@@ -31,7 +31,13 @@ namespace detail
             --count;
             return *this;
         }
-        constexpr TimesIterator<I, T>& operator++(int) noexcept { return ++*this; }
+        /// Steps forward, and answers the position before the step.
+        constexpr TimesIterator<I, T> operator++(int) noexcept
+        {
+            auto prior = *this;
+            ++*this;
+            return prior;
+        }
 
         constexpr TimesIterator<I, T>& operator--() noexcept
         {
@@ -39,7 +45,13 @@ namespace detail
             ++count;
             return *this;
         }
-        constexpr TimesIterator<I, T>& operator--(int) noexcept { return ++*this; }
+        /// Steps back, and answers the position before the step.
+        constexpr TimesIterator<I, T> operator--(int) noexcept
+        {
+            auto prior = *this;
+            --*this;
+            return prior;
+        }
 
         constexpr bool operator==(TimesIterator<I, T> const& other) const noexcept
         {
@@ -133,7 +145,13 @@ namespace detail
             return *this;
         }
 
-        constexpr Times2DIterator<I, T1, T2>& operator++(int) noexcept { return ++*this; }
+        /// Steps forward, and answers the position before the step.
+        constexpr Times2DIterator<I, T1, T2> operator++(int) noexcept
+        {
+            auto prior = *this;
+            ++*this;
+            return prior;
+        }
 
         constexpr bool operator==(Times2DIterator<I, T1, T2> const& other) const noexcept
         {
