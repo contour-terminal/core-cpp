@@ -1,0 +1,20 @@
+# Build trees: every preset builds into out/build/<preset>.
+/out/
+/build/
+
+# Tool state and caches (clangd, the docs venv, CPM sources shared across build trees).
+/.cache/
+/compile_commands.json
+__pycache__/
+
+# Per-developer presets and IDE state.
+/CMakeUserPresets.json
+/.vs/
+/.vscode/
+/.idea/
+
+# CTest's dashboard directory, when ctest runs from the source root.
+/Testing/
+
+# The docs site, built by mkdocs.
+/site/
