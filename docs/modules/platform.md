@@ -43,7 +43,7 @@ includes; a composition root gets them from `nativeEnvironmentProvider()` and
 | Factory | Windows | Linux, macOS, the BSDs | Emscripten |
 |---|---|---|---|
 | `nativeEnvironmentProvider()` (`<core/platform/EnvironmentProvider.hpp>`) | `GetEnvironmentVariableA`/`SetEnvironmentVariableA`, names case-insensitive | the POSIX provider: reads through `core::LiveEnvironment`, exports through `core::setProcessEnvironmentVariable()` | the POSIX provider, over the environment Emscripten's libc keeps for the module (under node a fixed default set, not the host's) |
-| `nativeFileInfoProvider()` (`<core/platform/FileInfoProvider.hpp>`) | `std::filesystem`: the read-only flag as permissions, no blocks, device or inode | the POSIX provider: `lstat(2)` for every field, symlinks as links with their targets, and the blocks, device and inode | the POSIX provider, over Emscripten's virtual filesystem; a relative symlink target reads resolved against the link's directory there |
+| `nativeFileInfoProvider()` (`<core/platform/FileInfoProvider.hpp>`) | `std::filesystem`: the read-only flag as permissions, no blocks, device or inode | the POSIX provider: `lstat(2)` for every field, symlinks as links with their targets, and the blocks, device and inode | the POSIX provider, over Emscripten's virtual filesystem; a relative symlink target reads resolved against the link's directory there (3.1.56 at least) |
 
 The POSIX file-info provider was endo's `LinuxFileInfoProvider`, which used nothing Linux-specific;
 it is one implementation, `PosixFileInfoProvider`, for every POSIX system. Each call makes a new

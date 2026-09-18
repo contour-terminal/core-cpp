@@ -91,8 +91,12 @@ file-info providers (`SOURCES_EMSCRIPTEN`), and runs only their tests. Its
 row in the module table says `PLATFORMS wasm-subset`, so an Emscripten build compiles that list
 and nothing else of the module; a module whose row says `any` compiles all of `SOURCES` there,
 plus its `SOURCES_EMSCRIPTEN`.
-Anything else in the module may use threads, sockets and the filesystem freely; anything on that
-list may not. See [`library-hygiene.md`](library-hygiene.md).
+What the list may not use is what single-threaded Emscripten lacks: no `std::thread`, no
+blocking wait and no `Threads::Threads`, and no sockets, child processes or signal handlers. The
+filesystem is allowed: under Emscripten it is Emscripten's virtual one, which the POSIX file-info
+provider lists and `lstat()`s like any other, and its in-memory pipes are what `platformRead()`
+reads there. Anything else in the module may use all of these freely. See
+[`library-hygiene.md`](library-hygiene.md).
 
 ## Open work
 

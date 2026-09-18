@@ -128,7 +128,12 @@ class CachingEnvironment final: public Environment
                                                                                  std::string_view value);
 
 /// Removes a variable from the process's own environment, with the guarantees of
-/// @c setProcessEnvironmentVariable(). Removing a variable that is not set succeeds.
+/// @c setProcessEnvironmentVariable(). Removing a variable that is not set succeeds, and publishes
+/// nothing.
+///
+/// Not for use between `fork()` and `exec()`, for the same reason as the setter: it takes a lock
+/// and allocates, and in the child of a multi-threaded process the lock may be held by a thread
+/// that no longer exists. Build the child's environment before forking, or pass it to `execve()`.
 ///
 /// @param name Name of the variable to remove: not empty, and without '=' or NUL.
 /// @return Nothing, or why the variable could not be removed: @c std::errc::invalid_argument for a
