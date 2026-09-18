@@ -47,6 +47,68 @@ static_assert(!std::is_constructible_v<WallClockRef, ManualWallClock>, "includin
 static_assert(!std::is_copy_constructible_v<IWallClock> && !std::is_move_constructible_v<IWallClock>,
               "nothing may return an IWallClock by value (see IWallClock's deleted constructors)");
 
+// The retainers, which hold the borrow. fastcached asserts these rows over its own types
+// (FleetHistory, SchedulerService, CacheEngine); these test-local ones have the same shapes.
+
+/// Keeps a borrowed wall clock the way a type should: a WallClockRef, taken and stored by value.
+struct Retainer
+{
+    explicit Retainer(WallClockRef borrowed) noexcept: wall { borrowed } {}
+
+    WallClockRef wall;
+};
+
+/// Stores no clock of its own and hands its borrow on to two retainers, among other arguments:
+/// the shape fastcached#1028 had, where the temporary went to such a type. The borrow is a value,
+/// so handing it on copies it, and the refusal already happened at this constructor's parameter.
+struct Forwarder
+{
+    Forwarder(ManualClock& steadyClock, WallClockRef borrowed, int label) noexcept:
+        first { borrowed }, second { borrowed }, steady { steadyClock }, tag { label }
+    {
+    }
+
+    Retainer first;
+    Retainer second;
+    ManualClock& steady;
+    int tag;
+};
+
+static_assert(std::is_constructible_v<Retainer, SystemWallClock&>, "lvalue into a retainer");
+static_assert(!std::is_constructible_v<Retainer, SystemWallClock>, "rvalue into a retainer");
+static_assert(std::is_constructible_v<Forwarder, ManualClock&, SystemWallClock&, int>,
+              "lvalue through a forwarder, among other arguments");
+static_assert(!std::is_constructible_v<Forwarder, ManualClock&, SystemWallClock, int>,
+              "rvalue through a forwarder, among other arguments");
+static_assert(!std::is_constructible_v<Forwarder, ManualClock&, ManualWallClock, int>,
+              "including the clock tests reach for");
+
+// For contrast, the guard WallClockRef replaced: a deleted rvalue overload on the storing type. It
+// refuses a direct temporary...
+
+/// Guards its borrow with a deleted `IWallClock const&&` overload.
+struct OverloadRetainer
+{
+    explicit OverloadRetainer(IWallClock const& borrowed) noexcept: wall { &borrowed } {}
+    explicit OverloadRetainer(IWallClock const&&) = delete;
+
+    IWallClock const* wall;
+};
+
+/// Hands a reference on to an OverloadRetainer: inside it, the parameter is a named lvalue.
+struct OverloadForwarder
+{
+    explicit OverloadForwarder(IWallClock const& borrowed) noexcept: retainer { borrowed } {}
+
+    OverloadRetainer retainer;
+};
+
+static_assert(std::is_constructible_v<OverloadRetainer, SystemWallClock&>
+                  && !std::is_constructible_v<OverloadRetainer, SystemWallClock>,
+              "a deleted rvalue overload refuses a direct temporary...");
+static_assert(std::is_constructible_v<OverloadForwarder, SystemWallClock>,
+              "...and lets one through a forwarding constructor, which is why WallClockRef is a value");
+
 } // namespace
 
 TEST_CASE("SteadyClock::now is monotonic", "[clock]")
@@ -264,4 +326,27 @@ TEST_CASE("A borrowed wall clock answers as the clock it borrows", "[clock][borr
 
     clock.advance(std::chrono::seconds { 42 });
     CHECK(borrowed.now() == clock.now());
+}
+
+TEST_CASE("A borrow handed on through a forwarder still answers as the clock it borrows", "[clock][borrow]")
+{
+    // The rows above are about what does not compile; this is what does, through both hops.
+    auto steady = ManualClock {};
+    auto wall =
+        ManualWallClock { std::chrono::system_clock::time_point { std::chrono::seconds { 1'700'000'000 } } };
+    auto const forwarder = Forwarder { steady, wall, 7 };
+
+    CHECK(&forwarder.first.wall.get() == &wall);
+    CHECK(&forwarder.second.wall.get() == &wall);
+    CHECK(&forwarder.steady == &steady);
+    CHECK(forwarder.tag == 7);
+
+    wall.advance(std::chrono::seconds { 1 });
+    CHECK(forwarder.first.wall.now() == wall.now());
+    CHECK(forwarder.second.wall.now() == wall.now());
+
+    // The overload-guarded pair keeps a named clock just as well; it is only the temporary it
+    // cannot refuse once a forwarder is in between.
+    auto const overloaded = OverloadForwarder { wall };
+    CHECK(overloaded.retainer.wall == &wall);
 }
