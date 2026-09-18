@@ -12,6 +12,19 @@ add_test(NAME core-cpp.exit-codes
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-exit-codes.cmake")
 set_tests_properties(core-cpp.exit-codes PROPERTIES LABELS "core-cpp;hygiene")
 
+# What Part I §3 and the Global Constraints forbid, refused in this tree; and the scanner's own proof
+# that it refuses each of those things by name.
+add_test(NAME core-cpp.cmake-hygiene
+         COMMAND "${CMAKE_COMMAND}"
+                 "-DROOT=${CORE_CPP_SOURCE_DIR}"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-cmake-hygiene.cmake")
+add_test(NAME core-cpp.cmake-hygiene-selftest
+         COMMAND "${CMAKE_COMMAND}"
+                 "-DSCANNER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-cmake-hygiene.cmake"
+                 "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/cmake-hygiene-selftest"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-cmake-hygiene-selftest.cmake")
+set_tests_properties(core-cpp.cmake-hygiene core-cpp.cmake-hygiene-selftest PROPERTIES LABELS "core-cpp;hygiene")
+
 # A CRT assert, abort(), invalid parameter or crash must end the process instead of opening a dialog
 # that waits for a click. Each run must fail (WILL_FAIL) within the timeout; a run that hangs has hit a
 # dialog. The canary's main() asks for no suppression: linking core::testing_dialogs installs it.
