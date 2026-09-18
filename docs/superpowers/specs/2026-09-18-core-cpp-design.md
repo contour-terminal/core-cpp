@@ -60,7 +60,7 @@ Namespace equals directory. A header's outermost namespace is `core::<dir>`. Hea
   | Module | Built under Emscripten |
   |---|---|
   | base, log, cli | fully |
-  | coro | everything except `ThreadPoolExecutor.hpp`, which `#error`s with a message under single-threaded Emscripten. `<stop_token>` via the `-fexperimental-library` usage requirement on libc++ 17 (emsdk 3.1.56 ships 17.0.4) and newer |
+  | coro | everything except `ThreadPoolExecutor.hpp`, which `#error`s with a message under single-threaded Emscripten. `core::coro::StopToken`/`StopSource`/`StopCallback` alias `std::` where `__cpp_lib_jthread` is available and fall back to a core-cpp implementation otherwise (libc++ 17 in emsdk 3.1.56, older FreeBSD libc++), as `Generator` does; no experimental-library flag is propagated |
   | platform | Types, NativeHandle, PlatformError, Clock, StringUtils, PathUtils, GlobMatch, FileUri |
   | net | `net_types`, IoBackend, EventLoop, timers, DeadlineTimer, WithTimeout, HostDrivenBackend and `testing/{TestLoop,ScriptedBackend,NullBackend}`. No sockets, DNS, TLS or HTTP |
   | testing | fully (the Windows-dialog parts are no-ops) |
