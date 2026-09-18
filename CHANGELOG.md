@@ -116,6 +116,9 @@ workflow refuses one without a section here.
   appears in its header.
 - The OpenSSL dependency, taken from the system and never fetched, resolved when
   `CORE_CPP_WITH_TLS` is on.
+- Every Linux, macOS and BSD preset turns `CORE_CPP_WITH_TLS` on, and CI installs OpenSSL where
+  it builds them, so `core::net_tls` is built and tested on Linux, macOS and FreeBSD as well as in
+  `cl-release-tls` on Windows. Those presets now need OpenSSL's development files.
 - `core::net::EventLoop` calls its clock's `refresh()` before it computes a wait's timeout and
   after the wait returns, as `core::platform::IClock` asks of whoever owns a loop, so a
   `CachedClock` can drive it. contour's loop did not, because contour's `IClock` had no

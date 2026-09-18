@@ -54,5 +54,8 @@ projects. They take effect only when core-cpp is the top-level project.
 Every preset sets `CORE_CPP_TESTING`, `CORE_CPP_PEDANTIC` and `CORE_CPP_WERROR` on. The
 sanitizer presets set `CORE_CPP_SANITIZERS`, `clang-tidy` sets `CORE_CPP_CLANG_TIDY`,
 `clang-coverage` sets `CORE_CPP_COVERAGE` and turns `USE_COMPILER_CACHE` off, `clang-tracy`
-sets `CORE_CPP_WITH_TRACY`, `cl-release-tls` sets `CORE_CPP_WITH_TLS`, and `emscripten` sets
-`CORE_CPP_WITH_TUI` off.
+sets `CORE_CPP_WITH_TRACY`, and `emscripten` sets `CORE_CPP_WITH_TUI` off. Every preset for
+Linux, macOS and the BSDs (each inherits the hidden `unix` preset) and `cl-release-tls` set
+`CORE_CPP_WITH_TLS`, so they build and test `core::net_tls` and need OpenSSL's development files
+(see [Building](building.md#requirements)); `-DCORE_CPP_WITH_TLS=OFF` on the command line builds
+without them.

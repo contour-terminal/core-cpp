@@ -128,8 +128,10 @@ jobs:
           max-size: 500M
           save: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
 
-      - name: Install Ninja
-        run: sudo apt-get update -q && sudo apt-get install -y -q ninja-build
+      # OpenSSL's headers and libraries: every unix preset turns CORE_CPP_WITH_TLS on, and
+      # core::net_tls takes OpenSSL from the system.
+      - name: Install Ninja and OpenSSL
+        run: sudo apt-get update -q && sudo apt-get install -y -q ninja-build libssl-dev
 
       - name: Install clang ${{ env.LLVM_VERSION }}
         if: matrix.compiler == 'clang'
@@ -390,9 +392,10 @@ jobs:
           max-size: 500M
           save: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
 
-      - name: Install Ninja and clang ${{ env.LLVM_VERSION }}
+      # OpenSSL for core::net_tls, which the unix presets build (CORE_CPP_WITH_TLS).
+      - name: Install Ninja, OpenSSL and clang ${{ env.LLVM_VERSION }}
         run: |
-          sudo apt-get update -q && sudo apt-get install -y -q ninja-build
+          sudo apt-get update -q && sudo apt-get install -y -q ninja-build libssl-dev
           wget -q https://apt.llvm.org/llvm.sh
           sudo bash llvm.sh "$LLVM_VERSION"
 
@@ -427,9 +430,10 @@ jobs:
 
       # The compiler only. The analyser is the PyPI release .clang-tidy-version pins, not apt's
       # clang-tidy-22, whose rolling snapshots print the same version and differ in findings.
-      - name: Install Ninja and clang ${{ env.LLVM_VERSION }}
+      # OpenSSL, so that core::net_tls (CORE_CPP_WITH_TLS, on in the unix presets) is analysed too.
+      - name: Install Ninja, OpenSSL and clang ${{ env.LLVM_VERSION }}
         run: |
-          sudo apt-get update -q && sudo apt-get install -y -q ninja-build
+          sudo apt-get update -q && sudo apt-get install -y -q ninja-build libssl-dev
           wget -q https://apt.llvm.org/llvm.sh
           sudo bash llvm.sh "$LLVM_VERSION"
 
@@ -558,9 +562,10 @@ jobs:
           restore-keys: cpm-${{ runner.os }}-
 
       # The fastcached 0.2.0 release links libyaml-cpp.so.0.8, which the runner image lacks: without
-      # it the daemon exits 127 at start-up, and the module (correctly) disables caching.
-      - name: Install Ninja, GCC ${{ env.GCC_VERSION }} and the daemon's runtime library
-        run: sudo apt-get update -q && sudo apt-get install -y -q ninja-build "g++-$GCC_VERSION" libyaml-cpp0.8
+      # it the daemon exits 127 at start-up, and the module (correctly) disables caching. OpenSSL is
+      # for core::net_tls, which the unix presets build (CORE_CPP_WITH_TLS).
+      - name: Install Ninja, GCC ${{ env.GCC_VERSION }}, OpenSSL and the daemon's runtime library
+        run: sudo apt-get update -q && sudo apt-get install -y -q ninja-build "g++-$GCC_VERSION" libssl-dev libyaml-cpp0.8
 
       - name: No other compiler cache is installed
         run: |
@@ -640,10 +645,11 @@ jobs:
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
           restore-keys: cpm-${{ runner.os }}-
 
-      # llvm-<v> carries llvm-profdata and llvm-cov, which must match the compiler's version.
-      - name: Install Ninja, clang ${{ env.LLVM_VERSION }} and its coverage tools
+      # llvm-<v> carries llvm-profdata and llvm-cov, which must match the compiler's version. OpenSSL
+      # is for core::net_tls, which the unix presets build (CORE_CPP_WITH_TLS).
+      - name: Install Ninja, OpenSSL, clang ${{ env.LLVM_VERSION }} and its coverage tools
         run: |
-          sudo apt-get update -q && sudo apt-get install -y -q ninja-build
+          sudo apt-get update -q && sudo apt-get install -y -q ninja-build libssl-dev
           wget -q https://apt.llvm.org/llvm.sh
           sudo bash llvm.sh "$LLVM_VERSION"
           sudo apt-get install -y -q "llvm-$LLVM_VERSION"

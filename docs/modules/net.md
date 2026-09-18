@@ -100,8 +100,9 @@ These are contour's, carried as they are:
 
 Nearly every case of the last two moves bytes over a socket, a socketpair or, on Windows, the
 loopback TCP pair behind `SystemPipe` and `makeSocketPair()`, hence `loopback` on the binaries.
-`core-cpp.net_tls` runs wherever a preset turns `CORE_CPP_WITH_TLS` on, which `cl-release-tls`
-does.
+`core-cpp.net_tls` runs wherever `CORE_CPP_WITH_TLS` is on: every Linux, macOS and BSD preset
+(and so CI's Linux, macOS and sanitizer jobs and the nightly FreeBSD build) and `cl-release-tls`
+on Windows.
 
 See [Threading](../design/threading.md) and
 [Coroutines and lifetimes](../design/coroutines-and-lifetimes.md). The rules that govern this

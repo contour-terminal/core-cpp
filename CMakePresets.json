@@ -21,6 +21,9 @@
       "name": "unix",
       "hidden": true,
       "inherits": "base",
+      "cacheVariables": {
+        "CORE_CPP_WITH_TLS": "ON"
+      },
       "condition": {
         "type": "notEquals",
         "lhs": "${hostSystemName}",

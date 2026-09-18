@@ -19,7 +19,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # FreeBSD's own clang and libc++, which kqueue and the BSD source lists are for.
+      # FreeBSD's own clang and libc++, which kqueue and the BSD source lists are for. The preset
+      # turns CORE_CPP_WITH_TLS on, and the base system's OpenSSL serves it: no package is needed.
       - name: Build and test in a FreeBSD VM
         uses: vmactions/freebsd-vm@v1
         with:

@@ -18,6 +18,11 @@ cmake --workflow --preset ci-clang-debug     # the same three steps in one comma
   with `cl` or `clang-cl` 22.
 - Python 3, for `scripts/clang-format.py` and `scripts/tool-versions.py`.
 - For WebAssembly: emsdk 3.1.56 or newer, and node.
+- OpenSSL's development files, for the Linux, macOS and BSD presets, which turn
+  `CORE_CPP_WITH_TLS` on: `libssl-dev` on Debian and Ubuntu, the base system's on FreeBSD, and
+  Homebrew's `openssl@3` on macOS with `OPENSSL_ROOT_DIR` set to `$(brew --prefix openssl@3)`. On
+  Windows only `cl-release-tls` needs it (CI takes it from vcpkg). core-cpp never fetches
+  OpenSSL; `-DCORE_CPP_WITH_TLS=OFF` builds without it.
 - Network access for the first configure, to fetch Catch2 with CPM, unless it is installed.
 
 ## Presets
