@@ -450,7 +450,8 @@ TEST_CASE("request_stop racing the StopCallback destructor never runs a destroye
     // ThreadSanitizer's case: the callback's storage is written by one thread and destroyed by the
     // other, and only the stop state's synchronisation orders the two. The destructor starts once
     // the requesting thread is about to request stop, and a callback that wins the race keeps
-    // running until the destructor is on its way, so that the destructor meets it running.
+    // running until the destructor is on its way; the gate makes it likely, not certain, that the
+    // destructor meets it running.
     constexpr auto Rounds = 500;
     auto roundsThatRan = 0;
     auto overRuns = 0;

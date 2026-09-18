@@ -70,8 +70,8 @@ workflow refuses one without a section here.
   and `std::nostopstate` where the standard library defines `__cpp_lib_jthread`, and otherwise
   core-cpp's implementation with the standard semantics, which keeps plain state under
   single-threaded WebAssembly. libc++ before 20 has `<stop_token>` only behind
-  `-fexperimental-library` (emsdk 3.1.56's libc++ 17, FreeBSD 15's base Clang 19, likely
-  AppleClang), and core-cpp adds no compile flag to its consumers, so the fallback runs there,
+  `-fexperimental-library` (emsdk 3.1.56's libc++ 17, FreeBSD 15's base Clang 19, AppleClang 17
+  (measured in CI)), and core-cpp adds no compile flag to its consumers, so the fallback runs there,
   with real threads everywhere but WebAssembly. The configure log of a build with tests says which
   branch the toolchain takes.
   `CORE_ASYNC_FORCE_STOP_TOKEN_FALLBACK` selects the fallback everywhere; the test binary

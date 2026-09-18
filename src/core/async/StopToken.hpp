@@ -7,9 +7,9 @@
 ///
 /// They are `std::stop_token`, `std::stop_source`, `std::stop_callback<F>` and `std::nostopstate`
 /// where the standard library defines `__cpp_lib_jthread`, and otherwise a core-cpp
-/// implementation with the standard semantics. libc++ 17, which emsdk 3.1.56 ships, has
-/// `<stop_token>` only behind `-fexperimental-library`, and a library may not add that flag to
-/// its consumers' compiles.
+/// implementation with the standard semantics. libc++ before 20 has `<stop_token>` only behind
+/// `-fexperimental-library` (emsdk 3.1.56's libc++ 17 among them), and a library may not add that
+/// flag to its consumers' compiles.
 ///
 /// The fallback's semantics are the standard's:
 ///  - `request_stop()` returns true exactly once, and that call runs every registered callback

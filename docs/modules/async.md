@@ -25,9 +25,9 @@ The C++23 coroutine vocabulary. Namespace `core::async`, directory `src/core/asy
   `std::` and refused to compile otherwise.
 - The fallback is live wherever libc++ before 20 is used without `-fexperimental-library`, which
   gates `<stop_token>` there. That covers emsdk 3.1.56's libc++ 17, FreeBSD 15's base Clang 19,
-  and likely AppleClang. It runs with real threads on all of them but the first, so it is
-  production code, not a WebAssembly shim. core-cpp adds no compile flag to its consumers. The
-  configure log names the branch a toolchain takes, when core-cpp's tests are built:
+  and AppleClang 17 (measured in CI). It runs with real threads on all of them but the first, so
+  it is production code, not a WebAssembly shim. core-cpp adds no compile flag to its consumers.
+  The configure log names the branch a toolchain takes, when core-cpp's tests are built:
   `[core-cpp] async: StopToken is std::stop_token`, or `... is core-cpp's fallback`.
 - The fallback has the standard semantics. `request_stop()` returns true exactly once, and that
   call runs every registered callback once, on the requesting thread, before it returns. A
@@ -36,9 +36,9 @@ The C++23 coroutine vocabulary. Namespace `core::async`, directory `src/core/asy
   while it runs on another thread, but not when it is called from inside that callback.
   `stop_possible()` is false for a token without a stop state, and for one whose sources are all
   gone without a request; it reads the source count before the stop flag, so a stop requested
-  just before the last source goes never reads as impossible. Copies share state. Its members carry the standard's
-  names (`request_stop`, `stop_requested`, `stop_possible`, `get_token`, `callback_type`), so code
-  compiles against either branch.
+  just before the last source goes never reads as impossible. Copies share state. Its members
+  carry the standard's names (`request_stop`, `stop_requested`, `stop_possible`, `get_token`,
+  `callback_type`), so code compiles against either branch.
 - Under single-threaded WebAssembly the fallback keeps plain state: no atomics, no lock and no
   wait, since a running callback always runs on the calling thread there. Elsewhere a mutex
   guards its callback list, and no lock is held while a callback runs, so a callback may request
