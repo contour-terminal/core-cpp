@@ -35,3 +35,35 @@ fastcached
   - src/core/testing/SuppressWindowsDialogs.{hpp,cpp} (merged from
     src/tests/WindowsErrorPopups.hpp)
   - the readability-identifier-naming IgnoredRegexp of .clang-tidy
+
+Documentation and CI configuration adapted from the following projects, each
+licensed under the Apache License, Version 2.0, and each read as a git blob at the
+commit named below. The rules in .agent/ cite their origin individually.
+
+Contour Terminal Emulator, at 6777ff05014f8ff163b071e8b0e942830119db80
+  - AGENT.md: the C++ guidelines, the zero-warning policy and the design
+    principles, adapted into .agent/rules/
+
+Endo, at f774a210ce989e5947b8f61d715068b1dc96088c
+  - AGENT.md: dependency injection, data-driven design, error handling and the
+    platform-feature workflow, adapted into .agent/rules/
+  - .github/clang-tidy-matcher.json (verbatim)
+
+fastcached, at b5ded89c5ae6ba5b45337335ce774c5ae6986d65 (origin/master)
+  - AGENT.md, .agent/rules/{README,build-and-toolchain,testing,wire-and-protocol,
+    platform-service-and-config}.md and .agent/guides/{team-run,profiling-tracy}.md:
+    their generic rules, adapted into .agent/
+  - mkdocs.yml, docs/requirements.txt, .github/workflows/docs.yml and
+    .github/release.yml (adapted)
+
+Lightweight
+  https://github.com/LASTRADA-Software/Lightweight
+  at f57dc2e0704d885a3c642a63675873919fc2d128
+  - .agent/cpp-guidelines.md: the self-contained rule set and its checklist,
+    adapted into .agent/rules/cpp-guidelines.md
+
+tuidu
+  https://github.com/contour-terminal/tuidu
+  at 30107fbab72310fde5db89e7882eab288f6b541e
+  - AGENT.md: coroutine parameters by value, and keeping shared code free of
+    application concepts, adapted into .agent/rules/
