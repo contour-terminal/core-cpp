@@ -25,6 +25,16 @@ add_test(NAME core-cpp.cmake-hygiene-selftest
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-cmake-hygiene-selftest.cmake")
 set_tests_properties(core-cpp.cmake-hygiene core-cpp.cmake-hygiene-selftest PROPERTIES LABELS "core-cpp;hygiene")
 
+# A release tag must name the tree it releases (Part I §4). The release workflow runs
+# check-release.cmake on the pushed tag; this proves that it accepts a matching tree and refuses
+# each mismatch by name.
+add_test(NAME core-cpp.check-release-selftest
+         COMMAND "${CMAKE_COMMAND}"
+                 "-DCHECKER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-release.cmake"
+                 "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/check-release-selftest"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-release-selftest.cmake")
+set_tests_properties(core-cpp.check-release-selftest PROPERTIES LABELS "core-cpp;hygiene")
+
 # A CRT assert, abort(), invalid parameter or crash must end the process instead of opening a dialog
 # that waits for a click. Each run must fail (WILL_FAIL) within the timeout; a run that hangs has hit a
 # dialog. The canary's main() asks for no suppression: linking core::testing_dialogs installs it.
