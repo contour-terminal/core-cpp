@@ -31,7 +31,13 @@ include("${CMAKE_CURRENT_LIST_DIR}/FetchTransferBound.cmake")
 # that includes their headers. Catch2 in particular compiles parts of itself only from
 # C++17 on, and a test that uses them would fail to link otherwise. As a subproject,
 # the Catch2 row's WRAP (core_cpp_catch2_standard) sets it on the fetched targets instead.
-set(CMAKE_CXX_STANDARD 23)
+#
+# 23 is the default, not an override: a -DCMAKE_CXX_STANDARD=26 on the command line (CI's
+# C++26 leg) must reach the compile. A normal variable would shadow that cache entry, and the
+# leg would build C++23 and report green.
+if(NOT DEFINED CMAKE_CXX_STANDARD)
+    set(CMAKE_CXX_STANDARD 23)
+endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
