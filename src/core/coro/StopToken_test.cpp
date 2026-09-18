@@ -9,6 +9,7 @@
 #include <optional>
 #include <ranges>
 #include <type_traits>
+#include <utility>
 #include <version>
 
 // Single-threaded WebAssembly has no threads to start (Part I §1).
@@ -90,6 +91,35 @@ struct DestroySelf
     }
 };
 
+/// Destroys another StopCallback, from inside its own invocation.
+struct DestroyOther
+{
+    std::optional<StopCallback<DestroyOther>>* other;
+    int* calls;
+
+    void operator()() const
+    {
+        ++*calls;
+        other->reset();
+    }
+};
+
+/// Destroys the last source of its stop state and then the fallback callback that holds it, from
+/// inside its own invocation, which the source's request_stop is running.
+struct DestroySourceAndSelf
+{
+    std::optional<core::coro::detail::StopSourceFallback>* source;
+    std::optional<core::coro::detail::StopCallbackFallback<DestroySourceAndSelf>>* self;
+    int* calls;
+
+    void operator()() const
+    {
+        ++*calls;
+        source->reset();
+        self->reset(); // Destroys this object too: nothing of it is touched after this.
+    }
+};
+
 } // namespace
 
 TEST_CASE("A default-constructed StopToken has no stop state", "[StopToken]")
@@ -150,7 +180,7 @@ TEST_CASE("A StopCallback constructed on a stopped token runs in its constructor
     CHECK(calls == 1);
 }
 
-TEST_CASE("A destroyed StopCallback is not run, and the others still are", "[StopToken]")
+TEST_CASE("A destroyed StopCallback is not run and the others still are", "[StopToken]")
 {
     constexpr auto CallbackCount = std::size_t { 3 };
     for (auto const destroyed: std::views::iota(std::size_t { 0 }, CallbackCount))
@@ -190,6 +220,41 @@ TEST_CASE("A StopCallback destroyed by its own callback does not wait for itself
 
     CHECK(source.request_stop());
     CHECK(calls == 1);
+    CHECK_FALSE(callback.has_value());
+}
+
+TEST_CASE("A callback that destroys another registered callback keeps it from running", "[StopToken]")
+{
+    // Each destroys the other, so the one that runs first finds the other still registered,
+    // whichever order the implementation runs them in.
+    auto source = StopSource {};
+    auto calls = 0;
+    auto first = std::optional<StopCallback<DestroyOther>> {};
+    auto second = std::optional<StopCallback<DestroyOther>> {};
+    first.emplace(source.get_token(), DestroyOther { &second, &calls });
+    second.emplace(source.get_token(), DestroyOther { &first, &calls });
+
+    CHECK(source.request_stop());
+    CHECK(calls == 1);
+    CHECK(first.has_value() != second.has_value());
+}
+
+TEST_CASE("The fallback lets a callback destroy the last source and itself while stop runs it", "[StopToken]")
+{
+    // The fallback's own types, on every platform: the standard does not promise this of
+    // std::stop_source. No token remains, so while the callback runs, the source's request_stop is
+    // what keeps the stop state alive.
+    using core::coro::detail::StopCallbackFallback;
+    using core::coro::detail::StopSourceFallback;
+    auto source = std::optional<StopSourceFallback> { std::in_place };
+    auto callback = std::optional<StopCallbackFallback<DestroySourceAndSelf>> {};
+    auto calls = 0;
+    callback.emplace(source->get_token(), DestroySourceAndSelf { &source, &callback, &calls });
+
+    auto const first = source->request_stop();
+    CHECK(first);
+    CHECK(calls == 1);
+    CHECK_FALSE(source.has_value());
     CHECK_FALSE(callback.has_value());
 }
 
@@ -347,7 +412,8 @@ TEST_CASE("Of concurrent request_stop calls exactly one returns true", "[StopTok
     CHECK(calls.load() == 1);
 }
 
-TEST_CASE("~StopCallback waits for its callback running on another thread", "[StopToken][threads]")
+TEST_CASE("The StopCallback destructor waits for its callback running on another thread",
+          "[StopToken][threads]")
 {
     auto source = StopSource {};
     auto entered = std::atomic<bool> { false };
@@ -377,28 +443,40 @@ TEST_CASE("~StopCallback waits for its callback running on another thread", "[St
     CHECK(returnedBeforeDestroyed);
 }
 
-TEST_CASE("request_stop racing ~StopCallback never runs a destroyed callback", "[StopToken][threads]")
+TEST_CASE("request_stop racing the StopCallback destructor never runs a destroyed callback",
+          "[StopToken][threads]")
 {
     // ThreadSanitizer's case: the callback's storage is written by one thread and destroyed by the
-    // other, and only the stop state's synchronisation orders the two.
+    // other, and only the stop state's synchronisation orders the two. The destructor starts once
+    // the requesting thread is about to request stop, and a callback that wins the race keeps
+    // running until the destructor is on its way, so that the destructor meets it running.
     constexpr auto Rounds = 500;
     auto roundsThatRan = 0;
     auto overRuns = 0;
     auto lateRuns = 0;
+    auto gateTimeouts = 0;
     for ([[maybe_unused]] auto const round: std::views::iota(0, Rounds))
     {
         auto source = StopSource {};
         auto calls = std::atomic<int> { 0 };
+        auto requesting = std::atomic<bool> { false };
+        auto destroying = std::atomic<bool> { false };
         auto destroyed = std::atomic<bool> { false };
         auto late = std::atomic<bool> { false };
         {
             auto callback = std::optional<StopCallback<std::function<void()>>> {};
             callback.emplace(source.get_token(), [&] {
                 ++calls;
+                static_cast<void>(waitUntilSet(destroying));
                 if (destroyed.load())
                     late = true;
             });
-            auto requester = std::thread { [&source] { static_cast<void>(source.request_stop()); } };
+            auto requester = std::thread { [&] {
+                requesting = true;
+                static_cast<void>(source.request_stop());
+            } };
+            gateTimeouts += waitUntilSet(requesting) ? 0 : 1;
+            destroying = true;
             callback.reset();
             destroyed = true;
             requester.join();
@@ -409,8 +487,12 @@ TEST_CASE("request_stop racing ~StopCallback never runs a destroyed callback", "
     }
 
     CAPTURE(Rounds, roundsThatRan);
+    CHECK(gateTimeouts == 0);
     CHECK(overRuns == 0);
     CHECK(lateRuns == 0);
+    if (roundsThatRan == 0)
+        SKIP("the requesting thread never reached the callback before its destruction, so no round "
+             "raced a running callback against its destructor");
 }
 
 TEST_CASE("A StopCallback registered while another thread requests stop runs exactly once",
@@ -435,6 +517,91 @@ TEST_CASE("A StopCallback registered while another thread requests stop runs exa
 
     CAPTURE(Rounds);
     CHECK(wrongCounts == 0);
+}
+
+TEST_CASE("stop_possible stays true while stop is requested and the last source goes", "[StopToken][threads]")
+{
+    // One thread requests stop and then destroys the last source, while another reads
+    // stop_possible() over and over. At every instant a source exists or stop was requested, so
+    // every read must be true. Two reads of the state in the wrong order admit a false one: the
+    // request and the source's destruction both landing between them.
+    constexpr auto Rounds = 200;
+    auto roundsWithFalseReads = 0;
+    auto readerTimeouts = 0;
+    for ([[maybe_unused]] auto const round: std::views::iota(0, Rounds))
+    {
+        auto source = std::optional<StopSource> { std::in_place };
+        auto const token = source->get_token();
+        auto reading = std::atomic<bool> { false };
+        auto finished = std::atomic<bool> { false };
+        auto readFalse = std::atomic<bool> { false };
+        auto reader = std::thread { [&] {
+            reading = true;
+            while (!finished.load())
+            {
+                if (!token.stop_possible())
+                    readFalse = true;
+            }
+        } };
+        readerTimeouts += waitUntilSet(reading) ? 0 : 1;
+        static_cast<void>(source->request_stop());
+        source.reset();
+        finished = true;
+        reader.join();
+        roundsWithFalseReads += readFalse.load() ? 1 : 0;
+    }
+
+    CAPTURE(Rounds);
+    CHECK(readerTimeouts == 0);
+    CHECK(roundsWithFalseReads == 0);
+}
+
+TEST_CASE("A StopCallback that ran in its constructor does not wait for another at its address",
+          "[StopToken][threads]")
+{
+    // A callback destroys itself while it runs on this thread, and then waits for thread B. B
+    // constructs a callback in the same storage, on the stopped token, so it runs in its
+    // constructor, and destroys it. That one was never registered, so its destructor has nothing
+    // to wait for. Waiting for whatever callback runs at its address would wait for the first
+    // one, which waits for B.
+    struct Shared
+    {
+        std::optional<StopCallback<std::function<void()>>> slot;
+        std::atomic<bool> firstDestroyed { false };
+        std::atomic<bool> secondDone { false };
+        std::atomic<bool> firstSawSecondDone { false };
+        bool secondSawFirstDestroyed = false; // written by B, read after the join
+        bool secondRanInline = false;         // written by B, read after the join
+    };
+    auto shared = Shared {};
+    auto source = StopSource {};
+    auto const token = source.get_token();
+
+    shared.slot.emplace(token, [sharedPointer = &shared] {
+        auto* const state = sharedPointer; // the closure dies with the callback, on the next line
+        state->slot.reset();
+        state->firstDestroyed = true;
+        state->firstSawSecondDone = waitUntilSet(state->secondDone);
+    });
+
+    auto second = std::thread { [&shared, &token] {
+        shared.secondSawFirstDestroyed = waitUntilSet(shared.firstDestroyed);
+        if (shared.secondSawFirstDestroyed)
+        {
+            auto ranInline = false;
+            shared.slot.emplace(token, [&ranInline] { ranInline = true; });
+            shared.secondRanInline = ranInline;
+            shared.slot.reset();
+        }
+        shared.secondDone = true;
+    } };
+    auto const requested = source.request_stop();
+    second.join();
+
+    CHECK(requested);
+    CHECK(shared.secondSawFirstDestroyed);
+    CHECK(shared.secondRanInline);
+    CHECK(shared.firstSawSecondDone.load());
 }
 
 #endif

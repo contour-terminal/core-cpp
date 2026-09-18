@@ -192,7 +192,17 @@ namespace detail
         [[nodiscard]] bool isStopRequested() const noexcept { return _stopRequested; }
 
         /// @return Whether stop was requested, or a source remains that could request it.
-        [[nodiscard]] bool isStopPossible() const noexcept { return _stopRequested || _sourceCount != 0; }
+        [[nodiscard]] bool isStopPossible() const noexcept
+        {
+            // The count first, then the flag. A count of 0 is final: a source is only ever added
+            // by copying a live one. Every stop request was made through a source whose removal
+            // came after it, and each removal is a read-modify-write of the count, so a read that
+            // finds 0 comes after every request (all of it sequentially consistent), and the flag
+            // read after it holds the final answer. The other order admits a false: a request and
+            // the removal of the last source can both land between the flag's read and the
+            // count's, and a stop that was requested reads as impossible.
+            return _sourceCount != 0 || _stopRequested;
+        }
 
         /// Counts a new source of this state.
         void addSource() noexcept { ++_sourceCount; }
@@ -239,7 +249,12 @@ namespace detail
         /// Deregisters @p node. If its callback is running on another thread, waits for it to
         /// return; if it is running on this one, that callback is destroying its own node, and
         /// this returns at once.
-        /// @param node A callback that was registered, or that ran instead.
+        ///
+        /// A node is known by its address, and a destroyed node's address can be reused, so
+        /// only a node that @c registerCallback() accepted may be passed here. Such a node never
+        /// shares its address with a running one: a callback runs only once stop was requested,
+        /// and from then on every new callback runs in its constructor and is never registered.
+        /// @param node A callback that was registered.
         void deregisterCallback(StopCallbackNode& node) noexcept
         {
             auto lock = _sync.lock();
@@ -462,8 +477,9 @@ namespace detail
             start();
         }
 
-        /// Deregisters the callback. If it is running on another thread, waits for it to return
-        /// first; called from inside the callback, returns at once.
+        /// Deregisters the callback, if it was registered. If it is running on another thread,
+        /// waits for it to return first; called from inside the callback, returns at once. A
+        /// callback that ran in the constructor has nothing to deregister or wait for.
         ~StopCallbackFallback()
         {
             if (_state)
@@ -479,7 +495,13 @@ namespace detail
         void start() noexcept
         {
             if (_state && !_state->registerCallback(*this))
+            {
+                // Stop was requested already. The callback runs here and is never registered, so
+                // the destructor must not consult the state: another callback at this address
+                // may be running there, and waiting for it could deadlock.
+                _state.reset();
                 invoke(*this);
+            }
         }
 
         /// Runs the callback of @p node, a StopCallbackFallback<Callback>.
