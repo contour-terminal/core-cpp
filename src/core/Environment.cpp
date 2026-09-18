@@ -1,20 +1,29 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/Environment.hpp>
 
+#include <expected>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <vector>
 
 #ifdef _WIN32
-    #include <vector>
-
     #include <Windows.h>
 #else
+    #include <deque>
+    #include <format>
+    #include <memory>
     #include <mutex>
+    #include <utility>
 
+    #include <unistd.h>
+
+    // glibc's <unistd.h> declares `environ` (C++ builds define _GNU_SOURCE); macOS reaches it
+    // through _NSGetEnviron(), and the other systems want it declared here.
     #ifdef __APPLE__
         #include <crt_externs.h>
-    #else
+    #elifndef __GLIBC__
 extern "C" char** environ;
     #endif
 #endif
@@ -36,6 +45,16 @@ namespace
         return instance;
     }
 
+    /// @return The process's environment block, as `getenv()` and `execvp()` see it.
+    [[nodiscard]] char**& processEnviron() noexcept
+    {
+    #ifdef __APPLE__
+        return *_NSGetEnviron();
+    #else
+        return environ;
+    #endif
+    }
+
     /// Looks a name up in the environment block as it stands right now.
     ///
     /// A scan of the block rather than a getenv() call, which does exactly this scan and no better:
@@ -47,11 +66,7 @@ namespace
     /// @return Its value, or std::nullopt if it is not set.
     [[nodiscard]] std::optional<std::string> lookupInEnviron(std::string_view name)
     {
-    #ifdef __APPLE__
-        auto* const* entry = *_NSGetEnviron();
-    #else
-        auto* const* entry = environ;
-    #endif
+        auto* const* entry = processEnviron();
         while (entry != nullptr && *entry != nullptr)
         {
             auto const line = std::string_view { *entry };
@@ -62,7 +77,72 @@ namespace
         }
         return std::nullopt;
     }
+
+    /// @return Whether @p entry, a "name=value" line of an environment block, is the one for @p name.
+    [[nodiscard]] bool isEntryFor(std::string_view entry, std::string_view name) noexcept
+    {
+        return entry.size() > name.size() && entry.starts_with(name) && entry[name.size()] == '=';
+    }
+
+    /// What setProcessEnvironmentVariable() has published: every block, and every entry it created.
+    ///
+    /// A deque of each, because a deque never moves what it holds, so a pointer into one stays
+    /// valid for as long as the deque lives -- which is the rest of the process; see
+    /// publishedEnvironment().
+    struct PublishedEnvironment
+    {
+        std::deque<std::string> entries;       ///< "name=value" lines the writer created.
+        std::deque<std::vector<char*>> blocks; ///< NUL-terminated blocks, each published once.
+    };
+
+    /// @return The process's one @c PublishedEnvironment, which is never destroyed.
+    ///
+    /// Never destroyed on purpose: `environ` points into it until the process ends, and a static
+    /// destructor or an `atexit()` handler that runs after it would have been destroyed may still
+    /// read the environment -- through `getenv()`, or through a block libc's own `setenv()` copied
+    /// from one of these, whose entries still point into it.
+    [[nodiscard]] PublishedEnvironment& publishedEnvironment()
+    {
+        static auto& instance = *std::make_unique<PublishedEnvironment>().release();
+        return instance;
+    }
+
+    /// Publishes a copy of the current environment block in which @p name is removed and, when
+    /// @p value is given, set to it.
+    /// @param name Name of the variable to change, valid by isValidName().
+    /// @param value The value to set, or std::nullopt to remove the variable.
+    void publishEnvironment(std::string_view name, std::optional<std::string_view> value)
+    {
+        auto const lock = std::scoped_lock { environmentMutex() };
+        auto& published = publishedEnvironment();
+
+        auto block = std::vector<char*> {};
+        auto removed = false;
+        auto* const* entry = processEnviron();
+        while (entry != nullptr && *entry != nullptr)
+        {
+            if (isEntryFor(*entry, name))
+                removed = true;
+            else
+                block.push_back(*entry);
+            ++entry;
+        }
+        if (!value && !removed)
+            return; // Nothing to remove: the block as it stands already says so.
+
+        if (value)
+            block.push_back(published.entries.emplace_back(std::format("{}={}", name, *value)).data());
+        block.push_back(nullptr);
+        processEnviron() = published.blocks.emplace_back(std::move(block)).data();
+    }
 #endif
+
+    /// @return Whether @p name can name a variable of an environment block: it is not empty, and
+    ///         has neither the '=' that ends a name nor the NUL that ends an entry.
+    [[nodiscard]] bool isValidName(std::string_view name) noexcept
+    {
+        return !name.empty() && !name.contains('=') && !name.contains('\0');
+    }
 } // namespace
 
 std::optional<std::string> LiveEnvironment::get(std::string_view name) const
@@ -79,10 +159,13 @@ std::optional<std::string> LiveEnvironment::get(std::string_view name) const
         return std::nullopt;
 
     // `required` counts the terminating NUL; the second call's result does not. A writer racing
-    // between the two calls can shrink the value, so the second length is the one to trust.
+    // between the two calls can shrink the value, so the second length is the one to trust. A
+    // result of 0 is an empty value unless the call says the variable is gone: an empty value is a
+    // variable that is set, as it is on POSIX.
     auto buffer = std::vector<char>(required);
+    SetLastError(ERROR_SUCCESS);
     auto const written = GetEnvironmentVariableA(terminatedName.c_str(), buffer.data(), required);
-    if (written == 0 || written >= required)
+    if (written >= required || (written == 0 && GetLastError() != ERROR_SUCCESS))
         return std::nullopt;
     return std::string { buffer.data(), written };
 #else
@@ -114,6 +197,43 @@ Environment& defaultEnvironment()
     static LiveEnvironment const source;
     static CachingEnvironment instance { source };
     return instance;
+}
+
+std::expected<void, std::error_code> setProcessEnvironmentVariable(std::string_view name,
+                                                                   std::string_view value)
+{
+    if (!isValidName(name) || value.contains('\0'))
+        return std::unexpected(std::make_error_code(std::errc::invalid_argument));
+
+#ifdef _WIN32
+    // Both need a terminating NUL, which a string_view does not promise.
+    auto const terminatedName = std::string { name };
+    auto const terminatedValue = std::string { value };
+    if (SetEnvironmentVariableA(terminatedName.c_str(), terminatedValue.c_str()) == 0)
+        return std::unexpected(std::error_code(static_cast<int>(GetLastError()), std::system_category()));
+#else
+    publishEnvironment(name, value);
+#endif
+    return {};
+}
+
+std::expected<void, std::error_code> unsetProcessEnvironmentVariable(std::string_view name)
+{
+    if (!isValidName(name))
+        return std::unexpected(std::make_error_code(std::errc::invalid_argument));
+
+#ifdef _WIN32
+    auto const terminatedName = std::string { name };
+    if (SetEnvironmentVariableA(terminatedName.c_str(), nullptr) == 0)
+    {
+        // Removing a variable that is not set leaves it unset, which is what was asked for.
+        if (auto const error = GetLastError(); error != ERROR_ENVVAR_NOT_FOUND)
+            return std::unexpected(std::error_code(static_cast<int>(error), std::system_category()));
+    }
+#else
+    publishEnvironment(name, std::nullopt);
+#endif
+    return {};
 }
 
 } // namespace core

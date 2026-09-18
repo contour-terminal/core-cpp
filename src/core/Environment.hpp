@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <expected>
 #include <functional>
 #include <map>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 namespace core
 {
@@ -98,5 +100,33 @@ class CachingEnvironment final: public Environment
 /// construction instead; a test can then supply its own answers, which this cannot.
 /// @return A reference to a function-local-static @c CachingEnvironment over a @c LiveEnvironment.
 [[nodiscard]] Environment& defaultEnvironment();
+
+/// Sets a variable in the process's own environment, where @c LiveEnvironment reads it and child
+/// processes inherit it.
+///
+/// The one writer of the process environment, in place of `setenv()`, which is thread-unsafe and
+/// which this project's clang-tidy configuration rejects. On POSIX it never edits a block a reader
+/// may be walking: it builds a new block with the change applied and publishes it in `environ` with
+/// a single store, under the lock @c LiveEnvironment reads under. Nothing it publishes is ever
+/// freed, because a reader outside that lock -- `getenv()` in another library, `execvp()` -- may
+/// still hold a block published earlier. Each call so costs one block of pointers, which suits the
+/// rare writes a process makes to its own environment: an exported shell variable, a test fixture.
+/// On Windows it is `SetEnvironmentVariableA()`, which the operating system synchronizes; the
+/// CRT's own copy of the environment, which its `getenv()` reads, does not see it.
+///
+/// @param name Name of the variable to set: not empty, and without '=' or NUL.
+/// @param value The value it should read as, without NUL. An empty value sets the variable.
+/// @return Nothing, or why the variable could not be set: @c std::errc::invalid_argument for a
+///         name or value no environment can hold, or the operating system's error on Windows.
+[[nodiscard]] std::expected<void, std::error_code> setProcessEnvironmentVariable(std::string_view name,
+                                                                                 std::string_view value);
+
+/// Removes a variable from the process's own environment, with the guarantees of
+/// @c setProcessEnvironmentVariable(). Removing a variable that is not set succeeds.
+///
+/// @param name Name of the variable to remove: not empty, and without '=' or NUL.
+/// @return Nothing, or why the variable could not be removed: @c std::errc::invalid_argument for a
+///         name no environment can hold, or the operating system's error on Windows.
+[[nodiscard]] std::expected<void, std::error_code> unsetProcessEnvironmentVariable(std::string_view name);
 
 } // namespace core

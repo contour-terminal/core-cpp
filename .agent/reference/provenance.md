@@ -31,9 +31,9 @@ others in notes.
 | `src/core/Config.hpp.in` | origin: core-cpp | - | - | generates `core/Config.hpp` |
 | `src/core/Deferred.hpp` | contour-terminal/contour | `src/crispy/Deferred.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | - |
 | `src/core/Defines.hpp` | contour-terminal/contour | `src/crispy/Defines.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | `CRISPY_*` macros renamed `CORE_*` |
-| `src/core/Environment.cpp` | contour-terminal/contour | `src/crispy/Environment.cpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | - |
-| `src/core/Environment.hpp` | contour-terminal/contour | `src/crispy/Environment.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | - |
-| `src/core/Environment_test.cpp` | contour-terminal/contour | `src/crispy/Environment_test.cpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | - |
+| `src/core/Environment.cpp` | contour-terminal/contour | `src/crispy/Environment.cpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | post-import additions (Task A4): the process-environment writer (`setProcessEnvironmentVariable()`/`unsetProcessEnvironmentVariable()`), and on Windows `LiveEnvironment` reads a variable set to the empty string as set |
+| `src/core/Environment.hpp` | contour-terminal/contour | `src/crispy/Environment.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | post-import addition (Task A4): the process-environment writer |
+| `src/core/Environment_test.cpp` | contour-terminal/contour | `src/crispy/Environment_test.cpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | post-import additions (Task A4): the process-environment writer's cases |
 | `src/core/Escape.hpp` | contour-terminal/contour | `src/crispy/Escape.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | - |
 | `src/core/FNV.hpp` | contour-terminal/contour | `src/crispy/FNV.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | post-import fix (`48b261a`): the trivially-copyable overload no longer recurses forever for `T != unsigned char` |
 | `src/core/FNV_test.cpp` | origin: core-cpp | - | - | written for the fix above |

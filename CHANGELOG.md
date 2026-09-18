@@ -44,12 +44,18 @@ workflow refuses one without a section here.
 - `core::testing_main` applies the `LOG` environment variable to `core::log` before it runs the
   tests (`LOG=net` enables the `net` category and writes it to standard output), and so links
   `core::log`.
+- `core::setProcessEnvironmentVariable()` and `core::unsetProcessEnvironmentVariable()` in
+  `core::base`: the one writer of the process environment, in place of `setenv()`. On POSIX they
+  publish a new `environ` block under `LiveEnvironment`'s lock and never free a published one, so
+  a reader elsewhere never sees a block change or disappear under it.
 
 ### Fixed
 
 - `core::nextPowerOfTwo()` rounds a 16-, 32- or 64-bit value up to a power of two. crispy's, which
   it was imported from, compared the type's width in bytes against bit counts and so smeared only
   the eight bits below the highest set one: 257 became 511, and 0x10001 became 0x1fe01.
+- `core::LiveEnvironment` on Windows reads a variable set to the empty string as set, as it does
+  on POSIX; it read as unset.
 
 ### Imported
 

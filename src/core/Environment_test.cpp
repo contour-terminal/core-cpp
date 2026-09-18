@@ -5,6 +5,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <string>
+#include <system_error>
+#include <tuple>
 #include <utility>
 
 #ifdef _WIN32
@@ -190,3 +192,93 @@ TEST_CASE("environment is reached through the interface", "[environment]")
         CHECK(core::defaultEnvironment().get("PATH").has_value());
     }
 }
+
+namespace
+{
+/// Removes a variable the process-environment writer set, however the test case ends.
+class WrittenVariable
+{
+  public:
+    /// @param name Name of the variable to remove when this goes out of scope.
+    explicit WrittenVariable(std::string name): _name { std::move(name) } {}
+
+    ~WrittenVariable() { std::ignore = core::unsetProcessEnvironmentVariable(_name); }
+
+    WrittenVariable(WrittenVariable const&) = delete;
+    WrittenVariable& operator=(WrittenVariable const&) = delete;
+    WrittenVariable(WrittenVariable&&) = delete;
+    WrittenVariable& operator=(WrittenVariable&&) = delete;
+
+  private:
+    std::string _name;
+};
+
+#ifndef _WIN32
+/// @return A copy of every entry of @p block, an environment block as `environ` points at one.
+[[nodiscard]] std::vector<std::string> entriesOf(char* const* block)
+{
+    auto entries = std::vector<std::string> {};
+    while (block != nullptr && *block != nullptr)
+    {
+        entries.emplace_back(*block);
+        ++block;
+    }
+    return entries;
+}
+#endif
+} // namespace
+
+TEST_CASE("the process-environment writer is what LiveEnvironment then reads", "[environment]")
+{
+    auto constexpr Name = "CORE_CPP_ENVIRONMENT_WRITER_TEST_VARIABLE";
+    auto const cleanup = WrittenVariable { Name };
+    auto const live = core::LiveEnvironment {};
+
+    REQUIRE(core::setProcessEnvironmentVariable(Name, "one").has_value());
+    CHECK(live.get(Name) == "one");
+
+    // A second write replaces the value rather than adding a second entry that shadows it.
+    REQUIRE(core::setProcessEnvironmentVariable(Name, "two").has_value());
+    CHECK(live.get(Name) == "two");
+
+    // An empty value is a variable that is set, not one that is removed.
+    REQUIRE(core::setProcessEnvironmentVariable(Name, "").has_value());
+    CHECK(live.get(Name) == "");
+
+    REQUIRE(core::unsetProcessEnvironmentVariable(Name).has_value());
+    CHECK(!live.get(Name).has_value());
+
+    // Removing what is not there is not an error: the variable is unset either way.
+    CHECK(core::unsetProcessEnvironmentVariable(Name).has_value());
+}
+
+TEST_CASE("the process-environment writer refuses a name no environment can hold", "[environment]")
+{
+    auto const invalid = std::make_error_code(std::errc::invalid_argument);
+
+    CHECK(core::setProcessEnvironmentVariable("", "value").error() == invalid);
+    CHECK(core::setProcessEnvironmentVariable("A=B", "value").error() == invalid);
+    CHECK(core::unsetProcessEnvironmentVariable("").error() == invalid);
+    CHECK(core::unsetProcessEnvironmentVariable("A=B").error() == invalid);
+}
+
+#ifndef _WIN32
+TEST_CASE("the process-environment writer leaves a block a reader holds intact", "[environment]")
+{
+    // getenv() in another library, or execvp(), walks `environ` without taking any lock of ours. So
+    // the writer must never edit the block such a reader may hold, nor free it: it publishes a new
+    // one. The block captured here has to read exactly as it did before the writes.
+    auto constexpr Name = "CORE_CPP_ENVIRONMENT_WRITER_TEST_VARIABLE";
+    auto const cleanup = WrittenVariable { Name };
+
+    REQUIRE(core::setProcessEnvironmentVariable(Name, "before").has_value());
+    auto* const* const held = processEnviron();
+    auto const snapshot = entriesOf(held);
+
+    REQUIRE(core::setProcessEnvironmentVariable(Name, "after").has_value());
+    REQUIRE(core::unsetProcessEnvironmentVariable(Name).has_value());
+
+    CHECK(processEnviron() != held);
+    CHECK(entriesOf(held) == snapshot);
+}
+#endif
