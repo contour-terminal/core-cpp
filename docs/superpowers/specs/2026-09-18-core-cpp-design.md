@@ -60,7 +60,7 @@ Namespace equals directory. A header's outermost namespace is `core::<dir>`. Hea
   | Module | Built under Emscripten |
   |---|---|
   | base, log, cli | fully |
-  | coro | everything except `ThreadPoolExecutor.hpp`, which `#error`s with a message under single-threaded Emscripten. `<stop_token>` via the `-fexperimental-library` usage requirement on libc++ 18/19 |
+  | coro | everything except `ThreadPoolExecutor.hpp`, which `#error`s with a message under single-threaded Emscripten. `<stop_token>` via the `-fexperimental-library` usage requirement on libc++ 17 (emsdk 3.1.56 ships 17.0.4) and newer |
   | platform | Types, NativeHandle, PlatformError, Clock, StringUtils, PathUtils, GlobMatch, FileUri |
   | net | `net_types`, IoBackend, EventLoop, timers, DeadlineTimer, WithTimeout, HostDrivenBackend and `testing/{TestLoop,ScriptedBackend,NullBackend}`. No sockets, DNS, TLS or HTTP |
   | testing | fully (the Windows-dialog parts are no-ops) |
@@ -377,6 +377,9 @@ contour/endo/tuidu deltas:
 The order is **A** (skeleton and import) → **B** (merge) → **tag v0.1.0** → **C** (consumers, each migrates once).
 
 Consumer PRs open as drafts pinned to `v0.1.0`; for local work, set `-DCPM_core-cpp_SOURCE=D:/core-cpp`. contour's PR merges after endo's and tuidu's, because both fetch from contour master today.
+
+### Upstream sync (amendment, 2026-09-18)
+Every import records its upstream SHA per file in `.agent/reference/provenance.md`. Before 0.1.0 there is one catch-up check against each upstream's `origin/master`. Every consumer swap starts with a delta check over the paths it replaces, so no upstream commit is dropped.
 
 ## 7. Consumer migration
 
