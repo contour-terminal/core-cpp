@@ -1,0 +1,4 @@
+# The clang-tidy build core-cpp is analysed with: one immutable PyPI release, which installs
+# the same analyser on Linux, macOS and Windows. scripts/tool-versions.py installs it.
+package: clang-tidy
+version: 22.1.8

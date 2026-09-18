@@ -1,0 +1,7 @@
+# The clang-format build core-cpp is formatted with, and the one place its version is stated.
+#
+# PyPI's clang-format release: one build, with the same banner and the same output on Linux,
+# macOS and Windows. scripts/tool-versions.py installs it, and scripts/clang-format.py refuses
+# every other build. The line below is the first line of that build's `clang-format --version`,
+# which the contour-workflows format-on-edit hook compares character for character.
+version: clang-format version 22.1.8
