@@ -55,9 +55,15 @@ class FNV
         requires(std::is_trivially_copyable_v<V> && !std::same_as<V, std::string>
                  && !std::same_as<V, std::string_view>)
     {
+        // The step is spelled out rather than delegated to (*this)(memory, byte): an unsigned char
+        // byte binds `V const&` exactly, better than it converts to T, so the call would pick this
+        // overload again and recurse forever for every T but unsigned char.
         auto const bytes = std::span { reinterpret_cast<unsigned char const*>(&value), sizeof(V) };
         for (auto const byte: bytes)
-            memory = (*this)(memory, byte);
+        {
+            memory ^= static_cast<U>(byte);
+            memory *= _prime;
+        }
         return memory;
     }
 
