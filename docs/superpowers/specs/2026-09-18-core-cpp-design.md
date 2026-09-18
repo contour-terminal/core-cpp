@@ -22,7 +22,7 @@ Lightweight and morph hold no copies:
 - morph adopts core-cpp for what it needs, and the WebAssembly build is a hard constraint:
   - Its dependencies move from FetchContent to CPM.
   - Its TimeoutScheduler (native thread and browser `setTimeout` builds) and its base64 and WakeupPipe move onto core-cpp.
-  - **Coroutines, the main motivation:** a `Completion<T>` becomes awaitable, and model handlers may be `core::coro::Task<R>` coroutines driven on the model's strand.
+  - **Coroutines, the main motivation:** a `Completion<T>` becomes awaitable, and model handlers may be `core::async::Task<R>` coroutines driven on the model's strand.
 
 Decisions made with the user during brainstorming:
 - Merge both async designs now.
@@ -42,17 +42,17 @@ Decisions made with the user during brainstorming:
 
 ## 1. Modules, namespaces, targets
 
-Namespace equals directory. A header's outermost namespace is `core::<dir>`. Headers directly in `src/core/` are `core`. Nested helper namespaces (`detail`, `base64`, `views`, `testing`) are allowed inside. Real targets are named `core-cpp-<name>`, ALIASed `core::<name>`, and their type is always explicit.
+Namespace equals directory, both lowercase (user decision, 2026-09-18; `.clang-tidy` enforces `NamespaceCase: lower_case`). A header's outermost namespace is `core::<dir>`. Headers directly in `src/core/` are `core`. Nested helper namespaces (`detail`, `base64`, `views`, `testing`) are allowed inside. Real targets are named `core-cpp-<name>`, ALIASed `core::<name>`, and their type is always explicit.
 
 | Directory | Namespace | Target(s) | Kind | Depends on | Origin |
 |---|---|---|---|---|---|
-| `src/core/*.hpp` | `core` | `core::base` | STATIC | Threads (+Tracy opt.) | contour crispy: Assert, Defines, Environment, Escape, FNV, Flags, Times, UserInfo, Utils, Overloaded, Deferred, Base64 (`core::base64`). fastcached `Core/Profiling.hpp` (`FC_*`→`CORE_*`) and `Core/Ranges.hpp` |
+| `src/core/*.hpp` | `core` | `core::base` | STATIC | Threads (+Tracy opt.) | contour crispy: Assert, Defines, Environment, Escape, FNV, Flags, Times, UserInfo, Utils, Overloaded, Deferred, Base64 (`core::base64`). fastcached `Core/Profiling.hpp` (`FC_*`→`CORE_*`) and `Core/Ranges.hpp`. endo `Generator` (`core::Generator`; `std::generator` where available) |
 | `src/core/log/` | `core::log` | `core::log` | STATIC | base | crispy LogStore, LogSink (namespace `logstore`). `gsl::not_null` is replaced |
 | `src/core/cli/` | `core::cli` | `core::cli` | STATIC | base, log | crispy CLI (`crispy::cli`), App |
-| `src/core/platform/` | `core::platform` | `core::platform` | STATIC | base, log, coro | endo platform, generic part (see §7 endo row). Merged Clock (endo + contour net/platform + fastcached Core/Clock: IClock, SteadyClock, CachedClock, ManualClock, IWallClock, WallClockRef). SystemPipe, WinsockInit, Wakeup, SignalHandler, PlatformError, NativeHandle |
-| `src/core/coro/` | `core::coro` | `core::coro` | INTERFACE | std only | contour coro + fastcached Async grafts (§2), Generator (endo) |
-| `src/core/net/` | `core::net` | `core::net_types` (INTERFACE: NetError, IoResult), `core::net` (STATIC), `core::net_tls` (STATIC, only if `CORE_CPP_WITH_TLS`) | | coro, platform; TLS: OpenSSL PRIVATE | merged contour net + fastcached Net (§2) |
-| `src/core/tui/` | `core::tui` | `core::tui_output` (STATIC leaf: TerminalOutput, SgrBuilder, SyncGuard, TerminalProtocols, CursorShape, Error, platform/PosixIO, Win32Utf), `core::tui` | STATIC | tui_output: base only. tui: + platform, coro, net, libunicode, stb (opt.) | endo tui @ `f774a210`, which includes fastcached's upstreamed PR #184 |
+| `src/core/platform/` | `core::platform` | `core::platform` | STATIC | base, log | endo platform, generic part (see §7 endo row). Merged Clock (endo + contour net/platform + fastcached Core/Clock: IClock, SteadyClock, CachedClock, ManualClock, IWallClock, WallClockRef). SystemPipe, WinsockInit, Wakeup, SignalHandler, PlatformError, NativeHandle |
+| `src/core/async/` | `core::async` | `core::async` | INTERFACE | std only | contour coro + fastcached Async grafts (§2) |
+| `src/core/net/` | `core::net` | `core::net_types` (INTERFACE: NetError, IoResult), `core::net` (STATIC), `core::net_tls` (STATIC, only if `CORE_CPP_WITH_TLS`) | | async, platform; TLS: OpenSSL PRIVATE | merged contour net + fastcached Net (§2) |
+| `src/core/tui/` | `core::tui` | `core::tui_output` (STATIC leaf: TerminalOutput, SgrBuilder, SyncGuard, TerminalProtocols, CursorShape, Error, platform/PosixIO, Win32Utf), `core::tui` | STATIC | tui_output: base only. tui: + platform, async, net, libunicode, stb (opt.) | endo tui @ `f774a210`, which includes fastcached's upstreamed PR #184 |
 | `src/core/testing/` | `core::testing` | `core::testing`, `core::testing_main` | STATIC | base; Catch2 | endo testing (ScopedTempDir, ScopedWorkingDirectory, EnvHelper, SuppressWindowsDialogsAtStartup, WindowsDialogCanary). The four SuppressWindowsDialogs variants are merged. The new CatchMain normalises exit codes |
 
 - **WebAssembly subset** (`__EMSCRIPTEN__` without `__EMSCRIPTEN_PTHREADS__`; emsdk 3.1.56, which Qt 6.8 for WebAssembly and morph need, and latest). No `std::thread` and no `Threads::Threads` link there.
@@ -60,7 +60,7 @@ Namespace equals directory. A header's outermost namespace is `core::<dir>`. Hea
   | Module | Built under Emscripten |
   |---|---|
   | base, log, cli | fully |
-  | coro | everything except `ThreadPoolExecutor.hpp`, which `#error`s with a message under single-threaded Emscripten. `core::coro::StopToken`/`StopSource`/`StopCallback` alias `std::` where `__cpp_lib_jthread` is available and fall back to a core-cpp implementation otherwise (libc++ 17 in emsdk 3.1.56, older FreeBSD libc++), as `Generator` does; no experimental-library flag is propagated |
+  | async | everything except `ThreadPoolExecutor.hpp`, which `#error`s with a message under single-threaded Emscripten. `core::async::StopToken`/`StopSource`/`StopCallback` alias `std::` where `__cpp_lib_jthread` is available and fall back to a core-cpp implementation otherwise (libc++ 17 in emsdk 3.1.56, older FreeBSD libc++), as `Generator` does; no experimental-library flag is propagated |
   | platform | Types, NativeHandle, PlatformError, Clock, StringUtils, PathUtils, GlobMatch, FileUri |
   | net | `net_types`, IoBackend, EventLoop, timers, DeadlineTimer, WithTimeout, HostDrivenBackend and `testing/{TestLoop,ScriptedBackend,NullBackend}`. No sockets, DNS, TLS or HTTP |
   | testing | fully (the Windows-dialog parts are no-ops) |
@@ -76,8 +76,8 @@ Namespace equals directory. A header's outermost namespace is `core::<dir>`. Hea
 
 **Layering:**
 ```
-core::coro   Task / DetachedTask / syncRun / whenAll / whenAny / AsyncQueue / ResumeOn / IExecutor / ThreadPoolExecutor
-core::net    EventLoop (one per thread; implements coro::IExecutor) ── drives exactly one ──► IoBackend
+core::async  Task / DetachedTask / syncRun / whenAll / whenAny / AsyncQueue / ResumeOn / IExecutor / ThreadPoolExecutor
+core::net    EventLoop (one per thread; implements async::IExecutor) ── drives exactly one ──► IoBackend
              IoBackend: readiness (ReadinessHandler attach/setInterest/detach) + completion (Windows ICompletionPort/CompletionOp)
              sockets: PosixSocket (readiness backends) | IocpSocket (IOCP)
 ```
@@ -125,7 +125,7 @@ core::net    EventLoop (one per thread; implements coro::IExecutor) ── drive
 
    Objects registered with a loop must be destroyed before it.
 5. **Cancellation is `std::stop_token` only.**
-   - A cancel from the flow's own token throws `core::coro::OperationCancelled`.
+   - A cancel from the flow's own token throws `core::async::OperationCancelled`.
    - A cancel from the resource (`close()`, `cancelRead()`, a closed listener) returns `NetErrorCode::Cancelled` as a value.
    - Stop callbacks post `requestCancel(ParkId)` (generation-checked) through the inbound queue.
    - If a receive already completed with bytes, the data wins (#884).
@@ -141,7 +141,7 @@ core::net    EventLoop (one per thread; implements coro::IExecutor) ── drive
    - `read`/`write`/`writeVectored`/`waitReadable`/`cancelRead`/`shutdownWrite`/`handshakeIfNeeded`/`setReceiveDeadline`, plus contour's `readWithFd`.
    - Stop-aware, as `ResultAwaitable<R>`. Public `core::net::contract::*` slot guards.
    - One `PosixSocket` replaces fastcached Epoll/KqueueSocket and contour PosixSocket.
-   - `core::coro::asTask(aw)` for callers that store a Task.
+   - `core::async::asTask(aw)` for callers that store a Task.
 8. **DNS, dial, UDP, blocking I/O, TLS, HTTP:**
    - DNS never runs on the loop (fastcached `IAsyncAddressResolver`/`ThreadedAddressResolver`). Contour's `connect()` is re-implemented over `makeConnector`.
    - fastcached's `IConnector`/`ConnectFlow`/`DialOptions`/`KeepAlive`/`SocketDeadline`/`IAdmissionControl`.
@@ -197,17 +197,17 @@ class EmscriptenHostScheduler final : public IHostScheduler { /* emscripten_asyn
 
 enum class IdlePolicy : std::uint8_t { Block, Return };
 struct EventLoopOptions { IdlePolicy idle = IdlePolicy::Block; std::size_t dispatchBatch = 64; std::string_view name = {}; };
-class EventLoop : public coro::IExecutor {
+class EventLoop : public async::IExecutor {
   public:
     explicit EventLoop(IoBackend&, platform::IClock& = platform::defaultSteadyClock(), EventLoopOptions = {});
     void run(); RunOnceResult runOnce(std::optional<platform::SteadyDuration> maxWait = std::nullopt);
-    template <typename T> T blockOn(coro::Task<T>); std::size_t runUntilIdle();
+    template <typename T> T blockOn(async::Task<T>); std::size_t runUntilIdle();
     void stop() noexcept; void requestStop();
-    using coro::IExecutor::submit;
-    void submit(std::coroutine_handle<>) override; void submit(coro::ParkedWork) override;
-    void schedule(platform::SteadyTimePoint, std::coroutine_handle<>); void schedule(platform::SteadyTimePoint, coro::ParkedWork);
+    using async::IExecutor::submit;
+    void submit(std::coroutine_handle<>) override; void submit(async::ParkedWork) override;
+    void schedule(platform::SteadyTimePoint, std::coroutine_handle<>); void schedule(platform::SteadyTimePoint, async::ParkedWork);
     [[nodiscard]] bool cancelPending(std::coroutine_handle<>) noexcept;
-    void post(std::function<void()>); void spawn(coro::Task<void>);          // spawn: O(1) self-unlink
+    void post(std::function<void()>); void spawn(async::Task<void>);          // spawn: O(1) self-unlink
     [[nodiscard]] TimerId addTimer(platform::SteadyTimePoint, TimerCallback, void* state); bool cancelTimer(TimerId) noexcept;
     [[nodiscard]] DelayAwaiter delay(platform::SteadyDuration) noexcept; [[nodiscard]] DelayAwaiter sleepUntil(platform::SteadyTimePoint) noexcept;
     [[nodiscard]] WaitHandleAwaiter waitReadable(NativeHandle, HandleKind = defaultHandleKind) noexcept;
@@ -215,8 +215,8 @@ class EventLoop : public coro::IExecutor {
     void notifyHandleClosing(NativeHandle, FdWakePolicy);
     [[nodiscard]] bool running() const noexcept; [[nodiscard]] bool isOnWorkerThread() const noexcept;
     [[nodiscard]] bool teardownIsSerialisedWithDispatch() const noexcept;
-    [[nodiscard]] platform::IClock& clock() const noexcept; [[nodiscard]] coro::StopSource& rootStopSource() noexcept;
-    void resumeSoon(coro::ParkedWork); [[nodiscard]] ParkId registerPark(ParkEntry); void unregisterPark(ParkId) noexcept;
+    [[nodiscard]] platform::IClock& clock() const noexcept; [[nodiscard]] async::StopSource& rootStopSource() noexcept;
+    void resumeSoon(async::ParkedWork); [[nodiscard]] ParkId registerPark(ParkEntry); void unregisterPark(ParkId) noexcept;
     void requestCancel(ParkId) noexcept;   // any thread
 };
 [[nodiscard]] DelayAwaiter sleepUntil(EventLoop* loopOrNull, platform::SteadyTimePoint);   // null/elapsed ⇒ no suspend
@@ -247,10 +247,10 @@ namespace testing { class TestLoop; }  // is-a EventLoop over NullBackend, IdleP
 - `NetErrorCode::BadFileHandle` → `BadHandle`
 - `IClock::Now/Refresh` → `now/refresh`
 - `FC_ZONE_*` → `CORE_ZONE_*`
-- `<FastCache/Async|Net/…>` → `<core/coro|net/…>`
+- `<FastCache/Async|Net/…>` → `<core/async|net/…>`
 
 contour/endo/tuidu deltas:
-- `coro::` → `core::coro::`, `net::` → `core::net::`
+- `coro::` → `core::async::`, `net::` → `core::net::`
 - `net::IClock` → `core::platform::IClock`
 - `IListener::localPort` → `boundPort`
 - `NetErrorCode::Other` → `SystemError`
@@ -338,7 +338,7 @@ contour/endo/tuidu deltas:
   - mkdocs-material `--strict` (fastcached config and pins).
   - Doxygen at `/api/`, run after mkdocs.
   - Deployed with `upload-pages-artifact@v3` + `deploy-pages@v4`, `site_url https://contour-terminal.github.io/core-cpp/`.
-  - Nav: Getting started (CPM, vendoring, building, options) · Modules (index/layering, base, log, cli, platform, coro, net, tui, testing) · Design notes (DI, error handling, coroutines and lifetimes, threading, portability, profiling) · Contributing (guidelines, releasing) · Changelog · API.
+  - Nav: Getting started (CPM, vendoring, building, options) · Modules (index/layering, base, log, cli, platform, async, net, tui, testing) · Design notes (DI, error handling, coroutines and lifetimes, threading, portability, profiling) · Contributing (guidelines, releasing) · Changelog · API.
 - **Guidelines:**
   - `AGENT.md` holds tripwires and pointers. `CLAUDE.md` is `@AGENT.md`.
   - `.agent/rules/`:
@@ -361,7 +361,7 @@ contour/endo/tuidu deltas:
 
 - **The copy is verbatim** and byte-identical to a tag or full SHA. **No local changes**: fix upstream, cut a patch release, re-vendor.
 - **Commands:**
-  - `cmake -DMODE=sync -DREF=<tag> -DDEST=<dir> [-DREPO=<url|path>] [-DMODULES=base;log;cli;platform;coro;net;testing] -P <copy>/cmake/CoreCppVendor.cmake`
+  - `cmake -DMODE=sync -DREF=<tag> -DDEST=<dir> [-DREPO=<url|path>] [-DMODULES=base;log;cli;platform;async;net;testing] -P <copy>/cmake/CoreCppVendor.cmake`
     - Reads git **blobs** with `git -c core.autocrlf=false -c core.eol=lf`.
     - Refuses CR bytes, symlinks and submodules.
     - Writes `MANIFEST`: header lines `# repository/ref/commit/files`, then `<sha256>  <path>` sorted.
@@ -389,7 +389,7 @@ Every import records its upstream SHA per file in `.agent/reference/provenance.m
 | tuidu (`master`, contour-terminal) | CPM | `build/core-cpp`: delete `src/{coro,platform,testing,tui}` and the crispy fetch; codemod (43 files); API drift: EventSource mocks, `crispy::cli` PascalCase types. |
 | fastcached (`master`, LASTRADA-Software) | CPM | PR-A `claude/<n>-core-cpp-tui`: delete `vendor/`, the vendor-* checks and their scripts; adapter → `core::tui`. PR-B `claude/<m>-core-cpp-async-net`: delete `Async/`, `Net/` and the moved Core; staged semantic rename; benchmark gate. |
 | Lightweight (`master`, LASTRADA-Software) | CPM, only under `LIGHTWEIGHT_BUILD_TOOLS` | `feat/dbtool-core-tui`: StandardProgressManager and main.cpp use `core::tui_output`. |
-| contour (`master`, contour-terminal) | verbatim `vendor/core-cpp` (base, log, cli, platform, coro, net, testing) | `build/vendor-core-cpp`: delete `src/{coro,net}` and crispy's generic half; codemod; link-what-you-include commit first; vtparser includes → `<core/…>`; stays a draft until endo and tuidu merge. |
+| contour (`master`, contour-terminal) | verbatim `vendor/core-cpp` (base, log, cli, platform, async, net, testing) | `build/vendor-core-cpp`: delete `src/{coro,net}` and crispy's generic half; codemod; link-what-you-include commit first; vtparser includes → `<core/…>`; stays a draft until endo and tuidu merge. |
 | morph (`master`, LASTRADA-Software) | CPM, replacing FetchContent for glaze, Catch2 and Lightweight | PR-1 `build/core-cpp`: CPM; TimeoutScheduler's two builds → one wrapper over core-cpp EventLoop timers (native: its own thread; WebAssembly: HostDriven); `net/detail/base64.hpp` → `core::base64`; WakeupPipe → `core::platform::Wakeup`. PR-2 `feat/coroutines`: spec first (`docs/spec/core/coroutines.md`), awaitable `Completion<T>`, `Task<R>` model handlers on the model strand (not re-entrant by default), `morph::async::delay`, stop-token cancellation for execute deadlines. Follow-up issue for the remaining overlap (executors/strand, logger, FileIoOps, DateTime clock, `morph::net` on Windows). |
 
 ---
