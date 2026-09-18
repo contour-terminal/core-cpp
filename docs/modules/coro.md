@@ -39,9 +39,14 @@ fills with `co_yield`, imported from endo (`src/platform/Generator.hpp` at `f774
   where the standard library defines `__cpp_lib_jthread`, and otherwise
   `core::coro::detail::StopTokenFallback`, `StopSourceFallback`, `StopCallbackFallback<F>` and
   `NoStopStateFallback`. `NoStopState` is a `constexpr` object of `std::nostopstate_t` or of
-  `NoStopStateFallback`. libc++ 17, which emsdk 3.1.56 ships, has `<stop_token>` only behind
-  `-fexperimental-library`, and core-cpp adds no compile flag to its consumers. contour's copy
-  (`src/coro/Cancellation.hpp` at `6777ff05`) aliased `std::` and refused to compile otherwise.
+  `NoStopStateFallback`. contour's copy (`src/coro/Cancellation.hpp` at `6777ff05`) aliased
+  `std::` and refused to compile otherwise.
+- The fallback is live wherever libc++ before 20 is used without `-fexperimental-library`, which
+  gates `<stop_token>` there. That covers emsdk 3.1.56's libc++ 17, FreeBSD 15's base Clang 19,
+  and likely AppleClang. It runs with real threads on all of them but the first, so it is
+  production code, not a WebAssembly shim. core-cpp adds no compile flag to its consumers. The
+  configure log names the branch a toolchain takes, when core-cpp's tests are built:
+  `[core-cpp] coro: StopToken is std::stop_token`, or `... is core-cpp's fallback`.
 - The fallback has the standard semantics. `request_stop()` returns true exactly once, and that
   call runs every registered callback once, on the requesting thread, before it returns. A
   callback constructed on a stopped token runs in its constructor, is never registered, and so
