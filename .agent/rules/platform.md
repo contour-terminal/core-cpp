@@ -4,11 +4,12 @@ Rules for `src/core/platform/`, and for any platform-specific code in another mo
 operating-system difference is expressed, and the Windows facts that have each cost a debugging
 session.
 
-The module arrives in Task A4, from endo's generic platform layer with one clock merged from
-endo, contour and fastcached (the design spec,
-[Part I §1](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/specs/2026-09-18-core-cpp-design.md)).
-The endo-specific parts stay in endo: process listing, pipes, the project file tree and install
-paths.
+The module is endo's generic platform layer with one clock merged from endo, contour and
+fastcached (the design spec,
+[Part I §1](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/specs/2026-09-18-core-cpp-design.md);
+the [module page](https://contour-terminal.github.io/core-cpp/modules/platform/) lists what is in
+it). The endo-specific parts stay in endo: processes and the pipes to them, process listing, the
+project file tree, install paths and the interrupt throttle.
 
 ## A platform difference is an implementation, never an `#ifdef` in logic
 
@@ -27,9 +28,12 @@ Origin: [endo `AGENT.md`, "New Platform Feature"](https://github.com/contour-ter
 which also says: **do not bypass the platform layer.** A direct `::stat`, `std::getenv` or
 `CreateFileW` in another module is a seam that tests cannot replace.
 
-- **The environment is read in one place**, `EnvironmentProvider`, so a test sets it with
-  `testing::TestEnvironmentProvider` rather than mutating the process's environment, which is
-  shared by every thread and every test in the binary.
+- **The environment is read in one place**, `EnvironmentProvider` (or `core::Environment`, which
+  [core-cpp#7](https://github.com/contour-terminal/core-cpp/issues/7) merges with it), so a test
+  sets it with `testing::TestEnvironmentProvider` or `core::testing::FakeEnvironment` rather than
+  mutating the process's environment, which is shared by every thread and every test in the
+  binary. **It is written in one place too:** `core::setProcessEnvironmentVariable()`, never
+  `setenv()`, which clang-tidy's `concurrency-mt-unsafe` rejects along with `getenv()`.
 - **Time is `IClock`.** Its `now()` is what logic reads, and its virtual `refresh()` is the
   contract that lets `CachedClock` be refreshed by the event loop at fixed points of each turn
   (the design spec, Part I §2, the `runOnce` turn). Tests use `ManualClock`.
@@ -54,7 +58,10 @@ which also says: **do not bypass the platform layer.** A direct `::stat`, `std::
   so a consumer's translation unit that includes a core-cpp header has none of them, and
   `<Windows.h>` would define `min`/`max` macros into it. Declare in the header, include
   `<Windows.h>` in the `.cpp`; `core::testing::suppressWindowsDialogs()` was moved out of line
-  for exactly this reason.
+  for exactly this reason, and so were the Windows halves of `core/platform/Types.hpp`
+  (`windows/WindowsTypes.cpp`), which spells `HANDLE` and `DWORD` as `void*` and
+  `unsigned long` and holds the two spellings equal with a `static_assert` there.
+  `Types_test.cpp` fails if the header brings `<Windows.h>` back.
 - **`cl` and `clang-cl` are both the MSVC driver** (`CORE_CPP_MSVC_DRIVER`): both take `/`
   options, and both get `/utf-8 /permissive- /Zc:__cplusplus`. clang-cl defines `__clang__` and
   `_MSC_VER` but not `__GNUC__`, and on clang-cl `/Wall` means `-Weverything`, which is why the
@@ -78,8 +85,9 @@ which also says: **do not bypass the platform layer.** A direct `::stat`, `std::
 
 ## The WebAssembly subset
 
-Under single-threaded Emscripten, `core::platform` builds only Types, NativeHandle,
-PlatformError, Clock, StringUtils, PathUtils, GlobMatch and FileUri (`SOURCES_EMSCRIPTEN`). Its
+Under single-threaded Emscripten, `core::platform` builds only Types (with `NativeHandle`),
+PlatformError, Clock, StringUtils, PathUtils, GlobMatch and FileUri (`SOURCES_EMSCRIPTEN`), and
+runs only their tests. Its
 row in the module table says `PLATFORMS wasm-subset`, so an Emscripten build compiles that list
 and nothing else of the module; a module whose row says `any` compiles all of `SOURCES` there,
 plus its `SOURCES_EMSCRIPTEN`.
@@ -91,3 +99,5 @@ list may not. See [`library-hygiene.md`](library-hygiene.md).
 - **[core-cpp#7](https://github.com/contour-terminal/core-cpp/issues/7)** — unify
   `core::Environment` (`core::base`, from crispy) with `core::platform::EnvironmentProvider`
   into one injectable seam.
+- **[core-cpp#14](https://github.com/contour-terminal/core-cpp/issues/14)** — `Wakeup`'s
+  constructor throws; return `std::expected` from a factory instead.

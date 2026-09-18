@@ -19,6 +19,9 @@ Contour Terminal Emulator
     Overloaded,Times,UserInfo,Utils}.{hpp,cpp}, src/core/log/{LogStore,LogSink}.*,
     src/core/log/Assert.hpp, src/core/cli/{CLI,App}.*,
     src/core/testing/Environment.hpp and their tests (from src/crispy/, adapted)
+  - src/core/platform/Clock.hpp and src/core/platform/SystemPipe.{hpp,cpp} (merged
+    from src/net/platform/Clock.hpp and src/net/platform/SystemPipe.{hpp,cpp}), and
+    src/core/platform/WinsockInit.{hpp,cpp} (identical to src/net/platform/)
 
 Endo
   https://github.com/contour-terminal/endo
@@ -28,6 +31,9 @@ Endo
   - src/core/testing/SuppressWindowsDialogsAtStartup.cpp
   - tests/WindowsDialogCanary.cpp
   - cmake/CPM.cmake (the CPM 0.40.8 pin and its SHA-256)
+  - src/core/platform/** (from the generic half of src/platform/, adapted; Clock.hpp
+    and SystemPipe merged with contour's and fastcached's) and their tests
+  - src/core/coro/Generator.hpp and its test (from src/platform/, adapted)
   - src/core/testing/{ScopedTempDir,ScopedWorkingDirectory,EnvHelper}.hpp and
     ScopedTempDir_test.cpp (from src/testing/, adapted)
 
@@ -44,6 +50,9 @@ fastcached
   Imported at ee71f868547712892b7d9a2ebff60d49c496e25c (origin/master)
   - src/core/{Profiling,Ranges}.hpp and their tests (from src/FastCache/Core/,
     adapted)
+  Imported at b461e8b6d367ed22e4bf2935717fa59360a64b7d (origin/master)
+  - src/core/platform/Clock.hpp and Clock_test.cpp (merged from
+    src/FastCache/Core/{Clock.hpp,Clock_test.cpp,WallClockRef_test.cpp})
 
 Documentation and CI configuration adapted from the following projects, each
 licensed under the Apache License, Version 2.0, and each read as a git blob at the

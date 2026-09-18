@@ -2,26 +2,88 @@
 
 The operating-system layer: clocks, wakeups, signals, pipes, the file system, the environment and
 paths, each behind an interface with a test double. Namespace `core::platform`, directory
-`src/core/platform/`, target `core::platform`.
+`src/core/platform/`, target `core::platform`. It links [base](base.md) and [coro](coro.md) (for
+`Generator`), and `ws2_32` on Windows.
 
-!!! note "Status"
-    Not imported yet. Task A4 of the
-    [implementation plan](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/plans/2026-09-18-core-cpp.md)
-    imports the generic half of endo's `src/platform` at `f774a210`.
+Imported from the generic half of endo's `src/platform` at `f774a210`, with one clock merged from
+endo's, contour's (`src/net/platform/Clock.hpp` at `6777ff05`) and fastcached's
+(`src/FastCache/Core/Clock.hpp` at `b461e8b6`), and `SystemPipe` merged with contour's copy.
+endo's shell-specific platform code stays in endo: processes and the pipes to them
+(`Process`, `Pipe`, `WaitResult`, `ProcessProvider`), the project file tree, install paths and
+the interrupt throttle.
 
-## Planned contents
+| Header | What it has |
+|---|---|
+| `<core/platform/Clock.hpp>` | the clock seams, see [below](#clocks) |
+| `<core/platform/Types.hpp>` | `NativeHandle`, `InvalidHandle`, `ProcessId`, the standard handles, `platformRead()`/`platformWrite()`/`platformClose()`, `isTerminal()`, `nativeHandleToNumber()` |
+| `<core/platform/PlatformError.hpp>` | `PlatformError`, the error of this module's fallible operations, and `toString()` |
+| `<core/platform/Wakeup.hpp>` | `Wakeup`, a signal one thread raises to wake another out of `poll()` or `WaitForMultipleObjects()`: an eventfd on Linux, a self-pipe on macOS and the BSDs, an event on Windows |
+| `<core/platform/SystemPipe.hpp>` | `createSystemPipe()`: an in-process byte channel whose read end an event loop can wait on, on every platform |
+| `<core/platform/WinsockInit.hpp>` | `ensureWinsockInitialized()`, once per process; a no-op off Windows |
+| `<core/platform/SignalHandler.hpp>` | `SignalHandler`: SIGCHLD, SIGTSTP, SIGCONT and SIGINT through signalfd on Linux and handlers elsewhere, Ctrl+C and Ctrl+Break on Windows, and an optional `Wakeup` to raise on an interrupt |
+| `<core/platform/MessageQueue.hpp>` | `MessageQueue<T>`, a thread-safe queue that can raise a `Wakeup` on every push |
+| `<core/platform/FileSystem.hpp>`, `<core/platform/NativeFileSystem.hpp>` | the `FileSystem` interface, errors as `std::expected`, a lazy recursive walk as a `core::coro::Generator`; `NativeFileSystem` over `std::filesystem` |
+| `<core/platform/FileInfoProvider.hpp>` | `FileInfoProvider`, a directory listing with `stat(2)` metadata (`FileEntry`), a single file or a glob pattern |
+| `<core/platform/EnvironmentProvider.hpp>` | `EnvironmentProvider`: variables with a set-then-export model, the working directory, `homeDirectory()`, `userName()`, `configHome()` |
+| `<core/platform/UserPaths.hpp>` | `homeDirectory()` and `configHome()` over a `core::Environment`, or over the process environment |
+| `<core/platform/PathUtils.hpp>` | path spelling: `normalizePath()`, `joinPath()`, `absolutePath()`, `canonicalCasePath()`, `stripTrailingSeparator()`, `isCaseOnlyRename()`, `resolveDevicePath()` |
+| `<core/platform/GlobMatch.hpp>` | `globMatchFilename()` (`*`, `?`, `[...]`) and `containsGlobChars()` |
+| `<core/platform/FileUri.hpp>` | RFC 3986 percent-encoding and RFC 8089 `file://` URIs |
+| `<core/platform/SystemInfo.hpp>` | `hostName()` and `cachedHostName()` |
+| `<core/platform/StringUtils.hpp>` | `trimInPlace()` |
 
-- **One merged clock**, from endo's, contour's and fastcached's: `IClock` with `now()` and a
-  `refresh()` an event loop calls at fixed points of each turn, `SteadyClock`, `CachedClock`,
-  `ManualClock`, `IWallClock`, `SystemWallClock`, `ManualWallClock`, `WallClockRef`.
-- `Wakeup`, `SignalHandler`, `SystemPipe`, `WinsockInit`, `MessageQueue`, `PlatformError`,
-  `NativeHandle`.
-- `FileSystem` and `NativeFileSystem`, `FileInfoProvider`, `EnvironmentProvider`, `PathUtils`,
-  `GlobMatch`, `UserPaths`, `FileUri`, `SystemInfo`, `StringUtils`, with their doubles in
-  `testing/`.
+The test doubles are in `testing/` and in `core::platform::testing`:
+`testing::InMemoryFileSystem` (a `FileSystem` held in maps, with symlinks, permissions and
+refused paths), `testing::MockFileInfoProvider` and `testing::TestEnvironmentProvider`, which never
+touches the process environment. The native implementations of `FileInfoProvider` and
+`EnvironmentProvider` are in the private `posix/`, `linux/` and `windows/` directories; a
+composition root picks one per platform.
 
-endo's shell-specific platform code (processes, pipes to child processes, the project file tree,
-install paths) stays in endo.
+## Clocks
 
-Depends on [base](base.md), [log](log.md) and [coro](coro.md). Under WebAssembly only Types,
-NativeHandle, PlatformError, Clock, StringUtils, PathUtils, GlobMatch and FileUri build.
+Logic that schedules against a deadline takes an `IClock&` rather than calling
+`std::chrono::steady_clock::now()`, so a test can drive time.
+
+- **`IClock`** answers `now()`, a `SteadyTimePoint`. Its virtual `refresh()` does nothing by
+  default; an event loop calls it at fixed points of each turn (after the blocking wait returns,
+  and before it computes the next timeout), which is what makes a caching clock correct.
+- **`SteadyClock`** reads the OS clock on every call. **`defaultSteadyClock()`** is a process-wide
+  one, for default arguments.
+- **`CachedClock`** wraps another clock and answers the sample its last `refresh()` took, so a
+  turn that reads the clock a thousand times pays for one read. Several loops may share one; it
+  never moves backwards.
+- **`ManualClock`** moves only on `advance()` and `setNow()`.
+- **`IWallClock`**, **`SystemWallClock`**, **`ManualWallClock`** and **`defaultSystemWallClock()`**
+  are the same seam for `std::chrono::system_clock`, for inputs that are wall-clock instants (an
+  absolute expiry, a log line's date). Internal scheduling never reads the wall clock.
+- **`WallClockRef`** is how a type keeps a borrowed `IWallClock`: it binds to a named clock and
+  refuses a temporary, and because it is carried by value the refusal survives a forwarding
+  constructor, which a deleted `T(IWallClock const&&)` overload does not
+  ([fastcached#1028](https://github.com/LASTRADA-Software/fastcached/issues/1028)).
+
+## Behaviour worth knowing
+
+- **`SystemPipe` never blocks.** On POSIX both ends are non-blocking and close-on-exec. A write
+  that the full channel refuses reports success, because the bytes already pending wake the reader
+  just as well, and a read of an empty channel fails rather than parking the loop. On Windows the
+  channel is a loopback TCP pair whose read end is mapped to a waitable event.
+- **`Types.hpp` does not include `<Windows.h>`.** `NativeHandle` is `void*` and `ProcessId`
+  `unsigned long` there, and the calls into the Windows API are out of line. endo's copy defined
+  `STDIN_FILENO` and the `SIG*` numbers on Windows for its process code; core-cpp's does not.
+- **The process environment is written in one place.** `PosixEnvironmentProvider` exports through
+  `core::setProcessEnvironmentVariable()` (in [base](base.md)), never `setenv()`.
+- **`UserPaths` reads through a `core::Environment`**, so a test passes a
+  `core::testing::FakeEnvironment`. The overloads without one read the process environment through
+  `core::LiveEnvironment`, which on Windows is the operating system's block.
+- **`Wakeup`'s constructor throws** `std::runtime_error` when the operating system refuses the
+  descriptor or event, as endo's does;
+  [core-cpp#14](https://github.com/contour-terminal/core-cpp/issues/14) tracks returning
+  `std::expected` instead.
+
+## Under Emscripten
+
+The row in the module table says `PLATFORMS wasm-subset`. Under single-threaded Emscripten only
+Types, PlatformError, Clock, StringUtils, PathUtils, GlobMatch and FileUri build (the
+`SOURCES_EMSCRIPTEN` list), and their tests run under node. Clock needs no threads; its test of
+concurrent `CachedClock` refreshes is compiled only where threads exist. There is no separate
+`NativeHandle.hpp`: `NativeHandle` is part of `Types.hpp`, as it is in endo.

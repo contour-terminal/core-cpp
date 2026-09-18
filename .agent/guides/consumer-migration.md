@@ -74,8 +74,14 @@ target_link_libraries(myapp PRIVATE core::coro core::net core::tui)
 | `endo::platform::` | `core::platform::` |
 | `endo::testing::` | `core::testing::` |
 | `tui::` | `core::tui::` |
-| `endo::Generator` | `core::coro::Generator` |
+| `endo::Generator`, `<platform/Generator.hpp>` | `core::coro::Generator`, `<core/coro/Generator.hpp>` |
+| `<platform/X.hpp>` (endo's generic platform layer) | `<core/platform/X.hpp>` |
 | `<testing/ScopedTempDir.hpp>`, `<testing/ScopedWorkingDirectory.hpp>`, `<testing/EnvHelper.hpp>` | `<core/testing/...>` |
+| the compatibility aliases in `namespace endo` (`endo::NativeHandle`, `endo::FileSystem`, `endo::SignalHandler`, `endo::TestEnvironment`, ...) | the `core::platform::` names; `endo::TestEnvironment` is `core::platform::TestEnvironmentProvider` |
+| `endo::containsGlobChars`, `endo::globMatchFilename` | `core::platform::containsGlobChars`, `core::platform::globMatchFilename` |
+| `net::IClock`, `net::SteadyClock`, `net::ManualClock`, `net::defaultSteadyClock`, `net::SteadyTimePoint`, `net::SteadyDuration`, `<net/platform/Clock.hpp>` | the same names in `core::platform`, `<core/platform/Clock.hpp>` |
+| `net::NativeHandle`, `net::InvalidHandle`, `net::platformRead`/`platformWrite`/`platformClose`, `<net/platform/NativeHandle.hpp>` | the same names in `core::platform`, `<core/platform/Types.hpp>` (there is no `NativeHandle.hpp`) |
+| `net::ensureWinsockInitialized`, `<net/platform/WinsockInit.hpp>` | `core::platform::ensureWinsockInitialized`, `<core/platform/WinsockInit.hpp>` |
 | `<crispy/X.hpp>` for Assert, Base64, Deferred, Defines, Environment, Escape, FNV, Flags, Overloaded, Times, UserInfo, Utils | `<core/X.hpp>` |
 | `<crispy/LogStore.hpp>`, `<crispy/LogSink.hpp>` | `<core/log/LogStore.hpp>`, `<core/log/LogSink.hpp>` |
 | `<crispy/CLI.hpp>`, `<crispy/App.hpp>` | `<core/cli/CLI.hpp>`, `<core/cli/App.hpp>` |
@@ -97,6 +103,11 @@ target_link_libraries(myapp PRIVATE core::coro core::net core::tui)
 | the global `Overloaded` of `<crispy/Overloaded.hpp>`, and `crispy::Overloaded` of `<crispy/Utils.hpp>` | `core::Overloaded`, in `<core/Overloaded.hpp>` (which `<core/Utils.hpp>` includes) |
 | `logstore::SourceLocationCustom` | removed: `core::log::SourceLocation` is `std::source_location` |
 | `crispy::views::enumerate`, a function object | `core::views::enumerate`, a function template: `enumerate(r)` is unchanged, but it cannot be passed as a value |
+| `net::createSystemPipe()` returning `std::expected<..., NetError>`, and `SystemPipe::read`/`write` returning `IoResult` | `core::platform::createSystemPipe()`, and `read`/`write`, report a `core::platform::PlatformError` (`PipeCreationFailed`, `IoError`); the non-blocking behaviour is contour's |
+| endo's `SystemPipe`, blocking on POSIX | non-blocking and close-on-exec on both ends: a write the full channel refuses reports done, and a read of an empty channel fails (`IoError`) instead of blocking |
+| endo's `<platform/Types.hpp>` including `<windows.h>`, `<io.h>` and `<fcntl.h>` on Windows, and defining `STDIN_FILENO`/`STDOUT_FILENO`/`STDERR_FILENO` and `SIGINT`/`SIGTERM`/`SIGKILL`/`SIGTSTP`/`SIGCONT`/`SIGCHLD` there | `<core/platform/Types.hpp>` includes none of them and defines none: endo's process code (which stays in endo) includes what it uses and defines its own Windows fallbacks |
+| `homeDirectory()`, `configHome()` from `<platform/UserPaths.hpp>`, reading `std::getenv()` | the same functions, reading `core::LiveEnvironment` (on Windows the operating system's block, not the CRT's copy); overloads take a `core::Environment const&` |
+| `ENDO_GENERATOR_FORCE_FALLBACK` | `CORE_GENERATOR_FORCE_FALLBACK`; `Generator` is the fallback on libstdc++ now as well (endo's picked by include order) |
 | `endo::testing::setTestEnv()`/`ScopedEnv` over `setenv()`/`getenv()` | `core::testing::setTestEnv()`/`ScopedEnv`, over `core::setProcessEnvironmentVariable()`/`core::LiveEnvironment` on POSIX, `_putenv_s()` on Windows as before |
 
 ### fastcached (PascalCase to camelBack)
@@ -117,6 +128,11 @@ The full table has 44 rows and is seeded into `tools/migrate/renames.json` (Task
 | `*Listener::Bind(...)` | `listen(loop, ListenOptions)` |
 | `NetErrorCode::BadFileHandle` | `BadHandle` |
 | `IClock::Now`, `Refresh` | `now`, `refresh` |
+| `<FastCache/Core/Clock.hpp>`, `FastCache::IClock`, `SteadyClock`, `CachedClock`, `ManualClock`, `IWallClock`, `SystemWallClock`, `ManualWallClock`, `WallClockRef` | `<core/platform/Clock.hpp>`, the same names in `core::platform` |
+| `FastCache::TimePoint`, `FastCache::Duration` | `core::platform::SteadyTimePoint`, `core::platform::SteadyDuration` |
+| `ManualClock::Advance`, `SetNow`; `ManualWallClock::Advance`, `SetNow` | `advance`, `setNow` |
+| `IWallClock::Now`, `WallClockRef::Now`, `WallClockRef::Get` | `now`, `now`, `get` |
+| `FastCache::DefaultSystemWallClock()` | `core::platform::defaultSystemWallClock()` |
 | `FC_ZONE_*`, `FC_FRAME_MARK*`, `FC_THREAD_NAME`, `FC_PLOT`, `FC_TRACY_ENABLED` | `CORE_ZONE_*`, `CORE_FRAME_MARK*`, `CORE_THREAD_NAME`, `CORE_PLOT`, `CORE_CPP_WITH_TRACY` (0 or 1 in `<core/Config.hpp>`) |
 | `<FastCache/Core/Profiling.hpp>`, `<FastCache/Core/Ranges.hpp>` | `<core/Profiling.hpp>`, `<core/Ranges.hpp>` |
 | `FastCache::FindOrNull`, `FastCache::FindIfOrNull` | `core::findOrNull`, `core::findIfOrNull` |

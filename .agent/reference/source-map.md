@@ -32,11 +32,14 @@ src/core/
                             Base64, Profiling, Ranges
   log/                      core::log (crispy): LogStore, LogSink; Assert (fatal, SoftRequire)
   cli/                      core::cli (crispy): CLI, App
-  platform/                 (planned, A4) core::platform: Clock, Wakeup, SignalHandler,
-                            SystemPipe, FileSystem, EnvironmentProvider, ... ;
-                            posix/ linux/ darwin/ windows/ are private; testing/ holds the fakes
-  coro/                     (planned, A5 and B1) core::coro: Task, cancellation, whenAll/whenAny,
-                            Generator, executors, AsyncQueue; header-only
+  platform/                 core::platform (endo platform, one merged Clock): Clock, Types,
+                            PlatformError, Wakeup, SignalHandler, SystemPipe, WinsockInit,
+                            MessageQueue, FileSystem, FileInfoProvider, EnvironmentProvider,
+                            UserPaths, PathUtils, GlobMatch, FileUri, SystemInfo, StringUtils;
+                            posix/ linux/ windows/ are private; testing/ holds the fakes
+                            (InMemoryFileSystem, MockFileInfoProvider, TestEnvironmentProvider)
+  coro/                     core::coro, header-only: Generator (endo); Task, cancellation,
+                            whenAll/whenAny, executors, AsyncQueue (planned, A5 and B1)
   net/                      (planned, A6 and B2-B11) core::net_types, core::net, core::net_tls:
                             EventLoop, IoBackend and backend/, sockets, dialling, timers, TLS
   tui/                      (planned, A7 and B12) core::tui_output (the leaf) and core::tui

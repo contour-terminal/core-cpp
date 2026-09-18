@@ -10,8 +10,8 @@ namespace is its directory (`src/core/net/` is `core::net`; headers directly in 
 | [base](base.md) | `core` | `core::base` | static | Threads; Tracy (optional) | available |
 | [log](log.md) | `core::log` | `core::log` | static | base | available |
 | [cli](cli.md) | `core::cli` | `core::cli` | static | base, log | available |
-| [platform](platform.md) | `core::platform` | `core::platform` | static | base, log, coro | planned: Task A4 |
-| [coro](coro.md) | `core::coro` | `core::coro` | header-only | the standard library | planned: Tasks A5, B1 |
+| [platform](platform.md) | `core::platform` | `core::platform` | static | base, log, coro | available |
+| [coro](coro.md) | `core::coro` | `core::coro` | header-only | the standard library | `Generator` available; the rest: Tasks A5, B1 |
 | [net](net.md) | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | header-only, static, static | coro, platform; OpenSSL for `net_tls` | planned: Tasks A6, B2 to B11 |
 | [tui](tui.md) | `core::tui` | `core::tui_output`, `core::tui` | static | `tui_output`: base; `tui`: also platform, coro, net, libunicode, stb (optional) | planned: Tasks A7, B12 |
 | [testing](testing.md) | `core::testing` | `core::testing`, `core::testing_dialogs`, `core::testing_main` | static, object, static | base; log and Catch2 for `testing_main` | available |
@@ -66,7 +66,7 @@ subset builds, and CI runs its tests under node:
 |---|---|
 | base, log, cli | fully |
 | coro | everything except `ThreadPoolExecutor.hpp` |
-| platform | Types, NativeHandle, PlatformError, Clock, StringUtils, PathUtils, GlobMatch, FileUri |
+| platform | Types (with `NativeHandle`), PlatformError, Clock, StringUtils, PathUtils, GlobMatch, FileUri |
 | net | `net_types`, `IoBackend`, `EventLoop`, timers, `DeadlineTimer`, `WithTimeout`, the host-driven backend and the test doubles; no sockets, DNS, TLS or HTTP |
 | testing | fully (the Windows parts are no-ops) |
 | tui | never |

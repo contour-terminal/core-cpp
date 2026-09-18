@@ -101,3 +101,10 @@ core_cpp_module(NAME cli KIND STATIC DEPS base log PLATFORMS any)
 # Only core::testing_main needs Catch2, and CORE_CPP_CATCH2_MAIN gates that one target; it links
 # log to apply the LOG filter.
 core_cpp_module(NAME testing KIND STATIC DEPS base log PLATFORMS any)
+
+# Header-only, and needing nothing but the standard library.
+core_cpp_module(NAME coro KIND INTERFACE PLATFORMS any)
+
+# Under single-threaded Emscripten only Types, PlatformError, Clock, StringUtils, PathUtils,
+# GlobMatch and FileUri build: see its SOURCES_EMSCRIPTEN.
+core_cpp_module(NAME platform KIND STATIC DEPS base log coro PLATFORMS wasm-subset)
