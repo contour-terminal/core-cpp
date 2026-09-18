@@ -67,7 +67,7 @@ Namespace equals directory, both lowercase (user decision, 2026-09-18; `.clang-t
   | tui | never |
 
   The module table's `PLATFORMS` column takes `any|native|wasm-subset`, and `SOURCES_EMSCRIPTEN` selects the subset.
-- **Private code:** `detail/`, `posix/`, `linux/`, `darwin/`, `windows/`, `backend/` and tui `platform/` are private and are not in any FILE_SET. Each module's `testing/` subdir holds its DI fakes, which are public and compiled into the module.
+- **Private code:** `detail/`, `posix/`, `linux/`, `bsd/` (Apple and the BSDs), `darwin/`, `windows/`, `emscripten/` and tui `platform/` are private and are not in any FILE_SET. A module's top-level directory holds only platform-independent code. OS-specific code lives in these subdirectories, and CMake's per-platform source lists select it, not an `#ifdef` in a shared file (user direction, 2026-09-18). Each module's `testing/` subdir holds its DI fakes, which are public and compiled into the module.
 - **Stays in contour:** crispy's renderer/contour-only half (BufferObject, Ring, StrongHash, Intrinsics, StrongLRU*, LRUCache, AlignedAllocator, Animation, Point, Size, ReadSelector, FileDescriptor, TrieMap, Sort, Comparison, Compose, ScopedTimer, StackTrace, InterpolatedString, Owned, Range, tracy-stub), and **vtparser** (single consumer, performance-critical, still evolving).
 - **Graduation rule:** a file moves into core-cpp when a second project needs it. It must carry no PUBLIC flags and no dependency beyond std and Threads.
 - **Stays in endo:** `endo::http` (curl) and endo-specific platform: Process, Pipe, ProcessProvider*, ProjectFileTree, InstallPaths, InterruptThrottle.
