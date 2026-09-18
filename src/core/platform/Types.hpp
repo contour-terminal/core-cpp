@@ -147,14 +147,21 @@ inline auto platformWrite(NativeHandle fd, void const* data, std::size_t size) -
 
 /// Cross-platform read using POSIX read.
 ///
-/// Under Emscripten the end-of-file half of the contract does not hold for a pipe: its in-memory
-/// pipes report EAGAIN, not end-of-file, once the writer has closed and the pipe is drained, so
-/// such a read answers -1 there.
+/// Semantics are `read(2)`'s: the number of bytes read, 0 at the end of the file (a pipe whose
+/// write end has closed, once it is drained, included), or -1 on an error, with `errno` set.
+///
+/// Under Emscripten a pipe has no end of file. Its pipes behave as if the read end were always
+/// non-blocking: a read of an empty pipe fails with EAGAIN whether or not the writer has closed.
+/// A drained pipe whose writer closed therefore reads -1 with `errno` EAGAIN there, never 0, and
+/// the caller cannot tell it from a pipe that is merely empty for now. Code that must run there
+/// learns that the writer is done some other way: a length sent first, a terminator, or the
+/// writer's own completion.
 ///
 /// @param fd The file descriptor to read from.
 /// @param data Pointer to buffer to read into.
 /// @param size Maximum number of bytes to read.
-/// @return Bytes read, 0 on EOF / broken pipe (but see Emscripten above), or -1 on error.
+/// @return Bytes read, 0 at the end of the file (never for a pipe under Emscripten), or -1 on
+///         error.
 inline auto platformRead(NativeHandle fd, void* data, std::size_t size) -> std::intptr_t
 {
     return static_cast<std::intptr_t>(::read(fd, data, size));

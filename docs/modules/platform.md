@@ -107,6 +107,10 @@ node. Clock needs no threads; its test of
 concurrent `CachedClock` refreshes is compiled only where threads exist. There is no separate
 `NativeHandle.hpp`: `NativeHandle` is part of `Types.hpp`, as it is in endo.
 
-`platformRead()`'s end-of-file contract does not hold for a pipe there: Emscripten's in-memory
-pipes report EAGAIN once the writer has closed and the pipe is drained, so the read answers -1,
-not 0. Its test of that case is compiled only where the contract holds.
+**A pipe has no end of file there.** `platformRead()` is `read(2)`, which elsewhere answers 0
+for a drained pipe whose writer has closed. Emscripten's pipes behave as if the read end were
+always non-blocking, so a read of an empty pipe fails with EAGAIN whether the writer is still
+there or not: the drained pipe reads -1 with `errno` EAGAIN, never 0, and nothing tells it from a
+pipe that is only empty for now. Code that must also run there learns that the writer is done
+some other way, such as a length sent first, a terminator, or the writer's own completion. The
+test of that case checks each platform's answer, 0 natively and -1 with EAGAIN under Emscripten.

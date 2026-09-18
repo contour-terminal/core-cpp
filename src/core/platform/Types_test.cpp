@@ -12,6 +12,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <array>
+#include <cerrno>
 #include <cstdint>
 #include <string_view>
 
@@ -50,16 +51,13 @@ TEST_CASE("the standard handles are the standard streams of the platform", "[pla
     CHECK(standardError() != InvalidHandle);
 }
 
-// Emscripten's in-memory pipes report no end-of-file once the writer closes: the drained read
-// fails (EAGAIN) instead, so there is no end-of-file for platformRead to pass on there.
-#ifndef __EMSCRIPTEN__
-TEST_CASE("platformRead.returns_zero_on_closed_pipe_eof", "[platform]")
+TEST_CASE("platformRead.drained_pipe_whose_writer_closed", "[platform]")
 {
     // Regression guard: on Windows, ReadFile on a drained pipe whose writer has
     // closed fails with ERROR_BROKEN_PIPE. platformRead must normalize that to
     // a POSIX-style EOF (return 0), not an I/O error (return -1).
 
-    #ifdef _WIN32
+#ifdef _WIN32
     HANDLE readEnd = nullptr;
     HANDLE writeEnd = nullptr;
     REQUIRE(CreatePipe(&readEnd, &writeEnd, nullptr, 0) != 0);
@@ -70,7 +68,7 @@ TEST_CASE("platformRead.returns_zero_on_closed_pipe_eof", "[platform]")
     REQUIRE(WriteFile(writeEnd, payload.data(), static_cast<DWORD>(payload.size()), &written, nullptr) != 0);
     CHECK(written == payload.size());
     CloseHandle(writeEnd);
-    #else
+#else
     int fds[2] = { -1, -1 };
     REQUIRE(::pipe(fds) == 0);
     auto const readH = fds[0];
@@ -81,21 +79,29 @@ TEST_CASE("platformRead.returns_zero_on_closed_pipe_eof", "[platform]")
     auto const w = static_cast<intptr_t>(::write(writeH, payload.data(), payload.size()));
     REQUIRE(w == expected);
     ::close(writeH);
-    #endif
+#endif
 
     std::array<char, 16> buf {};
     auto const first = platformRead(readH, buf.data(), buf.size());
     CHECK(first == 2);
     CHECK(std::string_view(buf.data(), static_cast<size_t>(first)) == "hi");
 
-    // Second call: buffer empty, writer closed. Must be EOF, not error.
+    // Second call: buffer empty, writer closed. Must be EOF, not error...
+    errno = 0;
     auto const second = platformRead(readH, buf.data(), buf.size());
+#ifdef __EMSCRIPTEN__
+    // ...except under Emscripten, whose pipes have no end of file: a read of an empty pipe
+    // fails with EAGAIN whether or not the writer has closed (see platformRead()).
+    auto const readError = errno;
+    CHECK(second == -1);
+    CHECK(readError == EAGAIN);
+#else
     CHECK(second == 0);
-
-    #ifdef _WIN32
-    CloseHandle(readEnd);
-    #else
-    ::close(readH);
-    #endif
-}
 #endif
+
+#ifdef _WIN32
+    CloseHandle(readEnd);
+#else
+    ::close(readH);
+#endif
+}
