@@ -14,23 +14,23 @@ directory. A defined subset (base, log, cli, async and testing, and parts of pla
 held to building and passing its tests under single-threaded WebAssembly.
 
 **Status: 0.1.0 is in development.** The build framework, `core::base`, `core::log`,
-`core::cli`, `core::platform` and `core::testing` exist; the other modules are imported and
-merged by the tasks of the
-[implementation plan](docs/superpowers/plans/2026-09-18-core-cpp.md), and the table below says
-which. Nothing is tagged yet.
+`core::cli`, `core::platform`, `core::async`, `core::net` and `core::testing` exist. The tasks of
+the [implementation plan](docs/superpowers/plans/2026-09-18-core-cpp.md) still import `core::tui`
+and merge fastcached's executors and networking layer into `core::async` and `core::net`; the
+table below says what each module has today. Nothing is tagged yet.
 
 ## Modules
 
 | Module | Namespace | Target(s) | Depends on | Contents | Status |
 |---|---|---|---|---|---|
-| base | `core` | `core::base` | Threads | assertions, environment, escaping, hashing, flags, time, `Base64`, `Generator`, profiling macros, range helpers | **available** |
+| base | `core` | `core::base` | Threads; Tracy (optional) | assertions, environment, escaping, hashing, flags, time, `Base64`, `Generator`, profiling macros, range helpers | **available** |
 | log | `core::log` | `core::log` | base | log store and sinks | **available** |
 | cli | `core::cli` | `core::cli` | base, log | command-line parser, application scaffold | **available** |
 | platform | `core::platform` | `core::platform` | base, log | clocks, wakeup, signals, pipes, file system, environment, paths | **available** |
-| async | `core::async` | `core::async` (header-only) | the standard library | `Task`, cancellation, `whenAll`/`whenAny`, executors, `AsyncQueue` | `Task`, cancellation and the combinators **available** (A5); executors and `AsyncQueue` planned (B1) |
-| net | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | async, platform; OpenSSL for TLS | event loop and backends (epoll, kqueue, IOCP, poll, host-driven), sockets, dialling, timers, TLS, HTTP server | planned (A6, B2-B11) |
+| async | `core::async` | `core::async` (header-only) | the standard library | `StopToken`, `Task`, cancellation, `whenAll`/`whenAny`, executors, `AsyncQueue` | `StopToken`, `Task`, cancellation and the combinators **available** (A5); executors and `AsyncQueue` planned (B1) |
+| net | `core::net` | `core::net_types` (header-only), `core::net`, `core::net_tls` (with `CORE_CPP_WITH_TLS`) | async, platform; OpenSSL for TLS | event loop and backends (epoll, kqueue, poll; IOCP and host-driven planned), TCP and AF_UNIX sockets, descriptor passing, buffered reading, a write queue, timeouts, TLS, HTTP server; dialling planned | contour's event loop, sockets, TLS and HTTP server **available** (A6), native only but for `core::net_types`; the merge with fastcached's planned (B2-B11) |
 | tui | `core::tui` | `core::tui_output`, `core::tui` | base; the full TUI also platform, async, net, libunicode | terminal output, input, widgets, runtime | planned (A7, B12) |
-| testing | `core::testing` | `core::testing`, `core::testing_main` | base; log and Catch2 for `testing_main` | Windows dialog suppression, a fake environment, scoped temporary directory, working directory and environment variable, a Catch2 `main()` with the `LOG` filter and a normalised exit code | **available** |
+| testing | `core::testing` | `core::testing`, `core::testing_dialogs`, `core::testing_main` | base; log and Catch2 for `testing_main` | Windows dialog suppression, a fake environment, scoped temporary directory, working directory and environment variable, a Catch2 `main()` with the `LOG` filter and a normalised exit code | **available** |
 
 The layering is enforced: a module links only the modules its row in
 [`cmake/CoreCppModules.cmake`](cmake/CoreCppModules.cmake) lists.

@@ -167,6 +167,13 @@ presets, scripts and paths.
   check (`-*,clang-diagnostic-<x>` is a filter over compiler diagnostics, not a check) all
   print zero findings with exit status 0. Plant a finding and watch it reported before
   believing a run of zeros. Same origin.
+- **After editing `.clang-tidy`, rebuild the `clang-tidy` preset with `--clean-first`**
+  (`cmake --build --preset clang-tidy --clean-first`, or a fresh tree). `.clang-tidy` is not a
+  build input: ninja compares an object with its sources and headers, never with the
+  configuration clang-tidy reads, so every object that is up to date skips the analysis, and a
+  finding the new configuration adds stays hidden until someone edits that file. A5b turned on
+  `NamespaceCase: lower_case`, a warm local tree reported nothing, and CI, building cold, found
+  the `namespace CLI` alias in `src/core/cli/App.cpp`; commit `e45f730` fixed it.
 
 ## What a `char` is
 
@@ -279,6 +286,11 @@ loop does not say which kind it is:
   premise that `n + 1` cannot overflow and that the range is empty where the loop ran zero
   times.
 - **The variable outlives the loop**, and a later loop resumes where this one broke off.
+- **The step is not an index** (a linked list: `ai = ai->ai_next`, `CMSG_NXTHDR`), and the body
+  `continue`s. A `while` whose last statement steps is wrong the moment one `continue` skips it,
+  and loops for ever on that node. Step first: `auto const* ai = std::exchange(next,
+  next->ai_next);` at the top of the body, so every `continue` moves on. Origin: core-cpp's
+  import of contour's `src/net` (Task A6).
 
 Every one of these was first classified "mechanical" by a text scan, because a scan fails
 toward "nothing unusual here". Read the body. Target `std::views::iota`; for `argv`,
