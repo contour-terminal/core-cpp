@@ -17,9 +17,9 @@
 # core_cpp_add_module() creates the real target core-cpp-<name> and its alias
 # core::<name>. HEADERS are the public headers; they form the target's HEADERS file
 # set, based at src/ or, for a header CMake generates, at the generated include
-# root, so the target is install-ready. Private headers (detail/,
-# posix/, linux/, darwin/, windows/, backend/) go in a SOURCES list and are in no
-# file set.
+# root, so the target is install-ready. Private headers (detail/, posix/, linux/,
+# bsd/, darwin/, windows/, emscripten/) go in a SOURCES list and are in no file
+# set.
 #
 # SOURCES is compiled everywhere the module builds, and each platform list where the
 # platform source table below says. Under Emscripten the module row's PLATFORMS

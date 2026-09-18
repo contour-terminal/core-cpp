@@ -46,7 +46,8 @@ given, never through a concrete type, a singleton, or a free function with hidde
   compiled into the module**, so a consumer's tests use the same doubles core-cpp's do.
   *(core-cpp; the design spec, Part I §1)*
 - **A seam is where the platform split happens.** An OS difference is an implementation of an
-  interface under `posix/`, `linux/`, `darwin/` or `windows/`, chosen at the composition root;
+  interface under `posix/`, `linux/`, `bsd/`, `darwin/`, `windows/` or `emscripten/`, chosen at
+  the composition root;
   never an `#ifdef` in logic. See [`platform.md`](platform.md). *(endo)*
 - **Deviate only with a stated reason**, for example a pure leaf computation with no
   environment coupling, or a measured hot path where the indirection costs too much. *(endo,

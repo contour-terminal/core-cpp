@@ -141,7 +141,7 @@ packagers get no new dependency. The contract is in
 ## Public API and versioning
 
 - **The public API is what a module's `FILE_SET HEADERS` lists.** Private headers (`detail/`,
-  `posix/`, `linux/`, `darwin/`, `windows/`, `backend/`, `tui/platform/`) are in no file set,
+  `posix/`, `linux/`, `bsd/`, `darwin/`, `windows/`, `emscripten/`, `tui/platform/`) are in no file set,
   and a consumer that includes one is on its own.
 - **Grep the consumers before changing a public signature**: contour, endo, fastcached,
   tuidu, Lightweight's dbtool and morph ([`../reference/consumers.md`](../reference/consumers.md)

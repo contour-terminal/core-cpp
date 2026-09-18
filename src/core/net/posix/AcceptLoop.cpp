@@ -5,7 +5,7 @@
 
     #include <core/async/Cancellation.hpp>
     #include <core/net/EventLoop.hpp>
-    #include <core/net/PeerAddress.hpp>
+    #include <core/net/detail/PeerAddress.hpp>
     #include <core/net/detail/WouldBlock.hpp>
     #include <core/net/posix/PosixSocket.hpp>
 

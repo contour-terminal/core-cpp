@@ -145,8 +145,9 @@ has the measurement that made this a rule.
   what it tests: `Foo.hpp`, `Foo.cpp`, `Foo_test.cpp`. *(fastcached, endo)*
 - **Every header is self-contained:** it compiles on its own, with no precompiled header and
   nothing included before it. Every `.cpp` includes what it uses. *(Lightweight, fastcached)*
-- **Private headers stay private.** `detail/`, `posix/`, `linux/`, `darwin/`, `windows/`,
-  `backend/` and `tui/platform/` are in no `FILE_SET`, and a consumer must not include them.
+- **Private headers stay private.** `detail/`, `posix/`, `linux/`, `bsd/`, `darwin/`,
+  `windows/`, `emscripten/` and `tui/platform/` are in no `FILE_SET`, and a consumer must not
+  include them.
   *(core-cpp; the design spec, Part I §1)*
 - **Include with angle brackets from the `src/` root:** `#include <core/net/EventLoop.hpp>`.
   `.clang-format` groups and orders the `<core/...>` includes. *(contour)*

@@ -27,24 +27,23 @@ endif()
 # is what net's own headers need. Free on glibc, fatal on FreeBSD, where the symbols live in libthr.
 # (contour's src/net/CMakeLists.txt, 6777ff05)
 #
-# PeerAddress.hpp is private although it sits in the module's root: it includes <winsock2.h>, which a
-# public header must not (.agent/rules/platform.md), and only the accept paths use it.
+# The module's root holds only platform-independent code. What one platform needs lives in posix/,
+# linux/ (epoll), bsd/ (kqueue, for Apple and the BSDs) and windows/, and the source lists below
+# choose it; contour's PollEventSource.cpp is split along its #ifdef into posix/ and windows/.
+# DefaultEventSource.cpp keeps its #ifdefs until Task B3 replaces it.
 core_cpp_add_module(net KIND STATIC
     HEADERS
         AsyncBufferedReader.hpp
         DefaultEventSource.hpp
         Diagnostics.hpp
-        EpollEventSource.hpp
         EventLoop.hpp
         EventSource.hpp
         HttpServer.hpp
         IListener.hpp
         ISocket.hpp
-        KqueueEventSource.hpp
         PollEventSource.hpp
         Sockets.hpp
         SplitSocket.hpp
-        WaitChunking.hpp
         WithTimeout.hpp
         WriteQueue.hpp
         testing/CoroTestSupport.hpp
@@ -57,15 +56,16 @@ core_cpp_add_module(net KIND STATIC
         Diagnostics.cpp
         EventLoop.cpp
         HttpServer.cpp
-        PeerAddress.hpp
-        PollEventSource.cpp
         WriteQueue.cpp
+        detail/PeerAddress.hpp
+        detail/WaitChunking.hpp
         testing/InMemoryTransport.cpp
     SOURCES_POSIX
         detail/WouldBlock.hpp
         posix/AcceptLoop.cpp
         posix/AcceptLoop.hpp
         posix/FdUtils.hpp
+        posix/PollEventSource.cpp
         posix/PosixListener.cpp
         posix/PosixListener.hpp
         posix/PosixSocket.cpp
@@ -74,10 +74,13 @@ core_cpp_add_module(net KIND STATIC
         posix/UnixListener.cpp
         posix/UnixListener.hpp
     SOURCES_LINUX
-        EpollEventSource.cpp
+        linux/EpollEventSource.cpp
+        linux/EpollEventSource.hpp
     SOURCES_BSD
-        KqueueEventSource.cpp
+        bsd/KqueueEventSource.cpp
+        bsd/KqueueEventSource.hpp
     SOURCES_WINDOWS
+        windows/PollEventSource.cpp
         windows/SocketsWin32.cpp
         windows/WindowsListener.cpp
         windows/WindowsListener.hpp
@@ -110,8 +113,8 @@ core_cpp_add_test(net
         Socket_test.cpp
         WriteQueue_test.cpp
     SOURCES_POSIX
-        FdPassing_test.cpp
-        UnixSocket_test.cpp
+        posix/FdPassing_test.cpp
+        posix/UnixSocket_test.cpp
     LABELS loopback)
 
 core_cpp_add_test(net NAME net_tls SOURCES Tls_test.cpp LABELS loopback)

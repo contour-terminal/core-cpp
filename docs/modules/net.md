@@ -28,9 +28,8 @@ directory `src/core/net/`. Three targets:
 | `<core/net/IoResult.hpp>` | `IoResult`, `std::expected<std::size_t, NetError>`: what every byte transfer returns |
 | `<core/net/EventLoop.hpp>` | `EventLoop`: the single-threaded driver that resumes coroutines on descriptor readiness and timers; `blockOn()`, `spawn()`, `post()` (the one member other threads may call), `requestStop()`, `delay()`, `sleepUntil()`, `waitReadable()`, `waitWritable()`, `notifyHandleClosing()`; `pollUntil()` |
 | `<core/net/EventSource.hpp>` | `EventSource`, the injected blocking wait the loop drives, and its registry: `FdToken`, `FdInterest`, `FdRegistry`, `WaitOutcome` |
-| `<core/net/PollEventSource.hpp>` | the portable `EventSource`: `poll(2)` on POSIX, `WaitForMultipleObjects` on Windows, in chunks past 64 handles (`<core/net/WaitChunking.hpp>`) |
-| `<core/net/EpollEventSource.hpp>`, `<core/net/KqueueEventSource.hpp>` | epoll (Linux) and kqueue (macOS, the BSDs): the same behaviour, a wait costs O(ready) rather than O(registered) |
-| `<core/net/DefaultEventSource.hpp>` | `makeDefaultEventSource()`, the best backend here with a fallback to poll; `makeEventSource(EventSourceKind)` for tests |
+| `<core/net/PollEventSource.hpp>` | the portable `EventSource`: `poll(2)` on POSIX, `WaitForMultipleObjects` on Windows, in chunks past 64 handles |
+| `<core/net/DefaultEventSource.hpp>` | `makeDefaultEventSource()`, the best backend here with a fallback to poll; `makeEventSource(EventSourceKind)` for tests. The epoll (Linux) and kqueue (macOS, the BSDs) sources behave as poll does, and a wait costs O(ready) rather than O(registered); their headers are private, so these two functions are how a program gets one |
 | `<core/net/ISocket.hpp>`, `<core/net/IListener.hpp>` | the transport interfaces: `read`, `readWithFd`, `write`, `close`; `accept`, `localPort` |
 | `<core/net/Sockets.hpp>` | `listen()`, `connect()`, `listenUnix()`, `connectUnix()`, `adoptFd()`, `appendReadChunk()` |
 | `<core/net/AsyncBufferedReader.hpp>` | `readLine()`, `readUntil()`, `readExactly()` over an `ISocket`, each buffered byte scanned once |
@@ -48,9 +47,14 @@ The test doubles are public, in `testing/` and namespace `core::net::testing`, a
 `CoroTestSupport.hpp` (`sleepFor`, `allOf`, `anyOf`, `waitUntil`). contour's `testing/TempDir.hpp`
 was not imported: [`core::testing::ScopedTempDir`](testing.md) does the same.
 
-The per-platform code is private: `posix/` (the listeners, `PosixSocket`, the accept loop),
-`windows/` (`WindowsSocket` and `WindowsListener` over `WSAEventSelect`, the loopback pair), and
-`detail/`. So is `PeerAddress.hpp`, which includes `<winsock2.h>`.
+The module's own directory holds only platform-independent code. What one platform needs is
+private, and CMake's per-platform source lists choose it: `posix/` (`poll(2)`, the listeners,
+`PosixSocket`, the accept loop), `linux/` (epoll), `bsd/` (kqueue, for Apple and the BSDs) and
+`windows/` (`WaitForMultipleObjects`, `WindowsSocket` and `WindowsListener` over
+`WSAEventSelect`, the loopback pair). contour's `PollEventSource.cpp` is split along its
+`#ifdef` into `posix/` and `windows/`; `DefaultEventSource.cpp` keeps its `#ifdef`s until Task
+B3 replaces it. `detail/` has the rest that is private: the chunking arithmetic of the Windows
+wait, `PeerAddress.hpp` (which includes `<winsock2.h>`), and two helpers.
 
 ## Invariants
 

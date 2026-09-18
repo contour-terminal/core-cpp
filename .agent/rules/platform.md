@@ -14,13 +14,20 @@ project file tree, install paths and the interrupt throttle.
 ## A platform difference is an implementation, never an `#ifdef` in logic
 
 1. **Define an abstract interface** in `src/core/platform/`, or in the module that needs it.
-2. **Implement it per platform** in the module's private `posix/`, `linux/`, `darwin/` or
-   `windows/` subdirectory, and list each file in the matching `SOURCES_POSIX`,
-   `SOURCES_LINUX`, `SOURCES_BSD`, `SOURCES_WINDOWS` or `SOURCES_EMSCRIPTEN` argument of
-   `core_cpp_add_module`. The table in `cmake/CoreCppTargets.cmake` decides which list a
-   platform compiles; `BSD` covers macOS, which shares kqueue, and `POSIX` means a native POSIX
-   system, which Emscripten is not, although CMake sets `UNIX` there.
-   `tests/cmake/check-platform-sources.cmake` proves the selection for each platform.
+2. **Implement it per platform** in the module's private `posix/`, `linux/`, `bsd/` (Apple and
+   the BSDs), `darwin/`, `windows/` or `emscripten/` subdirectory, and list each file in the
+   matching `SOURCES_POSIX`, `SOURCES_LINUX`, `SOURCES_BSD`, `SOURCES_WINDOWS` or
+   `SOURCES_EMSCRIPTEN` argument of `core_cpp_add_module`. The table in
+   `cmake/CoreCppTargets.cmake` decides which list a platform compiles; `BSD` covers macOS,
+   which shares kqueue, and `POSIX` means a native POSIX system, which Emscripten is not,
+   although CMake sets `UNIX` there. `tests/cmake/check-platform-sources.cmake` proves the
+   selection for each platform.
+   - **A module's own directory holds only platform-independent code.** A source with one
+     `#ifdef` branch per platform is split into those subdirectories rather than kept whole:
+     contour's `PollEventSource.cpp` is `core::net`'s `posix/PollEventSource.cpp` and
+     `windows/PollEventSource.cpp`, epoll is in `linux/` and kqueue in `bsd/`. A public header
+     stays portable: a member only one platform uses is declared on all of them. Origin: user
+     direction, 2026-09-18 (core-cpp's Task A6).
 3. **Inject it through a constructor.** The concrete type is named once, at the composition
    root; logic never checks the platform.
 

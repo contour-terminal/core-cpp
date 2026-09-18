@@ -54,8 +54,11 @@ without an event loop, coroutines or libunicode; Lightweight's `dbtool` uses it 
 ## Public and private headers
 
 A module's public headers are the ones in its `FILE_SET HEADERS`, included as
-`<core/<module>/<Header>.hpp>`. Its `detail/`, `posix/`, `linux/`, `darwin/`, `windows/` and
-`backend/` subdirectories, and the TUI's `platform/`, are private and in no file set. A module's
+`<core/<module>/<Header>.hpp>`. Its `detail/`, `posix/`, `linux/`, `bsd/` (Apple and the
+BSDs), `darwin/`, `windows/` and `emscripten/` subdirectories, and the TUI's `platform/`, are
+private and in no file set. A module's own directory holds only platform-independent code; what
+one platform needs is in those subdirectories, which CMake's per-platform source lists select. A
+module's
 `testing/` subdirectory holds its test doubles; they are public and compiled into the module, so
 a consumer's tests can use them.
 

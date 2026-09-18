@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include <core/net/KqueueEventSource.hpp>
+#include <core/net/bsd/KqueueEventSource.hpp>
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 

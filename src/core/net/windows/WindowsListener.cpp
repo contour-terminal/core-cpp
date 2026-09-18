@@ -16,7 +16,7 @@
 
 #ifdef _WIN32
 
-    #include <core/net/PeerAddress.hpp>
+    #include <core/net/detail/PeerAddress.hpp>
 
     #include <cstring>
     #include <string>

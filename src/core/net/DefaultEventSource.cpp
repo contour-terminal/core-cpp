@@ -6,9 +6,9 @@
 #include <memory>
 
 #ifdef __linux__
-    #include <core/net/EpollEventSource.hpp>
+    #include <core/net/linux/EpollEventSource.hpp>
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-    #include <core/net/KqueueEventSource.hpp>
+    #include <core/net/bsd/KqueueEventSource.hpp>
 #endif
 
 namespace core::net

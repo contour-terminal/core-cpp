@@ -46,9 +46,10 @@ src/core/
                             core::net (contour: EventLoop over EventSource, poll/epoll/kqueue,
                             sockets, AsyncBufferedReader, WriteQueue, WithTimeout, HttpServer,
                             Diagnostics; native only), core::net_tls (Tls, OpenSSL private);
-                            posix/ windows/ detail/ and PeerAddress.hpp are private; testing/
+                            posix/ (poll, sockets) linux/ (epoll) bsd/ (kqueue) windows/
+                            (WaitForMultipleObjects, sockets) detail/ are private; testing/
                             holds the fakes (ScriptedEventSource, makeSocketPair, AllBackends,
-                            CoroTestSupport); IoBackend, backend/, dialling (planned, B2-B11)
+                            CoroTestSupport); IoBackend, dialling (planned, B2-B11)
   tui/                      (planned, A7 and B12) core::tui_output (the leaf) and core::tui
   testing/                  core::testing: SuppressWindowsDialogs (no test framework needed),
                             Environment (FakeEnvironment), ScopedTempDir,
@@ -86,8 +87,11 @@ docs/                       the documentation site (mkdocs.yml at the root); Dox
 
 - **A public header** goes in its module's directory and in that module's `HEADERS` list; its
   namespace is `core::<directory>`.
-- **A platform-specific implementation** goes in the module's `posix/`, `linux/`, `darwin/` or
-  `windows/` subdirectory and in the matching `SOURCES_*` list; it is in no file set.
+- **A platform-specific implementation** goes in the module's `posix/`, `linux/`, `bsd/` (Apple
+  and the BSDs), `darwin/`, `windows/` or `emscripten/` subdirectory and in the matching
+  `SOURCES_*` list; it is in no file set. A module's own directory holds only
+  platform-independent code: a source with an `#ifdef` per platform is split into those
+  subdirectories instead.
 - **A test double** goes in the module's `testing/` subdirectory; it is public and compiled into
   the module.
 - **A test** goes next to what it tests, as `Foo_test.cpp`, and in the module's

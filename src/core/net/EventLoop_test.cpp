@@ -3,8 +3,8 @@
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/PollEventSource.hpp>
-#include <core/net/WaitChunking.hpp>
 #include <core/net/WithTimeout.hpp>
+#include <core/net/detail/WaitChunking.hpp>
 #include <core/net/testing/ScriptedEventSource.hpp>
 #include <core/platform/Clock.hpp>
 #include <core/platform/SystemPipe.hpp>
