@@ -7,12 +7,23 @@
 set(_coreCppPlatformSubset FileUri.cpp GlobMatch.cpp PathUtils.cpp)
 set(_coreCppPlatformSubsetTests
     Clock_test.cpp
+    EnvironmentProvider_test.cpp
+    FileInfoProvider_test.cpp
     FileUri_test.cpp
     GlobMatch_test.cpp
     PathUtils_test.cpp
     PlatformError_test.cpp
     StringUtils_test.cpp
     Types_test.cpp)
+
+# The POSIX providers, which nativeEnvironmentProvider() and nativeFileInfoProvider() return on
+# every POSIX system. Emscripten's libc serves them too, over its own environment and virtual
+# filesystem, so they are part of the subset.
+set(_coreCppPlatformPosixProviders
+    posix/PosixEnvironmentProvider.cpp
+    posix/PosixEnvironmentProvider.hpp
+    posix/PosixFileInfoProvider.cpp
+    posix/PosixFileInfoProvider.hpp)
 
 # Sockets back SystemPipe on Windows: a loopback pair mapped to a waitable event.
 set(_coreCppPlatformLibs "")
@@ -51,13 +62,8 @@ core_cpp_add_module(platform KIND STATIC
         SystemPipe.cpp
         WinsockInit.cpp
         testing/InMemoryFileSystem.cpp
-    # linux/LinuxFileInfoProvider is the POSIX one, named for where it was written: it reads
-    # lstat(2) and std::filesystem, which every POSIX system has.
     SOURCES_POSIX
-        linux/LinuxFileInfoProvider.cpp
-        linux/LinuxFileInfoProvider.hpp
-        posix/PosixEnvironmentProvider.cpp
-        posix/PosixEnvironmentProvider.hpp
+        ${_coreCppPlatformPosixProviders}
     SOURCES_LINUX
         linux/LinuxWakeup.cpp
     SOURCES_BSD
@@ -71,14 +77,13 @@ core_cpp_add_module(platform KIND STATIC
         windows/WindowsWakeup.cpp
     SOURCES_EMSCRIPTEN
         ${_coreCppPlatformSubset}
+        ${_coreCppPlatformPosixProviders}
     PUBLIC_LIBS core::base core::coro
     PRIVATE_LIBS ${_coreCppPlatformLibs})
 
 core_cpp_add_test(platform
     SOURCES
         ${_coreCppPlatformSubsetTests}
-        EnvironmentProvider_test.cpp
-        FileInfoProvider_test.cpp
         FileSystem_test.cpp
         MessageQueue_test.cpp
         SignalHandler_test.cpp

@@ -86,8 +86,8 @@ which also says: **do not bypass the platform layer.** A direct `::stat`, `std::
 ## The WebAssembly subset
 
 Under single-threaded Emscripten, `core::platform` builds only Types (with `NativeHandle`),
-PlatformError, Clock, StringUtils, PathUtils, GlobMatch and FileUri (`SOURCES_EMSCRIPTEN`), and
-runs only their tests. Its
+PlatformError, Clock, StringUtils, PathUtils, GlobMatch, FileUri and the POSIX environment and
+file-info providers (`SOURCES_EMSCRIPTEN`), and runs only their tests. Its
 row in the module table says `PLATFORMS wasm-subset`, so an Emscripten build compiles that list
 and nothing else of the module; a module whose row says `any` compiles all of `SOURCES` there,
 plus its `SOURCES_EMSCRIPTEN`.

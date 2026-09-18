@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include <core/platform/linux/LinuxFileInfoProvider.hpp>
+#include <core/platform/posix/PosixFileInfoProvider.hpp>
 
 #include <core/platform/GlobMatch.hpp>
 #include <core/platform/PathUtils.hpp>
@@ -74,10 +74,10 @@ namespace
 
 std::unique_ptr<FileInfoProvider> nativeFileInfoProvider()
 {
-    return std::make_unique<LinuxFileInfoProvider>();
+    return std::make_unique<PosixFileInfoProvider>();
 }
 
-std::vector<FileEntry> LinuxFileInfoProvider::listDirectory(std::string const& path) const
+std::vector<FileEntry> PosixFileInfoProvider::listDirectory(std::string const& path) const
 {
     std::vector<FileEntry> entries;
     std::error_code ec;

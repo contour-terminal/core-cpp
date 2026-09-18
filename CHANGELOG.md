@@ -53,10 +53,12 @@ workflow refuses one without a section here.
   `UserPaths`, `PathUtils`, `GlobMatch`, `FileUri`, `SystemInfo` and `StringUtils`, with the test
   doubles `testing::InMemoryFileSystem`, `testing::MockFileInfoProvider` and
   `testing::TestEnvironmentProvider`, and `nativeEnvironmentProvider()` and
-  `nativeFileInfoProvider()`, which give a composition root the private native implementations.
+  `nativeFileInfoProvider()`, which give a composition root the private native implementations:
+  Windows' own, and one POSIX provider each for Linux, macOS, the BSDs and Emscripten (endo's
+  `LinuxFileInfoProvider`, which used nothing Linux-specific, is `PosixFileInfoProvider`).
   Under single-threaded Emscripten its row says
-  `wasm-subset`: Types, PlatformError, Clock, StringUtils, PathUtils, GlobMatch and FileUri build,
-  and their tests run under node.
+  `wasm-subset`: Types, PlatformError, Clock, StringUtils, PathUtils, GlobMatch, FileUri and the
+  POSIX providers build, and their tests run under node.
 - `core::coro`, header-only, with `core::coro::Generator<T>`: `std::generator` where the standard
   library has it and is not libstdc++, otherwise `core::coro::detail::GeneratorFallback<T>`, which
   is tested on every platform. The rest of the module arrives with Tasks A5 and B1.

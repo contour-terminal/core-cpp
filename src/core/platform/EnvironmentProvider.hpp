@@ -124,9 +124,12 @@ class EnvironmentProvider
 /// On POSIX it is the provider that reads the process environment through
 /// @c core::LiveEnvironment and exports through @c core::setProcessEnvironmentVariable(); on
 /// Windows the one over `GetEnvironmentVariableA()`/`SetEnvironmentVariableA()`, which matches
-/// names case-insensitively. Both implementations are private (`posix/`, `windows/`), so this is
-/// the way to reach them. Each call makes a new provider, and the variables one was told to set
-/// but not to export are its own. Not in the WebAssembly subset.
+/// names case-insensitively. Under Emscripten it is the POSIX one, over the environment
+/// Emscripten's libc keeps for the module (under node a fixed default set, not the host's), and
+/// what it exports reaches only that environment, since a module starts no process. Both
+/// implementations are private (`posix/`, `windows/`), so this is the way to reach them. Each
+/// call makes a new provider, and the variables one was told to set but not to export are its
+/// own.
 ///
 /// @return The provider, owned by the caller.
 [[nodiscard]] std::unique_ptr<EnvironmentProvider> nativeEnvironmentProvider();

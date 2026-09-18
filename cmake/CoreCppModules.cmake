@@ -106,5 +106,5 @@ core_cpp_module(NAME testing KIND STATIC DEPS base log PLATFORMS any)
 core_cpp_module(NAME coro KIND INTERFACE PLATFORMS any)
 
 # Under single-threaded Emscripten only Types, PlatformError, Clock, StringUtils, PathUtils,
-# GlobMatch and FileUri build: see its SOURCES_EMSCRIPTEN.
+# GlobMatch, FileUri and the POSIX providers build: see its SOURCES_EMSCRIPTEN.
 core_cpp_module(NAME platform KIND STATIC DEPS base log coro PLATFORMS wasm-subset)

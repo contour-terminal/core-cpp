@@ -13,7 +13,7 @@
 #ifdef _WIN32
     #include <core/platform/windows/WindowsFileInfoProvider.hpp>
 #else
-    #include <core/platform/linux/LinuxFileInfoProvider.hpp>
+    #include <core/platform/posix/PosixFileInfoProvider.hpp>
 #endif
 
 using namespace core::platform;
@@ -46,14 +46,14 @@ struct TempDir
 
 TEST_CASE("nativeFileInfoProvider is this platform's own provider, and lists a directory", "[platform]")
 {
-    // The implementations are private (linux/, windows/); a composition root reaches them only
-    // through the factory. Every POSIX system gets the lstat(2) one named LinuxFileInfoProvider.
+    // The implementations are private (posix/, windows/); a composition root reaches them only
+    // through the factory. Every POSIX system, and Emscripten, gets the lstat(2) one.
     auto const provider = nativeFileInfoProvider();
     REQUIRE(provider != nullptr);
 #ifdef _WIN32
     CHECK(dynamic_cast<WindowsFileInfoProvider const*>(provider.get()) != nullptr);
 #else
-    CHECK(dynamic_cast<LinuxFileInfoProvider const*>(provider.get()) != nullptr);
+    CHECK(dynamic_cast<PosixFileInfoProvider const*>(provider.get()) != nullptr);
 #endif
 
     TempDir const tmp;
@@ -140,18 +140,36 @@ TEST_CASE("MockFileInfoProvider.nonexistent_returns_empty", "[platform][mock]")
 }
 
 // ===========================================================================
-// LinuxFileInfoProvider tests (real filesystem, Linux only)
+// PosixFileInfoProvider tests (real filesystem: every POSIX system, and Emscripten's)
 // ===========================================================================
 
 #ifndef _WIN32
-TEST_CASE("LinuxFileInfoProvider.listDirectory_directory", "[platform][linux]")
+namespace
+{
+/// Tests whether @p reported is what a listing may report for a symlink in @p directory whose
+/// target was written as @p written: that text, verbatim. Emscripten's readlink() (3.1.56 at
+/// least) answers with the target resolved against the link's directory instead, so there the
+/// resolved path is what the provider can report.
+[[nodiscard]] bool isReportedTarget(std::string const& reported,
+                                    std::string const& written,
+                                    [[maybe_unused]] fs::path const& directory)
+{
+    #ifdef __EMSCRIPTEN__
+    if (reported == (directory / written).generic_string())
+        return true;
+    #endif
+    return reported == written;
+}
+} // namespace
+
+TEST_CASE("PosixFileInfoProvider.listDirectory_directory", "[platform][posix]")
 {
     TempDir const tmp;
     tmp.createFile("alpha.txt", "hello");
     tmp.createFile("beta.md", "world");
     tmp.createSubdir("gamma");
 
-    auto const provider = LinuxFileInfoProvider {};
+    auto const provider = PosixFileInfoProvider {};
     auto entries = provider.listDirectory(tmp.path.string());
 
     REQUIRE(entries.size() == 3);
@@ -162,12 +180,12 @@ TEST_CASE("LinuxFileInfoProvider.listDirectory_directory", "[platform][linux]")
     CHECK(entries[2].isDir == true);
 }
 
-TEST_CASE("LinuxFileInfoProvider.listDirectory_single_file", "[platform][linux]")
+TEST_CASE("PosixFileInfoProvider.listDirectory_single_file", "[platform][posix]")
 {
     TempDir const tmp;
     tmp.createFile("target.txt", "content");
 
-    auto const provider = LinuxFileInfoProvider {};
+    auto const provider = PosixFileInfoProvider {};
     auto entries = provider.listDirectory((tmp.path / "target.txt").string());
 
     REQUIRE(entries.size() == 1);
@@ -176,18 +194,18 @@ TEST_CASE("LinuxFileInfoProvider.listDirectory_single_file", "[platform][linux]"
     CHECK(entries[0].isDir == false);
 }
 
-TEST_CASE("LinuxFileInfoProvider.listDirectory_single_directory_entry", "[platform][linux]")
+TEST_CASE("PosixFileInfoProvider.listDirectory_single_directory_entry", "[platform][posix]")
 {
     TempDir const tmp;
     tmp.createSubdir("mydir");
 
-    auto const provider = LinuxFileInfoProvider {};
+    auto const provider = PosixFileInfoProvider {};
     // When path points to a directory, it lists contents (even if empty).
     auto entries = provider.listDirectory((tmp.path / "mydir").string());
     CHECK(entries.empty()); // empty directory
 }
 
-TEST_CASE("LinuxFileInfoProvider.listDirectory_glob_pattern", "[platform][linux]")
+TEST_CASE("PosixFileInfoProvider.listDirectory_glob_pattern", "[platform][posix]")
 {
     TempDir const tmp;
     tmp.createFile("a.txt", "aaa");
@@ -195,7 +213,7 @@ TEST_CASE("LinuxFileInfoProvider.listDirectory_glob_pattern", "[platform][linux]
     tmp.createFile("c.md", "ccc");
     tmp.createSubdir("d_dir");
 
-    auto const provider = LinuxFileInfoProvider {};
+    auto const provider = PosixFileInfoProvider {};
     auto entries = provider.listDirectory((tmp.path / "*.txt").string());
 
     REQUIRE(entries.size() == 2);
@@ -203,14 +221,14 @@ TEST_CASE("LinuxFileInfoProvider.listDirectory_glob_pattern", "[platform][linux]
     CHECK(entries[1].name == "b.txt");
 }
 
-TEST_CASE("LinuxFileInfoProvider.listDirectory_glob_question_mark", "[platform][linux]")
+TEST_CASE("PosixFileInfoProvider.listDirectory_glob_question_mark", "[platform][posix]")
 {
     TempDir const tmp;
     tmp.createFile("ab.txt");
     tmp.createFile("cd.txt");
     tmp.createFile("abc.txt");
 
-    auto const provider = LinuxFileInfoProvider {};
+    auto const provider = PosixFileInfoProvider {};
     auto entries = provider.listDirectory((tmp.path / "??.txt").string());
 
     REQUIRE(entries.size() == 2);
@@ -218,17 +236,17 @@ TEST_CASE("LinuxFileInfoProvider.listDirectory_glob_question_mark", "[platform][
     CHECK(entries[1].name == "cd.txt");
 }
 
-TEST_CASE("LinuxFileInfoProvider.listDirectory_glob_no_match", "[platform][linux]")
+TEST_CASE("PosixFileInfoProvider.listDirectory_glob_no_match", "[platform][posix]")
 {
     TempDir const tmp;
     tmp.createFile("a.txt");
 
-    auto const provider = LinuxFileInfoProvider {};
+    auto const provider = PosixFileInfoProvider {};
     auto entries = provider.listDirectory((tmp.path / "*.xyz").string());
     CHECK(entries.empty());
 }
 
-TEST_CASE("LinuxFileInfoProvider.listDirectory_lists_dangling_symlink", "[platform][linux]")
+TEST_CASE("PosixFileInfoProvider.listDirectory_lists_dangling_symlink", "[platform][posix]")
 {
     // A dangling symlink fails to resolve via status() (which follows). It must still be
     // listed via the symlink_status() fallback — mirroring how the Windows provider keeps
@@ -237,7 +255,7 @@ TEST_CASE("LinuxFileInfoProvider.listDirectory_lists_dangling_symlink", "[platfo
     tmp.createFile("real.txt", "data");
     fs::create_symlink(tmp.path / "missing_target", tmp.path / "broken.lnk");
 
-    auto const provider = LinuxFileInfoProvider {};
+    auto const provider = PosixFileInfoProvider {};
     auto entries = provider.listDirectory(tmp.path.string());
 
     REQUIRE(entries.size() == 2);
@@ -246,14 +264,14 @@ TEST_CASE("LinuxFileInfoProvider.listDirectory_lists_dangling_symlink", "[platfo
     CHECK(entries[1].name == "real.txt");
 }
 
-TEST_CASE("LinuxFileInfoProvider.populates_stat_metadata", "[platform][linux]")
+TEST_CASE("PosixFileInfoProvider.populates_stat_metadata", "[platform][posix]")
 {
     // The lstat-based provider must fill the disk-usage / identity fields
     // (blocks, dev, ino) for real files, not just apparent size.
     TempDir const tmp;
     tmp.createFile("data.bin", std::string(8192, 'x')); // 8 KiB => several 512B blocks
 
-    auto const provider = LinuxFileInfoProvider {};
+    auto const provider = PosixFileInfoProvider {};
     auto entries = provider.listDirectory((tmp.path / "data.bin").string());
 
     REQUIRE(entries.size() == 1);
@@ -266,7 +284,7 @@ TEST_CASE("LinuxFileInfoProvider.populates_stat_metadata", "[platform][linux]")
     CHECK(e.isDir == false);
 }
 
-TEST_CASE("LinuxFileInfoProvider.marks_symlink", "[platform][linux]")
+TEST_CASE("PosixFileInfoProvider.marks_symlink", "[platform][posix]")
 {
     // A symlink must be flagged isSymlink and never reported as a directory,
     // even when it points at one (it is not followed).
@@ -274,7 +292,7 @@ TEST_CASE("LinuxFileInfoProvider.marks_symlink", "[platform][linux]")
     tmp.createSubdir("realdir");
     fs::create_symlink(tmp.path / "realdir", tmp.path / "link_to_dir");
 
-    auto const provider = LinuxFileInfoProvider {};
+    auto const provider = PosixFileInfoProvider {};
     auto entries = provider.listDirectory(tmp.path.string());
 
     REQUIRE(entries.size() == 2);
@@ -287,7 +305,7 @@ TEST_CASE("LinuxFileInfoProvider.marks_symlink", "[platform][linux]")
     CHECK(entries[1].isDir == true);
 }
 
-TEST_CASE("LinuxFileInfoProvider.populates_symlink_target", "[platform][linux]")
+TEST_CASE("PosixFileInfoProvider.populates_symlink_target", "[platform][posix]")
 {
     // A symlink entry must expose its target path verbatim (read via readlink),
     // while a regular file leaves symlinkTarget empty.
@@ -295,36 +313,36 @@ TEST_CASE("LinuxFileInfoProvider.populates_symlink_target", "[platform][linux]")
     tmp.createFile("real.txt", "data");
     fs::create_symlink("real.txt", tmp.path / "link.txt"); // relative target, kept verbatim
 
-    auto const provider = LinuxFileInfoProvider {};
+    auto const provider = PosixFileInfoProvider {};
     auto entries = provider.listDirectory(tmp.path.string());
 
     REQUIRE(entries.size() == 2);
     // Sorted by name: "link.txt" < "real.txt"
     CHECK(entries[0].name == "link.txt");
     CHECK(entries[0].isSymlink == true);
-    CHECK(entries[0].symlinkTarget == "real.txt");
+    CHECK(isReportedTarget(entries[0].symlinkTarget, "real.txt", tmp.path));
     CHECK(entries[1].name == "real.txt");
     CHECK(entries[1].isSymlink == false);
     CHECK(entries[1].symlinkTarget.empty());
 }
 
-TEST_CASE("LinuxFileInfoProvider.populates_dangling_symlink_target", "[platform][linux]")
+TEST_CASE("PosixFileInfoProvider.populates_dangling_symlink_target", "[platform][posix]")
 {
     // readlink succeeds for a dangling symlink: the target string is still reported
     // even though it does not resolve to an existing file.
     TempDir const tmp;
     fs::create_symlink("missing_target", tmp.path / "broken.lnk");
 
-    auto const provider = LinuxFileInfoProvider {};
+    auto const provider = PosixFileInfoProvider {};
     auto entries = provider.listDirectory(tmp.path.string());
 
     REQUIRE(entries.size() == 1);
     CHECK(entries[0].name == "broken.lnk");
     CHECK(entries[0].isSymlink == true);
-    CHECK(entries[0].symlinkTarget == "missing_target");
+    CHECK(isReportedTarget(entries[0].symlinkTarget, "missing_target", tmp.path));
 }
 
-TEST_CASE("LinuxFileInfoProvider.siblings_share_device", "[platform][linux]")
+TEST_CASE("PosixFileInfoProvider.siblings_share_device", "[platform][posix]")
 {
     // Two entries in the same directory live on the same filesystem, so their
     // st_dev must match — the invariant cross-device detection relies on.
@@ -332,7 +350,7 @@ TEST_CASE("LinuxFileInfoProvider.siblings_share_device", "[platform][linux]")
     tmp.createFile("a.txt", "a");
     tmp.createFile("b.txt", "b");
 
-    auto const provider = LinuxFileInfoProvider {};
+    auto const provider = PosixFileInfoProvider {};
     auto entries = provider.listDirectory(tmp.path.string());
 
     REQUIRE(entries.size() == 2);
@@ -340,21 +358,21 @@ TEST_CASE("LinuxFileInfoProvider.siblings_share_device", "[platform][linux]")
     CHECK(entries[0].ino != entries[1].ino); // distinct files -> distinct inodes
 }
 
-TEST_CASE("LinuxFileInfoProvider.populates_absolute_path", "[platform][linux]")
+TEST_CASE("PosixFileInfoProvider.populates_absolute_path", "[platform][posix]")
 {
     // FileEntry::name is only a basename, so anything that needs to address the entry rather
     // than display it depends on this field being absolute.
     TempDir const tmp;
     tmp.createFile("a.txt", "a");
 
-    auto const provider = LinuxFileInfoProvider {};
+    auto const provider = PosixFileInfoProvider {};
     auto const entries = provider.listDirectory(tmp.path.string());
 
     REQUIRE(entries.size() == 1);
     CHECK(entries[0].path == normalizePath(tmp.path / "a.txt"));
 }
 
-TEST_CASE("LinuxFileInfoProvider.absolute_path_from_relative_listing", "[platform][linux]")
+TEST_CASE("PosixFileInfoProvider.absolute_path_from_relative_listing", "[platform][posix]")
 {
     // Listing a relative directory must still yield absolute entry paths.
     TempDir const tmp;
@@ -362,7 +380,7 @@ TEST_CASE("LinuxFileInfoProvider.absolute_path_from_relative_listing", "[platfor
 
     auto const previous = fs::current_path();
     fs::current_path(tmp.path);
-    auto const provider = LinuxFileInfoProvider {};
+    auto const provider = PosixFileInfoProvider {};
     auto const entries = provider.listDirectory(".");
     auto const globbed = provider.listDirectory("*.txt");
     auto const single = provider.listDirectory("rel.txt");
@@ -380,16 +398,16 @@ TEST_CASE("LinuxFileInfoProvider.absolute_path_from_relative_listing", "[platfor
     CHECK(normalizePath(fs::canonical(single[0].path)) == expected);
 }
 
-TEST_CASE("LinuxFileInfoProvider.listDirectory_nonexistent", "[platform][linux]")
+TEST_CASE("PosixFileInfoProvider.listDirectory_nonexistent", "[platform][posix]")
 {
-    auto const provider = LinuxFileInfoProvider {};
+    auto const provider = PosixFileInfoProvider {};
     auto entries = provider.listDirectory("/nonexistent/path/that/does/not/exist");
     CHECK(entries.empty());
 }
 
-TEST_CASE("LinuxFileInfoProvider.listDirectory_glob_nonexistent_pattern", "[platform][linux]")
+TEST_CASE("PosixFileInfoProvider.listDirectory_glob_nonexistent_pattern", "[platform][posix]")
 {
-    auto const provider = LinuxFileInfoProvider {};
+    auto const provider = PosixFileInfoProvider {};
     auto entries = provider.listDirectory("*.surely_nonexistent_ext_xyz");
     // If CWD has no such files, should be empty.
     CHECK(entries.empty());

@@ -8,7 +8,7 @@ namespace core::platform
 
 /// Windows implementation of FileInfoProvider using std::filesystem.
 ///
-/// Nearly identical to LinuxFileInfoProvider since both use std::filesystem.
+/// Lists like PosixFileInfoProvider, since both use std::filesystem for that.
 /// The only difference is that Windows permissions are limited (read-only flag only,
 /// no owner/group/others distinction).
 class WindowsFileInfoProvider final: public FileInfoProvider

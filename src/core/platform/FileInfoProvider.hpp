@@ -53,11 +53,14 @@ class FileInfoProvider
 /// @brief Creates this operating system's own FileInfoProvider, for a composition root.
 ///
 /// On Windows it is the provider over `std::filesystem`, which reports the read-only flag as the
-/// permissions and has no block count, device or inode (the documented sentinels). On every POSIX
-/// system -- Linux, and by default macOS and the BSDs too -- it is the `lstat(2)` provider, which
-/// is named `LinuxFileInfoProvider` for where it was written but needs nothing Linux-specific.
-/// Both implementations are private (`linux/`, `windows/`), so this is the way to reach them. Not
-/// in the WebAssembly subset.
+/// permissions and has no block count, device or inode (the documented sentinels). On Linux,
+/// macOS and the BSDs it is the POSIX provider, which describes each entry with `lstat(2)`: every
+/// field, symlinks as links (not followed) with their targets, and the block count, device and
+/// inode. Under Emscripten it is the POSIX provider too, over Emscripten's virtual filesystem
+/// (in memory unless the program mounts another); its `readlink()` resolves a relative symlink
+/// target against the link's directory (3.1.56 at least), so @c FileEntry::symlinkTarget is that
+/// absolute path there. Both implementations are private (`posix/`, `windows/`), so this is the
+/// way to reach them.
 ///
 /// @return The provider, owned by the caller.
 [[nodiscard]] std::unique_ptr<FileInfoProvider> nativeFileInfoProvider();

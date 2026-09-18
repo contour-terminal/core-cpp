@@ -36,16 +36,18 @@ The test doubles are in `testing/` and in `core::platform::testing`:
 `testing::InMemoryFileSystem` (a `FileSystem` held in maps, with symlinks, permissions and
 refused paths), `testing::MockFileInfoProvider` and `testing::TestEnvironmentProvider`, which never
 touches the process environment. The native implementations of `FileInfoProvider` and
-`EnvironmentProvider` are in the private `posix/`, `linux/` and `windows/` directories, which no
-consumer includes; a composition root gets them from `nativeEnvironmentProvider()` and
+`EnvironmentProvider` are in the private `posix/` and `windows/` directories, which no consumer
+includes; a composition root gets them from `nativeEnvironmentProvider()` and
 `nativeFileInfoProvider()`, each a `std::unique_ptr` to the interface:
 
-| Factory | Windows | Every POSIX system (Linux, macOS, the BSDs) |
-|---|---|---|
-| `nativeEnvironmentProvider()` (`<core/platform/EnvironmentProvider.hpp>`) | `GetEnvironmentVariableA`/`SetEnvironmentVariableA`, names case-insensitive | reads through `core::LiveEnvironment`, exports through `core::setProcessEnvironmentVariable()` |
-| `nativeFileInfoProvider()` (`<core/platform/FileInfoProvider.hpp>`) | `std::filesystem`: the read-only flag as permissions, no blocks, device or inode | `lstat(2)`: the POSIX default, named `LinuxFileInfoProvider` for where it was written |
+| Factory | Windows | Linux, macOS, the BSDs | Emscripten |
+|---|---|---|---|
+| `nativeEnvironmentProvider()` (`<core/platform/EnvironmentProvider.hpp>`) | `GetEnvironmentVariableA`/`SetEnvironmentVariableA`, names case-insensitive | the POSIX provider: reads through `core::LiveEnvironment`, exports through `core::setProcessEnvironmentVariable()` | the POSIX provider, over the environment Emscripten's libc keeps for the module (under node a fixed default set, not the host's) |
+| `nativeFileInfoProvider()` (`<core/platform/FileInfoProvider.hpp>`) | `std::filesystem`: the read-only flag as permissions, no blocks, device or inode | the POSIX provider: `lstat(2)` for every field, symlinks as links with their targets, and the blocks, device and inode | the POSIX provider, over Emscripten's virtual filesystem; a relative symlink target reads resolved against the link's directory there |
 
-Each call makes a new provider; neither factory is in the WebAssembly subset.
+The POSIX file-info provider was endo's `LinuxFileInfoProvider`, which used nothing Linux-specific;
+it is one implementation, `PosixFileInfoProvider`, for every POSIX system. Each call makes a new
+provider.
 
 ## Clocks
 
@@ -97,8 +99,10 @@ Logic that schedules against a deadline takes an `IClock&` rather than calling
 ## Under Emscripten
 
 The row in the module table says `PLATFORMS wasm-subset`. Under single-threaded Emscripten only
-Types, PlatformError, Clock, StringUtils, PathUtils, GlobMatch and FileUri build (the
-`SOURCES_EMSCRIPTEN` list), and their tests run under node. Clock needs no threads; its test of
+Types, PlatformError, Clock, StringUtils, PathUtils, GlobMatch, FileUri and the POSIX
+`EnvironmentProvider` and `FileInfoProvider` (behind `nativeEnvironmentProvider()` and
+`nativeFileInfoProvider()`) build (the `SOURCES_EMSCRIPTEN` list), and their tests run under
+node. Clock needs no threads; its test of
 concurrent `CachedClock` refreshes is compiled only where threads exist. There is no separate
 `NativeHandle.hpp`: `NativeHandle` is part of `Types.hpp`, as it is in endo.
 
