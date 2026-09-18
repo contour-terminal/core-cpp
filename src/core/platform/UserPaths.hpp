@@ -13,9 +13,10 @@ namespace core::platform
 ///
 /// Tries HOME (Unix), then USERPROFILE (Windows).
 ///
-/// @param environment The environment to read the variables from.
+/// @param environment The environment to read the variables from: by default the process
+///                    environment as it is now, and in a test a fake one.
 /// @return The home directory path, or std::nullopt if neither variable is set.
-[[nodiscard]] inline auto homeDirectory(core::Environment const& environment)
+[[nodiscard]] inline auto homeDirectory(core::Environment const& environment = core::LiveEnvironment {})
     -> std::optional<std::filesystem::path>
 {
     if (auto const home = environment.get("HOME"))
@@ -25,21 +26,15 @@ namespace core::platform
     return std::nullopt;
 }
 
-/// @brief Returns the user's home directory, from the process environment as it is now.
-/// @return The home directory path, or std::nullopt if neither HOME nor USERPROFILE is set.
-[[nodiscard]] inline auto homeDirectory() -> std::optional<std::filesystem::path>
-{
-    return homeDirectory(core::LiveEnvironment {});
-}
-
 /// @brief Returns the user's configuration base directory.
 ///
 /// On Unix: $XDG_CONFIG_HOME, or ~/.config if not set.
 /// On Windows: $APPDATA (typically ~/AppData/Roaming).
 ///
-/// @param environment The environment to read the variables from.
+/// @param environment The environment to read the variables from: by default the process
+///                    environment as it is now, as for homeDirectory().
 /// @return The configuration directory path, or std::nullopt if it cannot be determined.
-[[nodiscard]] inline auto configHome(core::Environment const& environment)
+[[nodiscard]] inline auto configHome(core::Environment const& environment = core::LiveEnvironment {})
     -> std::optional<std::filesystem::path>
 {
     if (auto const xdg = environment.get("XDG_CONFIG_HOME"); xdg && !xdg->empty())
@@ -49,14 +44,6 @@ namespace core::platform
     if (auto home = homeDirectory(environment))
         return *home / ".config";
     return std::nullopt;
-}
-
-/// @brief Returns the user's configuration base directory, from the process environment as it
-/// is now.
-/// @return The configuration directory path, or std::nullopt if it cannot be determined.
-[[nodiscard]] inline auto configHome() -> std::optional<std::filesystem::path>
-{
-    return configHome(core::LiveEnvironment {});
 }
 
 } // namespace core::platform

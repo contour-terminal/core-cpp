@@ -25,7 +25,7 @@ the interrupt throttle.
 | `<core/platform/FileSystem.hpp>`, `<core/platform/NativeFileSystem.hpp>` | the `FileSystem` interface, errors as `std::expected`, a lazy recursive walk as a `core::coro::Generator`; `NativeFileSystem` over `std::filesystem` |
 | `<core/platform/FileInfoProvider.hpp>` | `FileInfoProvider`, a directory listing with `stat(2)` metadata (`FileEntry`), a single file or a glob pattern |
 | `<core/platform/EnvironmentProvider.hpp>` | `EnvironmentProvider`: variables with a set-then-export model, the working directory, `homeDirectory()`, `userName()`, `configHome()` |
-| `<core/platform/UserPaths.hpp>` | `homeDirectory()` and `configHome()` over a `core::Environment`, or over the process environment |
+| `<core/platform/UserPaths.hpp>` | `homeDirectory()` and `configHome()` over a `core::Environment`, by default the process environment |
 | `<core/platform/PathUtils.hpp>` | path spelling: `normalizePath()`, `joinPath()`, `absolutePath()`, `canonicalCasePath()`, `stripTrailingSeparator()`, `isCaseOnlyRename()`, `resolveDevicePath()` |
 | `<core/platform/GlobMatch.hpp>` | `globMatchFilename()` (`*`, `?`, `[...]`) and `containsGlobChars()` |
 | `<core/platform/FileUri.hpp>` | RFC 3986 percent-encoding and RFC 8089 `file://` URIs |
@@ -89,8 +89,9 @@ Logic that schedules against a deadline takes an `IClock&` rather than calling
 - **The process environment is written in one place.** `PosixEnvironmentProvider` exports through
   `core::setProcessEnvironmentVariable()` (in [base](base.md)), never `setenv()`.
 - **`UserPaths` reads through a `core::Environment`**, so a test passes a
-  `core::testing::FakeEnvironment`. The overloads without one read the process environment through
-  `core::LiveEnvironment`, which on Windows is the operating system's block.
+  `core::testing::FakeEnvironment`. Its default argument is a `core::LiveEnvironment`, so
+  `homeDirectory()` and `configHome()` called without one read the process environment (on
+  Windows the operating system's block) through the same body the tests run.
 - **`Wakeup`'s constructor throws** `std::runtime_error` when the operating system refuses the
   descriptor or event, as endo's does;
   [core-cpp#14](https://github.com/contour-terminal/core-cpp/issues/14) tracks returning

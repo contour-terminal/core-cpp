@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-#include <core/Environment.hpp>
 #include <core/platform/UserPaths.hpp>
 #include <core/testing/Environment.hpp>
 
@@ -67,11 +66,8 @@ TEST_CASE("configHome.nothing_to_derive_it_from", "[platform]")
     CHECK(!configHome(FakeEnvironment {}).has_value());
 }
 
-TEST_CASE("the zero-argument overloads read the process environment", "[platform]")
-{
-    // They are the core::Environment overloads over a LiveEnvironment, whatever HOME, USERPROFILE,
-    // XDG_CONFIG_HOME and APPDATA hold on the machine running this.
-    auto const live = core::LiveEnvironment {};
-    CHECK(homeDirectory() == homeDirectory(live));
-    CHECK(configHome() == configHome(live));
-}
+// Called without an environment, each is the same function over its default argument, the
+// process environment. That the call exists is checked here without making it: every case
+// above runs the one body, over a fake, and none depends on what the machine running it holds.
+static_assert(requires { homeDirectory(); });
+static_assert(requires { configHome(); });

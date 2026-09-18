@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <filesystem>
 #include <string>
 
 #ifdef _WIN32
@@ -101,6 +102,59 @@ TEST_CASE("EnvironmentProvider.userName_missing", "[platform]")
 {
     TestEnvironmentProvider const env;
     CHECK(!env.userName().has_value());
+}
+
+TEST_CASE("EnvironmentProvider.homeDirectory_prefers_HOME", "[platform]")
+{
+    TestEnvironmentProvider env;
+    env.set("HOME", "/home/alice");
+    env.set("USERPROFILE", "C:/Users/alice");
+    CHECK(env.homeDirectory() == std::filesystem::path("/home/alice"));
+}
+
+TEST_CASE("EnvironmentProvider.homeDirectory_falls_back_to_USERPROFILE", "[platform]")
+{
+    TestEnvironmentProvider env;
+    env.set("USERPROFILE", "C:/Users/alice");
+    CHECK(env.homeDirectory() == std::filesystem::path("C:/Users/alice"));
+}
+
+TEST_CASE("EnvironmentProvider.homeDirectory_missing", "[platform]")
+{
+    TestEnvironmentProvider const env;
+    CHECK(!env.homeDirectory().has_value());
+}
+
+TEST_CASE("EnvironmentProvider.configHome_prefers_XDG_CONFIG_HOME", "[platform]")
+{
+    TestEnvironmentProvider env;
+    env.set("XDG_CONFIG_HOME", "/xdg");
+    env.set("APPDATA", "C:/AppData");
+    env.set("HOME", "/home/alice");
+    CHECK(env.configHome() == std::filesystem::path("/xdg"));
+}
+
+TEST_CASE("EnvironmentProvider.configHome_falls_back_to_APPDATA", "[platform]")
+{
+    // An empty XDG_CONFIG_HOME counts as unset, as the XDG specification says.
+    TestEnvironmentProvider env;
+    env.set("XDG_CONFIG_HOME", "");
+    env.set("APPDATA", "C:/AppData");
+    env.set("HOME", "/home/alice");
+    CHECK(env.configHome() == std::filesystem::path("C:/AppData"));
+}
+
+TEST_CASE("EnvironmentProvider.configHome_falls_back_to_home_dot_config", "[platform]")
+{
+    TestEnvironmentProvider env;
+    env.set("HOME", "/home/alice");
+    CHECK(env.configHome() == std::filesystem::path("/home/alice") / ".config");
+}
+
+TEST_CASE("EnvironmentProvider.configHome_missing", "[platform]")
+{
+    TestEnvironmentProvider const env;
+    CHECK(!env.configHome().has_value());
 }
 
 TEST_CASE("TestEnvironmentProvider.changeDirectory", "[platform]")
