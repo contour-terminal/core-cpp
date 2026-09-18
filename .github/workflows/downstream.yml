@@ -30,7 +30,7 @@ jobs:
     env:
       UPSTREAM: LASTRADA-Software/fastcached
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Compare with fastcached master
         env:

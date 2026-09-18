@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # FreeBSD's own clang and libc++, which kqueue and the BSD source lists are for. The preset
       # turns CORE_CPP_WITH_TLS on, and the base system's OpenSSL serves it: no package is needed.
