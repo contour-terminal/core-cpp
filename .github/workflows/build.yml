@@ -131,13 +131,19 @@ jobs:
 
       - name: Install GCC ${{ matrix.gcc }}
         if: matrix.compiler == 'gcc'
+        # Not `apt-cache show g++-15` to ask whether the archive has it: a name apt does not know
+        # is read as a regex, `g++-15` matches clang-15, and the install then succeeds with clang.
+        # The PPA is only needed where the image lacks the compiler, and the result is asserted.
         run: |
-          if ! apt-cache show "g++-${{ matrix.gcc }}" >/dev/null 2>&1; then
+          gxx="g++-${{ matrix.gcc }}"
+          if ! command -v "$gxx"; then
             sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
             sudo apt-get update -q
+            sudo apt-get install -y -q "$gxx"
           fi
-          sudo apt-get install -y -q "g++-${{ matrix.gcc }}"
-          echo "CXX_COMPILER=g++-${{ matrix.gcc }}" >> "$GITHUB_ENV"
+          command -v "$gxx" || { echo "::error::$gxx was not installed"; exit 1; }
+          "$gxx" --version | head -1
+          echo "CXX_COMPILER=$gxx" >> "$GITHUB_ENV"
 
       - name: Configure
         run: >-
