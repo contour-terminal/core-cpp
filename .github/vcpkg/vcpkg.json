@@ -1,0 +1,7 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "core-cpp-ci-tls",
+  "version-string": "0",
+  "description": "OpenSSL for the cl-release-tls CI leg only; core-cpp itself takes OpenSSL from the system.",
+  "dependencies": ["openssl"]
+}

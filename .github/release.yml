@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Categories for GitHub's generated release notes, which release.yml's draft uses. Adapted from
+# fastcached's (b5ded89c), with core-cpp's labels.
+#
+#   * The "*" catch-all is load-bearing: a pull request that matches no category is OMITTED from
+#     the notes, not sorted to the end. Without it an unlabelled pull request would vanish.
+#   * Order decides, because the first matching category wins: breaking-change comes first, so a
+#     breaking feature is listed where a reader looking for upgrade risk looks.
+#   * There is deliberately no `exclude:`; excluding a label drops those pull requests silently.
+changelog:
+  categories:
+    - title: "Breaking changes"
+      labels: [breaking-change]
+    - title: "Features"
+      labels: [type/feature]
+    - title: "Bug fixes"
+      labels: [type/bug]
+    - title: "Performance"
+      labels: [type/perf]
+    - title: "Documentation"
+      labels: [type/docs]
+    - title: "Internals"
+      labels: [type/chore]
+    - title: "Other changes"
+      labels: ["*"]

@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# On a pushed vX.Y.Z tag: refuse a tag that does not name the tree it tags, build the vendoring
+# archive, and open a DRAFT release with generated notes. A person publishes it; nothing here
+# publishes anything. The procedure is .agent/guides/releasing.md.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  draft:
+    name: Draft the release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The tag equals project(VERSION), and CHANGELOG.md has its section.
+      - name: The tag names this tree
+        run: cmake -DTAG="$TAG" -DROOT="$GITHUB_WORKSPACE" -P tests/cmake/check-release.cmake
+
+      # The vendoring file set of the tag, for a packager who vendors without git
+      # (docs/vendoring.md). cmake/CoreCppVendor.cmake arrives with Task A8.
+      - name: Vendor archive
+        run: |
+          test -f cmake/CoreCppVendor.cmake \
+            || { echo "::error::cmake/CoreCppVendor.cmake does not exist yet (Task A8); no release can be cut before it"; exit 1; }
+          stage="$RUNNER_TEMP/core-cpp-$TAG"
+          cmake -DMODE=export -DREF="$TAG" -DREPO="$GITHUB_WORKSPACE" -DDEST="$stage" -P cmake/CoreCppVendor.cmake
+          tar -czf "core-cpp-$TAG-vendor.tar.gz" -C "$RUNNER_TEMP" "core-cpp-$TAG"
+          sha256sum "core-cpp-$TAG-vendor.tar.gz" > SHA256SUMS
+          cat SHA256SUMS
+
+      # Notes are generated from the merged pull requests, grouped by .github/release.yml.
+      - name: Open a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" --draft --generate-notes --verify-tag \
+            --title "core-cpp ${TAG#v}" \
+            "core-cpp-$TAG-vendor.tar.gz" SHA256SUMS

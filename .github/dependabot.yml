@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Keeps the GitHub Actions the workflows use up to date. C++ dependencies are pinned in
+# cmake/CoreCppDependencies.cmake and moved by hand, with a CHANGELOG entry.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels:
+      - type/chore
+    groups:
+      github-actions:
+        patterns: ["*"]

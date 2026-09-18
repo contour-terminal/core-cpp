@@ -1,0 +1,670 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# core-cpp's CI. `ci-ok` is the one required check: it needs every job that gates, and fails
+# unless each of them succeeded. A job added here that should gate goes into its `needs:` in the
+# same change; `coverage` is deliberately not there.
+#
+# Jobs whose modules do not exist yet still run: until the imports land they build the skeleton,
+# the testing module, the exit-code fixture and the hygiene checks.
+name: Build
+
+on:
+  push:
+    branches: [master]
+  # No `branches:` and no `paths:` filter: a filtered-out pull request would never create the
+  # `ci-ok` check, and a required check that never reports blocks the pull request with nothing
+  # saying why (.agent/rules/build-and-toolchain.md, "A gate that does not report").
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Only a pull request's superseded run is worth cancelling; a push to master is a record.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  LLVM_VERSION: "22"
+  GCC_VERSION: "14"
+  CPM_SOURCE_CACHE: ${{ github.workspace }}/.cache/cpm
+  CTEST_PARALLEL_LEVEL: "4"
+  CTEST_OUTPUT_ON_FAILURE: "1"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ---------------------------------------------------------------------------------------------
+  style:
+    name: style
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The one clang-format build the tree is formatted with, from the one place its version is
+      # stated (.clang-format-version). scripts/clang-format.py refuses any other build.
+      - name: Install the pinned clang-format
+        run: python -m pip install "$(python scripts/tool-versions.py | grep '^clang-format==')"
+
+      - name: clang-format
+        run: python scripts/clang-format.py --check
+
+      - name: CMake and C++ hygiene
+        run: cmake -DROOT="$GITHUB_WORKSPACE" -P tests/cmake/check-cmake-hygiene.cmake
+
+      - name: Hygiene self-test
+        run: >-
+          cmake -DSCANNER="$GITHUB_WORKSPACE/tests/cmake/check-cmake-hygiene.cmake"
+          -DWORK_DIR="$RUNNER_TEMP/cmake-hygiene-selftest"
+          -P tests/cmake/check-cmake-hygiene-selftest.cmake
+
+      - name: Release-check self-test
+        run: >-
+          cmake -DCHECKER="$GITHUB_WORKSPACE/tests/cmake/check-release.cmake"
+          -DWORK_DIR="$RUNNER_TEMP/check-release-selftest"
+          -P tests/cmake/check-release-selftest.cmake
+
+      # .gitattributes normalises text to LF, so a CR byte in a tracked file means a file git
+      # treated as binary, which a text import must never be.
+      - name: No tracked file contains a CR byte
+        run: |
+          python - <<'PY'
+          import subprocess, sys
+          paths = subprocess.run(["git", "ls-files", "-z"], capture_output=True, check=True).stdout.split(b"\0")
+          bad = [p.decode() for p in paths if p and b"\r" in open(p, "rb").read()]
+          for path in bad:
+              print(f"::error file={path}::contains a CR byte")
+          print(f"checked {len([p for p in paths if p])} tracked files, {len(bad)} with a CR byte")
+          sys.exit(1 if bad else 0)
+          PY
+
+  # ---------------------------------------------------------------------------------------------
+  linux:
+    name: linux (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: clang-22, os: ubuntu-24.04, preset: clang-debug, compiler: clang }
+          - { name: gcc-14, os: ubuntu-24.04, preset: gcc-release, compiler: gcc, gcc: "14" }
+          # morph's compiler.
+          - { name: gcc-15, os: ubuntu-24.04, preset: gcc-release, compiler: gcc, gcc: "15" }
+          - { name: clang-22-arm64, os: ubuntu-24.04-arm, preset: clang-release, compiler: clang }
+          - { name: clang-22-cxx26, os: ubuntu-24.04, preset: clang-debug, compiler: clang, cxx_standard: "26" }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache CPM sources
+        uses: actions/cache@v4
+        with:
+          path: .cache/cpm
+          key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
+          restore-keys: cpm-${{ runner.os }}-
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-${{ matrix.name }}
+          max-size: 500M
+          save: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
+
+      - name: Install Ninja
+        run: sudo apt-get update -q && sudo apt-get install -y -q ninja-build
+
+      - name: Install clang ${{ env.LLVM_VERSION }}
+        if: matrix.compiler == 'clang'
+        run: |
+          wget -q https://apt.llvm.org/llvm.sh
+          sudo bash llvm.sh "$LLVM_VERSION"
+          echo "CXX_COMPILER=clang++-$LLVM_VERSION" >> "$GITHUB_ENV"
+
+      - name: Install GCC ${{ matrix.gcc }}
+        if: matrix.compiler == 'gcc'
+        run: |
+          if ! apt-cache show "g++-${{ matrix.gcc }}" >/dev/null 2>&1; then
+            sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+            sudo apt-get update -q
+          fi
+          sudo apt-get install -y -q "g++-${{ matrix.gcc }}"
+          echo "CXX_COMPILER=g++-${{ matrix.gcc }}" >> "$GITHUB_ENV"
+
+      - name: Configure
+        run: >-
+          cmake --preset ${{ matrix.preset }} -DCMAKE_CXX_COMPILER="$CXX_COMPILER"
+          ${{ matrix.cxx_standard && format('-DCMAKE_CXX_STANDARD={0}', matrix.cxx_standard) || '' }}
+
+      # A leg named C++26 that compiles C++23 would report green for a question it never asked:
+      # a normal variable once shadowed -DCMAKE_CXX_STANDARD. So every compile of core-cpp's own
+      # sources is read back from the compile database (fetched dependencies keep their own).
+      - name: Assert core-cpp compiles as C++${{ matrix.cxx_standard }}
+        if: matrix.cxx_standard
+        run: |
+          python3 - "out/build/${{ matrix.preset }}/compile_commands.json" "${{ matrix.cxx_standard }}" <<'PY'
+          import json, re, sys
+          entries = [e for e in json.load(open(sys.argv[1])) if "/_deps/" not in e["file"].replace("\\", "/")]
+          flags = {"26": ("c++26", "c++2c")}[sys.argv[2]]
+          wrong = [e["file"] for e in entries
+                   if not any(f"-std={f}" in (e.get("command") or " ".join(e.get("arguments", []))) for f in flags)]
+          print(f"{len(entries)} core-cpp compile(s), {len(wrong)} not compiled as C++{sys.argv[2]}")
+          for path in wrong:
+              print(f"::error file={path}::not compiled as C++{sys.argv[2]}")
+          sys.exit(1 if wrong or not entries else 0)
+          PY
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  # ---------------------------------------------------------------------------------------------
+  macos:
+    name: macos (${{ matrix.name }})
+    runs-on: macos-15
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: appleclang, preset: appleclang-release }
+          - { name: llvm-22, preset: clang-release, homebrew_llvm: true }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache CPM sources
+        uses: actions/cache@v4
+        with:
+          path: .cache/cpm
+          key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
+          restore-keys: cpm-${{ runner.os }}-
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: macos-${{ matrix.name }}
+          max-size: 500M
+          save: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
+
+      # OpenSSL is keg-only on Homebrew; the TLS module finds it through OPENSSL_ROOT_DIR.
+      - name: Install Ninja and OpenSSL
+        run: |
+          brew install ninja openssl@3
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+
+      # The versioned formula when Homebrew has one, else `llvm`, and either way the major
+      # version is asserted: a leg named LLVM 22 must not quietly compile with 23.
+      - name: Install Homebrew LLVM ${{ env.LLVM_VERSION }}
+        if: matrix.homebrew_llvm
+        run: |
+          formula="llvm@$LLVM_VERSION"
+          brew info "$formula" >/dev/null 2>&1 || formula=llvm
+          brew install "$formula"
+          prefix="$(brew --prefix "$formula")"
+          "$prefix/bin/clang++" --version
+          "$prefix/bin/clang++" --version | grep -q "clang version $LLVM_VERSION\." \
+            || { echo "::error::$formula is not LLVM $LLVM_VERSION"; exit 1; }
+          echo "LLVM_PREFIX=$prefix" >> "$GITHUB_ENV"
+
+      - name: Configure
+        run: |
+          if [ -n "${LLVM_PREFIX:-}" ]; then
+            # Homebrew's clang with Homebrew's libc++ and libunwind, found at run time too.
+            cmake --preset ${{ matrix.preset }} \
+              -DCMAKE_CXX_COMPILER="$LLVM_PREFIX/bin/clang++" \
+              -DCMAKE_EXE_LINKER_FLAGS="-L$LLVM_PREFIX/lib/c++ -L$LLVM_PREFIX/lib/unwind -lunwind -Wl,-rpath,$LLVM_PREFIX/lib/c++ -Wl,-rpath,$LLVM_PREFIX/lib/unwind"
+          else
+            cmake --preset ${{ matrix.preset }}
+          fi
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  # ---------------------------------------------------------------------------------------------
+  windows:
+    name: windows (${{ matrix.preset }})
+    runs-on: windows-2025
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # cl-debug is here for the runtime: the Debug CRT's _ITERATOR_DEBUG_LEVEL=2 traps iterator
+        # misuse where it happens, so it runs ctest, not only a build.
+        preset: [cl-release, clangcl-release, cl-debug, cl-release-tls]
+    env:
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg-archives
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache CPM sources
+        uses: actions/cache@v4
+        with:
+          path: .cache/cpm
+          key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
+          restore-keys: cpm-${{ runner.os }}-
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: windows-${{ matrix.preset }}
+          max-size: 500M
+          save: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
+
+      - name: Install Ninja
+        run: choco install ninja -y --no-progress
+
+      # The runner's Visual Studio bundles an older clang-cl; core-cpp's floor is 22. `upgrade`,
+      # not `install`: install does nothing when another LLVM version is already installed.
+      - name: Install LLVM ${{ env.LLVM_VERSION }} (clang-cl)
+        if: matrix.preset == 'clangcl-release'
+        run: |
+          choco upgrade llvm --version=22.1.8 --allow-downgrade -y --no-progress
+          clangcl="C:/Program Files/LLVM/bin/clang-cl.exe"
+          "$clangcl" --version
+          "$clangcl" --version | grep -q "clang version $LLVM_VERSION\." \
+            || { echo "::error::clang-cl is not LLVM $LLVM_VERSION"; exit 1; }
+          echo "CXX_COMPILER_PATH=$clangcl" >> "$GITHUB_ENV"
+
+      # OpenSSL for the TLS leg comes from vcpkg, in manifest mode: .github/vcpkg/vcpkg.json lists
+      # it, and the configure below installs it into the build tree. The binary archives are kept
+      # between runs, so OpenSSL is compiled once per vcpkg commit.
+      - name: Cache vcpkg binary archives
+        if: matrix.preset == 'cl-release-tls'
+        uses: actions/cache@v4
+        with:
+          path: .cache/vcpkg-archives
+          key: vcpkg-${{ hashFiles('.github/vcpkg/vcpkg.json') }}-e6f9e70a29a3e80a1fc510d8503304315447112f
+
+      - name: vcpkg
+        if: matrix.preset == 'cl-release-tls'
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: e6f9e70a29a3e80a1fc510d8503304315447112f
+
+      # Forward slashes: a backslash path handed through bash loses its backslashes.
+      - name: Use vcpkg's toolchain
+        if: matrix.preset == 'cl-release-tls'
+        run: |
+          mkdir -p "${VCPKG_DEFAULT_BINARY_CACHE//\\//}"
+          root="${VCPKG_ROOT//\\//}"
+          workspace="${GITHUB_WORKSPACE//\\//}"
+          echo "TOOLCHAIN_FILE=$root/scripts/buildsystems/vcpkg.cmake" >> "$GITHUB_ENV"
+          echo "VCPKG_MANIFEST=$workspace/.github/vcpkg" >> "$GITHUB_ENV"
+
+      - name: MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure
+        run: >-
+          cmake --preset ${{ matrix.preset }}
+          ${CXX_COMPILER_PATH:+"-DCMAKE_CXX_COMPILER=$CXX_COMPILER_PATH"}
+          ${TOOLCHAIN_FILE:+"-DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN_FILE"}
+          ${VCPKG_MANIFEST:+"-DVCPKG_MANIFEST_DIR=$VCPKG_MANIFEST"}
+
+      - name: Assert vcpkg installed OpenSSL
+        if: matrix.preset == 'cl-release-tls'
+        run: |
+          header="out/build/${{ matrix.preset }}/vcpkg_installed/x64-windows/include/openssl/ssl.h"
+          test -f "$header" || { echo "::error::vcpkg did not install OpenSSL ($header is missing)"; exit 1; }
+          echo "found $header"
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  # ---------------------------------------------------------------------------------------------
+  sanitizers:
+    name: sanitizers (${{ matrix.preset }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { preset: clang-asan-ubsan, ctest_args: "" }
+          - { preset: clang-tsan, ctest_args: "-LE no-tsan" }
+    env:
+      TSAN_OPTIONS: halt_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache CPM sources
+        uses: actions/cache@v4
+        with:
+          path: .cache/cpm
+          key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
+          restore-keys: cpm-${{ runner.os }}-
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: sanitizers-${{ matrix.preset }}
+          max-size: 500M
+          save: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
+
+      - name: Install Ninja and clang ${{ env.LLVM_VERSION }}
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q ninja-build
+          wget -q https://apt.llvm.org/llvm.sh
+          sudo bash llvm.sh "$LLVM_VERSION"
+
+      # ThreadSanitizer cannot map its shadow memory under the runner kernel's full ASLR entropy.
+      - name: Reduce ASLR entropy for ThreadSanitizer
+        if: matrix.preset == 'clang-tsan'
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} -DCMAKE_CXX_COMPILER="clang++-$LLVM_VERSION"
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }} ${{ matrix.ctest_args }}
+
+  # ---------------------------------------------------------------------------------------------
+  clang-tidy:
+    name: clang-tidy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache CPM sources
+        uses: actions/cache@v4
+        with:
+          path: .cache/cpm
+          key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
+          restore-keys: cpm-${{ runner.os }}-
+
+      # The compiler only. The analyser is the PyPI release .clang-tidy-version pins, not apt's
+      # clang-tidy-22, whose rolling snapshots print the same version and differ in findings.
+      - name: Install Ninja and clang ${{ env.LLVM_VERSION }}
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q ninja-build
+          wget -q https://apt.llvm.org/llvm.sh
+          sudo bash llvm.sh "$LLVM_VERSION"
+
+      # Installed with --target and run in place: the wheel's binary finds its resource headers
+      # relative to itself, and a copied binary parses nothing. The binary is the one under
+      # clang_tidy/data/bin; the bin/clang-tidy beside it is a Python entry point that needs the
+      # package on sys.path.
+      - name: Install the pinned clang-tidy
+        run: |
+          site="$RUNNER_TEMP/clang-tidy"
+          python3 -m pip install --no-deps --target "$site" "$(python3 scripts/tool-versions.py | grep '^clang-tidy==')"
+          tidy="$site/clang_tidy/data/bin/clang-tidy"
+          test -x "$tidy" || { echo "::error::the clang-tidy wheel has no $tidy"; exit 1; }
+          "$tidy" --version
+          want="$(python3 scripts/tool-versions.py | sed -n 's/^clang-tidy==//p')"
+          "$tidy" --version | grep -q "version $want" || { echo "::error::$tidy is not clang-tidy $want"; exit 1; }
+          echo "CLANG_TIDY_EXE=$tidy" >> "$GITHUB_ENV"
+
+      # A run that prints no finding proves nothing until the analyser is seen to find one: a
+      # binary that does not execute, or a configuration with no check enabled, is also silent.
+      - name: Canary (the analyser must report a planted finding)
+        run: |
+          canary=src/core/TidyCanary.cpp
+          printf '// SPDX-License-Identifier: Apache-2.0\nint Badly_Named_Global = 0;\n' > "$canary"
+          set +e
+          "$CLANG_TIDY_EXE" "$canary" -- -std=c++23 > "$RUNNER_TEMP/canary.log" 2>&1
+          set -e
+          rm -f "$canary"
+          cat "$RUNNER_TEMP/canary.log"
+          grep -q 'readability-identifier-naming' "$RUNNER_TEMP/canary.log" \
+            || { echo "::error::clang-tidy did not report the planted naming finding"; exit 1; }
+
+      - name: Configure
+        run: >-
+          cmake --preset clang-tidy -DCMAKE_CXX_COMPILER="clang++-$LLVM_VERSION"
+          -DCORE_CPP_CLANG_TIDY_EXE="$CLANG_TIDY_EXE"
+
+      - name: Assert clang-tidy is wired into the build
+        run: |
+          n=$(grep -c -- '--tidy=' out/build/clang-tidy/build.ninja || true)
+          echo "$n compile rule(s) run clang-tidy"
+          [ "$n" -gt 0 ] || { echo "::error::no compile runs clang-tidy"; exit 1; }
+
+      - name: Build with clang-tidy
+        run: |
+          echo "::add-matcher::.github/clang-tidy-matcher.json"
+          cmake --build --preset clang-tidy -- -k 0
+
+  # ---------------------------------------------------------------------------------------------
+  emscripten:
+    name: emscripten (emsdk ${{ matrix.emsdk }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.1.56 is what Qt 6.8 for WebAssembly, and so morph, builds with.
+        emsdk: ["3.1.56", "latest"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache CPM sources
+        uses: actions/cache@v4
+        with:
+          path: .cache/cpm
+          key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
+          restore-keys: cpm-${{ runner.os }}-
+
+      - name: Install Ninja
+        run: sudo apt-get update -q && sudo apt-get install -y -q ninja-build
+
+      # A pinned version is cached; `latest` is not, or the cache would pin it.
+      - name: emsdk ${{ matrix.emsdk }}
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ matrix.emsdk }}
+          actions-cache-folder: ${{ matrix.emsdk != 'latest' && format('emsdk-cache-{0}', matrix.emsdk) || '' }}
+
+      # The emscripten preset finds its toolchain file through $EMSDK.
+      - name: Locate the emsdk
+        run: |
+          if [ -z "${EMSDK:-}" ]; then
+            EMSDK="$(dirname "$(dirname "$(dirname "$(readlink -f "$(command -v emcc)")")")")"
+            echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
+          fi
+          emcc --version | head -n 1
+          node --version
+          test -f "$EMSDK/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake"
+
+      - name: Configure
+        run: cmake --preset emscripten
+
+      # Single-threaded means no -pthread anywhere: Threads::Threads would force it, and with it
+      # SharedArrayBuffer, onto every page that loads a consumer.
+      - name: Assert no compile or link command mentions pthread
+        run: |
+          n=$(ninja -C out/build/emscripten -t commands | grep -c pthread || true)
+          echo "$n command(s) mention pthread"
+          [ "$n" -eq 0 ] || { echo "::error::the WebAssembly build uses pthreads"; exit 1; }
+
+      - name: Build
+        run: cmake --build --preset emscripten
+
+      - name: Test (under node)
+        run: ctest --preset emscripten
+
+  # ---------------------------------------------------------------------------------------------
+  # Proves core-cpp builds through fastcache-cc when it is available: the launcher is fetched and
+  # a daemon started by the verbatim module itself, and the second build must be served from the
+  # cache. No other launcher is installed here, so nothing else can win the selection.
+  compile-cache:
+    name: compile-cache
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PRESET: gcc-release
+      BUILD_DIR: out/build/gcc-release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache CPM sources
+        uses: actions/cache@v4
+        with:
+          path: .cache/cpm
+          key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
+          restore-keys: cpm-${{ runner.os }}-
+
+      - name: Install Ninja and GCC ${{ env.GCC_VERSION }}
+        run: sudo apt-get update -q && sudo apt-get install -y -q ninja-build "g++-$GCC_VERSION"
+
+      - name: No other compiler cache is installed
+        run: |
+          for launcher in fastcache-cc sccache ccache; do
+            if command -v "$launcher"; then echo "::error::$launcher is on PATH and could win the selection"; exit 1; fi
+          done
+
+      # The token lifts GitHub's unauthenticated API limit for the release lookup.
+      - name: Configure (auto-install fastcache-cc, auto-start a daemon)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cmake --preset "$PRESET" -DCMAKE_CXX_COMPILER="g++-$GCC_VERSION" \
+            -DFASTCACHE_AUTO_INSTALL=ON -DFASTCACHE_AUTO_START=ON | tee "$RUNNER_TEMP/configure.log"
+          grep '\[cache\]' "$RUNNER_TEMP/configure.log"
+
+      # The module sets CMAKE_CXX_COMPILER_LAUNCHER as a normal variable, so CMakeCache.txt never
+      # shows it. CoreCppTopLevel.cmake records it as CORE_CPP_CXX_COMPILER_LAUNCHER, and the
+      # generated build.ninja is the artefact itself.
+      - name: Assert fastcache-cc is the launcher
+        run: |
+          grep -E '^CORE_CPP_CXX_COMPILER_LAUNCHER:INTERNAL=.*fastcache-cc' "$BUILD_DIR/CMakeCache.txt" \
+            || { echo "::error::CORE_CPP_CXX_COMPILER_LAUNCHER does not name fastcache-cc"; exit 1; }
+          n=$(grep -cE '^ *LAUNCHER = .*fastcache-cc' "$BUILD_DIR/build.ninja" || true)
+          echo "$n launcher binding(s) in build.ninja name fastcache-cc"
+          [ "$n" -gt 0 ] || { echo "::error::build.ninja compiles nothing through fastcache-cc"; exit 1; }
+          fc="$(sed -n 's/^FASTCACHE_CC:FILEPATH=//p' "$BUILD_DIR/CMakeCache.txt")"
+          test -x "$fc" || { echo "::error::FASTCACHE_CC ('$fc') is not an executable"; exit 1; }
+          echo "FASTCACHE_CC=$fc" >> "$GITHUB_ENV"
+
+      - name: Build (cold)
+        run: cmake --build --preset "$PRESET"
+
+      - name: Delete the objects and zero the statistics
+        run: |
+          "$FASTCACHE_CC" --zero-stats
+          n=$(find "$BUILD_DIR" -name '*.o' | wc -l)
+          find "$BUILD_DIR" -name '*.o' -delete
+          echo "deleted $n object(s)"
+          [ "$n" -gt 0 ]
+
+      - name: Rebuild (from the cache)
+        env:
+          FASTCACHE_VERBOSE: "1"
+        run: |
+          cmake --build --preset "$PRESET" 2>&1 | tee "$RUNNER_TEMP/rebuild.log"
+          hits=$(grep -c 'fastcache-cc: HIT' "$RUNNER_TEMP/rebuild.log" || true)
+          misses=$(grep -c 'fastcache-cc: MISS' "$RUNNER_TEMP/rebuild.log" || true)
+          echo "rebuild: $hits HIT, $misses MISS"
+          [ "$hits" -ge 1 ] || { echo "::error::no compile was served from fastcache-cc"; exit 1; }
+
+      - name: fastcache-cc --show-stats reports hits
+        run: |
+          "$FASTCACHE_CC" --show-stats | tee "$RUNNER_TEMP/stats.log"
+          hits=$(sed -nE 's/^[[:space:]]*hits[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p' "$RUNNER_TEMP/stats.log" | head -n 1)
+          echo "show-stats: ${hits:-no} hits"
+          [ "${hits:-0}" -ge 1 ] || { echo "::error::fastcache-cc --show-stats shows no hits"; exit 1; }
+
+      # A replayed object is only as good as what it runs: the tests run on the cache's objects.
+      - name: Test the replayed build
+        run: ctest --preset "$PRESET"
+
+  # ---------------------------------------------------------------------------------------------
+  # Not required: coverage informs, it does not gate. The compiler cache is off in this preset,
+  # because a replayed object's coverage mapping names the checkout that produced it.
+  coverage:
+    name: coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache CPM sources
+        uses: actions/cache@v4
+        with:
+          path: .cache/cpm
+          key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
+          restore-keys: cpm-${{ runner.os }}-
+
+      # llvm-<v> carries llvm-profdata and llvm-cov, which must match the compiler's version.
+      - name: Install Ninja, clang ${{ env.LLVM_VERSION }} and its coverage tools
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q ninja-build
+          wget -q https://apt.llvm.org/llvm.sh
+          sudo bash llvm.sh "$LLVM_VERSION"
+          sudo apt-get install -y -q "llvm-$LLVM_VERSION"
+
+      - name: Configure
+        run: cmake --preset clang-coverage -DCMAKE_CXX_COMPILER="clang++-$LLVM_VERSION"
+
+      - name: Build
+        run: cmake --build --preset clang-coverage
+
+      - name: Test
+        run: |
+          mkdir -p out/build/clang-coverage/profiles
+          LLVM_PROFILE_FILE="$PWD/out/build/clang-coverage/profiles/%m-%p.profraw" ctest --preset clang-coverage
+
+      - name: Report
+        run: |
+          build=out/build/clang-coverage
+          "llvm-profdata-$LLVM_VERSION" merge -sparse "$build"/profiles/*.profraw -o "$build/coverage.profdata"
+          mapfile -t binaries < <(find "$build" -path "$build/_deps" -prune -o -type f -perm -u+x -name 'core-cpp-*' -print | sort)
+          objects=("${binaries[0]}")
+          for binary in "${binaries[@]:1}"; do objects+=("-object=$binary"); done
+          ignore='(_deps|_test\.cpp$|/tests/)'
+          "llvm-cov-$LLVM_VERSION" report -instr-profile="$build/coverage.profdata" "${objects[@]}" -ignore-filename-regex="$ignore"
+          "llvm-cov-$LLVM_VERSION" export -format=lcov -instr-profile="$build/coverage.profdata" "${objects[@]}" \
+            -ignore-filename-regex="$ignore" > "$build/coverage.lcov"
+          "llvm-cov-$LLVM_VERSION" show -format=html -output-dir="$build/coverage-html" \
+            -instr-profile="$build/coverage.profdata" "${objects[@]}" -ignore-filename-regex="$ignore"
+
+      - name: Upload the report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            out/build/clang-coverage/coverage.lcov
+            out/build/clang-coverage/coverage-html
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------------------------
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [style, linux, macos, windows, sanitizers, clang-tidy, emscripten, compile-cache]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Skipped and cancelled are not success: a job that did not run proved nothing.
+      - name: Every required job succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          failed=$(echo "$RESULTS" | jq -r '[to_entries[] | select(.value.result != "success") | .key] | join(", ")')
+          if [ -n "$failed" ]; then
+            echo "::error::these required jobs did not succeed: $failed"
+            exit 1
+          fi
+          echo "all $(echo "$RESULTS" | jq 'length') required jobs succeeded"
