@@ -1,0 +1,3 @@
+# core-cpp
+
+A joint core/coroutine library to be used in our broad range of C++ projects, such as Endo, `tuidu`, fastcached, morph, etc...
