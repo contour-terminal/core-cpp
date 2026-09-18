@@ -55,8 +55,8 @@ because its event loop could not wait on a console handle.
 - **The module table is the dependency graph.** `cmake/CoreCppModules.cmake` lists every
   module in dependency order, with the modules it may link. `core_cpp_add_module` refuses a
   `core::<x>` link that the row does not list, so the layering is enforced at configure time.
-- **An include across modules is an edge of that table.** `core::coro` depends on the
-  standard library only; `core::net` on `coro` and `platform`; `core::tui_output` on `base`
+- **An include across modules is an edge of that table.** `core::async` depends on the
+  standard library only; `core::net` on `async` and `platform`; `core::tui_output` on `base`
   only. A header that includes across modules without a table edge is a layering violation
   even while the link happens to work transitively.
 - **An edge is closed by moving the file to the layer that owns it**, not by widening the

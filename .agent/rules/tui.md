@@ -12,9 +12,9 @@ Its consumers are endo, tuidu, fastcached's console tools and Lightweight's `dbt
 - **`core::tui_output` depends on `core::base` only**: `TerminalOutput`, `SgrBuilder`,
   `SyncGuard`, `TerminalProtocols`, `CursorShape`, `Error`, and the private `platform/PosixIO`
   and `Win32Utf`. Lightweight's `dbtool` links only this, to draw progress and colour without
-  taking an event loop, libunicode or coroutines. An include of libunicode or `core::coro` in
+  taking an event loop, libunicode or coroutines. An include of libunicode or `core::async` in
   a leaf file is a layering violation even if it links.
-- **`core::tui` is everything else** and may depend on `platform`, `coro`, `net`, libunicode,
+- **`core::tui` is everything else** and may depend on `platform`, `async`, `net`, libunicode,
   and stb when `CORE_CPP_WITH_IMAGES` is on.
 - **The TUI never builds under Emscripten.** `CORE_CPP_WITH_TUI` is forced off there.
 

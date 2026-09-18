@@ -27,8 +27,8 @@
 /// shipping standard library provides a usable `std::task`, so `Task` is always
 /// hand-rolled. Only the core `<coroutine>` language support is required.
 
-#include <core/coro/Cancellation.hpp>
-#include <core/coro/UniqueCoroHandle.hpp>
+#include <core/async/Cancellation.hpp>
+#include <core/async/UniqueCoroHandle.hpp>
 
 #include <coroutine>
 #include <exception>
@@ -36,10 +36,10 @@
 #include <utility>
 
 #if !defined(__cpp_impl_coroutine) || __cpp_impl_coroutine < 201902L
-    #error "core::coro::Task requires C++20 coroutine language support (__cpp_impl_coroutine)."
+    #error "core::async::Task requires C++20 coroutine language support (__cpp_impl_coroutine)."
 #endif
 
-namespace core::coro
+namespace core::async
 {
 
 namespace detail
@@ -288,4 +288,4 @@ class [[nodiscard]] Task<void>
     detail::UniqueCoroHandle<PromiseType> _handle;
 };
 
-} // namespace core::coro
+} // namespace core::async

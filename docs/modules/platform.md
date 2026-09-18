@@ -2,8 +2,8 @@
 
 The operating-system layer: clocks, wakeups, signals, pipes, the file system, the environment and
 paths, each behind an interface with a test double. Namespace `core::platform`, directory
-`src/core/platform/`, target `core::platform`. It links [base](base.md) and [coro](coro.md) (for
-`Generator`), and `ws2_32` on Windows.
+`src/core/platform/`, target `core::platform`. It links [base](base.md) (for `Generator`, among
+other things), and `ws2_32` on Windows.
 
 Imported from the generic half of endo's `src/platform` at `f774a210`, with one clock merged from
 endo's, contour's (`src/net/platform/Clock.hpp` at `6777ff05`) and fastcached's
@@ -22,7 +22,7 @@ the interrupt throttle.
 | `<core/platform/WinsockInit.hpp>` | `ensureWinsockInitialized()`, once per process; a no-op off Windows |
 | `<core/platform/SignalHandler.hpp>` | `SignalHandler`: SIGCHLD, SIGTSTP, SIGCONT and SIGINT through signalfd on Linux and handlers elsewhere, Ctrl+C and Ctrl+Break on Windows, and an optional `Wakeup` to raise on an interrupt |
 | `<core/platform/MessageQueue.hpp>` | `MessageQueue<T>`, a thread-safe queue that can raise a `Wakeup` on every push |
-| `<core/platform/FileSystem.hpp>`, `<core/platform/NativeFileSystem.hpp>` | the `FileSystem` interface, errors as `std::expected`, a lazy recursive walk as a `core::coro::Generator`; `NativeFileSystem` over `std::filesystem` |
+| `<core/platform/FileSystem.hpp>`, `<core/platform/NativeFileSystem.hpp>` | the `FileSystem` interface, errors as `std::expected`, a lazy recursive walk as a `core::Generator`; `NativeFileSystem` over `std::filesystem` |
 | `<core/platform/FileInfoProvider.hpp>` | `FileInfoProvider`, a directory listing with `stat(2)` metadata (`FileEntry`), a single file or a glob pattern |
 | `<core/platform/EnvironmentProvider.hpp>` | `EnvironmentProvider`: variables with a set-then-export model, the working directory, `homeDirectory()`, `userName()`, `configHome()` |
 | `<core/platform/UserPaths.hpp>` | `homeDirectory()` and `configHome()` over a `core::Environment`, by default the process environment |

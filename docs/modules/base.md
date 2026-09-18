@@ -4,8 +4,9 @@ The generic utilities every other module may use. Namespace `core`, headers dire
 `src/core/`, target `core::base`. It builds everywhere core-cpp does, single-threaded
 WebAssembly included, and links `Threads::Threads` except there.
 
-Imported from contour's `src/crispy` at `6777ff05`, with crispy's namespace renamed `core`, and
-from fastcached's `src/FastCache/Core` at `ee71f868`.
+Imported from contour's `src/crispy` at `6777ff05`, with crispy's namespace renamed `core`, from
+fastcached's `src/FastCache/Core` at `ee71f868`, and `Generator.hpp` from endo's
+`src/platform/Generator.hpp` at `f774a210`.
 
 | Header | What it has |
 |---|---|
@@ -18,12 +19,37 @@ from fastcached's `src/FastCache/Core` at `ee71f868`.
 | `<core/Escape.hpp>` | `core::escape()`, `unescape()` and `escapeMarkdown()` for byte strings |
 | `<core/FNV.hpp>` | `core::FNV`, the FNV-1a hash |
 | `<core/Flags.hpp>` | `core::Flags<Enum>`, a type-safe set of bit flags, and its `std::formatter` |
+| `<core/Generator.hpp>` | `core::Generator<T>`, a lazy, single-pass coroutine range; see [Generator](#generator) below |
 | `<core/Overloaded.hpp>` | `core::Overloaded`, lambdas combined into one visitor |
 | `<core/Profiling.hpp>` | the `CORE_ZONE_*`, `CORE_FRAME_MARK*`, `CORE_THREAD_NAME` and `CORE_PLOT` macros; see [Profiling](../design/profiling.md) |
 | `<core/Ranges.hpp>` | `core::findOrNull()` and `findIfOrNull()`, which answer a pointer; `core::ranges::Iota` and `FoldLeft`, the standard facility where the library has it and a fallback where it does not |
 | `<core/Times.hpp>` | `core::times()`, a counted range to iterate or to pipe a callable into |
 | `<core/UserInfo.hpp>` | the calling user's password-database entry (`getpwuid_r()`); none on Windows or under Emscripten |
 | `<core/Utils.hpp>` | string splitting, trimming, joining and case mapping, `toInteger()`, hex strings, `${VAR}` substitution, `nextPowerOfTwo()`, `views::enumerate()`, `threadName()` |
+
+## Generator
+
+`<core/Generator.hpp>` has `core::Generator<T>`, a lazy, single-pass range a coroutine fills with
+`co_yield`, imported from endo (`src/platform/Generator.hpp` at `f774a210`). It moved here from
+`core::async` in Task A5b: `core::async::Generator` would read as an *asynchronous*,
+`co_await`-able stream, and this one is synchronous, needing nothing but the standard library and
+the compiler's coroutine language support — the one header here that does.
+
+- It is `std::generator<T>` where the standard library has `<generator>` and is not libstdc++,
+  and otherwise `core::detail::GeneratorFallback<T>`, a small implementation over `<coroutine>`.
+  libc++ has no `<generator>` yet (emsdk 3.1.56 ships libc++ 17), and GCC 14 reports a null
+  `coroutine_handle` inside libstdc++'s own `std::generator` at `-O2` (`-Wnull-dereference`),
+  which the zero-warning policy makes an error. In practice MSVC uses `std::generator` and
+  everything else the fallback.
+- The choice is read from `<version>`, which the header includes first, so every translation unit
+  makes the same one. endo's copy tested `__cpp_lib_generator` before including anything, so the
+  answer depended on what a file included first; a virtual function returning a `Generator` could
+  then have two return types in one program.
+- `CORE_GENERATOR_FORCE_FALLBACK`, defined the same way in every translation unit, selects the
+  fallback everywhere.
+- The fallback is always defined and is tested on every platform. Each yielded value lives in the
+  coroutine frame until the next increment, so yield owning values. Breaking out of the loop
+  destroys the suspended frame.
 
 ## Assertions that log
 

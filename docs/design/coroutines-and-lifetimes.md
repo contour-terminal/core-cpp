@@ -5,7 +5,7 @@ design exists to prevent are silent: a coroutine frame that is parked and never 
 a frame freed twice, a coroutine resumed on the wrong thread, a view that outlives what it views.
 
 !!! note "Status"
-    `core::coro` and `core::net` are imported in Tasks A5 and A6 and merged with fastcached's
+    `core::async` and `core::net` are imported in Tasks A5 and A6 and merged with fastcached's
     design in Phase B. Task B13 completes this page with the rules as implemented.
 
 ## The rules

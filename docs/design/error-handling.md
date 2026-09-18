@@ -4,7 +4,7 @@
   `or_else`, `transform` and `transform_error` rather than nesting `if`s.
 - **Each module has its own error type**, added as the need arises: `core::net::NetError` (with
   `NetErrorCode`), `core::platform::PlatformError`.
-- **The one exception type is `core::coro::OperationCancelled`.** A coroutine throws it when its
+- **The one exception type is `core::async::OperationCancelled`.** A coroutine throws it when its
   own stop token cancels it, so cancellation unwinds a whole chain of coroutines at once.
 - **A cancellation that comes from the resource is a value.** Closing a socket, calling
   `cancelRead()` or closing a listener completes a pending operation with

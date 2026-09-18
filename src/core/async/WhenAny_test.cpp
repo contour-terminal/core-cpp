@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-#include <core/coro/Cancellation.hpp>
-#include <core/coro/Task.hpp>
-#include <core/coro/WhenAny.hpp>
+#include <core/async/Cancellation.hpp>
+#include <core/async/Task.hpp>
+#include <core/async/WhenAny.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -9,10 +9,10 @@
 #include <stdexcept>
 #include <vector>
 
-using core::coro::OperationCancelled;
-using core::coro::StopToken;
-using core::coro::Task;
-using core::coro::whenAny;
+using core::async::OperationCancelled;
+using core::async::StopToken;
+using core::async::Task;
+using core::async::whenAny;
 
 namespace
 {
@@ -98,7 +98,7 @@ TEST_CASE("whenAny resumes on the first child and cancels the loser", "[whenAny]
     auto aCancelled = false;
     auto bDone = false;
     auto bCancelled = false;
-    auto winner = core::coro::detail::WhenAnyNoWinner;
+    auto winner = core::async::detail::WhenAnyNoWinner;
 
     auto root = raceTwo(&waiters, &aDone, &aCancelled, &bDone, &bCancelled, &winner);
     root.handle().resume();
@@ -131,7 +131,7 @@ TEST_CASE("whenAny completes synchronously when a child wins during start", "[wh
     auto instantDone = false;
     auto parkedDone = false;
     auto parkedCancelled = false;
-    auto winner = core::coro::detail::WhenAnyNoWinner;
+    auto winner = core::async::detail::WhenAnyNoWinner;
 
     auto root = raceWithInstantWinner(&waiters, &instantDone, &parkedDone, &parkedCancelled, &winner);
     root.handle().resume();
@@ -156,7 +156,7 @@ TEST_CASE("whenAny over no tasks resolves to the no-winner sentinel", "[whenAny]
     root.handle().resume();
 
     REQUIRE(root.done());
-    REQUIRE(winner == core::coro::detail::WhenAnyNoWinner);
+    REQUIRE(winner == core::async::detail::WhenAnyNoWinner);
 }
 
 #ifndef _WIN32
@@ -210,10 +210,10 @@ TEST_CASE("whenAny throws OperationCancelled when the awaiting flow is cancelled
     auto aCancelled = false;
     auto bDone = false;
     auto bCancelled = false;
-    auto winner = core::coro::detail::WhenAnyNoWinner;
+    auto winner = core::async::detail::WhenAnyNoWinner;
 
     auto root = raceTwo(&waiters, &aDone, &aCancelled, &bDone, &bCancelled, &winner);
-    auto source = core::coro::StopSource {};
+    auto source = core::async::StopSource {};
     root.handle().promise().setStopToken(source.get_token());
     root.handle().resume();
 
@@ -233,7 +233,7 @@ TEST_CASE("whenAny throws OperationCancelled when the awaiting flow is cancelled
     REQUIRE(root.done());
     // No child won, so await_resume throws OperationCancelled (surfaced through
     // the root task) instead of returning a cancelled loser's index.
-    REQUIRE(winner == core::coro::detail::WhenAnyNoWinner);
+    REQUIRE(winner == core::async::detail::WhenAnyNoWinner);
     REQUIRE_THROWS_AS(root.result(), OperationCancelled);
 }
 #endif

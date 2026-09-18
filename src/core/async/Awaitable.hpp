@@ -2,15 +2,15 @@
 #pragma once
 
 /// @file
-/// Concepts shared across @c coro awaitables and coroutine promises.
+/// Concepts shared across @c core::async awaitables and coroutine promises.
 
-#include <core/coro/Cancellation.hpp>
+#include <core/async/Cancellation.hpp>
 
 #include <concepts>
 #include <coroutine>
 #include <utility>
 
-namespace core::coro
+namespace core::async
 {
 
 /// Satisfied by a type that can drive a `co_await` expression directly, i.e. it
@@ -37,4 +37,4 @@ concept HasStopToken = requires(P& promise) {
     { promise.stopToken() } -> std::convertible_to<StopToken>;
 };
 
-} // namespace core::coro
+} // namespace core::async

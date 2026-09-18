@@ -22,7 +22,7 @@ consumer; it is the design spec's
 ```sh
 # Copy a tag's files into <dir> and write <dir>/MANIFEST.
 cmake -DMODE=sync -DREF=<tag> -DDEST=<dir> [-DREPO=<url|path>] \
-      [-DMODULES=base;log;cli;platform;coro;net;testing] \
+      [-DMODULES=base;log;cli;platform;async;net;testing] \
       -P <copy>/cmake/CoreCppVendor.cmake
 
 # Verify <dir> against its MANIFEST. Needs no git.

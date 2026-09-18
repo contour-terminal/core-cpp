@@ -10,7 +10,7 @@ logging, command-line parsing, an operating-system layer, coroutines, an event l
 sockets and TLS, and a terminal UI. It replaces the near-verbatim copies of this code that
 contour, endo, fastcached and tuidu each carried, and it merges contour's and fastcached's two
 coroutine and networking designs into one. Everything is in namespace `core`, one namespace per
-directory. A defined subset (base, log, cli, coro and testing, and parts of platform and net) is
+directory. A defined subset (base, log, cli, async and testing, and parts of platform and net) is
 held to building and passing its tests under single-threaded WebAssembly.
 
 **Status: 0.1.0 is in development.** The build framework, `core::base`, `core::log`,
@@ -23,13 +23,13 @@ which. Nothing is tagged yet.
 
 | Module | Namespace | Target(s) | Depends on | Contents | Status |
 |---|---|---|---|---|---|
-| base | `core` | `core::base` | Threads | assertions, environment, escaping, hashing, flags, time, `Base64`, profiling macros, range helpers | **available** |
+| base | `core` | `core::base` | Threads | assertions, environment, escaping, hashing, flags, time, `Base64`, `Generator`, profiling macros, range helpers | **available** |
 | log | `core::log` | `core::log` | base | log store and sinks | **available** |
 | cli | `core::cli` | `core::cli` | base, log | command-line parser, application scaffold | **available** |
-| platform | `core::platform` | `core::platform` | base, log, coro | clocks, wakeup, signals, pipes, file system, environment, paths | **available** |
-| coro | `core::coro` | `core::coro` (header-only) | the standard library | `Task`, cancellation, `whenAll`/`whenAny`, generators, executors, `AsyncQueue` | `Generator` **available**; the rest planned (A5, B1) |
-| net | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | coro, platform; OpenSSL for TLS | event loop and backends (epoll, kqueue, IOCP, poll, host-driven), sockets, dialling, timers, TLS, HTTP server | planned (A6, B2-B11) |
-| tui | `core::tui` | `core::tui_output`, `core::tui` | base; the full TUI also platform, coro, net, libunicode | terminal output, input, widgets, runtime | planned (A7, B12) |
+| platform | `core::platform` | `core::platform` | base, log | clocks, wakeup, signals, pipes, file system, environment, paths | **available** |
+| async | `core::async` | `core::async` (header-only) | the standard library | `Task`, cancellation, `whenAll`/`whenAny`, executors, `AsyncQueue` | `Task`, cancellation and the combinators **available** (A5); executors and `AsyncQueue` planned (B1) |
+| net | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | async, platform; OpenSSL for TLS | event loop and backends (epoll, kqueue, IOCP, poll, host-driven), sockets, dialling, timers, TLS, HTTP server | planned (A6, B2-B11) |
+| tui | `core::tui` | `core::tui_output`, `core::tui` | base; the full TUI also platform, async, net, libunicode | terminal output, input, widgets, runtime | planned (A7, B12) |
 | testing | `core::testing` | `core::testing`, `core::testing_main` | base; log and Catch2 for `testing_main` | Windows dialog suppression, a fake environment, scoped temporary directory, working directory and environment variable, a Catch2 `main()` with the `LOG` filter and a normalised exit code | **available** |
 
 The layering is enforced: a module links only the modules its row in
@@ -45,7 +45,7 @@ CPMAddPackage(
     SYSTEM YES              # core-cpp headers never trip your -Werror
     EXCLUDE_FROM_ALL YES    # build only what you link
     OPTIONS "CORE_CPP_WITH_TUI ON" "CORE_CPP_WITH_TLS OFF")
-target_link_libraries(myapp PRIVATE core::coro core::net core::tui)
+target_link_libraries(myapp PRIVATE core::async core::net core::tui)
 # local development against a checkout: -DCPM_core-cpp_SOURCE=/path/to/core-cpp
 ```
 

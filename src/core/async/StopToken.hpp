@@ -2,7 +2,7 @@
 #pragma once
 
 /// @file
-/// Cooperative cancellation: `core::coro::StopToken`, `StopSource`, `StopCallback<F>` and
+/// Cooperative cancellation: `core::async::StopToken`, `StopSource`, `StopCallback<F>` and
 /// `NoStopState`.
 ///
 /// They are `std::stop_token`, `std::stop_source`, `std::stop_callback<F>` and `std::nostopstate`
@@ -36,30 +36,30 @@
 /// and @c detail::StopCallbackFallback. Its std-compatible members carry the standard's names
 /// (`request_stop`, `stop_requested`, ...), so code compiles against either.
 
-// Define CORE_CORO_FORCE_STOP_TOKEN_FALLBACK to make StopToken, StopSource and StopCallback the
+// Define CORE_ASYNC_FORCE_STOP_TOKEN_FALLBACK to make StopToken, StopSource and StopCallback the
 // fallback even where the standard library has <stop_token>. It has to be defined the same way in
 // every translation unit of a program, or they disagree about what a StopToken is; the test
-// binary core-cpp-coro-fallback-test is built that way.
+// binary core-cpp-async-fallback-test is built that way.
 
 #include <version>
 
 #if defined(__cpp_lib_jthread) && __cpp_lib_jthread >= 201911L \
-    && !defined(CORE_CORO_FORCE_STOP_TOKEN_FALLBACK)
-    #define CORE_CORO_STOP_TOKEN_IS_STD 1
+    && !defined(CORE_ASYNC_FORCE_STOP_TOKEN_FALLBACK)
+    #define CORE_ASYNC_STOP_TOKEN_IS_STD 1
     #include <stop_token>
 #else
-    #define CORE_CORO_STOP_TOKEN_IS_STD 0
+    #define CORE_ASYNC_STOP_TOKEN_IS_STD 0
 #endif
 
 // Single-threaded WebAssembly has one thread, so the fallback has nothing to synchronise there.
 #if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
-    #define CORE_CORO_STOP_TOKEN_HAS_THREADS 1
+    #define CORE_ASYNC_STOP_TOKEN_HAS_THREADS 1
     #include <atomic>
     #include <condition_variable>
     #include <mutex>
     #include <thread>
 #else
-    #define CORE_CORO_STOP_TOKEN_HAS_THREADS 0
+    #define CORE_ASYNC_STOP_TOKEN_HAS_THREADS 0
 #endif
 
 #include <concepts>
@@ -68,13 +68,13 @@
 #include <type_traits>
 #include <utility>
 
-namespace core::coro
+namespace core::async
 {
 
 namespace detail
 {
 
-#if CORE_CORO_STOP_TOKEN_HAS_THREADS
+#if CORE_ASYNC_STOP_TOKEN_HAS_THREADS
     /// How the fallback's stop state synchronises where there are threads: a mutex over the
     /// callback list, and a condition variable on which a callback's destructor waits for the
     /// callback to return.
@@ -519,7 +519,7 @@ namespace detail
 
 } // namespace detail
 
-#if CORE_CORO_STOP_TOKEN_IS_STD
+#if CORE_ASYNC_STOP_TOKEN_IS_STD
 
 /// Observes a stop request. Cheap to copy; copies share the stop state of the source.
 using StopToken = std::stop_token;
@@ -553,4 +553,4 @@ inline constexpr detail::NoStopStateFallback NoStopState {};
 
 #endif
 
-} // namespace core::coro
+} // namespace core::async

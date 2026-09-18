@@ -16,9 +16,9 @@
 /// every child has finished. Pair it with a shared token when you need
 /// one-fails-all-stop semantics.
 
-#include <core/coro/Cancellation.hpp>
-#include <core/coro/Task.hpp>
-#include <core/coro/UniqueCoroHandle.hpp>
+#include <core/async/Cancellation.hpp>
+#include <core/async/Task.hpp>
+#include <core/async/UniqueCoroHandle.hpp>
 
 #include <coroutine>
 #include <cstddef>
@@ -26,7 +26,7 @@
 #include <utility>
 #include <vector>
 
-namespace core::coro
+namespace core::async
 {
 
 namespace detail
@@ -206,4 +206,4 @@ template <typename... Tasks>
     return detail::WhenAllAwaiter { std::move(vec) };
 }
 
-} // namespace core::coro
+} // namespace core::async

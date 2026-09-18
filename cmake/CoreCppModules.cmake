@@ -103,7 +103,7 @@ core_cpp_module(NAME cli KIND STATIC DEPS base log PLATFORMS any)
 core_cpp_module(NAME testing KIND STATIC DEPS base log PLATFORMS any)
 
 # Header-only, and needing nothing but the standard library.
-core_cpp_module(NAME coro KIND INTERFACE PLATFORMS any)
+core_cpp_module(NAME async KIND INTERFACE PLATFORMS any)
 
 # Under single-threaded Emscripten only Types, PlatformError, Clock, StringUtils, PathUtils,
 # GlobMatch, FileUri and the POSIX providers build: see its SOURCES_EMSCRIPTEN.

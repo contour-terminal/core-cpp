@@ -19,9 +19,9 @@
 /// result and tail-transfers to the awaiting coroutine; later finishers are
 /// no-ops, so the parent is resumed exactly once.
 
-#include <core/coro/Cancellation.hpp>
-#include <core/coro/Task.hpp>
-#include <core/coro/UniqueCoroHandle.hpp>
+#include <core/async/Cancellation.hpp>
+#include <core/async/Task.hpp>
+#include <core/async/UniqueCoroHandle.hpp>
 
 #include <coroutine>
 #include <cstddef>
@@ -34,7 +34,7 @@
 #include <utility>
 #include <vector>
 
-namespace core::coro
+namespace core::async
 {
 
 namespace detail
@@ -256,4 +256,4 @@ template <typename... Tasks>
     return detail::WhenAnyAwaiter { std::move(vec) };
 }
 
-} // namespace core::coro
+} // namespace core::async

@@ -13,7 +13,7 @@ Most of these rules were paid for in fastcached; the full measurements are in
 - **Tests sit next to their sources:** `Foo_test.cpp` beside `Foo.cpp`, in the module's
   directory. There is one test binary per module, `core-cpp-<module>-test`, and a second one
   where a module's tests must also run under a definition that changes what its headers declare
-  (`core-cpp-coro-fallback-test`, with `CORE_CORO_FORCE_STOP_TOKEN_FALLBACK`): such a definition
+  (`core-cpp-async-fallback-test`, with `CORE_ASYNC_FORCE_STOP_TOKEN_FALLBACK`): such a definition
   holds for a whole program or for none of it, never for some of its files.
 - **`core_cpp_add_test(<module> SOURCES ... [LIBS ...] [LABELS ...])` registers it**
   (`cmake/CoreCppTargets.cmake`): it links `core::<module>` and `core::testing_main`, registers

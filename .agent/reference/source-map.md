@@ -29,7 +29,7 @@ src/core/
   Config.hpp.in             generates <core/Config.hpp>: version, skip exit code, WITH_* flags
   *.hpp, *.cpp              core::base (crispy, fastcached Core): Assert, Defines, Environment,
                             Escape, FNV, Flags, Times, UserInfo, Utils, Overloaded, Deferred,
-                            Base64, Profiling, Ranges
+                            Base64, Generator (endo), Profiling, Ranges
   log/                      core::log (crispy): LogStore, LogSink; Assert (fatal, SoftRequire)
   cli/                      core::cli (crispy): CLI, App
   platform/                 core::platform (endo platform, one merged Clock): Clock, Types,
@@ -38,9 +38,9 @@ src/core/
                             UserPaths, PathUtils, GlobMatch, FileUri, SystemInfo, StringUtils;
                             posix/ linux/ windows/ are private; testing/ holds the fakes
                             (InMemoryFileSystem, MockFileInfoProvider, TestEnvironmentProvider)
-  coro/                     core::coro, header-only: Generator (endo); StopToken (std:: or
-                            the fallback); Task, UniqueCoroHandle, Cancellation, Awaitable,
-                            whenAll/whenAny (contour); executors, AsyncQueue (planned, B1)
+  async/                    core::async, header-only: StopToken (std:: or the fallback); Task,
+                            UniqueCoroHandle, Cancellation, Awaitable, whenAll/whenAny (contour);
+                            executors, AsyncQueue (planned, B1)
   net/                      (planned, A6 and B2-B11) core::net_types, core::net, core::net_tls:
                             EventLoop, IoBackend and backend/, sockets, dialling, timers, TLS
   tui/                      (planned, A7 and B12) core::tui_output (the leaf) and core::tui

@@ -59,11 +59,14 @@ workflow refuses one without a section here.
   Under single-threaded Emscripten its row says
   `wasm-subset`: Types, PlatformError, Clock, StringUtils, PathUtils, GlobMatch, FileUri and the
   POSIX providers build, and their tests run under node.
-- `core::coro`, header-only, with `core::coro::Generator<T>`: `std::generator` where the standard
-  library has it and is not libstdc++, otherwise `core::coro::detail::GeneratorFallback<T>`, which
-  is tested on every platform. fastcached's executors arrive with Task B1.
-- `core::coro::StopToken`, `StopSource`, `StopCallback<F>` and the `constexpr` tag `NoStopState`
-  (`<core/coro/StopToken.hpp>`): `std::stop_token`, `std::stop_source`, `std::stop_callback<F>`
+- `core::async`, header-only and needing nothing but the standard library; fastcached's executors
+  arrive with Task B1.
+- `core::Generator<T>` in `core::base`: `std::generator` where the standard library has it and is
+  not libstdc++, otherwise `core::detail::GeneratorFallback<T>`, which is tested on every
+  platform. It needs only the standard library, so it lives in base rather than `core::async`,
+  where `core::async::Generator` would read as an asynchronous, `co_await`-able stream.
+- `core::async::StopToken`, `StopSource`, `StopCallback<F>` and the `constexpr` tag `NoStopState`
+  (`<core/async/StopToken.hpp>`): `std::stop_token`, `std::stop_source`, `std::stop_callback<F>`
   and `std::nostopstate` where the standard library defines `__cpp_lib_jthread`, and otherwise
   core-cpp's implementation with the standard semantics, which keeps plain state under
   single-threaded WebAssembly. libc++ before 20 has `<stop_token>` only behind
@@ -71,12 +74,12 @@ workflow refuses one without a section here.
   AppleClang), and core-cpp adds no compile flag to its consumers, so the fallback runs there,
   with real threads everywhere but WebAssembly. The configure log of a build with tests says which
   branch the toolchain takes.
-  `CORE_CORO_FORCE_STOP_TOKEN_FALLBACK` selects the fallback everywhere; the test binary
-  `core-cpp-coro-fallback-test` (ctest `core-cpp.coro-fallback`) is built with it, so the fallback
+  `CORE_ASYNC_FORCE_STOP_TOKEN_FALLBACK` selects the fallback everywhere; the test binary
+  `core-cpp-async-fallback-test` (ctest `core-cpp.async-fallback`) is built with it, so the fallback
   is tested on every platform, ThreadSanitizer included.
 - `core_cpp_add_test()` takes `NAME`, for a module's second test binary, and `DEFINITIONS`, the
   compile definitions of that binary alone.
-- contour's coroutine vocabulary in `core::coro`: `Task<T>`, lazy and awaited once, whose promise
+- contour's coroutine vocabulary in `core::async`: `Task<T>`, lazy and awaited once, whose promise
   carries the `StopToken` it inherits from the awaiting coroutine; `detail::UniqueCoroHandle`;
   `OperationCancelled` and `thisCoroStopToken()` (`Cancellation.hpp`); the `Awaiter` and
   `HasStopToken` concepts (`Awaitable.hpp`); `whenAll()`, which joins `Task<void>`s and rethrows the
@@ -103,7 +106,7 @@ workflow refuses one without a section here.
   the eight bits below the highest set one: 257 became 511, and 0x10001 became 0x1fe01.
 - `core::LiveEnvironment` on Windows reads a variable set to the empty string as set, as it does
   on POSIX; it read as unset.
-- `core::coro::Generator` is the same type in every translation unit. endo's, which it was
+- `core::Generator` is the same type in every translation unit. endo's, which it was
   imported from, tested `__cpp_lib_generator` before including anything, so whether it was
   `std::generator` depended on what the including file had included first, and a virtual function
   returning one (`FileSystem::walkDirectoryRecursive`) could have two return types in one program.
@@ -127,9 +130,9 @@ Each file was read as a git blob at the commit named, and none contains a CR byt
 | [contour](https://github.com/contour-terminal/contour) | `6777ff05014f8ff163b071e8b0e942830119db80` | crispy's generic half, `src/crispy/{Assert,Base64,Deferred,Defines,Environment,Escape,FNV,Flags,Overloaded,Times,UserInfo,Utils}` as `core` (`core::base`), `{LogStore,LogSink}` as `core::log`, `{CLI,App}` as `core::cli`, and `testing/Environment.hpp` as `core::testing`, with their tests (`Base64`, `CLI`, `Environment`, `LogSink`, `Times`, `Utils`); `fatal()` and `SoftRequire()` moved from `Assert.hpp` to `core/log/Assert.hpp`; `gsl::not_null` replaced by a reference |
 | [fastcached](https://github.com/LASTRADA-Software/fastcached) | `ee71f868547712892b7d9a2ebff60d49c496e25c` | `src/FastCache/Core/{Profiling,Ranges}.hpp` as `core/{Profiling,Ranges}.hpp` (`FC_*` as `CORE_*`, `FastCache::Ranges` as `core::ranges`), with `Profiling_test.cpp` and `Ranges_test.cpp` |
 | [endo](https://github.com/contour-terminal/endo) | `f774a210ce989e5947b8f61d715068b1dc96088c` | `src/testing/{ScopedTempDir,ScopedWorkingDirectory,EnvHelper}.hpp` and `ScopedTempDir_test.cpp` as `core::testing`; `EnvHelper` writes through `core::setProcessEnvironmentVariable()` and reads through `core::LiveEnvironment` on POSIX, not `setenv()`/`getenv()` |
-| [endo](https://github.com/contour-terminal/endo) | `f774a210ce989e5947b8f61d715068b1dc96088c` | the generic half of `src/platform` as `core::platform` (Types, PlatformError, Clock, Wakeup, SignalHandler, SystemPipe, WinsockInit, MessageQueue, FileSystem, NativeFileSystem, FileInfoProvider, EnvironmentProvider, UserPaths, PathUtils, GlobMatch, FileUri, SystemInfo, StringUtils, their `posix/`, `linux/` and `windows/` implementations and `testing/` doubles), with their tests (`WindowsPlatform_test.cpp` split into `PathUtils_test`, `Types_test` and `UserPaths_test`); `Generator.hpp` as `core::coro`. Process, Pipe, WaitResult, ProcessProvider, ProjectFileTree, InstallPaths and InterruptThrottle stay in endo; the `namespace endo` compatibility aliases were not imported |
+| [endo](https://github.com/contour-terminal/endo) | `f774a210ce989e5947b8f61d715068b1dc96088c` | the generic half of `src/platform` as `core::platform` (Types, PlatformError, Clock, Wakeup, SignalHandler, SystemPipe, WinsockInit, MessageQueue, FileSystem, NativeFileSystem, FileInfoProvider, EnvironmentProvider, UserPaths, PathUtils, GlobMatch, FileUri, SystemInfo, StringUtils, their `posix/`, `linux/` and `windows/` implementations and `testing/` doubles), with their tests (`WindowsPlatform_test.cpp` split into `PathUtils_test`, `Types_test` and `UserPaths_test`); `Generator.hpp` as `core::base` (`core::Generator`; Task A5b moved it out of `core::async`, which it needs nothing of). Process, Pipe, WaitResult, ProcessProvider, ProjectFileTree, InstallPaths and InterruptThrottle stay in endo; the `namespace endo` compatibility aliases were not imported |
 | [contour](https://github.com/contour-terminal/contour) | `6777ff05014f8ff163b071e8b0e942830119db80` | `src/net/platform/Clock.hpp`, merged into `core/platform/Clock.hpp`; `src/net/platform/SystemPipe.{hpp,cpp}`, whose non-blocking behaviour is merged into `core/platform/SystemPipe`; `src/net/platform/WinsockInit.{hpp,cpp}`, identical to endo's |
-| [contour](https://github.com/contour-terminal/contour) | `6777ff05014f8ff163b071e8b0e942830119db80` | `src/coro/{Awaitable,Cancellation,Task,UniqueCoroHandle,WhenAll,WhenAny}.hpp` and `{Task,WhenAll,WhenAny}_test.cpp` as `core::coro`, `coro::` renamed `core::coro::`; the `std::stop_token` aliases of `Cancellation.hpp` moved to `StopToken.hpp`, whose fallback replaces their `#error`; no `NOLINT`; two locals renamed for `-Wshadow`; two `WhenAny_test.cpp` helpers compiled only where the case using them is. `test_main.cpp` was not imported (`core::testing_main` replaces it), and `testing/SuppressWindowsDialogs.hpp` had been merged into `core::testing` already |
+| [contour](https://github.com/contour-terminal/contour) | `6777ff05014f8ff163b071e8b0e942830119db80` | `src/coro/{Awaitable,Cancellation,Task,UniqueCoroHandle,WhenAll,WhenAny}.hpp` and `{Task,WhenAll,WhenAny}_test.cpp` as `core::async`, `coro::` renamed `core::async::`; the `std::stop_token` aliases of `Cancellation.hpp` moved to `StopToken.hpp`, whose fallback replaces their `#error`; no `NOLINT`; two locals renamed for `-Wshadow`; two `WhenAny_test.cpp` helpers compiled only where the case using them is. `test_main.cpp` was not imported (`core::testing_main` replaces it), and `testing/SuppressWindowsDialogs.hpp` had been merged into `core::testing` already |
 | [fastcached](https://github.com/LASTRADA-Software/fastcached) | `b461e8b6d367ed22e4bf2935717fa59360a64b7d` | `src/FastCache/Core/Clock.hpp`, merged into `core/platform/Clock.hpp` in camelBack (`Now`/`Refresh` as `now`/`refresh`, `TimePoint`/`Duration` as `SteadyTimePoint`/`SteadyDuration`); `Clock_test.cpp` and `WallClockRef_test.cpp`, merged into `core/platform/Clock_test.cpp` |
 
 The rulebook and CI configuration adapt text from fastcached at

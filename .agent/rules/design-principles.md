@@ -118,7 +118,7 @@ fastcached, Lightweight)*
   copy that lacks a row turns a specific cause into an unclassified one that no caller can
   match on. Same origin.
 - **Exceptions are for unrecoverable conditions and for cancellation.** A recoverable error is
-  a value (`std::expected`). `core::coro::OperationCancelled` is thrown when a coroutine's own
+  a value (`std::expected`). `core::async::OperationCancelled` is thrown when a coroutine's own
   stop token cancels it, and a condition the program cannot continue past throws; see
   `cpp-guidelines.md` for what counts as unrecoverable. A cancellation that comes from the
   resource (`close()`, `cancelRead()`) is `NetErrorCode::Cancelled`, a value. A precondition

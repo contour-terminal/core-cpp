@@ -15,4 +15,4 @@ The terminal UI. Namespace `core::tui`, directory `src/core/tui/`, targets `core
   and progress with it and nothing else.
 - **`core::tui`**: terminal input, the screen, components and widgets, themes, key bindings, and
   a runtime composed on the event loop. It also depends on [platform](platform.md),
-  [coro](coro.md), [net](net.md) and libunicode, and on stb when `CORE_CPP_WITH_IMAGES` is on.
+  [async](async.md), [net](net.md) and libunicode, and on stb when `CORE_CPP_WITH_IMAGES` is on.

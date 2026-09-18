@@ -10,10 +10,10 @@ namespace is its directory (`src/core/net/` is `core::net`; headers directly in 
 | [base](base.md) | `core` | `core::base` | static | Threads; Tracy (optional) | available |
 | [log](log.md) | `core::log` | `core::log` | static | base | available |
 | [cli](cli.md) | `core::cli` | `core::cli` | static | base, log | available |
-| [platform](platform.md) | `core::platform` | `core::platform` | static | base, log, coro | available |
-| [coro](coro.md) | `core::coro` | `core::coro` | header-only | the standard library | `Generator`, `StopToken`, `Task`, `whenAll`, `whenAny` available; executors: Task B1 |
-| [net](net.md) | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | header-only, static, static | coro, platform; OpenSSL for `net_tls` | planned: Tasks A6, B2 to B11 |
-| [tui](tui.md) | `core::tui` | `core::tui_output`, `core::tui` | static | `tui_output`: base; `tui`: also platform, coro, net, libunicode, stb (optional) | planned: Tasks A7, B12 |
+| [platform](platform.md) | `core::platform` | `core::platform` | static | base, log | available |
+| [async](async.md) | `core::async` | `core::async` | header-only | the standard library | `StopToken`, `Task`, `whenAll`, `whenAny` available; executors: Task B1 |
+| [net](net.md) | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | header-only, static, static | async, platform; OpenSSL for `net_tls` | planned: Tasks A6, B2 to B11 |
+| [tui](tui.md) | `core::tui` | `core::tui_output`, `core::tui` | static | `tui_output`: base; `tui`: also platform, async, net, libunicode, stb (optional) | planned: Tasks A7, B12 |
 | [testing](testing.md) | `core::testing` | `core::testing`, `core::testing_dialogs`, `core::testing_main` | static, object, static | base; log and Catch2 for `testing_main` | available |
 
 The task numbers refer to the
@@ -33,19 +33,18 @@ graph BT
     cli --> log
     platform --> base
     platform --> log
-    platform --> coro
-    net --> coro
+    net --> async
     net --> platform
     tui_output --> base
     tui --> tui_output
     tui --> platform
-    tui --> coro
+    tui --> async
     tui --> net
     testing --> base
     testing --> log
 ```
 
-`coro` depends on the standard library only, so it can be used without anything else from
+`async` depends on the standard library only, so it can be used without anything else from
 core-cpp. `tui_output` depends on `base` only, so a program can write styled terminal output
 without an event loop, coroutines or libunicode; Lightweight's `dbtool` uses it that way.
 
@@ -65,7 +64,7 @@ subset builds, and CI runs its tests under node:
 | Module | Under Emscripten |
 |---|---|
 | base, log, cli | fully |
-| coro | everything except `ThreadPoolExecutor.hpp` |
+| async | everything except `ThreadPoolExecutor.hpp` |
 | platform | Types (with `NativeHandle`), PlatformError, Clock, StringUtils, PathUtils, GlobMatch, FileUri, and the POSIX `EnvironmentProvider` and `FileInfoProvider` behind `nativeEnvironmentProvider()` and `nativeFileInfoProvider()` |
 | net | `net_types`, `IoBackend`, `EventLoop`, timers, `DeadlineTimer`, `WithTimeout`, the host-driven backend and the test doubles; no sockets, DNS, TLS or HTTP |
 | testing | fully (the Windows parts are no-ops) |

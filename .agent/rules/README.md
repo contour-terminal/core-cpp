@@ -36,7 +36,7 @@ repository would link to the core-cpp issue of that number, which is a different
 | [`library-hygiene.md`](library-hygiene.md) | What makes core-cpp safe to consume: no global state, prefixes, vendoring, the graduation rule, public API and versioning |
 | [`build-and-toolchain.md`](build-and-toolchain.md) | What differs between compilers, standard libraries, hosts and tool versions; the compiler cache; CI gates |
 | [`testing.md`](testing.md) | How tests are registered, what they may assume, and the ways a suite has reported a defect as something else |
-| [`async-and-net.md`](async-and-net.md) | `src/core/coro/`, `src/core/net/`: layering, sockets, dialling, and socket and coroutine lifetime |
+| [`async-and-net.md`](async-and-net.md) | `src/core/async/`, `src/core/net/`: layering, sockets, dialling, and socket and coroutine lifetime |
 | [`platform.md`](platform.md) | `src/core/platform/`: OS seams and Windows specifics |
 | [`tui.md`](tui.md) | `src/core/tui/`: the terminal UI, its output leaf and its runtime |
 

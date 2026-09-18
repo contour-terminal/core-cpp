@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-#include <core/coro/Task.hpp>
-#include <core/coro/WhenAll.hpp>
+#include <core/async/Task.hpp>
+#include <core/async/WhenAll.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -8,8 +8,8 @@
 #include <string>
 #include <vector>
 
-using core::coro::Task;
-using core::coro::whenAll;
+using core::async::Task;
+using core::async::whenAll;
 
 namespace
 {

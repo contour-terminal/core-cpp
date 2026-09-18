@@ -13,7 +13,7 @@
 #include <coroutine>
 #include <utility>
 
-namespace core::coro::detail
+namespace core::async::detail
 {
 
 /// Move-only owner of a `std::coroutine_handle<Promise>`: destroys the owned
@@ -63,4 +63,4 @@ class UniqueCoroHandle
     HandleType _handle {};
 };
 
-} // namespace core::coro::detail
+} // namespace core::async::detail

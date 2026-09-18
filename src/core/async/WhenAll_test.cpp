@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-#include <core/coro/Cancellation.hpp>
-#include <core/coro/Task.hpp>
-#include <core/coro/WhenAll.hpp>
+#include <core/async/Cancellation.hpp>
+#include <core/async/Task.hpp>
+#include <core/async/WhenAll.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -10,9 +10,9 @@
 #include <string>
 #include <vector>
 
-using core::coro::StopSource;
-using core::coro::Task;
-using core::coro::whenAll;
+using core::async::StopSource;
+using core::async::Task;
+using core::async::whenAll;
 
 namespace
 {
@@ -46,7 +46,7 @@ Task<void> waitThenIncrement(std::vector<std::coroutine_handle<>>* waiters, int*
 /// Parks on a ManualEvent, then records whether its inherited token was cancelled.
 Task<void> waitThenRecordStop(std::vector<std::coroutine_handle<>>* waiters, std::vector<bool>* observed)
 {
-    auto const token = co_await core::coro::thisCoroStopToken();
+    auto const token = co_await core::async::thisCoroStopToken();
     co_await ManualEvent { waiters };
     observed->push_back(token.stop_requested());
 }

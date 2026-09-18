@@ -75,7 +75,7 @@ exemption short of an allowlist row that states its reason.
   the operation returns `std::expected`, or a result type such as
   `core::platform::ChannelResult` where an outcome is no failure at all. An exception is for a
   condition the program cannot continue past where it happens, and for cancellation:
-  `core::coro::OperationCancelled`, which a coroutine throws when its own stop token cancels it.
+  `core::async::OperationCancelled`, which a coroutine throws when its own stop token cancels it.
   A function that throws says so (`@throws`) and names the condition.
   *(core-cpp; endo and tuidu reserve exceptions for the same cancellation path)*
   - **Unrecoverable** means that no caller between the failure and `main()` has a meaningful

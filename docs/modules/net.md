@@ -26,5 +26,5 @@ The full design is Part I §2 of the
 [design spec](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/specs/2026-09-18-core-cpp-design.md).
 See [Threading](../design/threading.md) and [Coroutines and lifetimes](../design/coroutines-and-lifetimes.md).
 
-Depends on [coro](coro.md) and [platform](platform.md); `core::net_tls` also on OpenSSL, from the
+Depends on [async](async.md) and [platform](platform.md); `core::net_tls` also on OpenSSL, from the
 system, as a private dependency.

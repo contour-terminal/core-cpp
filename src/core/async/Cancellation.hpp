@@ -2,20 +2,20 @@
 #pragma once
 
 /// @file
-/// Cancellation primitives for @c core::coro coroutines.
+/// Cancellation primitives for @c core::async coroutines.
 ///
 /// Cancellation uses @c StopToken, @c StopSource and @c StopCallback from
-/// `<core/coro/StopToken.hpp>`: the standard `<stop_token>` facility where the
+/// `<core/async/StopToken.hpp>`: the standard `<stop_token>` facility where the
 /// standard library has it, and core-cpp's fallback with the same semantics where
 /// it does not. This header adds what a coroutine needs on top: the exception a
 /// cancelled frame unwinds with, and an awaitable that yields the awaiting
 /// coroutine's own token.
 
-#include <core/coro/StopToken.hpp>
+#include <core/async/StopToken.hpp>
 
 #include <coroutine>
 
-namespace core::coro
+namespace core::async
 {
 
 /// Exception thrown into an awaiting coroutine frame when its operation is
@@ -30,7 +30,7 @@ struct OperationCancelled
 /// suspending it. Lets a coroutine body observe its own cancellation token (e.g. to
 /// poll @c stop_requested() inside a loop) when the promise carries one; coroutines
 /// whose promise has no @c stopToken() accessor receive a default (never-stopped)
-/// token. Usage: `auto token = co_await core::coro::thisCoroStopToken();`.
+/// token. Usage: `auto token = co_await core::async::thisCoroStopToken();`.
 struct ThisCoroStopToken
 {
     StopToken token; ///< Filled from the awaiting promise in await_suspend.
@@ -60,4 +60,4 @@ struct ThisCoroStopToken
     return ThisCoroStopToken {};
 }
 
-} // namespace core::coro
+} // namespace core::async

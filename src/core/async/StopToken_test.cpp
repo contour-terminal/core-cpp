@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include <core/coro/StopToken.hpp>
+#include <core/async/StopToken.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -23,28 +23,29 @@
     #define CORE_CPP_TEST_THREADS 0
 #endif
 
-using core::coro::NoStopState;
-using core::coro::StopCallback;
-using core::coro::StopSource;
-using core::coro::StopToken;
+using core::async::NoStopState;
+using core::async::StopCallback;
+using core::async::StopSource;
+using core::async::StopToken;
 
 // StopToken.hpp is included first, before anything could have defined __cpp_lib_jthread for it.
 // Where the standard library has std::stop_token, StopToken must be it all the same, unless the
-// build forces the fallback (core-cpp.coro-fallback): the choice may not depend on what a
+// build forces the fallback (core-cpp.async-fallback): the choice may not depend on what a
 // translation unit happened to include first.
 #if defined(__cpp_lib_jthread) && __cpp_lib_jthread >= 201911L \
-    && !defined(CORE_CORO_FORCE_STOP_TOKEN_FALLBACK)
+    && !defined(CORE_ASYNC_FORCE_STOP_TOKEN_FALLBACK)
     #include <stop_token>
 static_assert(std::is_same_v<StopToken, std::stop_token>);
 static_assert(std::is_same_v<StopSource, std::stop_source>);
 static_assert(std::is_same_v<StopCallback<void (*)()>, std::stop_callback<void (*)()>>);
 static_assert(std::is_same_v<std::remove_const_t<decltype(NoStopState)>, std::nostopstate_t>);
 #else
-static_assert(std::is_same_v<StopToken, core::coro::detail::StopTokenFallback>);
-static_assert(std::is_same_v<StopSource, core::coro::detail::StopSourceFallback>);
-static_assert(std::is_same_v<StopCallback<void (*)()>, core::coro::detail::StopCallbackFallback<void (*)()>>);
+static_assert(std::is_same_v<StopToken, core::async::detail::StopTokenFallback>);
+static_assert(std::is_same_v<StopSource, core::async::detail::StopSourceFallback>);
 static_assert(
-    std::is_same_v<std::remove_const_t<decltype(NoStopState)>, core::coro::detail::NoStopStateFallback>);
+    std::is_same_v<StopCallback<void (*)()>, core::async::detail::StopCallbackFallback<void (*)()>>);
+static_assert(
+    std::is_same_v<std::remove_const_t<decltype(NoStopState)>, core::async::detail::NoStopStateFallback>);
 #endif
 
 // What code written against one branch relies on from the other.
@@ -108,8 +109,8 @@ struct DestroyOther
 /// inside its own invocation, which the source's request_stop is running.
 struct DestroySourceAndSelf
 {
-    std::optional<core::coro::detail::StopSourceFallback>* source;
-    std::optional<core::coro::detail::StopCallbackFallback<DestroySourceAndSelf>>* self;
+    std::optional<core::async::detail::StopSourceFallback>* source;
+    std::optional<core::async::detail::StopCallbackFallback<DestroySourceAndSelf>>* self;
     int* calls;
 
     void operator()() const
@@ -244,8 +245,8 @@ TEST_CASE("The fallback lets a callback destroy the last source and itself while
     // The fallback's own types, on every platform: the standard does not promise this of
     // std::stop_source. No token remains, so while the callback runs, the source's request_stop is
     // what keeps the stop state alive.
-    using core::coro::detail::StopCallbackFallback;
-    using core::coro::detail::StopSourceFallback;
+    using core::async::detail::StopCallbackFallback;
+    using core::async::detail::StopSourceFallback;
     auto source = std::optional<StopSourceFallback> { std::in_place };
     auto callback = std::optional<StopCallbackFallback<DestroySourceAndSelf>> {};
     auto calls = 0;

@@ -105,7 +105,7 @@ nav:
     - log: modules/log.md
     - cli: modules/cli.md
     - platform: modules/platform.md
-    - coro: modules/coro.md
+    - async: modules/async.md
     - net: modules/net.md
     - tui: modules/tui.md
     - testing: modules/testing.md

@@ -27,7 +27,7 @@ decides who, because that is what keeps branches from colliding.
 |---|---|
 | **base** | `src/core/*.hpp`, `src/core/log/`, `src/core/cli/` |
 | **platform** | `src/core/platform/`, `src/core/testing/` |
-| **async** | `src/core/coro/`, `src/core/net/` |
+| **async** | `src/core/async/`, `src/core/net/` |
 | **tui** | `src/core/tui/` |
 | **build** | `cmake/`, `CMakePresets.json`, `tests/cmake/`, `scripts/`, `.github/`, `docs/` |
 

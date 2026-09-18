@@ -1,6 +1,6 @@
 # Coroutines, the event loop and networking
 
-Rules for `src/core/coro/` and `src/core/net/`: what the layers may depend on, how sockets and
+Rules for `src/core/async/` and `src/core/net/`: what the layers may depend on, how sockets and
 dials behave, and the lifetime rules that keep a coroutine frame from being leaked, freed twice
 or resumed on the wrong thread.
 
@@ -21,7 +21,7 @@ are `schedule`/`cancelPending`, `ISocket::Read` is `read`, and so on).
 
 ## Layering
 
-- **`core::coro` depends on the standard library only.** `core::net` depends on `coro` and
+- **`core::async` depends on the standard library only.** `core::net` depends on `async` and
   `platform`; `core::net_types` (`NetError`, `IoResult`) links nothing. The module table
   enforces the link edges; an include across modules must be a table edge too.
 - **The layer that owns a concept owns its file.** When an include points the wrong way, the
@@ -41,9 +41,9 @@ The contract is the spec's (Part I §2, rules 1 to 6), and it is short enough to
   second step of `runOnce`, on every backend.
 - **One thread dequeues a loop or a completion port**, helper threads only post, and a socket
   is associated with exactly one port.
-- **Cancellation is `core::coro::StopToken`**, which is `std::stop_token` where the standard
+- **Cancellation is `core::async::StopToken`**, which is `std::stop_token` where the standard
   library has it and core-cpp's fallback where it does not. A cancel from a flow's own token throws
-  `core::coro::OperationCancelled`; a cancel from the resource (`close()`, `cancelRead()`, a
+  `core::async::OperationCancelled`; a cancel from the resource (`close()`, `cancelRead()`, a
   closed listener) returns `NetErrorCode::Cancelled` as a value. If a receive already completed
   with bytes, the data wins.
 
@@ -172,7 +172,7 @@ The contract is the spec's (Part I §2, rules 1 to 6), and it is short enough to
 - **A derived interface that re-declares one overload hides every other overload of that name.**
   `IReactor` re-declared `Submit(handle)` and not `Submit(ParkedWork)`, so every call through the
   derived type bound to the borrowing overload, and nothing diagnosed it. Every class deriving
-  from `coro::IExecutor` says `using IExecutor::submit;`, and a compile-time check asserts that
+  from `async::IExecutor` says `using IExecutor::submit;`, and a compile-time check asserts that
   `submit(ParkedWork{})` selects the owning overload. Origin:
   [fastcached#1041](https://github.com/LASTRADA-Software/fastcached/issues/1041).
 - **A watchdog may not write to a socket a coroutine owns**, and the reason is ownership, not
@@ -231,6 +231,6 @@ stackless event and is safe anywhere. See
   and `BackendKind::Wfmo` after one release in which the IOCP backend is the Windows default and
   green.
 - **[core-cpp#9](https://github.com/contour-terminal/core-cpp/issues/9)** — resolve morph's
-  follow-up from its move onto `core::coro` (executors and strand, logger, `FileIoOps`, the
-  DateTime clock seam, `morph::net` on Windows), and graduate morph's strand into `core::coro`
+  follow-up from its move onto `core::async` (executors and strand, logger, `FileIoOps`, the
+  DateTime clock seam, `morph::net` on Windows), and graduate morph's strand into `core::async`
   once a second consumer needs one.

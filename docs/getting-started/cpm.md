@@ -13,7 +13,7 @@ CPMAddPackage(
     SYSTEM YES              # core-cpp headers never trip your -Werror
     EXCLUDE_FROM_ALL YES    # build only what you link
     OPTIONS "CORE_CPP_WITH_TUI ON" "CORE_CPP_WITH_TLS OFF")
-target_link_libraries(myapp PRIVATE core::coro core::net core::tui)
+target_link_libraries(myapp PRIVATE core::async core::net core::tui)
 # local development against a checkout: -DCPM_core-cpp_SOURCE=/path/to/core-cpp
 ```
 

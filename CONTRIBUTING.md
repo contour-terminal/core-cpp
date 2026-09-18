@@ -85,7 +85,7 @@ notes it appears in:
 
 Add `breaking-change` when a consumer must change code or build configuration, and one
 `module/<name>` label per module touched: `module/base`, `module/log`, `module/cli`,
-`module/platform`, `module/coro`, `module/net`, `module/tui`, `module/testing`.
+`module/platform`, `module/async`, `module/net`, `module/tui`, `module/testing`.
 
 ## Versioning
 

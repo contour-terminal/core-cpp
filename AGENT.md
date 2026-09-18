@@ -16,14 +16,15 @@ is [the plan](docs/superpowers/plans/2026-09-18-core-cpp.md).
 | base | `core` | `core::base` | Threads |
 | log | `core::log` | `core::log` | base |
 | cli | `core::cli` | `core::cli` | base, log |
-| platform | `core::platform` | `core::platform` | base, log, coro |
-| coro | `core::coro` | `core::coro` (INTERFACE) | std only |
-| net | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | coro, platform |
-| tui | `core::tui` | `core::tui_output`, `core::tui` | base (leaf); + platform, coro, net, libunicode |
+| platform | `core::platform` | `core::platform` | base, log |
+| async | `core::async` | `core::async` (INTERFACE) | std only |
+| net | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | async, platform |
+| tui | `core::tui` | `core::tui_output`, `core::tui` | base (leaf); + platform, async, net, libunicode |
 | testing | `core::testing` | `core::testing`, `core::testing_dialogs`, `core::testing_main` | base; log and Catch2 for `testing_main` |
 
-`base`, `log`, `cli`, `platform` and `testing` exist, and `coro` has `Generator`, `StopToken`,
-`Task` and the combinators; the rest arrives with Tasks A6, A7 and Phase B. The
+`base`, `log`, `cli`, `platform` and `testing` exist, with `Generator` in base (Task A5b: it needs
+only std, and `core::async::Generator` would read as an asynchronous, `co_await`-able stream); and
+`async` has `StopToken`, `Task` and the combinators; the rest arrives with Tasks A6, A7 and Phase B. The
 module DAG is the table in `cmake/CoreCppModules.cmake`, and configure refuses a link it does not
 list.
 
@@ -94,7 +95,7 @@ How-tos: [`.agent/guides/`](.agent/guides/) (team runs, Tracy, consumer migratio
 
 Dependency injection by constructor; configuration fixed at construction; data-driven tables;
 `std::expected` with monadic chaining for every recoverable error (exceptions only for
-unrecoverable conditions and `core::coro::OperationCancelled`);
+unrecoverable conditions and `core::async::OperationCancelled`);
 `enum class` over `bool`; RAII for every handle. Details:
 [`.agent/rules/design-principles.md`](.agent/rules/design-principles.md).
 
@@ -121,7 +122,7 @@ a bug; Doxygen `///` on public API; zero warnings. The canonical text:
 ## Testing
 
 Tests sit next to their sources (`Foo_test.cpp`) and are registered with `core_cpp_add_test`,
-one binary per module linked to `core::testing_main` (coro has a second, over the StopToken
+one binary per module linked to `core::testing_main` (async has a second, over the StopToken
 fallback). Exit codes: 0 pass, 1 failure, 77 all
 skipped, 2 nothing ran. Labels: `core-cpp`, the module, `hygiene`, `canary`, `loopback`,
 `no-tsan`. `ctest -L hygiene` runs the checks over the tree and the build contract.

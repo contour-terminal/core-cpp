@@ -1,43 +1,25 @@
-# coro
+# async
 
-The C++23 coroutine vocabulary. Namespace `core::coro`, directory `src/core/coro/`, target
-`core::coro` (header-only).
+The C++23 coroutine vocabulary. Namespace `core::async`, directory `src/core/async/`, target
+`core::async` (header-only).
 
 !!! note "Status"
-    `Generator`, `StopToken`, and contour's `Task`, cancellation and combinators (`src/coro` at
+    `StopToken`, and contour's `Task`, cancellation and combinators (`src/coro` at
     `6777ff05`, Task A5 of the
     [implementation plan](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/plans/2026-09-18-core-cpp.md))
-    exist. Task B1 merges fastcached's executors and ownership rules into them.
-
-## Generator
-
-`<core/coro/Generator.hpp>` has `core::coro::Generator<T>`, a lazy, single-pass range a coroutine
-fills with `co_yield`, imported from endo (`src/platform/Generator.hpp` at `f774a210`).
-
-- It is `std::generator<T>` where the standard library has `<generator>` and is not libstdc++,
-  and otherwise `core::coro::detail::GeneratorFallback<T>`, a small implementation over
-  `<coroutine>`. libc++ has no `<generator>` yet (emsdk 3.1.56 ships libc++ 17), and GCC 14
-  reports a null `coroutine_handle` inside libstdc++'s own `std::generator` at `-O2`
-  (`-Wnull-dereference`), which the zero-warning policy makes an error. In practice MSVC uses
-  `std::generator` and everything else the fallback.
-- The choice is read from `<version>`, which the header includes first, so every translation unit
-  makes the same one. endo's copy tested `__cpp_lib_generator` before including anything, so the
-  answer depended on what a file included first; a virtual function returning a `Generator` could
-  then have two return types in one program.
-- `CORE_GENERATOR_FORCE_FALLBACK`, defined the same way in every translation unit, selects the
-  fallback everywhere.
-- The fallback is always defined and is tested on every platform. Each yielded value lives in the
-  coroutine frame until the next increment, so yield owning values. Breaking out of the loop
-  destroys the suspended frame.
+    exist. `Generator` moved to [base](base.md#generator) in Task A5b: `core::async::Generator`
+    would read as an *asynchronous*, `co_await`-able stream, and it is a synchronous one, needing
+    only the standard library. Task B1 merges fastcached's executors and ownership rules into
+    the rest.
 
 ## StopToken
 
-`<core/coro/StopToken.hpp>` has `core::coro::StopToken`, `StopSource`, `StopCallback<F>` and
+`<core/async/StopToken.hpp>` has `core::async::StopToken`, `StopSource`, `StopCallback<F>` and
 `NoStopState`, the vocabulary of cooperative cancellation.
 
 - They are `std::stop_token`, `std::stop_source`, `std::stop_callback<F>` and `std::nostopstate`
   where the standard library defines `__cpp_lib_jthread`, and otherwise
-  `core::coro::detail::StopTokenFallback`, `StopSourceFallback`, `StopCallbackFallback<F>` and
+  `core::async::detail::StopTokenFallback`, `StopSourceFallback`, `StopCallbackFallback<F>` and
   `NoStopStateFallback`. `NoStopState` is a `constexpr` object of `std::nostopstate_t` or of
   `NoStopStateFallback`. contour's copy (`src/coro/Cancellation.hpp` at `6777ff05`) aliased
   `std::` and refused to compile otherwise.
@@ -46,7 +28,7 @@ fills with `co_yield`, imported from endo (`src/platform/Generator.hpp` at `f774
   and likely AppleClang. It runs with real threads on all of them but the first, so it is
   production code, not a WebAssembly shim. core-cpp adds no compile flag to its consumers. The
   configure log names the branch a toolchain takes, when core-cpp's tests are built:
-  `[core-cpp] coro: StopToken is std::stop_token`, or `... is core-cpp's fallback`.
+  `[core-cpp] async: StopToken is std::stop_token`, or `... is core-cpp's fallback`.
 - The fallback has the standard semantics. `request_stop()` returns true exactly once, and that
   call runs every registered callback once, on the requesting thread, before it returns. A
   callback constructed on a stopped token runs in its constructor, is never registered, and so
@@ -63,17 +45,17 @@ fills with `co_yield`, imported from endo (`src/platform/Generator.hpp` at `f774
   stop again or register another callback.
 - The choice is read from `<version>`, which the header includes first, so every translation unit
   makes the same one.
-- `CORE_CORO_FORCE_STOP_TOKEN_FALLBACK` selects the fallback where the standard library has
+- `CORE_ASYNC_FORCE_STOP_TOKEN_FALLBACK` selects the fallback where the standard library has
   `<stop_token>`. It changes what every `Task` promise holds, so it must be defined the same way
-  in every translation unit of a program. The test binary `core-cpp-coro-fallback-test` (ctest
-  `core-cpp.coro-fallback`) builds the module's tests with it, so the fallback is tested on every
+  in every translation unit of a program. The test binary `core-cpp-async-fallback-test` (ctest
+  `core-cpp.async-fallback`) builds the module's tests with it, so the fallback is tested on every
   platform, under ThreadSanitizer too.
 
 ## Task, cancellation and combinators
 
-Imported from contour's `src/coro` at `6777ff05`, with `coro::` renamed `core::coro::`:
+Imported from contour's `src/coro` at `6777ff05`, with `coro::` renamed `core::async::`:
 
-- `Task<T>` (`<core/coro/Task.hpp>`) is a lazy coroutine producing one value, or none for
+- `Task<T>` (`<core/async/Task.hpp>`) is a lazy coroutine producing one value, or none for
   `Task<void>`. It starts suspended, so a `co_await` attaches its continuation before the body
   runs, and its final suspension transfers to the awaiting coroutine (symmetric transfer). A
   task is awaited, or driven through `handle()`, once. The `Task` value owns the frame and
@@ -95,19 +77,19 @@ Imported from contour's `src/coro` at `6777ff05`, with `coro::` renamed `core::c
   without `__OPTIMIZE__`. GCC at `-Og` or `-O1` defines `__OPTIMIZE__`, so the case is not skipped
   there and crashes the test binary; no preset builds at those levels. The fix is tracked in
   [core-cpp#15](https://github.com/contour-terminal/core-cpp/issues/15), to be decided in Task B1.
-- `detail::UniqueCoroHandle<Promise>` (`<core/coro/UniqueCoroHandle.hpp>`) is the move-only owner
+- `detail::UniqueCoroHandle<Promise>` (`<core/async/UniqueCoroHandle.hpp>`) is the move-only owner
   of a coroutine handle that `Task` and the combinators' child runners share.
-- `<core/coro/Cancellation.hpp>` has `OperationCancelled`, which a cancelled frame throws to
+- `<core/async/Cancellation.hpp>` has `OperationCancelled`, which a cancelled frame throws to
   unwind through ordinary RAII, and `thisCoroStopToken()`, an awaitable yielding the awaiting
   coroutine's token without suspending it (a default token where the promise has none). contour's
-  copy also aliased `std::stop_token` and friends, which are now `<core/coro/StopToken.hpp>`.
-- `<core/coro/Awaitable.hpp>` has the concepts `Awaiter` (`await_ready`, `await_suspend`,
+  copy also aliased `std::stop_token` and friends, which are now `<core/async/StopToken.hpp>`.
+- `<core/async/Awaitable.hpp>` has the concepts `Awaiter` (`await_ready`, `await_suspend`,
   `await_resume`) and `HasStopToken` (a promise with `stopToken()`).
-- `whenAll(tasks...)` (`<core/coro/WhenAll.hpp>`) starts every `Task<void>` and resumes the
+- `whenAll(tasks...)` (`<core/async/WhenAll.hpp>`) starts every `Task<void>` and resumes the
   awaiting coroutine once all have finished. Each child inherits the awaiting coroutine's token.
   It does not cancel siblings when one throws: the first exception is rethrown once every child
   has finished.
-- `whenAny(tasks...)` (`<core/coro/WhenAny.hpp>`) resolves to the index of the first
+- `whenAny(tasks...)` (`<core/async/WhenAny.hpp>`) resolves to the index of the first
   `Task<void>` to finish and requests stop on a child `StopSource` shared by the others, which
   must unwind on `OperationCancelled`. The awaiting coroutine resumes only once every child has
   finished, so the frames it owns outlive them. Cancelling the awaiting coroutine's own token
@@ -130,8 +112,8 @@ Changes from contour's copy, besides the namespace:
   `core::testing_main`. Its `src/coro/testing/SuppressWindowsDialogs.hpp` was merged into
   `core::testing` in Task A1.
 
-`Task_test.cpp`, `WhenAll_test.cpp` and `WhenAny_test.cpp` run in `core-cpp.coro` and again,
-over the `StopToken` fallback, in `core-cpp.coro-fallback`. `Task_test.cpp` and
+`Task_test.cpp`, `WhenAll_test.cpp` and `WhenAny_test.cpp` run in `core-cpp.async` and again,
+over the `StopToken` fallback, in `core-cpp.async-fallback`. `Task_test.cpp` and
 `WhenAny_test.cpp` do not compile their cases that propagate an exception out of a coroutine
 frame on Windows, where contour found that throwing through a coroutine frame crashes the Catch2
 harness (an MSVC coroutine-unwind interaction that also affects `std::generator`).
@@ -141,7 +123,7 @@ harness (an MSVC coroutine-unwind interaction that also affects `std::generator`
 
 From contour's `src/coro/README.md` at `6777ff05`, as far as it still holds:
 
-- `core::coro` includes nothing but the standard library. `core::net` is the layer that knows
+- `core::async` includes nothing but the standard library. `core::net` is the layer that knows
   about sockets, and neither depends on anything above it in the
   [module table](index.md).
 - Coroutine parameters are values, never references: a reference dangles once the coroutine
