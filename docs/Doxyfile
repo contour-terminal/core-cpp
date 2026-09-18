@@ -1,0 +1,75 @@
+# core-cpp: the API reference, generated from the public headers' /// comments.
+#
+# Run from the repository root, after `mkdocs build` (which empties site/):
+#
+#   doxygen docs/Doxyfile
+#
+# It writes site/api/, which the documentation workflow publishes at
+# https://contour-terminal.github.io/core-cpp/api/. Every relative path below is relative to the
+# directory doxygen runs in, which is the repository root.
+
+PROJECT_NAME           = core-cpp
+PROJECT_BRIEF          = "The shared C++23 foundation of the Contour Terminal projects"
+
+OUTPUT_DIRECTORY       = site
+HTML_OUTPUT            = api
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_TREEVIEW      = YES
+SEARCHENGINE           = YES
+
+# The public headers: every *.hpp under src/core, minus the private subdirectories of a module
+# (Part I §1). The platform pattern names tui/platform/ only, because src/core/platform/ is the
+# public core::platform module.
+INPUT                  = src/core
+FILE_PATTERNS          = *.hpp
+RECURSIVE              = YES
+EXCLUDE_PATTERNS       = */detail/* \
+                         */posix/* \
+                         */linux/* \
+                         */darwin/* \
+                         */windows/* \
+                         */backend/* \
+                         */tui/platform/*
+EXCLUDE_SYMBOLS        = detail \
+                         *::detail \
+                         *::detail::*
+
+# Headers are included as <core/...>, so that is how the reference names them.
+FULL_PATH_NAMES        = YES
+STRIP_FROM_PATH        = src
+STRIP_FROM_INC_PATH    = src
+
+EXTRACT_ALL            = NO
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = NO
+HIDE_UNDOC_MEMBERS     = NO
+JAVADOC_AUTOBRIEF      = YES
+MARKDOWN_SUPPORT       = YES
+BUILTIN_STL_SUPPORT    = YES
+SORT_MEMBER_DOCS       = NO
+
+# The preprocessor sees the generated <core/Config.hpp> as absent; the WITH_* switches are
+# documented as if on, so the reference describes every optional part.
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = YES
+PREDEFINED             = CORE_CPP_WITH_TUI=1 \
+                         CORE_CPP_WITH_IMAGES=1 \
+                         CORE_CPP_WITH_TLS=1 \
+                         CORE_CPP_WITH_TRACY=0
+
+# Undocumented public API is reported, and does not yet fail the build (open work after 0.1.0).
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = YES
+WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = NO
+WARN_AS_ERROR          = NO
+
+HAVE_DOT               = YES
+CLASS_GRAPH            = YES
+COLLABORATION_GRAPH    = NO
+INCLUDE_GRAPH          = NO
+INCLUDED_BY_GRAPH      = NO
+DOT_IMAGE_FORMAT       = svg

@@ -1,0 +1,124 @@
+# core-cpp: the documentation site configuration.
+#
+# Build:   pip install -r docs/requirements.txt && mkdocs build --strict
+# Preview: mkdocs serve
+#
+# Adapted from fastcached's mkdocs.yml (b5ded89c). `--strict` turns every warning below into a
+# failure, and CI builds with it on every pull request that touches the site.
+
+# What `--strict` is able to fail on. mkdocs 1.6 reports a page missing from `nav:` at INFO by
+# default, so a page added under docs/ and left out of the navigation built successfully; `warn`
+# makes `--strict` fail on it while leaving a local `mkdocs serve` usable.
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+  links:
+    not_found: warn
+
+# Snippets are included into other pages, never navigated to.
+not_in_nav: |
+  snippets/*
+
+# Not part of the site: the design spec and plan (read on GitHub), and the inputs of the build.
+exclude_docs: |
+  superpowers/
+  requirements.txt
+  Doxyfile
+
+site_name: core-cpp
+site_description: The shared C++23 foundation of the Contour Terminal projects
+site_author: The core-cpp Authors
+site_url: https://contour-terminal.github.io/core-cpp/
+repo_url: https://github.com/contour-terminal/core-cpp
+repo_name: contour-terminal/core-cpp
+edit_uri: edit/master/docs/
+copyright: Apache-2.0 licensed.
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - navigation.indexes
+    - content.code.copy
+    - content.tabs.link
+    - search.suggest
+    - search.share
+    - search.highlight
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      # The repository root first, so a page can include CHANGELOG.md, CONTRIBUTING.md and
+      # .agent/rules/cpp-guidelines.md where they live instead of carrying a copy.
+      base_path: [".", "docs/snippets"]
+      # A snippet that cannot be found is silently dropped by default, which renders a page with
+      # its content missing. Fail the (--strict) build instead.
+      check_paths: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Getting started:
+    - Using core-cpp with CPM: getting-started/cpm.md
+    - Vendoring: vendoring.md
+    - Building: getting-started/building.md
+    - Options: getting-started/options.md
+  - Modules:
+    - modules/index.md
+    - base: modules/base.md
+    - log: modules/log.md
+    - cli: modules/cli.md
+    - platform: modules/platform.md
+    - coro: modules/coro.md
+    - net: modules/net.md
+    - tui: modules/tui.md
+    - testing: modules/testing.md
+  - Design notes:
+    - Dependency injection: design/dependency-injection.md
+    - Error handling: design/error-handling.md
+    - Coroutines and lifetimes: design/coroutines-and-lifetimes.md
+    - Threading: design/threading.md
+    - Portability: design/portability.md
+    - Profiling: design/profiling.md
+  - Contributing:
+    - contributing/index.md
+    - C++ guidelines: contributing/cpp-guidelines.md
+    - Releasing: contributing/releasing.md
+  - Changelog: changelog.md
+  - API reference: https://contour-terminal.github.io/core-cpp/api/

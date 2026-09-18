@@ -1,0 +1,1 @@
+--8<-- ".agent/rules/cpp-guidelines.md"
