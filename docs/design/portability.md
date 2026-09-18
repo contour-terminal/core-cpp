@@ -18,7 +18,7 @@ C++23 is required, with compiler extensions off; CI also builds core-cpp's own s
 - **A platform difference is an implementation of an interface** under a module's private
   `posix/`, `linux/`, `darwin/` or `windows/` directory, selected by CMake, never an `#ifdef` in
   logic.
-- **A missing standard-library facility** (AppleClang's and libc++ 18's gaps) is selected by its
+- **A missing standard-library facility** (AppleClang's and libc++ 17's gaps) is selected by its
   `__cpp_lib_*` feature-test macro in one header, never by compiler version.
 - **Text is UTF-8.** MSVC compiles with `/utf-8`, so a narrow string literal means the same bytes
   on every host.

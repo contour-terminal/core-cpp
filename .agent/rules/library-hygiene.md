@@ -88,7 +88,8 @@ morph's browser clients depend on it.
   subset. Linking Threads there forces `-pthread`, and with it `SharedArrayBuffer`, onto every
   consumer page. `CORE_CPP_SINGLE_THREADED_WASM` is detected, not assumed, and the Threads row
   is skipped when it is on.
-- **libc++ 18 is the floor**: check `__cpp_lib_*` before using a newer library facility.
+- **libc++ 17 is the floor**, the one emsdk 3.1.56 ships (17.0.4): check `__cpp_lib_*` before
+  using a newer library facility.
 - **A subset module is done only when the `emscripten` CI job is green on both emsdk
   versions.** The job also asserts that no compile or link command mentions `pthread`.
 

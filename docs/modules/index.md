@@ -72,4 +72,5 @@ subset builds, and CI runs its tests under node:
 | tui | never |
 
 Code in the subset uses no `std::thread`, no blocking wait and no `Threads::Threads`, and checks a
-`__cpp_lib_*` feature-test macro before using a library facility newer than libc++ 18.
+`__cpp_lib_*` feature-test macro before using a library facility newer than libc++ 17, which
+emsdk 3.1.56 ships.

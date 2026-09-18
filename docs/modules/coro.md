@@ -20,5 +20,5 @@ The C++23 coroutine vocabulary. Namespace `core::coro`, directory `src/core/coro
 
 Depends on the standard library only. Under WebAssembly everything builds except
 `ThreadPoolExecutor.hpp`, which refuses to compile without threads; `<stop_token>` comes from
-libc++'s experimental library on libc++ 18 and 19. See
+libc++'s experimental library on libc++ 17 to 19. See
 [Coroutines and lifetimes](../design/coroutines-and-lifetimes.md).

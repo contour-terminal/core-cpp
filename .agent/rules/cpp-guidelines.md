@@ -26,12 +26,12 @@ This file is about how the code is *written*.
 - **C++23, with `CXX_EXTENSIONS OFF`.** Prefer what C++23 offers: `constexpr`, `std::ranges`
   and range views, `std::format`/`std::print`, `std::expected` with its monadic methods,
   `std::span`, structured bindings, coroutines. *(contour, endo, fastcached, Lightweight)*
-- **The WebAssembly subset is held to libc++ 18/19.** Code in a module or file that builds
+- **The WebAssembly subset is held to libc++ 17.** Code in a module or file that builds
   under single-threaded Emscripten (the table in the
   [module overview](https://contour-terminal.github.io/core-cpp/modules/)) checks the
   `__cpp_lib_*` feature-test macro before it uses a library facility newer than that, and
-  uses no `std::thread`, `std::jthread` or blocking wait. emsdk 3.1.56 ships libc++ 18, and
-  it is a CI leg. *(core-cpp; the design spec, Part I §1)*
+  uses no `std::thread`, `std::jthread` or blocking wait. emsdk 3.1.56 ships libc++ 17.0.4
+  (`_LIBCPP_VERSION` 170004), and it is a CI leg. *(core-cpp; the design spec, Part I §1)*
 - **Use `std::span` for arrays and contiguous sequences** in an API, never a pointer and a
   length. *(contour, endo, fastcached, Lightweight)*
 - **Use `auto` where it reads better**, and structured bindings for tuple-like results.

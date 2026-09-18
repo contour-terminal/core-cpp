@@ -24,7 +24,7 @@ pull request settles its row.
 - **contour builds offline from its vendored copy** (`CORE_CPP_FETCH_DEPS OFF`), so a dependency
   added without a `find_package` path breaks contour's distribution packagers.
 - **morph builds for the browser**, so the WebAssembly subset must stay single-thread safe and
-  inside libc++ 18.
+  inside libc++ 17, the one emsdk 3.1.56 ships.
 - **fastcached, endo and tuidu include `cmake/portable/CompileCache.cmake` themselves**, the same
   verbatim file core-cpp carries; as a subproject core-cpp sets no launcher and its targets use
   the parent's.

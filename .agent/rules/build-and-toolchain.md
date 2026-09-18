@@ -129,7 +129,7 @@ presets, scripts and paths.
   libc++; `views::enumerate` arrived late there too. Each compiled on libstdc++ and MSVC and
   failed on one macOS leg, after the merge when that leg was not required. A grep for the name
   answers "macOS already compiles it" and is wrong when the hazard is a signature. core-cpp
-  builds on AppleClang and on libc++ 18 (Emscripten), so: select a missing facility by its
+  builds on AppleClang and on libc++ 17 (emsdk 3.1.56), so: select a missing facility by its
   `__cpp_lib_*` feature-test macro in one header, never an `#if` at a call site and never a
   compiler ID, and compile and test the fallback on every platform. Origin: fastcached
   build-and-toolchain, "The local gate" (the libc++ entries).
