@@ -30,6 +30,37 @@ fills with `co_yield`, imported from endo (`src/platform/Generator.hpp` at `f774
   coroutine frame until the next increment, so yield owning values. Breaking out of the loop
   destroys the suspended frame.
 
+## StopToken
+
+`<core/coro/StopToken.hpp>` has `core::coro::StopToken`, `StopSource`, `StopCallback<F>` and
+`noStopState`, the vocabulary of cooperative cancellation.
+
+- They are `std::stop_token`, `std::stop_source`, `std::stop_callback<F>` and `std::nostopstate`
+  where the standard library defines `__cpp_lib_jthread`, and otherwise
+  `core::coro::detail::StopTokenFallback`, `StopSourceFallback`, `StopCallbackFallback<F>` and
+  `NoStopStateFallback`. libc++ 17, which emsdk 3.1.56 ships, has `<stop_token>` only behind
+  `-fexperimental-library`, and core-cpp adds no compile flag to its consumers. contour's copy
+  (`src/coro/Cancellation.hpp` at `6777ff05`) aliased `std::` and refused to compile otherwise.
+- The fallback has the standard semantics. `request_stop()` returns true exactly once, and that
+  call runs every registered callback once, on the requesting thread, before it returns. A
+  callback constructed on a stopped token runs in its constructor. `~StopCallback` deregisters,
+  and waits while its callback runs on another thread, but not when it is called from inside that
+  callback. `stop_possible()` is false for a token without a stop state, and for one whose
+  sources are all gone without a request. Copies share state. Its members carry the standard's
+  names (`request_stop`, `stop_requested`, `stop_possible`, `get_token`, `callback_type`), so code
+  compiles against either branch.
+- Under single-threaded WebAssembly the fallback keeps plain state: no atomics, no lock and no
+  wait, since a running callback always runs on the calling thread there. Elsewhere a mutex
+  guards its callback list, and no lock is held while a callback runs, so a callback may request
+  stop again or register another callback.
+- The choice is read from `<version>`, which the header includes first, so every translation unit
+  makes the same one.
+- `CORE_CORO_FORCE_STOP_TOKEN_FALLBACK` selects the fallback where the standard library has
+  `<stop_token>`. It changes what every `Task` promise holds, so it must be defined the same way
+  in every translation unit of a program. The test binary `core-cpp-coro-fallback-test` (ctest
+  `core-cpp.coro-fallback`) builds the module's tests with it, so the fallback is tested on every
+  platform, under ThreadSanitizer too.
+
 ## Planned contents
 
 - From contour: `Task<T>` with the stop token in its promise, `UniqueCoroHandle`, cancellation,
@@ -39,6 +70,6 @@ fills with `co_yield`, imported from endo (`src/platform/Generator.hpp` at `f774
   of the task it awaits.
 
 Depends on the standard library only. Under WebAssembly everything builds except
-`ThreadPoolExecutor.hpp`, which refuses to compile without threads; `<stop_token>` comes from
-libc++'s experimental library on libc++ 17 to 19. See
+`ThreadPoolExecutor.hpp` (Task B1), which refuses to compile without threads; where libc++ has no
+`<stop_token>` without its experimental library, `StopToken` is the fallback. See
 [Coroutines and lifetimes](../design/coroutines-and-lifetimes.md).

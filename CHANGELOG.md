@@ -62,6 +62,17 @@ workflow refuses one without a section here.
 - `core::coro`, header-only, with `core::coro::Generator<T>`: `std::generator` where the standard
   library has it and is not libstdc++, otherwise `core::coro::detail::GeneratorFallback<T>`, which
   is tested on every platform. The rest of the module arrives with Tasks A5 and B1.
+- `core::coro::StopToken`, `StopSource`, `StopCallback<F>` and `noStopState`
+  (`<core/coro/StopToken.hpp>`): `std::stop_token`, `std::stop_source`, `std::stop_callback<F>`
+  and `std::nostopstate` where the standard library defines `__cpp_lib_jthread`, and otherwise
+  core-cpp's implementation with the standard semantics, which keeps plain state under
+  single-threaded WebAssembly. libc++ 17 (emsdk 3.1.56) has `<stop_token>` only behind
+  `-fexperimental-library`, and core-cpp adds no compile flag to its consumers.
+  `CORE_CORO_FORCE_STOP_TOKEN_FALLBACK` selects the fallback everywhere; the test binary
+  `core-cpp-coro-fallback-test` (ctest `core-cpp.coro-fallback`) is built with it, so the fallback
+  is tested on every platform, ThreadSanitizer included.
+- `core_cpp_add_test()` takes `NAME`, for a module's second test binary, and `DEFINITIONS`, the
+  compile definitions of that binary alone.
 - `core::testing`: `ScopedTempDir`, `ScopedWorkingDirectory` and `EnvHelper` (`setTestEnv()`,
   `unsetTestEnv()`, `ScopedEnv`).
 - `core::setProcessEnvironmentVariable()` and `core::unsetProcessEnvironmentVariable()` in

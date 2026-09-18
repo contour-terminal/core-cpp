@@ -41,7 +41,8 @@ The contract is the spec's (Part I §2, rules 1 to 6), and it is short enough to
   second step of `runOnce`, on every backend.
 - **One thread dequeues a loop or a completion port**, helper threads only post, and a socket
   is associated with exactly one port.
-- **Cancellation is `std::stop_token`.** A cancel from a flow's own token throws
+- **Cancellation is `core::coro::StopToken`**, which is `std::stop_token` where the standard
+  library has it and core-cpp's fallback where it does not. A cancel from a flow's own token throws
   `core::coro::OperationCancelled`; a cancel from the resource (`close()`, `cancelRead()`, a
   closed listener) returns `NetErrorCode::Cancelled` as a value. If a receive already completed
   with bytes, the data wins.

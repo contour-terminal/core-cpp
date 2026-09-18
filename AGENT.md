@@ -121,7 +121,8 @@ a bug; Doxygen `///` on public API; zero warnings. The canonical text:
 ## Testing
 
 Tests sit next to their sources (`Foo_test.cpp`) and are registered with `core_cpp_add_test`,
-one binary per module linked to `core::testing_main`. Exit codes: 0 pass, 1 failure, 77 all
+one binary per module linked to `core::testing_main` (coro has a second, over the StopToken
+fallback). Exit codes: 0 pass, 1 failure, 77 all
 skipped, 2 nothing ran. Labels: `core-cpp`, the module, `hygiene`, `canary`, `loopback`,
 `no-tsan`. `ctest -L hygiene` runs the checks over the tree and the build contract.
 

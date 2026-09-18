@@ -9,9 +9,10 @@
 #                       [SOURCES_EMSCRIPTEN ...]
 #                       [PUBLIC_LIBS <lib>...] [PRIVATE_LIBS <lib>...])
 #
-#   core_cpp_add_test(<module> [SOURCES ...] [SOURCES_POSIX ...] [SOURCES_LINUX ...]
+#   core_cpp_add_test(<module> [NAME <name>]
+#                     [SOURCES ...] [SOURCES_POSIX ...] [SOURCES_LINUX ...]
 #                     [SOURCES_BSD ...] [SOURCES_WINDOWS ...] [SOURCES_EMSCRIPTEN ...]
-#                     [LIBS <lib>...] [LABELS <label>...])
+#                     [LIBS <lib>...] [LABELS <label>...] [DEFINITIONS <definition>...])
 #
 # core_cpp_add_module() creates the real target core-cpp-<name> and its alias
 # core::<name>. HEADERS are the public headers; they form the target's HEADERS file
@@ -32,7 +33,12 @@
 #
 # core_cpp_add_test() builds core-cpp-<module>-test from the module's *_test.cpp
 # files, links it with core::<module> (when that target exists) and
-# core::testing_main, and registers it with ctest as core-cpp.<module>.
+# core::testing_main, and registers it with ctest as core-cpp.<module>. A module
+# with a second test binary names it: NAME <name> builds core-cpp-<name>-test and
+# registers core-cpp.<name>, with the module's labels all the same. DEFINITIONS
+# are compile definitions of that binary alone, PRIVATE like every flag here: a
+# definition that changes what a header declares must hold for every translation
+# unit of a program, so it gets a binary of its own rather than a few of its files.
 
 include_guard(GLOBAL)
 
@@ -182,32 +188,39 @@ function(core_cpp_add_module name)
 endfunction()
 
 function(core_cpp_add_test module)
-    cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "${CORE_CPP_SOURCE_KEYWORDS};LIBS;LABELS")
+    cmake_parse_arguments(PARSE_ARGV 1 arg "" "NAME" "${CORE_CPP_SOURCE_KEYWORDS};LIBS;LABELS;DEFINITIONS")
     if(arg_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "core_cpp_add_test(${module}): unexpected arguments: ${arg_UNPARSED_ARGUMENTS}")
     endif()
     if(NOT CORE_CPP_TESTING)
         return()
     endif()
+    set(name "${module}")
+    if(DEFINED arg_NAME)
+        set(name "${arg_NAME}")
+    endif()
     core_cpp_selected_sources(arg "${CORE_CPP_MODULE_${module}_PLATFORMS}" sources)
     if(NOT sources)
         message(FATAL_ERROR "core_cpp_add_test(${module}): no test sources for this platform.")
     endif()
 
-    set(target core-cpp-${module}-test)
+    set(target core-cpp-${name}-test)
     add_executable(${target} ${sources})
     set(libs ${arg_LIBS} core::testing_main)
     if(TARGET core::${module})
         list(PREPEND libs core::${module})
     endif()
     target_link_libraries(${target} PRIVATE ${libs})
+    if(arg_DEFINITIONS)
+        target_compile_definitions(${target} PRIVATE ${arg_DEFINITIONS})
+    endif()
     core_cpp_apply_toolchain(${target})
 
     # The variable rather than core::testing_main's property: a module declared before testing in
     # the table registers its test before that target exists.
     set(labels core-cpp ${module} ${arg_LABELS})
-    add_test(NAME core-cpp.${module} COMMAND ${target})
-    set_tests_properties(core-cpp.${module} PROPERTIES
+    add_test(NAME core-cpp.${name} COMMAND ${target})
+    set_tests_properties(core-cpp.${name} PROPERTIES
         SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
         LABELS "${labels}")
 endfunction()
