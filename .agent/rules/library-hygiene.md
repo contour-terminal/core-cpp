@@ -111,6 +111,21 @@ packagers get no new dependency. The contract is in
   records the upstream commit of each verbatim file, and the nightly `downstream.yml` fails
   when fastcached's copy has moved on.
 
+## Provenance
+
+- **Every file under `src/core/`, `cmake/portable/` and `cmake/FetchTransferBound.cmake` has a
+  row in [`.agent/reference/provenance.md`](../reference/provenance.md)**: the upstream repo,
+  upstream path and synced SHA it was imported or ported from, or `origin: core-cpp` for code
+  written here. An import task adds its rows in the same commit as the import; a later port or
+  fix that touches an already-listed file bumps its SHA in that commit too.
+- **`tests/cmake/check-cmake-hygiene.cmake`'s `provenance` rule checks the table, not just its
+  existence.** A file in scope without a row is refused by name, and a row naming a file that no
+  longer exists is refused too, so a rename or deletion cannot leave a stale row behind.
+- **The table is read mechanically, not just kept for humans.** Task B12b's catch-up check runs
+  it against each row's upstream repo before v0.1.0, to find what has moved since the row's SHA
+  was recorded. A consumer migration's delta check reads the same table to scope what it must
+  compare.
+
 ## What belongs in core-cpp
 
 - **The graduation rule: a file moves into core-cpp when a second project needs it.** It must

@@ -108,6 +108,15 @@ set(CORE_CPP_HYGIENE_NAMESPACE_ALIAS_REGEX "^[ \t]*namespace[ \t]+[A-Za-z0-9_:]+
 # The rule the allowlist itself answers to.
 set(CORE_CPP_HYGIENE_RULES ${CORE_CPP_HYGIENE_RULES} stale-allowlist)
 
+# A rule over the tree against a table, not a line: every file under src/core/, cmake/portable/ and
+# cmake/FetchTransferBound.cmake has a row in .agent/reference/provenance.md, naming the upstream
+# file and SHA it was imported from, or "origin: core-cpp" for new code. A row naming a file that
+# does not exist is refused too, so a rename or deletion cannot leave a stale row behind.
+set(CORE_CPP_HYGIENE_RULES ${CORE_CPP_HYGIENE_RULES} provenance)
+set(CORE_CPP_HYGIENE_provenance_REASON
+    "every file under src/core/, cmake/portable/ and cmake/FetchTransferBound.cmake has one row in .agent/reference/provenance.md naming its upstream file and SHA, or 'origin: core-cpp' for new code (Global Constraints, \"Upstream sync discipline\")")
+set(CORE_CPP_HYGIENE_PROVENANCE_TABLE ".agent/reference/provenance.md")
+
 # --- the allowlist -----------------------------------------------------------------------------------
 
 set(_compileCacheReason
@@ -260,6 +269,54 @@ foreach(path IN LISTS scanned)
             core_cpp_hygiene_refuse(${rule} "${path}" ${lineNumber} "${line}")
         endforeach()
     endforeach()
+endforeach()
+
+# --- the provenance table -----------------------------------------------------------------------------
+
+# The files this rule covers: everything under src/core/ and cmake/portable/, plus the one file
+# FetchTransferBound.cmake. "scanned" already lists every file under cmake/ and src/, not just the
+# cmake/cpp kinds the line-based rules read.
+set(provenanceScope "")
+foreach(path IN LISTS scanned)
+    if(path MATCHES "^src/core/" OR path MATCHES "^cmake/portable/" OR path STREQUAL "cmake/FetchTransferBound.cmake")
+        list(APPEND provenanceScope "${path}")
+    endif()
+endforeach()
+
+# The "core-cpp path" column of every data row of the provenance table: a line "| <path> | ... |",
+# skipping the header row and the "|---|---|...|" separator row. Backticks around a path are markup,
+# not part of it.
+set(provenanceNamed "")
+if(EXISTS "${ROOT}/${CORE_CPP_HYGIENE_PROVENANCE_TABLE}")
+    file(STRINGS "${ROOT}/${CORE_CPP_HYGIENE_PROVENANCE_TABLE}" provenanceLines)
+    foreach(provenanceLine IN LISTS provenanceLines)
+        if(NOT provenanceLine MATCHES "^\\|([^|]*)\\|")
+            continue()
+        endif()
+        set(provenanceCell "${CMAKE_MATCH_1}")
+        string(REPLACE "`" "" provenanceCell "${provenanceCell}")
+        string(STRIP "${provenanceCell}" provenanceCell)
+        if(provenanceCell STREQUAL "" OR provenanceCell STREQUAL "core-cpp path" OR provenanceCell MATCHES "^[:-]+$")
+            continue()
+        endif()
+        list(APPEND provenanceNamed "${provenanceCell}")
+    endforeach()
+endif()
+
+# Every file in scope needs a row, named by the file.
+foreach(path IN LISTS provenanceScope)
+    if(NOT path IN_LIST provenanceNamed)
+        core_cpp_hygiene_refuse(provenance "${path}" "-" "no row in ${CORE_CPP_HYGIENE_PROVENANCE_TABLE}")
+    endif()
+endforeach()
+
+# A row naming a file that does not exist is refused, named by the table it appears in: a rename or
+# deletion cannot leave a stale row behind.
+foreach(named IN LISTS provenanceNamed)
+    if(NOT EXISTS "${ROOT}/${named}")
+        core_cpp_hygiene_refuse(provenance "${CORE_CPP_HYGIENE_PROVENANCE_TABLE}" "-"
+            "names '${named}', which does not exist")
+    endif()
 endforeach()
 
 # An allowlist row that allows nothing in a file that exists has outlived its reason. A row whose file

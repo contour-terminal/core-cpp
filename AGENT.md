@@ -28,7 +28,9 @@ list.
 
 Consumers: contour (vendored), endo, fastcached, tuidu, Lightweight's `dbtool`, morph (CPM). Who
 links what, and where each keeps its pin: [`.agent/reference/consumers.md`](.agent/reference/consumers.md).
-The annotated tree: [`.agent/reference/source-map.md`](.agent/reference/source-map.md).
+The annotated tree: [`.agent/reference/source-map.md`](.agent/reference/source-map.md). Which
+upstream file and SHA every imported file came from:
+[`.agent/reference/provenance.md`](.agent/reference/provenance.md).
 
 ## Library rules
 
