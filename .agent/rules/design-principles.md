@@ -117,11 +117,13 @@ fastcached, Lightweight)*
 - **Classify a platform error in one place.** Two copies of an `errno` table drift, and the
   copy that lacks a row turns a specific cause into an unclassified one that no caller can
   match on. Same origin.
-- **Exceptions are for one case:** `core::coro::OperationCancelled`, thrown when a coroutine's
-  own stop token cancels it. A cancellation that comes from the resource (`close()`,
-  `cancelRead()`) is `NetErrorCode::Cancelled`, a value. A precondition violation is an
-  assertion, not an error code: there is no result it could return that would be true. A test
-  fixture that cannot set up throws too, to fail its test (see `cpp-guidelines.md`).
+- **Exceptions are for unrecoverable conditions and for cancellation.** A recoverable error is
+  a value (`std::expected`). `core::coro::OperationCancelled` is thrown when a coroutine's own
+  stop token cancels it, and a condition the program cannot continue past throws; see
+  `cpp-guidelines.md` for what counts as unrecoverable. A cancellation that comes from the
+  resource (`close()`, `cancelRead()`) is `NetErrorCode::Cancelled`, a value. A precondition
+  violation is an assertion, not an error code: there is no result it could return that would be
+  true.
   *(core-cpp; the design spec, Part I §2)*
 
 ## `enum class` over `bool`

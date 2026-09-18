@@ -20,6 +20,14 @@ namespace core::platform
 class Wakeup
 {
   public:
+    /// @brief Creates the wakeup channel: an eventfd on Linux, a self-pipe on other UNIX systems,
+    ///        a manual-reset event on Windows.
+    /// @throws std::runtime_error if the operating system refuses it, which it does only when the
+    ///         process or the system has run out of descriptors, handles or kernel memory.
+    ///
+    /// Throwing rather than returning an error: that condition is unrecoverable. No event loop can
+    /// run without its wakeup channel, so no caller has anything else to do but give up, and
+    /// handing the failure back as a value would only make each caller pass it on.
     Wakeup();
     ~Wakeup();
 

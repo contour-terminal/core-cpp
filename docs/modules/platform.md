@@ -93,9 +93,11 @@ Logic that schedules against a deadline takes an `IClock&` rather than calling
   `homeDirectory()` and `configHome()` called without one read the process environment (on
   Windows the operating system's block) through the same body the tests run.
 - **`Wakeup`'s constructor throws** `std::runtime_error` when the operating system refuses the
-  descriptor or event, as endo's does;
-  [core-cpp#14](https://github.com/contour-terminal/core-cpp/issues/14) tracks returning
-  `std::expected` instead.
+  eventfd, self-pipe or event, which it does only when descriptors, handles or kernel memory are
+  exhausted. That is unrecoverable, since no event loop can run without its wakeup channel, so it
+  throws rather than returning an error, as the
+  [exceptions rule](https://github.com/contour-terminal/core-cpp/blob/master/.agent/rules/cpp-guidelines.md)
+  allows.
 
 ## Under Emscripten
 

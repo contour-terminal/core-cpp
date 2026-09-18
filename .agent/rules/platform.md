@@ -99,5 +99,3 @@ list may not. See [`library-hygiene.md`](library-hygiene.md).
 - **[core-cpp#7](https://github.com/contour-terminal/core-cpp/issues/7)** — unify
   `core::Environment` (`core::base`, from crispy) with `core::platform::EnvironmentProvider`
   into one injectable seam.
-- **[core-cpp#14](https://github.com/contour-terminal/core-cpp/issues/14)** — `Wakeup`'s
-  constructor throws; return `std::expected` from a factory instead.

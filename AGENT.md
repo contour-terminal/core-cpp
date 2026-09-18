@@ -93,7 +93,8 @@ How-tos: [`.agent/guides/`](.agent/guides/) (team runs, Tracy, consumer migratio
 ## Design principles
 
 Dependency injection by constructor; configuration fixed at construction; data-driven tables;
-`std::expected` with monadic chaining (the only exception is `core::coro::OperationCancelled`);
+`std::expected` with monadic chaining for every recoverable error (exceptions only for
+unrecoverable conditions and `core::coro::OperationCancelled`);
 `enum class` over `bool`; RAII for every handle. Details:
 [`.agent/rules/design-principles.md`](.agent/rules/design-principles.md).
 

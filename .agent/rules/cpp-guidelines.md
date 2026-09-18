@@ -70,16 +70,32 @@ exemption short of an allowlist row that states its reason.
   `cmake/CoreCppDependencies.cmake` saying how it is found or fetched, and a CHANGELOG entry.
   See [`library-hygiene.md`](https://github.com/contour-terminal/core-cpp/blob/master/.agent/rules/library-hygiene.md).
   *(contour, endo, fastcached, Lightweight)*
-- **No exception type but `core::coro::OperationCancelled`**, which a coroutine throws when
-  its own stop token cancels it. Every other fallible operation returns `std::expected`.
+- **Recoverable errors return `std::expected`; exceptions are for unrecoverable conditions.**
+  A failure its caller can act on (report it, retry, fall back, take another path) is a value:
+  the operation returns `std::expected`, or a result type such as
+  `core::platform::ChannelResult` where an outcome is no failure at all. An exception is for a
+  condition the program cannot continue past where it happens, and for cancellation:
+  `core::coro::OperationCancelled`, which a coroutine throws when its own stop token cancels it.
+  A function that throws says so (`@throws`) and names the condition.
   *(core-cpp; endo and tuidu reserve exceptions for the same cancellation path)*
-  - **Carve-out: a test fixture's setup.** `core::testing::ScopedTempDir` and
-    `ScopedWorkingDirectory` throw when they cannot set up, because a fixture that cannot set up
-    must fail the test, and Catch2 reports a throw from a constructor as exactly that; an empty
-    path handed back instead would put the test's files in the working directory. The carve-out
-    covers test-only code under `src/core/testing/` and nothing a production path calls.
-    `core::platform::Wakeup`'s throwing constructor is a separate question, decided in
-    [core-cpp#14](https://github.com/contour-terminal/core-cpp/issues/14).
+  - **Unrecoverable** means that no caller between the failure and `main()` has a meaningful
+    alternative, so a value handed back would only be passed on by each of them, or ignored.
+    Examples:
+    - `core::platform::Wakeup`'s constructor, when the operating system refuses the eventfd,
+      self-pipe or event because descriptors, handles or kernel memory are exhausted: no event
+      loop can run without its wakeup channel.
+    - `core::testing::ScopedTempDir` and `ScopedWorkingDirectory`, when they cannot set up: a
+      fixture that cannot set up must fail its test, and Catch2 reports a throw from a
+      constructor as exactly that. An empty path handed back instead would put the test's files
+      in the working directory.
+    - Memory exhaustion, which the standard library reports as `std::bad_alloc`.
+  - **Recoverable**, and so a value: anything a caller can expect in normal operation and handle.
+    A file that does not exist, a permission refused, malformed input, a peer that closed, a
+    channel with nothing to read yet, a timeout, a full buffer, a busy resource. When in doubt,
+    it is recoverable: a caller that cannot go on can still treat a value as fatal, while a
+    throw costs every other caller a `try` block.
+  - **A precondition violation is neither**: it is an assertion, because there is no result the
+    function could return that would be true.
 
 ## Zero warnings
 
