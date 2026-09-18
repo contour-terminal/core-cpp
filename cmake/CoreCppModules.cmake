@@ -4,11 +4,18 @@
 # dependency order (Part I §1).
 #
 #   core_cpp_module(NAME <name> [DIR <directory under src/core>] KIND STATIC|INTERFACE
-#                   [DEPS <module>...] PLATFORMS any|native [WHEN <option>])
+#                   [DEPS <module>...] PLATFORMS any|native|wasm-subset [WHEN <option>])
 #
 # DIR defaults to NAME. DEPS lists the modules this one may link, and every one of
-# them must appear in an earlier row. PLATFORMS native keeps a module out of an
-# Emscripten build. WHEN names the option that has to be ON for the module to build.
+# them must appear in an earlier row. WHEN names the option that has to be ON for
+# the module to build. PLATFORMS says what of the module an Emscripten build has
+# (Part I §1):
+#
+#   any          all of it: SOURCES, plus SOURCES_EMSCRIPTEN;
+#   wasm-subset  only its SOURCES_EMSCRIPTEN, which lists the subset;
+#   native       none of it: the module is skipped.
+#
+# core_cpp_add_module() and core_cpp_add_test() apply it (cmake/CoreCppTargets.cmake).
 #
 # core_cpp_add_modules() walks the rows in order and enters each enabled module's
 # directory. That directory declares its targets with core_cpp_add_module(), which
@@ -28,8 +35,9 @@ function(core_cpp_module)
     if(NOT arg_KIND MATCHES "^(STATIC|INTERFACE)$")
         message(FATAL_ERROR "core_cpp_module(${arg_NAME}): KIND must be STATIC or INTERFACE, not '${arg_KIND}'.")
     endif()
-    if(NOT arg_PLATFORMS MATCHES "^(any|native)$")
-        message(FATAL_ERROR "core_cpp_module(${arg_NAME}): PLATFORMS must be any or native, not '${arg_PLATFORMS}'.")
+    if(NOT arg_PLATFORMS MATCHES "^(any|native|wasm-subset)$")
+        message(FATAL_ERROR
+            "core_cpp_module(${arg_NAME}): PLATFORMS must be any, native or wasm-subset, not '${arg_PLATFORMS}'.")
     endif()
     if(arg_NAME IN_LIST CORE_CPP_MODULES)
         message(FATAL_ERROR "core_cpp_module(${arg_NAME}): declared twice.")

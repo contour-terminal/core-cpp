@@ -6,16 +6,23 @@
 #                       [HEADERS <public header>...]
 #                       [SOURCES <source or private header>...]
 #                       [SOURCES_POSIX ...] [SOURCES_LINUX ...] [SOURCES_BSD ...] [SOURCES_WINDOWS ...]
+#                       [SOURCES_EMSCRIPTEN ...]
 #                       [PUBLIC_LIBS <lib>...] [PRIVATE_LIBS <lib>...])
 #
 #   core_cpp_add_test(<module> [SOURCES ...] [SOURCES_POSIX ...] [SOURCES_LINUX ...]
-#                     [SOURCES_BSD ...] [SOURCES_WINDOWS ...] [LIBS <lib>...] [LABELS <label>...])
+#                     [SOURCES_BSD ...] [SOURCES_WINDOWS ...] [SOURCES_EMSCRIPTEN ...]
+#                     [LIBS <lib>...] [LABELS <label>...])
 #
 # core_cpp_add_module() creates the real target core-cpp-<name> and its alias
 # core::<name>. HEADERS are the public headers; they form the target's HEADERS file
 # set, based at src/, so the target is install-ready. Private headers (detail/,
 # posix/, linux/, darwin/, windows/, backend/) go in a SOURCES list and are in no
 # file set.
+#
+# SOURCES is compiled everywhere the module builds, and each platform list where the
+# platform source table below says. Under Emscripten the module row's PLATFORMS
+# decides: an `any` module compiles SOURCES and SOURCES_EMSCRIPTEN, a `wasm-subset`
+# module only SOURCES_EMSCRIPTEN, which lists the subset (Part I §1).
 #
 # It must be called from a directory that core_cpp_add_modules() entered for a row
 # of the module table, and a target it links as core::<x> must belong to that same
@@ -35,16 +42,24 @@ include_guard(GLOBAL)
 set(CORE_CPP_SKIP_EXIT_CODE 77)
 
 # "<keyword>|<variable>": the platform-specific source list <keyword> is compiled
-# when <variable> is true. BSD includes macOS, which shares its kqueue.
+# when <variable> is true. BSD includes macOS, which shares its kqueue. POSIX means a
+# native POSIX system: Emscripten sets UNIX and its libc emulates much of POSIX, but
+# it has no pipes, signals, sockets or processes to speak of, so a SOURCES_POSIX file
+# is not compiled there; SOURCES_EMSCRIPTEN is.
+set(CORE_CPP_PLATFORM_POSIX OFF)
+if(UNIX AND NOT EMSCRIPTEN)
+    set(CORE_CPP_PLATFORM_POSIX ON)
+endif()
 set(CORE_CPP_PLATFORM_BSD OFF)
 if(APPLE OR BSD)
     set(CORE_CPP_PLATFORM_BSD ON)
 endif()
 set(CORE_CPP_PLATFORM_SOURCE_TABLE
-    "SOURCES_POSIX|UNIX"
+    "SOURCES_POSIX|CORE_CPP_PLATFORM_POSIX"
     "SOURCES_LINUX|LINUX"
     "SOURCES_BSD|CORE_CPP_PLATFORM_BSD"
     "SOURCES_WINDOWS|WIN32"
+    "SOURCES_EMSCRIPTEN|EMSCRIPTEN"
 )
 set(CORE_CPP_SOURCE_KEYWORDS SOURCES)
 foreach(_coreCppRow IN LISTS CORE_CPP_PLATFORM_SOURCE_TABLE)
@@ -53,9 +68,14 @@ foreach(_coreCppRow IN LISTS CORE_CPP_PLATFORM_SOURCE_TABLE)
 endforeach()
 
 ## @brief Sets @p outVar to the sources the parsed arguments with prefix @p prefix
-## select for this platform: SOURCES plus every platform list that applies.
-function(core_cpp_selected_sources prefix outVar)
+## select for this platform: SOURCES plus every platform list that applies. A module
+## whose row says PLATFORMS @p platforms wasm-subset has only its SOURCES_EMSCRIPTEN
+## under Emscripten.
+function(core_cpp_selected_sources prefix platforms outVar)
     set(sources ${${prefix}_SOURCES})
+    if(EMSCRIPTEN AND platforms STREQUAL "wasm-subset")
+        set(sources "")
+    endif()
     foreach(row IN LISTS CORE_CPP_PLATFORM_SOURCE_TABLE)
         string(REPLACE "|" ";" fields "${row}")
         list(GET fields 0 keyword)
@@ -107,7 +127,7 @@ function(core_cpp_add_module name)
             "core_cpp_add_module(${name}) says KIND ${arg_KIND}; its row in cmake/CoreCppModules.cmake "
             "says ${CORE_CPP_MODULE_${module}_KIND}.")
     endif()
-    core_cpp_selected_sources(arg sources)
+    core_cpp_selected_sources(arg "${CORE_CPP_MODULE_${module}_PLATFORMS}" sources)
 
     set(target core-cpp-${name})
     if(arg_KIND STREQUAL "STATIC")
@@ -165,7 +185,7 @@ function(core_cpp_add_test module)
     if(NOT CORE_CPP_TESTING)
         return()
     endif()
-    core_cpp_selected_sources(arg sources)
+    core_cpp_selected_sources(arg "${CORE_CPP_MODULE_${module}_PLATFORMS}" sources)
     if(NOT sources)
         message(FATAL_ERROR "core_cpp_add_test(${module}): no test sources for this platform.")
     endif()

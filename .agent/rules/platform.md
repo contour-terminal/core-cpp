@@ -15,9 +15,11 @@ paths.
 1. **Define an abstract interface** in `src/core/platform/`, or in the module that needs it.
 2. **Implement it per platform** in the module's private `posix/`, `linux/`, `darwin/` or
    `windows/` subdirectory, and list each file in the matching `SOURCES_POSIX`,
-   `SOURCES_LINUX`, `SOURCES_BSD` or `SOURCES_WINDOWS` argument of `core_cpp_add_module`. The
-   table in `cmake/CoreCppTargets.cmake` decides which list a platform compiles; `BSD` covers
-   macOS, which shares kqueue.
+   `SOURCES_LINUX`, `SOURCES_BSD`, `SOURCES_WINDOWS` or `SOURCES_EMSCRIPTEN` argument of
+   `core_cpp_add_module`. The table in `cmake/CoreCppTargets.cmake` decides which list a
+   platform compiles; `BSD` covers macOS, which shares kqueue, and `POSIX` means a native POSIX
+   system, which Emscripten is not, although CMake sets `UNIX` there.
+   `tests/cmake/check-platform-sources.cmake` proves the selection for each platform.
 3. **Inject it through a constructor.** The concrete type is named once, at the composition
    root; logic never checks the platform.
 
@@ -77,7 +79,10 @@ which also says: **do not bypass the platform layer.** A direct `::stat`, `std::
 ## The WebAssembly subset
 
 Under single-threaded Emscripten, `core::platform` builds only Types, NativeHandle,
-PlatformError, Clock, StringUtils, PathUtils, GlobMatch and FileUri (`SOURCES_EMSCRIPTEN`).
+PlatformError, Clock, StringUtils, PathUtils, GlobMatch and FileUri (`SOURCES_EMSCRIPTEN`). Its
+row in the module table says `PLATFORMS wasm-subset`, so an Emscripten build compiles that list
+and nothing else of the module; a module whose row says `any` compiles all of `SOURCES` there,
+plus its `SOURCES_EMSCRIPTEN`.
 Anything else in the module may use threads, sockets and the filesystem freely; anything on that
 list may not. See [`library-hygiene.md`](library-hygiene.md).
 

@@ -25,6 +25,13 @@ add_test(NAME core-cpp.cmake-hygiene-selftest
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-cmake-hygiene-selftest.cmake")
 set_tests_properties(core-cpp.cmake-hygiene core-cpp.cmake-hygiene-selftest PROPERTIES LABELS "core-cpp;hygiene")
 
+# Which of a module's source lists each platform compiles, Emscripten included (Part I §1).
+add_test(NAME core-cpp.platform-sources
+         COMMAND "${CMAKE_COMMAND}"
+                 "-DTARGETS=${CORE_CPP_SOURCE_DIR}/cmake/CoreCppTargets.cmake"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-platform-sources.cmake")
+set_tests_properties(core-cpp.platform-sources PROPERTIES LABELS "core-cpp;hygiene")
+
 # A release tag must name the tree it releases (Part I §4). The release workflow runs
 # check-release.cmake on the pushed tag; this proves that it accepts a matching tree and refuses
 # each mismatch by name.

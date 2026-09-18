@@ -74,6 +74,12 @@ jobs:
           -DWORK_DIR="$RUNNER_TEMP/check-release-selftest"
           -P tests/cmake/check-release-selftest.cmake
 
+      # Emscripten sets UNIX; it must still compile no SOURCES_POSIX file.
+      - name: Platform source selection
+        run: >-
+          cmake -DTARGETS="$GITHUB_WORKSPACE/cmake/CoreCppTargets.cmake"
+          -P tests/cmake/check-platform-sources.cmake
+
       # .gitattributes normalises text to LF, so a CR byte in a tracked file means a file git
       # treated as binary, which a text import must never be.
       - name: No tracked file contains a CR byte

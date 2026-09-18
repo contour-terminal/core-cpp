@@ -25,6 +25,8 @@ workflow refuses one without a section here.
 - Checks over the tree: the CMake and C++ hygiene rules with their self-test, the exit-code
   contract, and `tests/cmake/check-release.cmake`, which the release workflow runs on a tag.
 - The documentation site, the API reference, the rulebook in `.agent/`, and the CI workflows.
+- The module table's `PLATFORMS` column takes `any`, `native` or `wasm-subset`, and a module may
+  list `SOURCES_EMSCRIPTEN`; `SOURCES_POSIX` is not compiled under Emscripten, which sets `UNIX`.
 
 ### Imported
 
