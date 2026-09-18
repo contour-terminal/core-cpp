@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Test helpers that need no test framework, built wherever core-cpp is, the WebAssembly subset
-# included. The Windows parts are no-ops everywhere else.
+# included: the Windows dialog suppression, a no-op everywhere else, and the test doubles of
+# core::base's interfaces (Environment.hpp).
 core_cpp_add_module(testing KIND STATIC
-    HEADERS SuppressWindowsDialogs.hpp
-    SOURCES SuppressWindowsDialogs.cpp)
+    HEADERS Environment.hpp SuppressWindowsDialogs.hpp
+    SOURCES SuppressWindowsDialogs.cpp
+    PUBLIC_LIBS core::base)
 
 # An OBJECT library, because its one translation unit is referenced by nothing: in a static library
 # the linker would drop it. Linking this adds its object to the executable itself.

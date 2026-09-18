@@ -15,7 +15,8 @@
 #
 # core_cpp_add_module() creates the real target core-cpp-<name> and its alias
 # core::<name>. HEADERS are the public headers; they form the target's HEADERS file
-# set, based at src/, so the target is install-ready. Private headers (detail/,
+# set, based at src/ or, for a header CMake generates, at the generated include
+# root, so the target is install-ready. Private headers (detail/,
 # posix/, linux/, darwin/, windows/, backend/) go in a SOURCES list and are in no
 # file set.
 #
@@ -155,8 +156,11 @@ function(core_cpp_add_module name)
         target_sources(${target} PRIVATE ${sources})
     endif()
     if(arg_HEADERS)
+        # The generated headers (core/Config.hpp) are public too, based at the generated root.
         target_sources(${target} ${usage}
-            FILE_SET HEADERS BASE_DIRS "${CORE_CPP_SOURCE_DIR}/src" FILES ${arg_HEADERS})
+            FILE_SET HEADERS
+            BASE_DIRS "${CORE_CPP_SOURCE_DIR}/src" "${CORE_CPP_GENERATED_INCLUDE_DIR}"
+            FILES ${arg_HEADERS})
     endif()
     target_include_directories(${target} ${usage}
         "$<BUILD_INTERFACE:${CORE_CPP_SOURCE_DIR}/src>"

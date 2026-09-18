@@ -216,6 +216,7 @@ CheckOptions:
   # Member typedefs the standard library looks up by name.
   readability-identifier-naming.TypeAliasIgnoredRegexp: '^(value_type|size_type|difference_type|pointer|const_pointer|reference|const_reference|iterator|const_iterator|reverse_iterator|const_reverse_iterator|iterator_category|iterator_concept|element_type|allocator_type|char_type|traits_type|key_type|mapped_type|promise_type|is_transparent)$'
   readability-identifier-naming.TypedefIgnoredRegexp: '^(value_type|size_type|difference_type|pointer|const_pointer|reference|const_reference|iterator|const_iterator|reverse_iterator|const_reverse_iterator|iterator_category|iterator_concept|element_type|allocator_type|char_type|traits_type|key_type|mapped_type|promise_type|is_transparent)$'
-  # Specializations of std templates, and a promise type where the coroutine traits look for it.
-  readability-identifier-naming.StructIgnoredRegexp: '^(formatter|hash|tuple_size|tuple_element|coroutine_traits|promise_type)$'
-  readability-identifier-naming.ClassIgnoredRegexp: '^(formatter|hash|tuple_size|tuple_element|coroutine_traits|promise_type)$'
+  # Specializations of std templates, a promise type where the coroutine traits look for it, and
+  # a range's nested iterator class, which generic code names as R::iterator.
+  readability-identifier-naming.StructIgnoredRegexp: '^(formatter|hash|tuple_size|tuple_element|coroutine_traits|promise_type|iterator)$'
+  readability-identifier-naming.ClassIgnoredRegexp: '^(formatter|hash|tuple_size|tuple_element|coroutine_traits|promise_type|iterator)$'

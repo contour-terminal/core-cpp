@@ -15,6 +15,10 @@ Contour Terminal Emulator
     src/crispy/SuppressWindowsDialogs.hpp and
     src/coro/testing/SuppressWindowsDialogs.hpp)
   - LICENSE
+  - src/core/{Assert,Base64,Deferred,Defines,Environment,Escape,FNV,Flags,
+    Overloaded,Times,UserInfo,Utils}.{hpp,cpp}, src/core/log/{LogStore,LogSink}.*,
+    src/core/log/Assert.hpp, src/core/cli/{CLI,App}.*,
+    src/core/testing/Environment.hpp and their tests (from src/crispy/, adapted)
 
 Endo
   https://github.com/contour-terminal/endo
@@ -35,6 +39,9 @@ fastcached
   - src/core/testing/SuppressWindowsDialogs.{hpp,cpp} (merged from
     src/tests/WindowsErrorPopups.hpp)
   - the readability-identifier-naming IgnoredRegexp of .clang-tidy
+  Imported at ee71f868547712892b7d9a2ebff60d49c496e25c (origin/master)
+  - src/core/{Profiling,Ranges}.hpp and their tests (from src/FastCache/Core/,
+    adapted)
 
 Documentation and CI configuration adapted from the following projects, each
 licensed under the Apache License, Version 2.0, and each read as a git blob at the
