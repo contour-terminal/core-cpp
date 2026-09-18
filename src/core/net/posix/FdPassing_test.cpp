@@ -40,7 +40,8 @@ void sendWithFds(int socketFd, std::string_view payload, std::span<int const> fd
     if (!fds.empty())
     {
         msg.msg_control = control.data();
-        msg.msg_controllen = CMSG_SPACE(fds.size() * sizeof(int));
+        // CMSG_SPACE() and CMSG_LEN() are size_t, the fields socklen_t on macOS and the BSDs.
+        msg.msg_controllen = static_cast<decltype(msg.msg_controllen)>(CMSG_SPACE(fds.size() * sizeof(int)));
         // CMSG_FIRSTHDR() is null for a control buffer too short for one header, which
         // CMSG_SPACE() never makes; GCC at -O3 cannot see that (-Wnull-dereference).
         auto* const cmsg = CMSG_FIRSTHDR(&msg);
@@ -50,7 +51,7 @@ void sendWithFds(int socketFd, std::string_view payload, std::span<int const> fd
         {
             cmsg->cmsg_level = SOL_SOCKET;
             cmsg->cmsg_type = SCM_RIGHTS;
-            cmsg->cmsg_len = CMSG_LEN(fds.size() * sizeof(int));
+            cmsg->cmsg_len = static_cast<decltype(cmsg->cmsg_len)>(CMSG_LEN(fds.size() * sizeof(int)));
             std::memcpy(CMSG_DATA(cmsg), fds.data(), fds.size() * sizeof(int));
         }
     }
