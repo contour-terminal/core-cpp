@@ -116,8 +116,9 @@ TEST_CASE("isExecutableFile accepts a file carrying an execute bit", "[FileSyste
 
 TEST_CASE("isExecutableFile rejects a regular file without an execute bit", "[FileSystem]")
 {
-    // Mirrors the POSIX rule the shell relies on: a readable/writable but non-executable
-    // file on PATH must not be treated as a runnable command.
+    // Mirrors the POSIX rule every PATH lookup relies on, execvp(3)'s as much as a command
+    // interpreter's: a readable/writable but non-executable file on PATH is not a runnable
+    // command.
     auto fs = InMemoryFileSystem {};
     fs.addFile("/usr/bin/data", "contents");
 
@@ -128,10 +129,10 @@ TEST_CASE("isExecutableFile rejects a regular file without an execute bit", "[Fi
 TEST_CASE("isExecutableFile agrees with the real filesystem on the execute bit", "[FileSystem]")
 {
     // The tests above pin InMemoryFileSystem's behaviour, which on its own only proves the
-    // model is self-consistent. This one anchors it to the real thing: shell PATH resolution
-    // (CommandResolver) is tested entirely against the model, so if the two ever disagree
-    // about the execute bit, every one of those tests would agree with each other and be
-    // wrong together.
+    // model is self-consistent. This one anchors it to the real thing: code that resolves
+    // commands on PATH through a FileSystem is typically tested entirely against the model, so
+    // if the two ever disagree about the execute bit, every one of those tests would agree with
+    // each other and be wrong together.
     auto const& fs = core::platform::NativeFileSystem::instance();
 
     auto const path = fs.createTempFile("core_execbit_test");

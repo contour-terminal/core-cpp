@@ -12,7 +12,8 @@ TEST_CASE("SignalHandler records an interrupt until it is cleared", "[platform][
 
     SignalHandler::simulateSigint();
     CHECK(SignalHandler::hasPendingSigint());
-    // Reading the flag does not consume it: a builtin polls it until the interrupt is handled.
+    // Reading the flag does not consume it: in-process work polls it until the program has
+    // handled the interrupt and cleared it.
     CHECK(SignalHandler::hasPendingSigint());
 
     SignalHandler::clearPendingSigint();

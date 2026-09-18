@@ -110,10 +110,11 @@ class CachingEnvironment final: public Environment
 /// a single store, under the lock @c LiveEnvironment reads under. Nothing it publishes is ever
 /// freed, because a reader outside that lock -- `getenv()` in another library, `execvp()` -- may
 /// still hold a block published earlier. Each call so costs one block of pointers, which suits the
-/// rare writes a process makes to its own environment: an exported shell variable, a test fixture.
-/// A write that changes nothing (the variable already reads @p value) publishes nothing. On
-/// Windows it is `SetEnvironmentVariableA()`, which the operating system synchronizes; the CRT's
-/// own copy of the environment, which its `getenv()` reads, does not see it.
+/// rare writes a process makes to its own environment: a variable it exports to the children it
+/// starts, a test fixture's setting. A write that changes nothing (the variable already reads
+/// @p value) publishes nothing. On Windows it is `SetEnvironmentVariableA()`, which the operating
+/// system synchronizes; the CRT's own copy of the environment, which its `getenv()` reads, does not
+/// see it.
 ///
 /// Not for use between `fork()` and `exec()`: it takes a lock and allocates, and in the child of a
 /// multi-threaded process the lock may be held by a thread that no longer exists. Build the

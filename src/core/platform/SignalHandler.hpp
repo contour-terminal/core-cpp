@@ -40,7 +40,7 @@ class SignalCallback
 ///
 /// Supported signals:
 /// - SIGCHLD: Child process state change (exit, stop, continue)
-/// - SIGTSTP: Terminal stop signal (Ctrl+Z from parent shell or kill -TSTP)
+/// - SIGTSTP: Terminal stop signal (Ctrl+Z at the controlling terminal, or kill -TSTP)
 /// - SIGCONT: Continue after stop (when resumed via fg or kill -CONT)
 class SignalHandler
 {

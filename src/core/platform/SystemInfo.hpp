@@ -16,9 +16,9 @@ namespace core::platform
 
 /// @brief Returns the local machine's hostname, resolved once per process.
 ///
-/// hostName() issues a system call on every call. Callers on output paths that run per prompt
-/// render or per listed file want this instead; a machine's hostname does not change under a
-/// running process.
+/// hostName() issues a system call on every call. A caller that asks on every redraw of a status
+/// line, or once per entry of a listing, wants this instead; a machine's hostname does not change
+/// under a running process.
 ///
 /// @return The hostname, or an empty string if it could not be determined.
 [[nodiscard]] std::string const& cachedHostName();

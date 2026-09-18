@@ -124,8 +124,8 @@ std::expected<void, PlatformError> WindowsEnvironmentProvider::changeDirectory(
 std::string WindowsEnvironmentProvider::currentDirectory() const
 {
     // Report the real on-disk capitalization (and an upper-case drive letter) so that
-    // PWD and the prompt agree with how the directory is actually stored, rather than
-    // echoing whatever case was passed to SetCurrentDirectory.
+    // PWD, and whatever shows the user the directory, agree with how it is actually stored,
+    // rather than echoing whatever case was passed to SetCurrentDirectory.
     return canonicalCasePath(std::filesystem::current_path());
 }
 
