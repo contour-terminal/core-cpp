@@ -59,6 +59,13 @@ TEST_CASE("normalisedExitCode: some test cases skipped and the rest passed is 0"
     CHECK(normalisedExitCode(totalsOf(1, 0, 2), 0) == 0);
 }
 
+TEST_CASE("normalisedExitCode: nothing failed but Catch2 reported an error is 1", "[testing]")
+{
+    // -w UnmatchedTestSpec with a test spec part that matched nothing: Catch2 returns 3.
+    CHECK(normalisedExitCode(totalsOf(1, 0, 0), 3) == 1);
+    CHECK(normalisedExitCode(totalsOf(1, 0, 2), 3) == 1);
+}
+
 TEST_CASE("normalisedExitCode: no test case ran and Catch2 objected is 2", "[testing]")
 {
     CHECK(normalisedExitCode(totalsOf(0, 0, 0), 2) == 2);

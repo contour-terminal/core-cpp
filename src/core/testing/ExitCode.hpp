@@ -14,12 +14,16 @@ inline constexpr int SkipExitCode = CORE_CPP_SKIP_EXIT_CODE;
 
 /// @brief Maps the outcome of a Catch2 run to core-cpp's exit-code contract.
 ///
-/// | Outcome                                   | Exit status  |
-/// |-------------------------------------------|--------------|
-/// | any assertion or test case failed         | 1            |
-/// | every test case that ran was skipped      | SkipExitCode |
-/// | no test case ran and Catch2 said so       | 2            |
-/// | otherwise                                 | 0            |
+/// | Outcome                                                    | Exit status  |
+/// |------------------------------------------------------------|--------------|
+/// | any assertion or test case failed                          | 1            |
+/// | every test case that ran was skipped                       | SkipExitCode |
+/// | no test case ran and Catch2 said so                        | 2            |
+/// | nothing failed, but Catch2 still reported an error         | 1            |
+/// | otherwise                                                  | 0            |
+///
+/// The fourth row is, for example, `-w UnmatchedTestSpec` with a test spec part that matched
+/// nothing: Catch2 returns 3 although every test case that ran passed.
 ///
 /// Catch2 3.8's own main returns 42 when anything failed and 4 when every test case was
 /// skipped, and ctest reads both as a failure: a binary whose tests all skip is reported as

@@ -12,7 +12,7 @@ int normalisedExitCode(Catch::Totals const& totals, int rawExitCode) noexcept
         return SkipExitCode;
     if (totals.testCases.total() == 0 && rawExitCode != 0)
         return 2;
-    return 0;
+    return rawExitCode == 0 ? 0 : 1;
 }
 
 } // namespace core::testing
