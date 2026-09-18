@@ -134,6 +134,16 @@ presets, scripts and paths.
   [fastcached#1420](https://github.com/LASTRADA-Software/fastcached/issues/1420),
   [fastcached#1442](https://github.com/LASTRADA-Software/fastcached/issues/1442),
   [fastcached#1447](https://github.com/LASTRADA-Software/fastcached/issues/1447).
+- **C++20 module scanning is off, for the configure's probes too.** core-cpp has no module
+  units, and `core_cpp_apply_toolchain()` sets `CXX_SCAN_FOR_MODULES OFF` on its targets, but a
+  `try_compile()` has no such target: from C++20 on, CMake scans every probe of
+  `check_cxx_compiler_flag()` and FindThreads. Where the compiler has no `clang-scan-deps`
+  (FreeBSD's base clang) every probe failed, so the configure dropped the whole pedantic set,
+  reported that the compiler does not accept `-pthread`, and stopped at Threads; nothing in the
+  output mentioned scanning. `CoreCppTopLevel.cmake` defaults
+  `CMAKE_CXX_SCAN_FOR_MODULES` to OFF. Origin: core-cpp's first Portability run (FreeBSD 14.3,
+  clang 19.1.7), reproduced on Linux by pointing `CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS` at a
+  missing file.
 - **Run clang-format and clang-tidy at the pinned version, in a build directory of their own.**
   An older clang-tidy is not a laxer one: it is silent about checks it does not have (a file
   clean under 18 arrived at CI with thirteen findings from 22). The PyPI wheel finds its

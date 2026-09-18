@@ -41,5 +41,14 @@ endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# core-cpp has no module units, and core_cpp_apply_toolchain() turns scanning off on its own
+# targets. A try_compile() has no such target: from C++20 on, CMake scans every probe of
+# check_cxx_compiler_flag() and FindThreads, and where the compiler has no clang-scan-deps
+# (FreeBSD's base clang) every probe then fails, the configure dropping the pedantic set and
+# stopping at Threads. Off by default here, for the probes and the fetched dependencies alike.
+if(NOT DEFINED CMAKE_CXX_SCAN_FOR_MODULES)
+    set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+endif()
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_COLOR_DIAGNOSTICS ON)
