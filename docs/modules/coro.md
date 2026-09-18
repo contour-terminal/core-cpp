@@ -33,11 +33,12 @@ fills with `co_yield`, imported from endo (`src/platform/Generator.hpp` at `f774
 ## StopToken
 
 `<core/coro/StopToken.hpp>` has `core::coro::StopToken`, `StopSource`, `StopCallback<F>` and
-`noStopState`, the vocabulary of cooperative cancellation.
+`NoStopState`, the vocabulary of cooperative cancellation.
 
 - They are `std::stop_token`, `std::stop_source`, `std::stop_callback<F>` and `std::nostopstate`
   where the standard library defines `__cpp_lib_jthread`, and otherwise
   `core::coro::detail::StopTokenFallback`, `StopSourceFallback`, `StopCallbackFallback<F>` and
+  `NoStopStateFallback`. `NoStopState` is a `constexpr` object of `std::nostopstate_t` or of
   `NoStopStateFallback`. libc++ 17, which emsdk 3.1.56 ships, has `<stop_token>` only behind
   `-fexperimental-library`, and core-cpp adds no compile flag to its consumers. contour's copy
   (`src/coro/Cancellation.hpp` at `6777ff05`) aliased `std::` and refused to compile otherwise.

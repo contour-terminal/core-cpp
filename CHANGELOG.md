@@ -62,7 +62,7 @@ workflow refuses one without a section here.
 - `core::coro`, header-only, with `core::coro::Generator<T>`: `std::generator` where the standard
   library has it and is not libstdc++, otherwise `core::coro::detail::GeneratorFallback<T>`, which
   is tested on every platform. fastcached's executors arrive with Task B1.
-- `core::coro::StopToken`, `StopSource`, `StopCallback<F>` and `noStopState`
+- `core::coro::StopToken`, `StopSource`, `StopCallback<F>` and the `constexpr` tag `NoStopState`
   (`<core/coro/StopToken.hpp>`): `std::stop_token`, `std::stop_source`, `std::stop_callback<F>`
   and `std::nostopstate` where the standard library defines `__cpp_lib_jthread`, and otherwise
   core-cpp's implementation with the standard semantics, which keeps plain state under

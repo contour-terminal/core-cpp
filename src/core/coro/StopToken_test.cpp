@@ -23,7 +23,7 @@
     #define CORE_CPP_TEST_THREADS 0
 #endif
 
-using core::coro::noStopState;
+using core::coro::NoStopState;
 using core::coro::StopCallback;
 using core::coro::StopSource;
 using core::coro::StopToken;
@@ -38,13 +38,13 @@ using core::coro::StopToken;
 static_assert(std::is_same_v<StopToken, std::stop_token>);
 static_assert(std::is_same_v<StopSource, std::stop_source>);
 static_assert(std::is_same_v<StopCallback<void (*)()>, std::stop_callback<void (*)()>>);
-static_assert(std::is_same_v<std::remove_const_t<decltype(noStopState)>, std::nostopstate_t>);
+static_assert(std::is_same_v<std::remove_const_t<decltype(NoStopState)>, std::nostopstate_t>);
 #else
 static_assert(std::is_same_v<StopToken, core::coro::detail::StopTokenFallback>);
 static_assert(std::is_same_v<StopSource, core::coro::detail::StopSourceFallback>);
 static_assert(std::is_same_v<StopCallback<void (*)()>, core::coro::detail::StopCallbackFallback<void (*)()>>);
 static_assert(
-    std::is_same_v<std::remove_const_t<decltype(noStopState)>, core::coro::detail::NoStopStateFallback>);
+    std::is_same_v<std::remove_const_t<decltype(NoStopState)>, core::coro::detail::NoStopStateFallback>);
 #endif
 
 // What code written against one branch relies on from the other.
@@ -55,7 +55,7 @@ static_assert(std::is_nothrow_move_constructible_v<StopSource>);
 static_assert(!std::is_copy_constructible_v<StopCallback<void (*)()>>);
 static_assert(!std::is_move_constructible_v<StopCallback<void (*)()>>);
 static_assert(std::is_same_v<StopCallback<void (*)()>::callback_type, void (*)()>);
-static_assert(!std::is_convertible_v<decltype(noStopState), StopSource>,
+static_assert(!std::is_convertible_v<decltype(NoStopState), StopSource>,
               "the StopSource constructor is explicit");
 
 namespace
@@ -323,9 +323,9 @@ TEST_CASE("A requested stop stays requested and possible after the sources are g
     CHECK(token.stop_possible());
 }
 
-TEST_CASE("A StopSource constructed with noStopState has no stop state", "[StopToken]")
+TEST_CASE("A StopSource constructed with NoStopState has no stop state", "[StopToken]")
 {
-    auto source = StopSource { noStopState };
+    auto source = StopSource { NoStopState };
     CHECK_FALSE(source.stop_possible());
     CHECK_FALSE(source.stop_requested());
     CHECK_FALSE(source.request_stop());

@@ -3,7 +3,7 @@
 
 /// @file
 /// Cooperative cancellation: `core::coro::StopToken`, `StopSource`, `StopCallback<F>` and
-/// `noStopState`.
+/// `NoStopState`.
 ///
 /// They are `std::stop_token`, `std::stop_source`, `std::stop_callback<F>` and `std::nostopstate`
 /// where the standard library defines `__cpp_lib_jthread`, and otherwise a core-cpp
@@ -532,8 +532,8 @@ using StopSource = std::stop_source;
 template <typename Callback>
 using StopCallback = std::stop_callback<Callback>;
 
-/// Constructs a @c StopSource with no stop state: `StopSource { noStopState }`.
-inline std::nostopstate_t const noStopState {};
+/// Constructs a @c StopSource with no stop state: `StopSource { NoStopState }`.
+inline constexpr std::nostopstate_t NoStopState {};
 
 #else
 
@@ -548,8 +548,8 @@ using StopSource = detail::StopSourceFallback;
 template <typename Callback>
 using StopCallback = detail::StopCallbackFallback<Callback>;
 
-/// Constructs a @c StopSource with no stop state: `StopSource { noStopState }`.
-inline detail::NoStopStateFallback const noStopState {};
+/// Constructs a @c StopSource with no stop state: `StopSource { NoStopState }`.
+inline constexpr detail::NoStopStateFallback NoStopState {};
 
 #endif
 
