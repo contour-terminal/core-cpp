@@ -54,6 +54,7 @@ set(cases
     "namespace-directory|src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foobar {}\n"
     "namespace-directory|src/core/foo/detail/Bar.hpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core\n{\nnamespace foo\n{\n}\n}\n"
     "namespace-directory|src/core/Top.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace crispy\n{\n}\n"
+    "namespace-directory|src/core/Base64.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core::Async\n{\n}\n"
     "provenance|src/core/foo/Extra.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foo {}\n"
     "provenance|.agent/reference/provenance.md|# Provenance\n\n| core-cpp path | upstream repo | upstream path | synced SHA | notes |\n|---|---|---|---|---|\n| `src/core/foo/CMakeLists.txt` | origin: core-cpp | - | - | - |\n| `src/core/foo/Foo.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/detail/Bar.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/Main.cpp` | origin: core-cpp | - | - | - |\n| `src/core/Top.hpp` | origin: core-cpp | - | - | - |\n| `src/core/Base64.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/DoesNotExist.cpp` | origin: core-cpp | - | - | - |\n"
 )

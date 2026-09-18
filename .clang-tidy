@@ -13,7 +13,7 @@
 #     members, member typedefs, std specializations), taken from fastcached's .clang-tidy
 #     (eb9c9c68). contour annotated those with NOLINT; core-cpp has no NOLINT at all
 #     (tests/cmake/check-cmake-hygiene.cmake refuses one), so they are exempted here. The
-#     members of std::stop_token, stop_source and stop_callback join them: core::coro's
+#     members of std::stop_token, stop_source and stop_callback join them: core::async's
 #     fallback for those spells them as the standard does, so code compiles against either.
 #
 # A bare `-some-check` with no rationale is indistinguishable from an accident, so record
@@ -194,6 +194,7 @@ CheckOptions:
   readability-identifier-naming.EnumConstantCase: CamelCase
   readability-identifier-naming.FunctionCase: camelBack
   readability-identifier-naming.MethodCase: camelBack
+  readability-identifier-naming.NamespaceCase: lower_case
   readability-identifier-naming.ParameterCase: camelBack
   readability-identifier-naming.PrivateMemberCase: camelBack
   readability-identifier-naming.PrivateMemberPrefix: '_'
@@ -212,8 +213,8 @@ CheckOptions:
   #
   # The hook names, as fastcached's FunctionIgnoredRegexp lists them, for every kind of
   # function and method this block checks, and the members of std::stop_token, stop_source and
-  # stop_callback, which core::coro's fallback for them spells as the standard does
-  # (src/core/coro/StopToken.hpp).
+  # stop_callback, which core::async's fallback for them spells as the standard does
+  # (src/core/async/StopToken.hpp).
   readability-identifier-naming.FunctionIgnoredRegexp: '^(main|begin|end|push_back|pop_back|data|str|get|size|length|resize|empty|clear|value|c_str|capacity|to_string|string_view|assign|at|reserve|substr|sv|await_ready|await_suspend|await_resume|initial_suspend|final_suspend|unhandled_exception|return_value|return_void|yield_value|get_return_object|get_return_object_on_allocation_failure|address|operator_new|operator_delete|from_promise|allocate|deallocate|request_stop|stop_requested|stop_possible|get_token)$'
   readability-identifier-naming.MethodIgnoredRegexp: '^(main|begin|end|push_back|pop_back|data|str|get|size|length|resize|empty|clear|value|c_str|capacity|to_string|string_view|assign|at|reserve|substr|sv|await_ready|await_suspend|await_resume|initial_suspend|final_suspend|unhandled_exception|return_value|return_void|yield_value|get_return_object|get_return_object_on_allocation_failure|address|operator_new|operator_delete|from_promise|allocate|deallocate|request_stop|stop_requested|stop_possible|get_token)$'
   readability-identifier-naming.ClassMethodIgnoredRegexp: '^(main|begin|end|push_back|pop_back|data|str|get|size|length|resize|empty|clear|value|c_str|capacity|to_string|string_view|assign|at|reserve|substr|sv|await_ready|await_suspend|await_resume|initial_suspend|final_suspend|unhandled_exception|return_value|return_void|yield_value|get_return_object|get_return_object_on_allocation_failure|address|operator_new|operator_delete|from_promise|allocate|deallocate|request_stop|stop_requested|stop_possible|get_token)$'

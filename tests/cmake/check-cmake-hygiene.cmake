@@ -97,11 +97,13 @@ core_cpp_hygiene_rule(c-style-for KIND cpp
 # declares is the one its directory names. src/core/<dir>/... declares core::<dir>, or a namespace
 # nested in it (core::<dir>::detail), and spells it that way, not as `namespace core { namespace
 # <dir>`. A file directly in src/core/ declares core, or a namespace nested in it (core::base64).
-# Helper namespaces inside the first are free. A file that declares no named namespace (a main(), a
-# file of TU-local helpers, a header of macros) is not checked, and neither is a namespace alias.
+# Helper namespaces inside the first are free, but not from case: every segment is lowercase
+# (readability-identifier-naming.NamespaceCase in .clang-tidy says the same). A file that declares
+# no named namespace (a main(), a file of TU-local helpers, a header of macros) is not checked, and
+# neither is a namespace alias.
 set(CORE_CPP_HYGIENE_RULES ${CORE_CPP_HYGIENE_RULES} namespace-directory)
 set(CORE_CPP_HYGIENE_namespace-directory_REASON
-    "a source's first namespace is the one its directory names: src/core/<dir>/ is core::<dir>, src/core/ is core (Part I §1)")
+    "a source's first namespace is the one its directory names, in lowercase: src/core/<dir>/ is core::<dir>, src/core/ is core (Part I §1)")
 set(CORE_CPP_HYGIENE_NAMESPACE_REGEX "^[ \t]*(inline[ \t]+)?namespace[ \t]+([A-Za-z_][A-Za-z0-9_:]*)([ \t{/].*)?$")
 set(CORE_CPP_HYGIENE_NAMESPACE_ALIAS_REGEX "^[ \t]*namespace[ \t]+[A-Za-z0-9_:]+[ \t]*=")
 
@@ -248,6 +250,9 @@ foreach(path IN LISTS scanned)
                 if(NOT declared STREQUAL expectedNamespace AND NOT declared MATCHES "^${expectedNamespace}::")
                     core_cpp_hygiene_refuse(namespace-directory "${path}" ${lineNumber}
                         "${line}    (expected ${expectedNamespace})")
+                elseif(declared MATCHES "[A-Z]")
+                    core_cpp_hygiene_refuse(namespace-directory "${path}" ${lineNumber}
+                        "${line}    (namespaces are lowercase)")
                 endif()
                 set(expectedNamespace "")
             endif()
