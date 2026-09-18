@@ -255,7 +255,8 @@ jobs:
         # misuse where it happens, so it runs ctest, not only a build.
         preset: [cl-release, clangcl-release, cl-debug, cl-release-tls]
     env:
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg-archives
+      VCPKG_COMMIT: e6f9e70a29a3e80a1fc510d8503304315447112f
+      VCPKG_ARCHIVES: ${{ github.workspace }}/.cache/vcpkg-archives
     steps:
       - uses: actions/checkout@v4
 
@@ -289,28 +290,35 @@ jobs:
           echo "CXX_COMPILER_PATH=$clangcl" >> "$GITHUB_ENV"
 
       # OpenSSL for the TLS leg comes from vcpkg, in manifest mode: .github/vcpkg/vcpkg.json lists
-      # it, and the configure below installs it into the build tree. The binary archives are kept
-      # between runs, so OpenSSL is compiled once per vcpkg commit.
+      # it, and the configure below installs it into the build tree. Its binary archives live in
+      # $VCPKG_ARCHIVES, which this step keeps between runs, so a run with a warm cache restores
+      # OpenSSL instead of compiling it (about 8.5 minutes, on the path of ci-ok).
       - name: Cache vcpkg binary archives
         if: matrix.preset == 'cl-release-tls'
         uses: actions/cache@v4
         with:
           path: .cache/vcpkg-archives
-          key: vcpkg-${{ hashFiles('.github/vcpkg/vcpkg.json') }}-e6f9e70a29a3e80a1fc510d8503304315447112f
+          key: vcpkg-archives-x64-windows-${{ env.VCPKG_COMMIT }}-${{ hashFiles('.github/vcpkg/vcpkg.json') }}
+          restore-keys: vcpkg-archives-x64-windows-${{ env.VCPKG_COMMIT }}-
 
       - name: vcpkg
         if: matrix.preset == 'cl-release-tls'
         uses: lukka/run-vcpkg@v11
         with:
-          vcpkgGitCommitId: e6f9e70a29a3e80a1fc510d8503304315447112f
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT }}
 
+      # After run-vcpkg, because it sets VCPKG_BINARY_SOURCES to `clear;x-gha,readwrite`, and vcpkg
+      # has removed the x-gha backend: it warns and caches nothing, and the cache step above then
+      # had nothing to save. A files provider in the cached directory replaces it.
       # Forward slashes: a backslash path handed through bash loses its backslashes.
-      - name: Use vcpkg's toolchain
+      - name: Use vcpkg's toolchain and binary archives
         if: matrix.preset == 'cl-release-tls'
         run: |
-          mkdir -p "${VCPKG_DEFAULT_BINARY_CACHE//\\//}"
+          archives="${VCPKG_ARCHIVES//\\//}"
+          mkdir -p "$archives"
           root="${VCPKG_ROOT//\\//}"
           workspace="${GITHUB_WORKSPACE//\\//}"
+          echo "VCPKG_BINARY_SOURCES=clear;files,$archives,readwrite" >> "$GITHUB_ENV"
           echo "TOOLCHAIN_FILE=$root/scripts/buildsystems/vcpkg.cmake" >> "$GITHUB_ENV"
           echo "VCPKG_MANIFEST=$workspace/.github/vcpkg" >> "$GITHUB_ENV"
 
@@ -324,12 +332,17 @@ jobs:
           ${TOOLCHAIN_FILE:+"-DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN_FILE"}
           ${VCPKG_MANIFEST:+"-DVCPKG_MANIFEST_DIR=$VCPKG_MANIFEST"}
 
-      - name: Assert vcpkg installed OpenSSL
+      # An archive directory still empty after the install means the provider is inert again, and
+      # the next run compiles OpenSSL once more while the cache step reads as working.
+      - name: Assert vcpkg installed OpenSSL and archived it
         if: matrix.preset == 'cl-release-tls'
         run: |
           header="out/build/${{ matrix.preset }}/vcpkg_installed/x64-windows/include/openssl/ssl.h"
           test -f "$header" || { echo "::error::vcpkg did not install OpenSSL ($header is missing)"; exit 1; }
           echo "found $header"
+          n=$(find "${VCPKG_ARCHIVES//\\//}" -type f -name '*.zip' | wc -l)
+          echo "$n binary archive(s) in $VCPKG_ARCHIVES"
+          [ "$n" -gt 0 ] || { echo "::error::vcpkg wrote no binary archive to $VCPKG_ARCHIVES"; exit 1; }
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
