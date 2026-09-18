@@ -5,12 +5,13 @@ nothing when off. It is gated by `CORE_CPP_WITH_TRACY` (default `OFF`). When it 
 Tracy header is included, nothing is linked, and every macro in `<core/Profiling.hpp>` expands
 to `(void) 0`.
 
-**Status.** `<core/Profiling.hpp>` arrives with `core::base` in Task A3, from fastcached's
-profiling header with its `FC_*` macros renamed `CORE_*`. The Tracy row of the dependency table
-arrives with it, pinned to the Tracy release contour pins in its `cmake/Tracy.cmake` (0.14.1 at
-contour `6777ff05`), because the client compiled into a program and the viewer that reads its
-captures must be the same version. Until then the `clang-tracy` preset configures and builds
-with nothing to instrument.
+`<core/Profiling.hpp>` is part of `core::base`: fastcached's profiling header, with its `FC_*`
+macros renamed `CORE_*`. The Tracy row of the dependency table pins the Tracy release contour
+pins in its `cmake/Tracy.cmake` (0.14.1 at contour `6777ff05`), because the client compiled into
+a program and the viewer that reads its captures must be the same version. With the option on,
+`core::base` links `Tracy::TracyClient` PUBLIC; a client core-cpp fetches is built with
+`TRACY_ENABLE` and `TRACY_ONLY_LOCALHOST`. CI builds and tests the `clang-tracy` preset
+(`linux (clang-22-tracy)`).
 
 This guide is adapted from
 [fastcached `.agent/guides/profiling-tracy.md`](https://github.com/LASTRADA-Software/fastcached/blob/b5ded89c5ae6ba5b45337335ce774c5ae6986d65/.agent/guides/profiling-tracy.md).

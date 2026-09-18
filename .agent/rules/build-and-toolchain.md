@@ -114,7 +114,8 @@ presets, scripts and paths.
   spelling the type out trips `modernize-use-auto` instead. Taking the analyser's advice trades
   a Linux-only lint for a Windows-only build failure, found by whoever next builds on Windows.
   Scan for a *value* and name no iterator, or use a helper that returns a pointer
-  (`FindOrNull`, which `core/Ranges.hpp` brings from fastcached in Task A3). Origin:
+  (`core::findOrNull` or `core::findIfOrNull` in `<core/Ranges.hpp>`, from fastcached's
+  `FindOrNull`). Origin:
   [fastcached#1342](https://github.com/LASTRADA-Software/fastcached/issues/1342).
 - **A return type is not part of a free function's mangled name on Linux.** Two functions
   differing only in their return type, each declared in a different header, both compile, and

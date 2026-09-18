@@ -49,15 +49,15 @@ class App
 
     /// Parses @p argv into the parameter store WITHOUT dispatching to any command handler, populating
     /// parameters() with the syntax's defaults plus whatever @p argv overrides — the same parse step
-    /// run() performs internally. An action that re-enters another verb's code path (e.g. the GUI
-    /// boot under `contour client`) re-parses so that verb's parameter surface resolves.
+    /// run() performs internally. An action that re-enters another verb's code path re-parses so
+    /// that verb's parameter surface resolves.
     /// @param argc Argument count.
     /// @param argv Argument vector (argv[0] is the program name).
     /// @return true if parsing succeeded (parameters() is now populated), false otherwise.
     [[nodiscard]] bool reparseParameters(int argc, char const* argv[]);
 
-    /// The test-facing alias of reparseParameters(): constructs an app instance with a fully-formed
-    /// parameters() (e.g. so a default profile resolves) without launching the GUI event loop.
+    /// The test-facing alias of reparseParameters(): gives an app instance a fully-formed
+    /// parameters() without dispatching to any command handler.
     [[nodiscard]] bool parseParametersForTesting(int argc, char const* argv[]);
 
     /// The environment this application was constructed with, for the collaborators it builds.
@@ -70,11 +70,10 @@ class App
 
     /// This process's own argv, as run() received it (argv[0] first).
     ///
-    /// For a verb that must re-launch THIS binary with THIS configuration — `contour daemon
-    /// --background` respawning itself detached. Replaying the original tokens is exact by
-    /// construction: rebuilding them from the parsed flags means every option added later has
-    /// to be remembered in a second place, and the ones that were forgotten are invisible
-    /// until someone uses them together.
+    /// For a verb that must re-launch THIS binary with THIS configuration, a daemon respawning
+    /// itself detached for instance. Replaying the original tokens is exact by construction: rebuilding them
+    /// from the parsed flags means every option added later has to be remembered in a second place, and the
+    /// ones that were forgotten are invisible until someone uses them together.
     /// @return The argument vector; empty before run() has been entered.
     [[nodiscard]] std::vector<std::string> const& commandLine() const noexcept { return _commandLine; }
 
@@ -86,7 +85,7 @@ class App
     ///
     /// One implementation so every verb behaves identically: when this was inlined at each
     /// verb the two copies had already drifted — only one of them reported a mistyped tag.
-    /// @param optionPrefix The verb's dotted flag prefix, e.g. "contour.daemon".
+    /// @param optionPrefix The verb's dotted flag prefix, e.g. "tool.serve".
     /// @param showProcessId Whether to prefix each line with the emitting process id.
     /// @return Nothing, or why the log file could not be opened.
     [[nodiscard]] std::expected<void, std::string> installLogging(std::string const& optionPrefix,

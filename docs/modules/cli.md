@@ -16,8 +16,8 @@ Imported from contour's crispy `CLI` and `App` at `6777ff05`, where they were `c
 
 A command has options and subcommands. Options are spelled POSIX-style (`--timeout=1.0`,
 `-t 1.0`) or naturally (`timeout 1.0`); a boolean needs no value. `parse()` fills a `FlagStore`
-whose keys are the dotted path of each option, `contour.capture.timeout` for example, prefilled
-with every default:
+whose keys are the dotted path of each option, `tool.fetch.timeout` for the `timeout` option of
+the `fetch` subcommand of `tool`, prefilled with every default:
 
 ```cpp
 auto const syntax = core::cli::Command {

@@ -318,9 +318,8 @@ TEST_CASE("utils.nextPowerOfTwo")
 
 TEST_CASE("utils.trim")
 {
-    // constexpr, so the whole table is settled at compile time -- these are the cases the
-    // /.flatpak-info walk in vtpty relies on, a key-file writing `shared = ipc ;` as readily as
-    // `shared=ipc;`. @see vtpty::parseFlatpakInfo.
+    // constexpr, so the whole table is settled at compile time -- the cases a key-file parser
+    // relies on, which must read `shared = ipc ;` as readily as `shared=ipc;`.
     STATIC_CHECK(core::trim("  padded  "sv) == "padded"sv);
     STATIC_CHECK(core::trimLeft("  padded  "sv) == "padded  "sv);
     STATIC_CHECK(core::trimRight("  padded  "sv) == "  padded"sv);
