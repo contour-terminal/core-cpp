@@ -95,3 +95,7 @@ Types, PlatformError, Clock, StringUtils, PathUtils, GlobMatch and FileUri build
 `SOURCES_EMSCRIPTEN` list), and their tests run under node. Clock needs no threads; its test of
 concurrent `CachedClock` refreshes is compiled only where threads exist. There is no separate
 `NativeHandle.hpp`: `NativeHandle` is part of `Types.hpp`, as it is in endo.
+
+`platformRead()`'s end-of-file contract does not hold for a pipe there: Emscripten's in-memory
+pipes report EAGAIN once the writer has closed and the pipe is drained, so the read answers -1,
+not 0. Its test of that case is compiled only where the contract holds.

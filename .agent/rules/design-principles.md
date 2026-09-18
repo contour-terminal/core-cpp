@@ -120,7 +120,8 @@ fastcached, Lightweight)*
 - **Exceptions are for one case:** `core::coro::OperationCancelled`, thrown when a coroutine's
   own stop token cancels it. A cancellation that comes from the resource (`close()`,
   `cancelRead()`) is `NetErrorCode::Cancelled`, a value. A precondition violation is an
-  assertion, not an error code: there is no result it could return that would be true.
+  assertion, not an error code: there is no result it could return that would be true. A test
+  fixture that cannot set up throws too, to fail its test (see `cpp-guidelines.md`).
   *(core-cpp; the design spec, Part I §2)*
 
 ## `enum class` over `bool`

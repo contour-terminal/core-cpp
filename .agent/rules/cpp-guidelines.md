@@ -73,6 +73,13 @@ exemption short of an allowlist row that states its reason.
 - **No exception type but `core::coro::OperationCancelled`**, which a coroutine throws when
   its own stop token cancels it. Every other fallible operation returns `std::expected`.
   *(core-cpp; endo and tuidu reserve exceptions for the same cancellation path)*
+  - **Carve-out: a test fixture's setup.** `core::testing::ScopedTempDir` and
+    `ScopedWorkingDirectory` throw when they cannot set up, because a fixture that cannot set up
+    must fail the test, and Catch2 reports a throw from a constructor as exactly that; an empty
+    path handed back instead would put the test's files in the working directory. The carve-out
+    covers test-only code under `src/core/testing/` and nothing a production path calls.
+    `core::platform::Wakeup`'s throwing constructor is a separate question, decided in
+    [core-cpp#14](https://github.com/contour-terminal/core-cpp/issues/14).
 
 ## Zero warnings
 
