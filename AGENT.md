@@ -20,10 +20,11 @@ is [the plan](docs/superpowers/plans/2026-09-18-core-cpp.md).
 | coro | `core::coro` | `core::coro` (INTERFACE) | std only |
 | net | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | coro, platform |
 | tui | `core::tui` | `core::tui_output`, `core::tui` | base (leaf); + platform, coro, net, libunicode |
-| testing | `core::testing` | `core::testing`, `core::testing_dialogs`, `core::testing_main` | base; Catch2 for `testing_main` |
+| testing | `core::testing` | `core::testing`, `core::testing_dialogs`, `core::testing_main` | base; log and Catch2 for `testing_main` |
 
-Only `testing` exists so far; the others arrive with Tasks A3 to A7 and Phase B. The module DAG is
-the table in `cmake/CoreCppModules.cmake`, and configure refuses a link it does not list.
+`base`, `log`, `cli` and `testing` exist; the others arrive with Tasks A4 to A7 and Phase B. The
+module DAG is the table in `cmake/CoreCppModules.cmake`, and configure refuses a link it does not
+list.
 
 Consumers: contour (vendored), endo, fastcached, tuidu, Lightweight's `dbtool`, morph (CPM). Who
 links what, and where each keeps its pin: [`.agent/reference/consumers.md`](.agent/reference/consumers.md).

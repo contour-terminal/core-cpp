@@ -7,14 +7,14 @@ namespace is its directory (`src/core/net/` is `core::net`; headers directly in 
 
 | Module | Namespace | Target(s) | Kind | Depends on | Status |
 |---|---|---|---|---|---|
-| [base](base.md) | `core` | `core::base` | static | Threads; Tracy (optional) | planned: Task A3 |
-| [log](log.md) | `core::log` | `core::log` | static | base | planned: Task A3 |
-| [cli](cli.md) | `core::cli` | `core::cli` | static | base, log | planned: Task A3 |
+| [base](base.md) | `core` | `core::base` | static | Threads; Tracy (optional) | available |
+| [log](log.md) | `core::log` | `core::log` | static | base | available |
+| [cli](cli.md) | `core::cli` | `core::cli` | static | base, log | available |
 | [platform](platform.md) | `core::platform` | `core::platform` | static | base, log, coro | planned: Task A4 |
 | [coro](coro.md) | `core::coro` | `core::coro` | header-only | the standard library | planned: Tasks A5, B1 |
 | [net](net.md) | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | header-only, static, static | coro, platform; OpenSSL for `net_tls` | planned: Tasks A6, B2 to B11 |
 | [tui](tui.md) | `core::tui` | `core::tui_output`, `core::tui` | static | `tui_output`: base; `tui`: also platform, coro, net, libunicode, stb (optional) | planned: Tasks A7, B12 |
-| [testing](testing.md) | `core::testing` | `core::testing`, `core::testing_dialogs`, `core::testing_main` | static, object, static | base; Catch2 for `testing_main` | available |
+| [testing](testing.md) | `core::testing` | `core::testing`, `core::testing_dialogs`, `core::testing_main` | static, object, static | base; log and Catch2 for `testing_main` | available |
 
 The task numbers refer to the
 [implementation plan](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/plans/2026-09-18-core-cpp.md).
@@ -42,6 +42,7 @@ graph BT
     tui --> coro
     tui --> net
     testing --> base
+    testing --> log
 ```
 
 `coro` depends on the standard library only, so it can be used without anything else from

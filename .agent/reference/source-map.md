@@ -27,11 +27,11 @@ cmake/
   CoreCppVendor.cmake       (planned, A8) MODE=sync|check|export of the vendoring contract
 src/core/
   Config.hpp.in             generates <core/Config.hpp>: version, skip exit code, WITH_* flags
-  *.hpp, *.cpp              (planned, A3) core::base: Assert, Defines, Environment, Escape, FNV,
-                            Flags, Times, UserInfo, Utils, Overloaded, Deferred, Base64,
-                            Profiling, Ranges
-  log/                      (planned, A3) core::log: LogStore, LogSink
-  cli/                      (planned, A3) core::cli: CLI, App
+  *.hpp, *.cpp              core::base (crispy, fastcached Core): Assert, Defines, Environment,
+                            Escape, FNV, Flags, Times, UserInfo, Utils, Overloaded, Deferred,
+                            Base64, Profiling, Ranges
+  log/                      core::log (crispy): LogStore, LogSink; Assert (fatal, SoftRequire)
+  cli/                      core::cli (crispy): CLI, App
   platform/                 (planned, A4) core::platform: Clock, Wakeup, SignalHandler,
                             SystemPipe, FileSystem, EnvironmentProvider, ... ;
                             posix/ linux/ darwin/ windows/ are private; testing/ holds the fakes
@@ -40,9 +40,11 @@ src/core/
   net/                      (planned, A6 and B2-B11) core::net_types, core::net, core::net_tls:
                             EventLoop, IoBackend and backend/, sockets, dialling, timers, TLS
   tui/                      (planned, A7 and B12) core::tui_output (the leaf) and core::tui
-  testing/                  core::testing: SuppressWindowsDialogs (no test framework needed);
+  testing/                  core::testing: SuppressWindowsDialogs (no test framework needed),
+                            Environment (FakeEnvironment);
                             core::testing_dialogs: the startup object that installs it;
-                            core::testing_main: Catch2's main() with the exit-code contract
+                            core::testing_main: Catch2's main() with the LOG filter and the
+                            exit-code contract
 tests/
   CMakeLists.txt            the exit-code fixture, the hygiene checks, the Windows dialog canary
   ExitCodeFixture.cpp       one Catch2 case per outcome, for check-exit-codes.cmake
@@ -51,6 +53,7 @@ tests/
     check-exit-codes.cmake          asserts core::testing_main's exit codes from outside
     check-cmake-hygiene.cmake       the rules of Part I §3 as a table, plus an allowlist
     check-cmake-hygiene-selftest.cmake  proves every hygiene rule refuses
+    check-platform-sources.cmake    which source lists each platform compiles, Emscripten included
     check-release.cmake             a release tag equals project(VERSION) and has a CHANGELOG section
     check-release-selftest.cmake    proves each refusal of check-release.cmake
 scripts/
