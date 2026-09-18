@@ -52,8 +52,8 @@ inline void unsetTestEnv(char const* name)
 ///
 /// The environment is process-global, so a test that sets a variable and restores it at the
 /// end of the test body leaks that change whenever an assertion throws first. $HOME is the
-/// one that bites here: other fixtures read it while constructing a shell, so a leaked
-/// value silently redirects a later test's history or config to the wrong place.
+/// one that bites: other fixtures read it while they set up, so a leaked value silently
+/// redirects a later test's history or configuration to the wrong place.
 class ScopedEnv
 {
   public:

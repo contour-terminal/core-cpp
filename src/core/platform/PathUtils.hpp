@@ -24,9 +24,9 @@ namespace core::platform
 /// @brief Whether the host filesystem resolves paths case-insensitively by default.
 ///
 /// True on Windows and the default macOS volume format, where `foo` and `FOO` name the
-/// same entry. Path completion and matching consult this so the shell mirrors how the
-/// OS itself resolves names — e.g. completing `Lastrada-to` to the on-disk
-/// `lastrada-tools/`. POSIX (Linux) filesystems are case-sensitive, so it is false there
+/// same entry. Path completion and matching consult this so a program mirrors how the
+/// OS itself resolves names — e.g. completing `Project-to` to the on-disk
+/// `project-tools/`. POSIX (Linux) filesystems are case-sensitive, so it is false there
 /// and smart-case matching is retained.
 inline constexpr bool FilesystemCaseInsensitive =
 #if defined(_WIN32) || defined(__APPLE__)
@@ -181,8 +181,8 @@ inline constexpr bool FilesystemCaseInsensitive =
 
 /// @brief Resolves POSIX-style device paths to their platform-native equivalent.
 ///
-/// Endo accepts POSIX device paths (`/dev/null`) across all platforms for portability.
-/// On Windows these paths must be rewritten to the corresponding reserved device name
+/// A program that accepts POSIX device paths (`/dev/null`) on every platform, for portability,
+/// has to rewrite them on Windows to the corresponding reserved device name
 /// before being passed to file-open APIs:
 ///
 /// | POSIX      | Windows |

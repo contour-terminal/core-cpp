@@ -31,7 +31,7 @@ class WindowsEnvironmentProvider final: public EnvironmentProvider
     [[nodiscard]] std::string currentDirectory() const override;
 
   private:
-    /// @brief Internal storage for shell-local variables (case-insensitive key comparison).
+    /// @brief Internal storage for variables set but not exported (case-insensitive key comparison).
     struct CaseInsensitiveLess
     {
         bool operator()(std::string const& a, std::string const& b) const;

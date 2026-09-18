@@ -37,14 +37,14 @@ namespace
 
 #ifdef _WIN32
     /// Win32 console control handler. Intercepts Ctrl+C / Ctrl+Break so the
-    /// shell survives (records a pending interrupt and returns TRUE); lets the
+    /// process survives (records a pending interrupt and returns TRUE); lets the
     /// default handler process other control events (e.g. CTRL_CLOSE_EVENT).
     BOOL WINAPI consoleCtrlHandler(DWORD ctrlType)
     {
         if (SignalHandler::isInterruptCtrlEvent(ctrlType))
         {
-            // Record the interrupt so in-process builtins polling hasPendingSigint()
-            // can abort, and return TRUE so the shell is not terminated. The
+            // Record the interrupt so in-process work polling hasPendingSigint()
+            // can abort, and return TRUE so the process is not terminated. The
             // foreground child shares the console process group and receives its own
             // CTRL_C_EVENT from the OS; background jobs are shielded by being created
             // in a separate console process group.
@@ -92,8 +92,8 @@ int SignalHandler::initialize(SignalCallback* callback)
 #ifdef _WIN32
     // Windows has no POSIX signals. Install a console control handler so that
     // Ctrl+C / Ctrl+Break interrupt the foreground child instead of terminating
-    // the shell. The handler records a pending interrupt and returns TRUE,
-    // preventing the default handler from calling ExitProcess on the shell.
+    // this process. The handler records a pending interrupt and returns TRUE,
+    // preventing the default handler from calling ExitProcess on it.
     SetConsoleCtrlHandler(&consoleCtrlHandler, TRUE);
     return -1;
 #elifdef __linux__
@@ -106,7 +106,7 @@ int SignalHandler::initialize(SignalCallback* callback)
     sigaddset(&mask, SIGINT);
     pthread_sigmask(SIG_BLOCK, &mask, nullptr);
 
-    // Ignore SIGTTOU so tcsetpgrp() doesn't stop the shell when transferring terminal control
+    // Ignore SIGTTOU so tcsetpgrp() doesn't stop this process when transferring terminal control
     signal(SIGTTOU, SIG_IGN);
 
     // Create signalfd for receiving signals as file descriptor events
@@ -130,11 +130,11 @@ int SignalHandler::initialize(SignalCallback* callback)
     sa.sa_handler = sigcontHandler;
     sigaction(SIGCONT, &sa, nullptr);
 
-    // Ignore SIGTTOU so tcsetpgrp() doesn't stop the shell when transferring terminal control
+    // Ignore SIGTTOU so tcsetpgrp() doesn't stop this process when transferring terminal control
     signal(SIGTTOU, SIG_IGN);
 
-    // Handle SIGINT via flag — builtins (like sleep) poll this to support Ctrl+C interruption.
-    // At the prompt, terminal is in raw mode so Ctrl+C is a keypress, not a signal.
+    // Handle SIGINT via flag: in-process work (a sleep, say) polls it to support Ctrl+C.
+    // A terminal in raw mode delivers Ctrl+C as a keypress, not as this signal.
     sa.sa_handler = sigintHandler;
     sigaction(SIGINT, &sa, nullptr);
 
@@ -150,7 +150,7 @@ void SignalHandler::restore()
 {
 #ifdef _WIN32
     // Deregister the console control handler installed in initialize() and clear any
-    // interrupt it may have recorded, so a pending flag does not survive shell teardown
+    // interrupt it may have recorded, so a pending flag does not survive this teardown
     // into a later SignalHandler user.
     SetConsoleCtrlHandler(&consoleCtrlHandler, FALSE);
     sigintPending.store(false);

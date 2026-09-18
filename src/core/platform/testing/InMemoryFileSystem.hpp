@@ -129,7 +129,7 @@ class InMemoryFileSystem final: public FileSystem
     ///
     /// std::filesystem's is_regular_file(), is_directory() and the stream opens all follow
     /// symlinks; only is_symlink() and symlink_status() do not. This model has to agree, or a
-    /// shell reading through it would classify a symlink as neither file nor directory and
+    /// program reading through it would classify a symlink as neither file nor directory and
     /// take a path meant for FIFOs and devices.
     ///
     /// @param key A normalized path.

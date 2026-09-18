@@ -102,12 +102,12 @@ class ScopedTempDir
         return _path / std::filesystem::path(name);
     }
 
-    /// @brief The directory's path as a string, for interpolating into shell commands.
+    /// @brief The directory's path as a string, for interpolating into a command line.
     ///
-    /// Generic (forward-slash) form on purpose: the shell under test treats a backslash as
-    /// an escape, so a native Windows path would be mangled -- and inside a glob pattern it
-    /// would silently escape the character that follows it instead of separating a
-    /// directory. Forward slashes are accepted by the Windows APIs the shell calls.
+    /// Generic (forward-slash) form on purpose: a command language that treats a backslash as
+    /// an escape would mangle a native Windows path -- and inside a glob pattern it would
+    /// silently escape the character that follows it instead of separating a directory.
+    /// Forward slashes are accepted by the Windows file APIs as well.
     [[nodiscard]] std::string string() const { return _path.generic_string(); }
 
   private:

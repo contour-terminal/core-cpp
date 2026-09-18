@@ -36,7 +36,7 @@ struct FileEntry
 /// Abstract interface for listing directory contents.
 ///
 /// Implementations provide platform-specific directory enumeration.
-/// Inject via constructor for testability (mock in tests, real in shell).
+/// Inject via constructor for testability (the mock in tests, the native one in production).
 class FileInfoProvider
 {
   public:

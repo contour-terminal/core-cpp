@@ -57,7 +57,7 @@ auto canonicalCasePath(std::filesystem::path const& p) -> std::string
 
     // Open a handle to the path so its canonical, correctly-cased name can be queried.
     // GetLongPathNameW only expands 8.3 short names — it leaves already-long components
-    // in whatever case they were passed — so it cannot fix the casing the shell needs.
+    // in whatever case they were passed — so it cannot fix the casing callers need.
     // FILE_FLAG_BACKUP_SEMANTICS is required to obtain a handle to a directory.
     auto* const rawHandle = CreateFileW(native.c_str(),
                                         0,

@@ -19,8 +19,8 @@ namespace core::platform
 
 /// Abstract interface for filesystem operations.
 ///
-/// This interface abstracts all filesystem I/O, enabling unit-testing of
-/// shell builtins and subsystems in isolation via InMemoryFileSystem.
+/// This interface abstracts all filesystem I/O, so code that takes it can be unit-tested
+/// in isolation over testing::InMemoryFileSystem.
 class FileSystem
 {
   public:
@@ -32,7 +32,7 @@ class FileSystem
     [[nodiscard]] virtual bool isRegularFile(std::filesystem::path const& path) const = 0;
     [[nodiscard]] virtual bool isSymlink(std::filesystem::path const& path) const = 0;
 
-    /// Tests whether @p path names a file the shell can execute.
+    /// Tests whether @p path names a file a process can execute.
     ///
     /// Returns true for regular files and symlinks to them, and — on Windows — also for
     /// App Execution Alias reparse points (e.g. `winget`, Microsoft Store `python`). These

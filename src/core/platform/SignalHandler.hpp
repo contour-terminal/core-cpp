@@ -10,8 +10,8 @@ class Wakeup;
 
 /// Abstract callback interface for signal notifications.
 ///
-/// Implement this interface to receive signal callbacks from SignalHandler.
-/// The shell implements this to handle job control signals.
+/// Implement this interface to receive signal callbacks from SignalHandler: a program that
+/// runs jobs in the foreground and background implements it to handle job control signals.
 class SignalCallback
 {
   public:
@@ -106,12 +106,12 @@ class SignalHandler
 
     /// Temporarily restores default SIGTSTP handling and re-raises the signal.
     ///
-    /// This is called during shell suspend to actually stop the process.
+    /// A program calls this when it suspends itself (Ctrl+Z) to actually stop the process.
     /// After the process is resumed (SIGCONT), the custom handler is reinstalled.
     static void suspendSelf();
 
     /// Decides whether a Windows console control event should be treated as a
-    /// user interrupt that the shell handles itself (keeping the shell alive)
+    /// user interrupt that the program handles itself (keeping the process alive)
     /// rather than letting the default handler terminate the process.
     ///
     /// Exposed as a pure function so the policy is unit-testable without
