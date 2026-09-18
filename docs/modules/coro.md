@@ -75,13 +75,21 @@ Imported from contour's `src/coro` at `6777ff05`, with `coro::` renamed `core::c
   destroys it; the awaiter only borrows it. The promise holds a `StopToken`, inherited from the
   awaiting coroutine when a task is awaited. `result()` of a root task requires both `done()`
   and an owned frame: `done()` is also true for a default-constructed or moved-from task.
-- Symmetric transfer keeps a chain of `co_await`s from growing the stack only where the compiler
-  makes the transfer a tail call. Clang and MSVC do at every optimisation level. GCC does only
-  when it optimises sibling calls: measured with GCC 14.3, a chain of 100000 synchronously
-  completing awaits overflows an 8 MiB stack at `-O0` and passes at `-O3`. WebAssembly as emsdk
-  3.1.56 builds it has no tail calls (no `-mtail-call`), and the same chain exceeds node's call
-  stack. There, a long chain of awaits that complete synchronously can overflow the stack, and
-  the test of that bound is skipped.
+- Symmetric transfer keeps `co_await`s from growing the stack only where the compiler makes the
+  transfer a tail call. Clang and MSVC do at every optimisation level. GCC does only when it
+  optimises sibling calls, and WebAssembly has no tail calls without `-mtail-call`. Measured at
+  100000 awaits that complete synchronously, with an 8 MiB stack:
+  - GCC 14.3 and 15, a nested chain (a task awaiting a task awaiting a task ...): overflows at
+    `-O0`, `-Og` and `-O1`; passes at `-O2` and `-O3`.
+  - GCC 14.3 and 15, a *loop* in one coroutine awaiting tasks that complete at once: overflows at
+    `-O0`; passes at `-Og` and above. Consecutive synchronous completions pile up stack until
+    the coroutine really suspends, which is what a read loop over buffered data does.
+  - emsdk 3.1.56 under node, the nested chain: exceeds node's call stack.
+
+  `Task_test.cpp` skips its deep-chain case under Emscripten without `-mtail-call` and for GCC
+  without `__OPTIMIZE__`. GCC at `-Og` or `-O1` defines `__OPTIMIZE__`, so the case is not skipped
+  there and crashes the test binary; no preset builds at those levels. The fix is tracked in
+  [core-cpp#15](https://github.com/contour-terminal/core-cpp/issues/15), to be decided in Task B1.
 - `detail::UniqueCoroHandle<Promise>` (`<core/coro/UniqueCoroHandle.hpp>`) is the move-only owner
   of a coroutine handle that `Task` and the combinators' child runners share.
 - `<core/coro/Cancellation.hpp>` has `OperationCancelled`, which a cancelled frame throws to
@@ -109,7 +117,8 @@ Changes from contour's copy, besides the namespace:
   `WhenAny_test.cpp`'s `ManualEvent` initialises its pointer member
   (`cppcoreguidelines-pro-type-member-init`), and its two helpers that only a case compiled off
   Windows uses are compiled off Windows too (`-Wunused-function` on clang-cl). `Task_test.cpp`
-  skips its deep-chain case under Emscripten and for GCC without optimisation (above).
+  skips its deep-chain case under Emscripten without `-mtail-call` and for GCC without
+  optimisation (above).
 - `Cancellation.hpp` no longer defines the stop-token aliases, nor refuses to compile without
   `__cpp_lib_jthread`.
 - contour's `src/coro/test_main.cpp` is not imported: every test binary links

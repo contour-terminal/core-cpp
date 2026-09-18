@@ -139,15 +139,18 @@ TEST_CASE("Task is move-only and the moved-from frame is not double-freed", "[Ta
 TEST_CASE("Deep co_await chains keep the stack bounded (symmetric transfer)", "[Task]")
 {
     // Without symmetric transfer this recursion would overflow the stack; with it
-    // both the descent and the unwind are tail calls, where the compiler makes them so.
-#ifdef __EMSCRIPTEN__
+    // both the descent and the unwind are tail calls, where the compiler makes them so. Where it
+    // does not, the case is skipped; core-cpp#15 tracks the fix.
+#if defined(__EMSCRIPTEN__) && !defined(__wasm_tail_call__)
     // Measured with emsdk 3.1.56 under node: "RangeError: Maximum call stack size exceeded". Its
     // WebAssembly has no tail calls unless built with -mtail-call, so each transfer nests a call.
-    SKIP("WebAssembly as emsdk builds it has no tail call for symmetric transfer");
+    SKIP("WebAssembly without -mtail-call has no tail call for symmetric transfer (core-cpp#15)");
 #elif defined(__GNUC__) && !defined(__clang__) && !defined(__OPTIMIZE__)
-    // Measured with GCC 14.3 at -O0: the recursion overflows an 8 MiB stack, and passes with an
-    // unlimited one. GCC makes the transfer a tail call only when it optimises sibling calls.
-    SKIP("GCC without optimisation does not make symmetric transfer a tail call");
+    // Measured with GCC 14.3 and 15: the recursion overflows an 8 MiB stack at -O0, -Og and -O1,
+    // and passes at -O2. GCC makes the transfer a tail call only when it optimises sibling calls.
+    // -Og and -O1 define __OPTIMIZE__, so this case is NOT skipped there and crashes the binary;
+    // no preset builds at those levels.
+    SKIP("GCC without optimisation does not make symmetric transfer a tail call (core-cpp#15)");
 #endif
     constexpr auto Depth = 100000;
     auto task = sumDown(Depth);
