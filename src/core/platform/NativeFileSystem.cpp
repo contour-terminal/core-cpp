@@ -377,7 +377,7 @@ std::expected<std::vector<FileSystem::DirectoryEntry>, std::string> NativeFileSy
     return entries;
 }
 
-coro::Generator<FileSystem::DirectoryEntry> NativeFileSystem::walkDirectoryRecursive(
+Generator<FileSystem::DirectoryEntry> NativeFileSystem::walkDirectoryRecursive(
     fs::path path, std::error_code* outError) const
 {
     // recursive_directory_iterator reads directories lazily as it advances, so

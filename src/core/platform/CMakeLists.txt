@@ -78,7 +78,7 @@ core_cpp_add_module(platform KIND STATIC
     SOURCES_EMSCRIPTEN
         ${_coreCppPlatformSubset}
         ${_coreCppPlatformPosixProviders}
-    PUBLIC_LIBS core::base core::coro
+    PUBLIC_LIBS core::base
     PRIVATE_LIBS ${_coreCppPlatformLibs})
 
 core_cpp_add_test(platform

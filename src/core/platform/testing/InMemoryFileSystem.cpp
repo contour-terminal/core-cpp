@@ -506,7 +506,7 @@ std::expected<std::vector<FileSystem::DirectoryEntry>, std::string> InMemoryFile
     return entries;
 }
 
-coro::Generator<FileSystem::DirectoryEntry> InMemoryFileSystem::walkDirectoryRecursive(
+Generator<FileSystem::DirectoryEntry> InMemoryFileSystem::walkDirectoryRecursive(
     std::filesystem::path path, std::error_code* outError) const
 {
     auto const dirKey = normalize(path);

@@ -9,7 +9,7 @@
 /// implementation built on the core `<coroutine>` header. The fallback exists
 /// because some standard libraries (notably libc++, including the libc++ 17 of
 /// emsdk 3.1.56) ship `<coroutine>` but not yet `<generator>`. Both spellings
-/// expose the same `core::coro::Generator<T>` alias so call sites are identical
+/// expose the same `core::Generator<T>` alias so call sites are identical
 /// across platforms.
 ///
 /// libstdc++ gets the fallback although it has `<generator>` (GCC 14): GCC's
@@ -42,7 +42,7 @@
 #include <coroutine>
 
 #if !defined(__cpp_impl_coroutine) || __cpp_impl_coroutine < 201902L
-    #error "core::coro::Generator requires C++20 coroutine language support (__cpp_impl_coroutine)."
+    #error "core::Generator requires C++20 coroutine language support (__cpp_impl_coroutine)."
 #endif
 
 #include <cstddef>
@@ -51,7 +51,7 @@
 #include <memory>
 #include <utility>
 
-namespace core::coro
+namespace core
 {
 
 namespace detail
@@ -239,4 +239,4 @@ template <typename T>
 using Generator = detail::GeneratorFallback<T>;
 #endif
 
-} // namespace core::coro
+} // namespace core

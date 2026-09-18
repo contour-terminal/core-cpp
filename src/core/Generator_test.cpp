@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include <core/coro/Generator.hpp>
+#include <core/Generator.hpp>
 
 #include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -11,8 +11,8 @@
 #include <vector>
 #include <version>
 
-using core::coro::Generator;
-using core::coro::detail::GeneratorFallback;
+using core::Generator;
+using core::detail::GeneratorFallback;
 
 // Generator.hpp is included first, before anything could have defined __cpp_lib_generator for
 // it. Where the standard library has <generator> (and is not libstdc++, see Generator.hpp),

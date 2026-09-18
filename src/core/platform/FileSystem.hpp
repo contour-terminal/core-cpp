@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include <core/coro/Generator.hpp>
+#include <core/Generator.hpp>
 
 #include <cstdint>
 #include <expected>
@@ -161,7 +161,7 @@ class FileSystem
     /// @return A generator of entries. A non-existent or non-directory root, or
     ///         an unreadable root, simply yields nothing. The owning FileSystem
     ///         must outlive the returned generator.
-    [[nodiscard]] virtual coro::Generator<DirectoryEntry> walkDirectoryRecursive(
+    [[nodiscard]] virtual Generator<DirectoryEntry> walkDirectoryRecursive(
         std::filesystem::path path, std::error_code* outError = nullptr) const = 0;
 
     // Metadata
