@@ -28,6 +28,8 @@ Endo
   - src/core/testing/SuppressWindowsDialogsAtStartup.cpp
   - tests/WindowsDialogCanary.cpp
   - cmake/CPM.cmake (the CPM 0.40.8 pin and its SHA-256)
+  - src/core/testing/{ScopedTempDir,ScopedWorkingDirectory,EnvHelper}.hpp and
+    ScopedTempDir_test.cpp (from src/testing/, adapted)
 
 fastcached
   https://github.com/LASTRADA-Software/fastcached

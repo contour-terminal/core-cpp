@@ -6,7 +6,7 @@ happened. Namespace `core::testing`, directory `src/core/testing/`.
 
 | Target | Kind | Needs | What it is |
 |---|---|---|---|
-| `core::testing` | static | `core::base` | `core::testing::suppressWindowsDialogs()`, and `core::testing::FakeEnvironment` (`<core/testing/Environment.hpp>`) |
+| `core::testing` | static | `core::base` | `core::testing::suppressWindowsDialogs()`, `core::testing::FakeEnvironment` (`<core/testing/Environment.hpp>`), and the scoped fixtures `ScopedTempDir`, `ScopedWorkingDirectory` and `ScopedEnv` |
 | `core::testing_dialogs` | object | `core::testing` | calls it during static initialisation, in every executable that links it |
 | `core::testing_main` | static | Catch2 3.8, `core::log` | `main()` for a Catch2 test binary, with the `LOG` filter and the exit-code contract |
 
@@ -79,6 +79,22 @@ has no effect there.
 `core::testing::FakeEnvironment` is a `core::Environment` that holds exactly the variables a
 test gives it, for code that takes its environment by reference instead of reading the process's.
 
-## Planned additions
+## Scoped fixtures
 
-Task A4 adds `ScopedTempDir`, `ScopedWorkingDirectory` and `EnvHelper` from endo.
+Imported from endo's `src/testing` at `f774a210`. Each undoes what it did when it goes out of
+scope, so a failing assertion cannot leak the change into the next test. Prefer a test double
+where the code under test takes one (`FakeEnvironment`,
+`core::platform::testing::InMemoryFileSystem`, `TestEnvironmentProvider`): these fixtures change
+state that the whole test binary shares.
+
+| Header | What it has |
+|---|---|
+| `<core/testing/ScopedTempDir.hpp>` | `ScopedTempDir`, a directory unique to the instance (`mkdtemp`, or the process id and a counter on Windows), removed with its contents on destruction; `path()`, `operator/`, and `string()` in the generic form |
+| `<core/testing/ScopedWorkingDirectory.hpp>` | `ScopedWorkingDirectory`, which changes the working directory and changes it back |
+| `<core/testing/EnvHelper.hpp>` | `setTestEnv()`, `unsetTestEnv()`, and `ScopedEnv`, which sets a variable and restores the value it replaced, or removes it |
+
+A fixture that cannot be set up throws, and Catch2 reports the test as failed: an empty temporary
+path, for one, would quietly put the fixture in the working directory. On POSIX `EnvHelper`
+writes through `core::setProcessEnvironmentVariable()` rather than `setenv()`. On Windows it uses
+`_putenv_s()`, which updates both the CRT's copy of the environment and the operating system's;
+there an empty value removes the variable.

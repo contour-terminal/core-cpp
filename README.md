@@ -29,7 +29,7 @@ which. Nothing is tagged yet.
 | coro | `core::coro` | `core::coro` (header-only) | the standard library | `Task`, cancellation, `whenAll`/`whenAny`, generators, executors, `AsyncQueue` | planned (A5, B1) |
 | net | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | coro, platform; OpenSSL for TLS | event loop and backends (epoll, kqueue, IOCP, poll, host-driven), sockets, dialling, timers, TLS, HTTP server | planned (A6, B2-B11) |
 | tui | `core::tui` | `core::tui_output`, `core::tui` | base; the full TUI also platform, coro, net, libunicode | terminal output, input, widgets, runtime | planned (A7, B12) |
-| testing | `core::testing` | `core::testing`, `core::testing_main` | base; log and Catch2 for `testing_main` | Windows dialog suppression, a fake environment, a Catch2 `main()` with the `LOG` filter and a normalised exit code | **available** |
+| testing | `core::testing` | `core::testing`, `core::testing_main` | base; log and Catch2 for `testing_main` | Windows dialog suppression, a fake environment, scoped temporary directory, working directory and environment variable, a Catch2 `main()` with the `LOG` filter and a normalised exit code | **available** |
 
 The layering is enforced: a module links only the modules its row in
 [`cmake/CoreCppModules.cmake`](cmake/CoreCppModules.cmake) lists.

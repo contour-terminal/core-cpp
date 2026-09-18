@@ -1,10 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Test helpers that need no test framework, built wherever core-cpp is, the WebAssembly subset
-# included: the Windows dialog suppression, a no-op everywhere else, and the test doubles of
-# core::base's interfaces (Environment.hpp).
+# included: the Windows dialog suppression, a no-op everywhere else, the test doubles of
+# core::base's interfaces (Environment.hpp), and the scoped fixtures a test that needs the real
+# process state uses: a temporary directory, a working directory, an environment variable.
 core_cpp_add_module(testing KIND STATIC
-    HEADERS Environment.hpp SuppressWindowsDialogs.hpp
+    HEADERS
+        EnvHelper.hpp
+        Environment.hpp
+        ScopedTempDir.hpp
+        ScopedWorkingDirectory.hpp
+        SuppressWindowsDialogs.hpp
     SOURCES SuppressWindowsDialogs.cpp
     PUBLIC_LIBS core::base)
 
@@ -30,7 +36,12 @@ if(CORE_CPP_CATCH2_MAIN)
         core::testing_dialogs "$<TARGET_OBJECTS:core-cpp-testing_dialogs>")
 endif()
 
-core_cpp_add_test(testing SOURCES CatchMain_test.cpp ExitCode_test.cpp)
+core_cpp_add_test(testing SOURCES
+    CatchMain_test.cpp
+    EnvHelper_test.cpp
+    ExitCode_test.cpp
+    ScopedTempDir_test.cpp
+    ScopedWorkingDirectory_test.cpp)
 if(TEST core-cpp.testing)
     # CatchMain_test.cpp asserts what main() makes of it.
     set_tests_properties(core-cpp.testing PROPERTIES ENVIRONMENT "LOG=net")

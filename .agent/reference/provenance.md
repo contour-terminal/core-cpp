@@ -66,10 +66,16 @@ others in notes.
 | `src/core/testing/CMakeLists.txt` | origin: core-cpp | - | - | - |
 | `src/core/testing/CatchMain.cpp` | origin: core-cpp | - | - | `core::testing_main`: Catch2's `main()`, the exit-code contract and the `LOG` filter |
 | `src/core/testing/CatchMain_test.cpp` | origin: core-cpp | - | - | covers the `LOG` filter |
+| `src/core/testing/EnvHelper.hpp` | contour-terminal/endo | `src/testing/EnvHelper.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | POSIX writes go through `core::setProcessEnvironmentVariable()`, and `ScopedEnv` reads through `core::LiveEnvironment`, instead of `setenv()`/`unsetenv()`/`getenv()` |
+| `src/core/testing/EnvHelper_test.cpp` | origin: core-cpp | - | - | the upstream file has no test |
 | `src/core/testing/Environment.hpp` | contour-terminal/contour | `src/crispy/testing/Environment.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | `crispy::testing::FakeEnvironment` renamed `core::testing::FakeEnvironment` |
 | `src/core/testing/ExitCode.cpp` | origin: core-cpp | - | - | - |
 | `src/core/testing/ExitCode.hpp` | origin: core-cpp | - | - | - |
 | `src/core/testing/ExitCode_test.cpp` | origin: core-cpp | - | - | - |
+| `src/core/testing/ScopedTempDir.hpp` | contour-terminal/endo | `src/testing/ScopedTempDir.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/testing/ScopedTempDir_test.cpp` | contour-terminal/endo | `src/testing/ScopedTempDir_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/testing/ScopedWorkingDirectory.hpp` | contour-terminal/endo | `src/testing/ScopedWorkingDirectory.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/testing/ScopedWorkingDirectory_test.cpp` | origin: core-cpp | - | - | the upstream file has no test |
 | `src/core/testing/SuppressWindowsDialogs.cpp` | contour-terminal/contour | `src/crispy/SuppressWindowsDialogs.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | the out-of-line body added in core-cpp (`26de633`); same four-way merge as `SuppressWindowsDialogs.hpp` below |
 | `src/core/testing/SuppressWindowsDialogs.hpp` | contour-terminal/contour | `src/crispy/SuppressWindowsDialogs.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | merged with contour `src/coro/testing/SuppressWindowsDialogs.hpp` (same commit), endo `src/testing/SuppressWindowsDialogs.hpp` (`f774a210ce989e5947b8f61d715068b1dc96088c`) and fastcached `src/tests/WindowsErrorPopups.hpp` (`eb9c9c68da8fadfd43b0b36366919cb462689f48`) |
 | `src/core/testing/SuppressWindowsDialogsAtStartup.cpp` | contour-terminal/endo | `src/testing/SuppressWindowsDialogsAtStartup.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | verbatim |

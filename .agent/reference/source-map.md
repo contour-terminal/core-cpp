@@ -41,7 +41,8 @@ src/core/
                             EventLoop, IoBackend and backend/, sockets, dialling, timers, TLS
   tui/                      (planned, A7 and B12) core::tui_output (the leaf) and core::tui
   testing/                  core::testing: SuppressWindowsDialogs (no test framework needed),
-                            Environment (FakeEnvironment);
+                            Environment (FakeEnvironment), ScopedTempDir,
+                            ScopedWorkingDirectory, EnvHelper (ScopedEnv);
                             core::testing_dialogs: the startup object that installs it;
                             core::testing_main: Catch2's main() with the LOG filter and the
                             exit-code contract
