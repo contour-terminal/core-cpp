@@ -37,7 +37,7 @@ using namespace std::string_view_literals;
 
 namespace fs = std::filesystem;
 
-namespace CLI = core::cli;
+namespace cli = core::cli;
 
 namespace
 {
@@ -50,11 +50,11 @@ std::string operator*(std::string_view a, size_t n)
     return s;
 }
 
-CLI::HelpDisplayStyle helpStyle()
+cli::HelpDisplayStyle helpStyle()
 {
-    auto style = CLI::HelpDisplayStyle {};
+    auto style = cli::HelpDisplayStyle {};
 
-    style.optionStyle = CLI::OptionStyle::Natural;
+    style.optionStyle = cli::OptionStyle::Natural;
 
 #ifndef _WIN32
     if (isatty(STDOUT_FILENO) == 0)
@@ -173,7 +173,7 @@ void App::listDebugTags()
 
 int App::helpAction()
 {
-    std::cout << CLI::helpText(_syntax.value(), helpStyle(), screenWidth());
+    std::cout << cli::helpText(_syntax.value(), helpStyle(), screenWidth());
     return EXIT_SUCCESS;
 }
 
@@ -221,7 +221,7 @@ int App::versionAction()
 bool App::reparseParameters(int argc, char const* argv[])
 {
     _syntax = parameterDefinition();
-    optional<CLI::FlagStore> flagsOpt = CLI::parse(_syntax.value(), argc, argv);
+    optional<cli::FlagStore> flagsOpt = cli::parse(_syntax.value(), argc, argv);
     if (!flagsOpt.has_value())
         return false;
     _flags = std::move(flagsOpt.value());
@@ -245,7 +245,7 @@ int App::run(int argc, char const* argv[])
 
         _syntax = parameterDefinition();
 
-        optional<CLI::FlagStore> flagsOpt = CLI::parse(_syntax.value(), argc, argv);
+        optional<cli::FlagStore> flagsOpt = cli::parse(_syntax.value(), argc, argv);
         if (!flagsOpt.has_value())
         {
             std::cerr << "Failed to parse command line parameters.\n";

@@ -64,7 +64,7 @@ others in notes.
 | `src/core/async/WhenAll_test.cpp` | contour-terminal/contour | `src/coro/WhenAll_test.cpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | namespace only; no `NOLINT`; also built over the `StopToken` fallback |
 | `src/core/async/WhenAny.hpp` | contour-terminal/contour | `src/coro/WhenAny.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | no `NOLINT`; the final awaiter's local `state` renamed `race` (`-Wshadow`) |
 | `src/core/async/WhenAny_test.cpp` | contour-terminal/contour | `src/coro/WhenAny_test.cpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | no `NOLINT`; `ManualEvent::waiters` initialised to `nullptr` (`cppcoreguidelines-pro-type-member-init`); `failingRacer()` and `raceWithFailingWinner()` moved under `#ifndef _WIN32` with the one case that uses them (`-Wunused-function` on clang-cl); also built over the `StopToken` fallback |
-| `src/core/cli/App.cpp` | contour-terminal/contour | `src/crispy/App.cpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | - |
+| `src/core/cli/App.cpp` | contour-terminal/contour | `src/crispy/App.cpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | post-import fix (Task A5b): the local `namespace CLI = core::cli;` alias is `cli`, lowercase like every other namespace (`readability-identifier-naming.NamespaceCase`) |
 | `src/core/cli/App.hpp` | contour-terminal/contour | `src/crispy/App.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | - |
 | `src/core/cli/CLI.cpp` | contour-terminal/contour | `src/crispy/CLI.cpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | - |
 | `src/core/cli/CLI.hpp` | contour-terminal/contour | `src/crispy/CLI.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | - |
