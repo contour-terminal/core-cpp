@@ -4,12 +4,21 @@
 # Task A5 imports contour's Task, cancellation and combinators; Task B1 adds fastcached's executors.
 core_cpp_add_module(coro KIND INTERFACE
     HEADERS
+        Awaitable.hpp
+        Cancellation.hpp
         Generator.hpp
-        StopToken.hpp)
+        StopToken.hpp
+        Task.hpp
+        UniqueCoroHandle.hpp
+        WhenAll.hpp
+        WhenAny.hpp)
 
 # The tests of everything that names a StopToken.
 set(_coreCppCoroStopTokenTests
-    StopToken_test.cpp)
+    StopToken_test.cpp
+    Task_test.cpp
+    WhenAll_test.cpp
+    WhenAny_test.cpp)
 
 core_cpp_add_test(coro SOURCES Generator_test.cpp ${_coreCppCoroStopTokenTests})
 

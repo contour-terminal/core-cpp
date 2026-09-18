@@ -61,7 +61,7 @@ workflow refuses one without a section here.
   POSIX providers build, and their tests run under node.
 - `core::coro`, header-only, with `core::coro::Generator<T>`: `std::generator` where the standard
   library has it and is not libstdc++, otherwise `core::coro::detail::GeneratorFallback<T>`, which
-  is tested on every platform. The rest of the module arrives with Tasks A5 and B1.
+  is tested on every platform. fastcached's executors arrive with Task B1.
 - `core::coro::StopToken`, `StopSource`, `StopCallback<F>` and `noStopState`
   (`<core/coro/StopToken.hpp>`): `std::stop_token`, `std::stop_source`, `std::stop_callback<F>`
   and `std::nostopstate` where the standard library defines `__cpp_lib_jthread`, and otherwise
@@ -73,6 +73,16 @@ workflow refuses one without a section here.
   is tested on every platform, ThreadSanitizer included.
 - `core_cpp_add_test()` takes `NAME`, for a module's second test binary, and `DEFINITIONS`, the
   compile definitions of that binary alone.
+- contour's coroutine vocabulary in `core::coro`: `Task<T>`, lazy and awaited once, whose promise
+  carries the `StopToken` it inherits from the awaiting coroutine; `detail::UniqueCoroHandle`;
+  `OperationCancelled` and `thisCoroStopToken()` (`Cancellation.hpp`); the `Awaiter` and
+  `HasStopToken` concepts (`Awaitable.hpp`); `whenAll()`, which joins `Task<void>`s and rethrows the
+  first failure once all have finished; and `whenAny()`, which resolves to the first to finish and
+  cancels the others. Their tests also run over the `StopToken` fallback. A `Task` chain's
+  symmetric transfer is a tail call with Clang and MSVC at every optimisation level, with GCC only
+  when it optimises sibling calls, and not in WebAssembly without the tail-call proposal: a GCC
+  build at `-O0`, and emsdk 3.1.56's default build under node, overflow the stack on a long chain
+  of synchronously completing awaits, so that test is skipped there.
 - `core::testing`: `ScopedTempDir`, `ScopedWorkingDirectory` and `EnvHelper` (`setTestEnv()`,
   `unsetTestEnv()`, `ScopedEnv`).
 - `core::setProcessEnvironmentVariable()` and `core::unsetProcessEnvironmentVariable()` in
@@ -113,6 +123,7 @@ Each file was read as a git blob at the commit named, and none contains a CR byt
 | [endo](https://github.com/contour-terminal/endo) | `f774a210ce989e5947b8f61d715068b1dc96088c` | `src/testing/{ScopedTempDir,ScopedWorkingDirectory,EnvHelper}.hpp` and `ScopedTempDir_test.cpp` as `core::testing`; `EnvHelper` writes through `core::setProcessEnvironmentVariable()` and reads through `core::LiveEnvironment` on POSIX, not `setenv()`/`getenv()` |
 | [endo](https://github.com/contour-terminal/endo) | `f774a210ce989e5947b8f61d715068b1dc96088c` | the generic half of `src/platform` as `core::platform` (Types, PlatformError, Clock, Wakeup, SignalHandler, SystemPipe, WinsockInit, MessageQueue, FileSystem, NativeFileSystem, FileInfoProvider, EnvironmentProvider, UserPaths, PathUtils, GlobMatch, FileUri, SystemInfo, StringUtils, their `posix/`, `linux/` and `windows/` implementations and `testing/` doubles), with their tests (`WindowsPlatform_test.cpp` split into `PathUtils_test`, `Types_test` and `UserPaths_test`); `Generator.hpp` as `core::coro`. Process, Pipe, WaitResult, ProcessProvider, ProjectFileTree, InstallPaths and InterruptThrottle stay in endo; the `namespace endo` compatibility aliases were not imported |
 | [contour](https://github.com/contour-terminal/contour) | `6777ff05014f8ff163b071e8b0e942830119db80` | `src/net/platform/Clock.hpp`, merged into `core/platform/Clock.hpp`; `src/net/platform/SystemPipe.{hpp,cpp}`, whose non-blocking behaviour is merged into `core/platform/SystemPipe`; `src/net/platform/WinsockInit.{hpp,cpp}`, identical to endo's |
+| [contour](https://github.com/contour-terminal/contour) | `6777ff05014f8ff163b071e8b0e942830119db80` | `src/coro/{Awaitable,Cancellation,Task,UniqueCoroHandle,WhenAll,WhenAny}.hpp` and `{Task,WhenAll,WhenAny}_test.cpp` as `core::coro`, `coro::` renamed `core::coro::`; the `std::stop_token` aliases of `Cancellation.hpp` moved to `StopToken.hpp`, whose fallback replaces their `#error`; no `NOLINT`; two locals renamed for `-Wshadow`; two `WhenAny_test.cpp` helpers compiled only where the case using them is. `test_main.cpp` was not imported (`core::testing_main` replaces it), and `testing/SuppressWindowsDialogs.hpp` had been merged into `core::testing` already |
 | [fastcached](https://github.com/LASTRADA-Software/fastcached) | `b461e8b6d367ed22e4bf2935717fa59360a64b7d` | `src/FastCache/Core/Clock.hpp`, merged into `core/platform/Clock.hpp` in camelBack (`Now`/`Refresh` as `now`/`refresh`, `TimePoint`/`Duration` as `SteadyTimePoint`/`SteadyDuration`); `Clock_test.cpp` and `WallClockRef_test.cpp`, merged into `core/platform/Clock_test.cpp` |
 
 The rulebook and CI configuration adapt text from fastcached at

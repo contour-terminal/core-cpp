@@ -22,8 +22,8 @@ is [the plan](docs/superpowers/plans/2026-09-18-core-cpp.md).
 | tui | `core::tui` | `core::tui_output`, `core::tui` | base (leaf); + platform, coro, net, libunicode |
 | testing | `core::testing` | `core::testing`, `core::testing_dialogs`, `core::testing_main` | base; log and Catch2 for `testing_main` |
 
-`base`, `log`, `cli`, `platform` and `testing` exist, and `coro` has its `Generator`; the rest
-arrives with Tasks A5 to A7 and Phase B. The
+`base`, `log`, `cli`, `platform` and `testing` exist, and `coro` has `Generator`, `StopToken`,
+`Task` and the combinators; the rest arrives with Tasks A6, A7 and Phase B. The
 module DAG is the table in `cmake/CoreCppModules.cmake`, and configure refuses a link it does not
 list.
 

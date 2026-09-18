@@ -22,6 +22,9 @@ Contour Terminal Emulator
   - src/core/platform/Clock.hpp and src/core/platform/SystemPipe.{hpp,cpp} (merged
     from src/net/platform/Clock.hpp and src/net/platform/SystemPipe.{hpp,cpp}), and
     src/core/platform/WinsockInit.{hpp,cpp} (identical to src/net/platform/)
+  - src/core/coro/{Awaitable,Cancellation,Task,UniqueCoroHandle,WhenAll,WhenAny}.hpp
+    and {Task,WhenAll,WhenAny}_test.cpp (from src/coro/, adapted), and the std::
+    aliases of src/core/coro/StopToken.hpp (from src/coro/Cancellation.hpp)
 
 Endo
   https://github.com/contour-terminal/endo
