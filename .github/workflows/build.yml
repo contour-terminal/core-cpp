@@ -44,9 +44,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -112,10 +112,10 @@ jobs:
           # CORE_CPP_WITH_TRACY: the fetched Tracy client, and the profiling macros' enabled branch.
           - { name: clang-22-tracy, os: ubuntu-24.04, preset: clang-tracy, compiler: clang }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache CPM sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
@@ -201,10 +201,10 @@ jobs:
           - { name: appleclang, preset: appleclang-release }
           - { name: llvm-22, preset: clang-release, homebrew_llvm: true }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache CPM sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
@@ -269,10 +269,10 @@ jobs:
       VCPKG_COMMIT: e6f9e70a29a3e80a1fc510d8503304315447112f
       VCPKG_ARCHIVES: ${{ github.workspace }}/.cache/vcpkg-archives
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache CPM sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
@@ -306,7 +306,7 @@ jobs:
       # OpenSSL instead of compiling it (about 8.5 minutes, on the path of ci-ok).
       - name: Cache vcpkg binary archives
         if: matrix.preset == 'cl-release-tls'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/vcpkg-archives
           key: vcpkg-archives-x64-windows-${{ env.VCPKG_COMMIT }}-${{ hashFiles('.github/vcpkg/vcpkg.json') }}
@@ -376,10 +376,10 @@ jobs:
       TSAN_OPTIONS: halt_on_error=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache CPM sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
@@ -419,10 +419,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache CPM sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
@@ -493,10 +493,10 @@ jobs:
         # 3.1.56 is what Qt 6.8 for WebAssembly, and so morph, builds with.
         emsdk: ["3.1.56", "latest"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache CPM sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
@@ -507,7 +507,7 @@ jobs:
 
       # A pinned version is cached; `latest` is not, or the cache would pin it.
       - name: emsdk ${{ matrix.emsdk }}
-        uses: mymindstorm/setup-emsdk@v14
+        uses: mymindstorm/setup-emsdk@v16
         with:
           version: ${{ matrix.emsdk }}
           actions-cache-folder: ${{ matrix.emsdk != 'latest' && format('emsdk-cache-{0}', matrix.emsdk) || '' }}
@@ -552,10 +552,10 @@ jobs:
       PRESET: gcc-release
       BUILD_DIR: out/build/gcc-release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache CPM sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
@@ -636,10 +636,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache CPM sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
@@ -680,7 +680,7 @@ jobs:
             -instr-profile="$build/coverage.profdata" "${objects[@]}" -ignore-filename-regex="$ignore"
 
       - name: Upload the report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: |
