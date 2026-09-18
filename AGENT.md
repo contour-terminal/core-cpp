@@ -67,8 +67,8 @@ markdown, never with an `@` import, or every session loads all of them.
 - **[`rules/library-hygiene.md`](.agent/rules/library-hygiene.md)**: the library rules above,
   the graduation rule, SemVer with 0.x breaks recorded under Breaking.
 - **[`rules/build-and-toolchain.md`](.agent/rules/build-and-toolchain.md)**: `build.ninja`, not
-  `CMakeCache.txt`, shows the launcher; rebuild `clangcl-*` trees with `--clean-first` after a
-  header edit
+  `CMakeCache.txt`, shows the launcher; with a fastcache-cc older than fastcached ca8dfc32,
+  rebuild `clangcl-*` trees with `--clean-first` after a header edit
   ([fastcached#1531](https://github.com/LASTRADA-Software/fastcached/issues/1531));
   `CORE_CPP_WERROR` decides fatality, not which warnings exist; a gate that does not report reads
   as passed.
@@ -137,7 +137,8 @@ refuses otherwise. Use the `/draft-release` skill, then `/publish-release`. Deta
 1. `python scripts/clang-format.py --check` (the pinned clang-format).
 2. The `clang-tidy` preset (the pinned clang-tidy), clean.
 3. `clang-debug`, then `gcc-release`; on Windows `cl-debug` and `clangcl-release`
-   (`--clean-first` on a cache-populated clang-cl tree).
+   (`--clean-first` on a cache-populated clang-cl tree if fastcache-cc predates fastcached
+   ca8dfc32).
 4. `mkdocs build --strict` if `docs/`, `mkdocs.yml` or a public header's comments changed.
 5. A CHANGELOG entry under `[Unreleased]`.
 6. "Consumer impact" in the pull request body.

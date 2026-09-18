@@ -54,11 +54,15 @@ ctest --preset clangcl-debug
 ```
 
 !!! warning "clang-cl trees built from the compiler cache"
-    When fastcache-cc serves a clang-cl compile from its cache, Ninja records no header
-    dependencies for that object, so a later header edit leaves it stale. Until
-    [fastcached#1531](https://github.com/LASTRADA-Software/fastcached/issues/1531) is fixed,
-    rebuild a `clangcl-*` tree with `cmake --build --preset clangcl-debug --clean-first` after
-    editing a header. `cl` trees and Linux and macOS trees are not affected.
+    A fastcache-cc older than fastcached ca8dfc32 writes no depfile when it serves a clang-cl
+    compile from its cache, so Ninja records no header dependencies for that object, and a later
+    header edit leaves it stale. With such a launcher, rebuild a `clangcl-*` tree with
+    `cmake --build --preset clangcl-debug --clean-first` after editing a header. From ca8dfc32 on
+    this is fixed
+    ([fastcached#1531](https://github.com/LASTRADA-Software/fastcached/issues/1531),
+    [fastcached#1533](https://github.com/LASTRADA-Software/fastcached/pull/1533)), and entries
+    cached without a depfile are recompiled and stored again. `cl` trees and Linux and macOS
+    trees were never affected.
 
 ### macOS
 

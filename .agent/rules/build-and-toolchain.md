@@ -45,16 +45,23 @@ presets, scripts and paths.
   `fastcache-cc --show-stats`. Every other job uses ccache, which the module picks when no
   daemon answers. Origin: fastcached build-and-toolchain, "Running the launcher is not testing
   it".
-- **After a header edit, rebuild a `clangcl-*` tree with `--clean-first`.** fastcache-cc does
-  not replay the `/showIncludes` stream on a clang-cl cache hit, so Ninja records no header
-  dependencies for an object served from the cache, and a later header edit leaves that object
-  stale: an incremental build that is wrong, found in core-cpp only because it became a
-  duplicate-symbol link error. `cl` and the GCC-style depfile path are unaffected, and a clean
-  build is always correct, because the cache key covers the preprocessed input. CI builds from
-  clean trees and is unaffected. Until
-  [fastcached#1531](https://github.com/LASTRADA-Software/fastcached/issues/1531) is fixed:
+- **With a fastcache-cc older than fastcached ca8dfc32, rebuild a `clangcl-*` tree with
+  `--clean-first` after a header edit; from ca8dfc32 on, do not bother.** CMake's Ninja
+  generator does not give clang-cl `/showIncludes`: it writes `deps = gcc` and asks for a GNU
+  depfile through the pass-through, `-clang:-MD -clang:-MT<obj> -clang:-MF<obj>.d`. The older
+  launcher did not recognise `-clang:-MF`, so a cache hit wrote the object but no depfile, and
+  Ninja recorded no header dependencies for it without a warning. A later header edit then left
+  that object stale: an incremental build that is wrong, found in core-cpp only because it
+  became a duplicate-symbol link error. `cl` (`deps = msvc`, `/showIncludes`) and GCC and Clang
+  hits were unaffected, and a clean build is always correct, because the cache key covers the
+  preprocessed input; CI builds from clean trees. The fix is in the fastcache-cc binary alone,
+  so the vendored `CompileCache.cmake` needs nothing, and entries cached without a depfile heal
+  themselves: the fixed launcher does not serve them to a compile that names a depfile, but
+  recompiles and stores again. With an older launcher:
   `cmake --build --preset clangcl-debug --clean-first`. `ninja -t deps <object>` showing
-  `#deps 0` is the tell.
+  `#deps 0` is the tell. Origin:
+  [fastcached#1531](https://github.com/LASTRADA-Software/fastcached/issues/1531), fixed by
+  [fastcached#1533](https://github.com/LASTRADA-Software/fastcached/pull/1533).
 
 ## `NDEBUG` is not optimisation, and only the compiler can say which build this is
 
