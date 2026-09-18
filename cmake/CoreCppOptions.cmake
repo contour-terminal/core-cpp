@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# core-cpp's options, as Part I §3 of the design spec lists them. Every one is
+# CORE_CPP_-prefixed, and a parent project may preset any of them as a normal
+# variable before adding core-cpp (CMP0077).
+
+include(CMakeDependentOption)
+
+option(CORE_CPP_TESTING "Build core::testing and core-cpp's own tests" ${PROJECT_IS_TOP_LEVEL})
+option(CORE_CPP_BUILD_EXAMPLES "Build core-cpp's examples" ${PROJECT_IS_TOP_LEVEL})
+option(CORE_CPP_FETCH_DEPS
+       "Fetch a dependency with CPM when neither the parent project nor find_package() provides it"
+       ON)
+option(CORE_CPP_WITH_TUI "Build core::tui_output and core::tui" ON)
+cmake_dependent_option(CORE_CPP_WITH_IMAGES "Decode images in core::tui (stb_image)" ON
+                       "CORE_CPP_WITH_TUI" OFF)
+option(CORE_CPP_WITH_TLS "Build core::net_tls (OpenSSL)" OFF)
+option(CORE_CPP_WITH_TRACY "Instrument core-cpp for the Tracy profiler" OFF)
+option(CORE_CPP_PEDANTIC "Compile core-cpp's targets with the pedantic warning set" ${PROJECT_IS_TOP_LEVEL})
+option(CORE_CPP_WERROR "Treat warnings in core-cpp's targets as errors" OFF)
+option(CORE_CPP_CLANG_TIDY
+       "Run clang-tidy on core-cpp's targets; OFF also clears a CXX_CLANG_TIDY they would inherit"
+       OFF)
+set(CORE_CPP_SANITIZERS "" CACHE STRING
+    "Sanitizers for core-cpp's targets, a list of address, undefined, thread and leak (top-level builds only)")
+option(CORE_CPP_COVERAGE "Instrument core-cpp's targets for coverage" OFF)
+
+# A sanitizer instruments core-cpp's targets only. As a subproject that would mix
+# instrumented and uninstrumented code under one parent, which is what makes TSan
+# report races that are not there. A parent instruments core-cpp itself, through
+# the CORE_CPP_TARGETS global property.
+if(CORE_CPP_SANITIZERS AND NOT PROJECT_IS_TOP_LEVEL)
+    message(FATAL_ERROR
+        "CORE_CPP_SANITIZERS='${CORE_CPP_SANITIZERS}' is only for a top-level core-cpp build. "
+        "A parent project applies its sanitizers to the targets in the CORE_CPP_TARGETS global property.")
+endif()
+
+# Under Emscripten only the WebAssembly subset builds (Part I §1), which has neither
+# a terminal nor TLS. A normal variable shadows the cache entry for core-cpp's
+# directories and leaves the parent's cache alone.
+if(EMSCRIPTEN)
+    foreach(_coreCppWasmOff IN ITEMS CORE_CPP_WITH_TUI CORE_CPP_WITH_IMAGES CORE_CPP_WITH_TLS)
+        if(${_coreCppWasmOff})
+            message(STATUS "[core-cpp] ${_coreCppWasmOff} is OFF under Emscripten (WebAssembly subset only)")
+        endif()
+        set(${_coreCppWasmOff} OFF)
+    endforeach()
+endif()

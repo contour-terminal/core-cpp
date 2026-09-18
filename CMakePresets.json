@@ -1,0 +1,760 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CORE_CPP_TESTING": "ON",
+        "CORE_CPP_PEDANTIC": "ON",
+        "CORE_CPP_WERROR": "ON"
+      }
+    },
+    {
+      "name": "unix",
+      "hidden": true,
+      "inherits": "base",
+      "condition": {
+        "type": "notEquals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "windows",
+      "hidden": true,
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      }
+    },
+    {
+      "name": "clang-debug",
+      "displayName": "Clang, Debug",
+      "inherits": "unix",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "clang-release",
+      "displayName": "Clang, Release",
+      "inherits": "unix",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "gcc-debug",
+      "displayName": "GCC, Debug",
+      "inherits": "unix",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "g++"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "gcc-release",
+      "displayName": "GCC, Release",
+      "inherits": "unix",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_COMPILER": "g++"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "clang-asan-ubsan",
+      "displayName": "Clang, AddressSanitizer + UndefinedBehaviorSanitizer",
+      "inherits": "unix",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CORE_CPP_SANITIZERS": "address;undefined"
+      }
+    },
+    {
+      "name": "clang-tsan",
+      "displayName": "Clang, ThreadSanitizer",
+      "inherits": "unix",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CORE_CPP_SANITIZERS": "thread"
+      }
+    },
+    {
+      "name": "clang-tidy",
+      "displayName": "Clang, Debug, clang-tidy on every core-cpp target",
+      "inherits": "unix",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CORE_CPP_CLANG_TIDY": "ON"
+      }
+    },
+    {
+      "name": "clang-coverage",
+      "displayName": "Clang, source-based coverage (no compiler cache)",
+      "inherits": "unix",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CORE_CPP_COVERAGE": "ON",
+        "USE_COMPILER_CACHE": "OFF"
+      }
+    },
+    {
+      "name": "clang-tracy",
+      "displayName": "Clang, RelWithDebInfo, Tracy profiler",
+      "inherits": "unix",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CORE_CPP_WITH_TRACY": "ON"
+      }
+    },
+    {
+      "name": "appleclang-debug",
+      "displayName": "AppleClang, Debug",
+      "inherits": "unix",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "/usr/bin/clang++"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "appleclang-release",
+      "displayName": "AppleClang, Release",
+      "inherits": "unix",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_COMPILER": "/usr/bin/clang++"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "cl-debug",
+      "displayName": "MSVC, Debug",
+      "inherits": "windows",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "cl"
+      }
+    },
+    {
+      "name": "cl-release",
+      "displayName": "MSVC, Release",
+      "inherits": "windows",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_COMPILER": "cl"
+      }
+    },
+    {
+      "name": "clangcl-debug",
+      "displayName": "clang-cl, Debug",
+      "inherits": "windows",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "clang-cl"
+      }
+    },
+    {
+      "name": "clangcl-release",
+      "displayName": "clang-cl, Release",
+      "inherits": "windows",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_COMPILER": "clang-cl"
+      }
+    },
+    {
+      "name": "cl-release-tls",
+      "displayName": "MSVC, Release, with core::net_tls (OpenSSL)",
+      "inherits": "windows",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_COMPILER": "cl",
+        "CORE_CPP_WITH_TLS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "unix",
+      "hidden": true,
+      "condition": {
+        "type": "notEquals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "windows",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "clang-debug",
+      "configurePreset": "clang-debug",
+      "inherits": "unix"
+    },
+    {
+      "name": "clang-release",
+      "configurePreset": "clang-release",
+      "inherits": "unix"
+    },
+    {
+      "name": "gcc-debug",
+      "configurePreset": "gcc-debug",
+      "inherits": "unix",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "gcc-release",
+      "configurePreset": "gcc-release",
+      "inherits": "unix",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "clang-asan-ubsan",
+      "configurePreset": "clang-asan-ubsan",
+      "inherits": "unix"
+    },
+    {
+      "name": "clang-tsan",
+      "configurePreset": "clang-tsan",
+      "inherits": "unix"
+    },
+    {
+      "name": "clang-tidy",
+      "configurePreset": "clang-tidy",
+      "inherits": "unix"
+    },
+    {
+      "name": "clang-coverage",
+      "configurePreset": "clang-coverage",
+      "inherits": "unix"
+    },
+    {
+      "name": "clang-tracy",
+      "configurePreset": "clang-tracy",
+      "inherits": "unix"
+    },
+    {
+      "name": "appleclang-debug",
+      "configurePreset": "appleclang-debug",
+      "inherits": "unix",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "appleclang-release",
+      "configurePreset": "appleclang-release",
+      "inherits": "unix",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "cl-debug",
+      "configurePreset": "cl-debug",
+      "inherits": "windows"
+    },
+    {
+      "name": "cl-release",
+      "configurePreset": "cl-release",
+      "inherits": "windows"
+    },
+    {
+      "name": "clangcl-debug",
+      "configurePreset": "clangcl-debug",
+      "inherits": "windows"
+    },
+    {
+      "name": "clangcl-release",
+      "configurePreset": "clangcl-release",
+      "inherits": "windows"
+    },
+    {
+      "name": "cl-release-tls",
+      "configurePreset": "cl-release-tls",
+      "inherits": "windows"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "unix",
+      "hidden": true,
+      "condition": {
+        "type": "notEquals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "timeout": 300
+      }
+    },
+    {
+      "name": "windows",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "timeout": 300
+      }
+    },
+    {
+      "name": "clang-debug",
+      "configurePreset": "clang-debug",
+      "inherits": "unix"
+    },
+    {
+      "name": "clang-release",
+      "configurePreset": "clang-release",
+      "inherits": "unix"
+    },
+    {
+      "name": "gcc-debug",
+      "configurePreset": "gcc-debug",
+      "inherits": "unix",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "gcc-release",
+      "configurePreset": "gcc-release",
+      "inherits": "unix",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "clang-asan-ubsan",
+      "configurePreset": "clang-asan-ubsan",
+      "inherits": "unix"
+    },
+    {
+      "name": "clang-tsan",
+      "configurePreset": "clang-tsan",
+      "inherits": "unix"
+    },
+    {
+      "name": "clang-tidy",
+      "configurePreset": "clang-tidy",
+      "inherits": "unix"
+    },
+    {
+      "name": "clang-coverage",
+      "configurePreset": "clang-coverage",
+      "inherits": "unix"
+    },
+    {
+      "name": "clang-tracy",
+      "configurePreset": "clang-tracy",
+      "inherits": "unix"
+    },
+    {
+      "name": "appleclang-debug",
+      "configurePreset": "appleclang-debug",
+      "inherits": "unix",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "appleclang-release",
+      "configurePreset": "appleclang-release",
+      "inherits": "unix",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "cl-debug",
+      "configurePreset": "cl-debug",
+      "inherits": "windows"
+    },
+    {
+      "name": "cl-release",
+      "configurePreset": "cl-release",
+      "inherits": "windows"
+    },
+    {
+      "name": "clangcl-debug",
+      "configurePreset": "clangcl-debug",
+      "inherits": "windows"
+    },
+    {
+      "name": "clangcl-release",
+      "configurePreset": "clangcl-release",
+      "inherits": "windows"
+    },
+    {
+      "name": "cl-release-tls",
+      "configurePreset": "cl-release-tls",
+      "inherits": "windows"
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "ci-clang-debug",
+      "displayName": "CI: Clang, Debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "clang-debug"
+        },
+        {
+          "type": "build",
+          "name": "clang-debug"
+        },
+        {
+          "type": "test",
+          "name": "clang-debug"
+        }
+      ]
+    },
+    {
+      "name": "ci-clang-release",
+      "displayName": "CI: Clang, Release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "clang-release"
+        },
+        {
+          "type": "build",
+          "name": "clang-release"
+        },
+        {
+          "type": "test",
+          "name": "clang-release"
+        }
+      ]
+    },
+    {
+      "name": "ci-gcc-debug",
+      "displayName": "CI: GCC, Debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "gcc-debug"
+        },
+        {
+          "type": "build",
+          "name": "gcc-debug"
+        },
+        {
+          "type": "test",
+          "name": "gcc-debug"
+        }
+      ]
+    },
+    {
+      "name": "ci-gcc-release",
+      "displayName": "CI: GCC, Release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "gcc-release"
+        },
+        {
+          "type": "build",
+          "name": "gcc-release"
+        },
+        {
+          "type": "test",
+          "name": "gcc-release"
+        }
+      ]
+    },
+    {
+      "name": "ci-clang-asan-ubsan",
+      "displayName": "CI: Clang, AddressSanitizer + UndefinedBehaviorSanitizer",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "clang-asan-ubsan"
+        },
+        {
+          "type": "build",
+          "name": "clang-asan-ubsan"
+        },
+        {
+          "type": "test",
+          "name": "clang-asan-ubsan"
+        }
+      ]
+    },
+    {
+      "name": "ci-clang-tsan",
+      "displayName": "CI: Clang, ThreadSanitizer",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "clang-tsan"
+        },
+        {
+          "type": "build",
+          "name": "clang-tsan"
+        },
+        {
+          "type": "test",
+          "name": "clang-tsan"
+        }
+      ]
+    },
+    {
+      "name": "ci-clang-tidy",
+      "displayName": "CI: Clang, Debug, clang-tidy on every core-cpp target",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "clang-tidy"
+        },
+        {
+          "type": "build",
+          "name": "clang-tidy"
+        },
+        {
+          "type": "test",
+          "name": "clang-tidy"
+        }
+      ]
+    },
+    {
+      "name": "ci-clang-coverage",
+      "displayName": "CI: Clang, source-based coverage (no compiler cache)",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "clang-coverage"
+        },
+        {
+          "type": "build",
+          "name": "clang-coverage"
+        },
+        {
+          "type": "test",
+          "name": "clang-coverage"
+        }
+      ]
+    },
+    {
+      "name": "ci-clang-tracy",
+      "displayName": "CI: Clang, RelWithDebInfo, Tracy profiler",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "clang-tracy"
+        },
+        {
+          "type": "build",
+          "name": "clang-tracy"
+        },
+        {
+          "type": "test",
+          "name": "clang-tracy"
+        }
+      ]
+    },
+    {
+      "name": "ci-appleclang-debug",
+      "displayName": "CI: AppleClang, Debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "appleclang-debug"
+        },
+        {
+          "type": "build",
+          "name": "appleclang-debug"
+        },
+        {
+          "type": "test",
+          "name": "appleclang-debug"
+        }
+      ]
+    },
+    {
+      "name": "ci-appleclang-release",
+      "displayName": "CI: AppleClang, Release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "appleclang-release"
+        },
+        {
+          "type": "build",
+          "name": "appleclang-release"
+        },
+        {
+          "type": "test",
+          "name": "appleclang-release"
+        }
+      ]
+    },
+    {
+      "name": "ci-cl-debug",
+      "displayName": "CI: MSVC, Debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "cl-debug"
+        },
+        {
+          "type": "build",
+          "name": "cl-debug"
+        },
+        {
+          "type": "test",
+          "name": "cl-debug"
+        }
+      ]
+    },
+    {
+      "name": "ci-cl-release",
+      "displayName": "CI: MSVC, Release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "cl-release"
+        },
+        {
+          "type": "build",
+          "name": "cl-release"
+        },
+        {
+          "type": "test",
+          "name": "cl-release"
+        }
+      ]
+    },
+    {
+      "name": "ci-clangcl-debug",
+      "displayName": "CI: clang-cl, Debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "clangcl-debug"
+        },
+        {
+          "type": "build",
+          "name": "clangcl-debug"
+        },
+        {
+          "type": "test",
+          "name": "clangcl-debug"
+        }
+      ]
+    },
+    {
+      "name": "ci-clangcl-release",
+      "displayName": "CI: clang-cl, Release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "clangcl-release"
+        },
+        {
+          "type": "build",
+          "name": "clangcl-release"
+        },
+        {
+          "type": "test",
+          "name": "clangcl-release"
+        }
+      ]
+    },
+    {
+      "name": "ci-cl-release-tls",
+      "displayName": "CI: MSVC, Release, with core::net_tls (OpenSSL)",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "cl-release-tls"
+        },
+        {
+          "type": "build",
+          "name": "cl-release-tls"
+        },
+        {
+          "type": "test",
+          "name": "cl-release-tls"
+        }
+      ]
+    }
+  ]
+}
