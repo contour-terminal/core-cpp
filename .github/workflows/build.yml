@@ -152,19 +152,23 @@ jobs:
 
       # A leg named C++26 that compiles C++23 would report green for a question it never asked:
       # a normal variable once shadowed -DCMAKE_CXX_STANDARD. So every compile of core-cpp's own
-      # sources is read back from the compile database (fetched dependencies keep their own).
+      # sources (src/ and tests/) is read back from the compile database. Fetched dependencies keep
+      # their own standard, and with CPM_SOURCE_CACHE set they live in .cache/cpm, not in _deps.
       - name: Assert core-cpp compiles as C++${{ matrix.cxx_standard }}
         if: matrix.cxx_standard
         run: |
-          python3 - "out/build/${{ matrix.preset }}/compile_commands.json" "${{ matrix.cxx_standard }}" <<'PY'
-          import json, re, sys
-          entries = [e for e in json.load(open(sys.argv[1])) if "/_deps/" not in e["file"].replace("\\", "/")]
-          flags = {"26": ("c++26", "c++2c")}[sys.argv[2]]
+          python3 - "out/build/${{ matrix.preset }}/compile_commands.json" "${{ matrix.cxx_standard }}" src tests <<'PY'
+          import json, os, sys
+          database, standard, *roots = sys.argv[1:]
+          roots = tuple(os.path.realpath(root) + os.sep for root in roots)
+          entries = [e for e in json.load(open(database))
+                     if os.path.realpath(os.path.join(e["directory"], e["file"])).startswith(roots)]
+          flags = {"26": ("c++26", "c++2c")}[standard]
           wrong = [e["file"] for e in entries
                    if not any(f"-std={f}" in (e.get("command") or " ".join(e.get("arguments", []))) for f in flags)]
-          print(f"{len(entries)} core-cpp compile(s), {len(wrong)} not compiled as C++{sys.argv[2]}")
+          print(f"{len(entries)} compile(s) under {', '.join(roots)}; {len(wrong)} not compiled as C++{standard}")
           for path in wrong:
-              print(f"::error file={path}::not compiled as C++{sys.argv[2]}")
+              print(f"::error::{path} is not compiled as C++{standard}")
           sys.exit(1 if wrong or not entries else 0)
           PY
 
