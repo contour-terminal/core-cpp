@@ -2,19 +2,20 @@
 #
 # The dependency table of Part I §3, and how each row is resolved.
 #
-#   core_cpp_dependency(<name> WHEN <variable> TARGETS <target>...
+#   core_cpp_dependency(<name> WHEN <condition>... TARGETS <target>...
 #                       [FIND_PACKAGE <find_package() arguments>...]
 #                       [CPM <CPMAddPackage() arguments>... | NO_FETCH]
 #                       [WRAP <function>])
 #
-# core_cpp_resolve_dependencies() resolves every row whose WHEN variable is true,
-# stopping at the first step that provides all of TARGETS:
+# WHEN is an if() condition over options, e.g. `CORE_CPP_TESTING OR CORE_CPP_CATCH2_MAIN`.
+# core_cpp_resolve_dependencies() resolves every row whose condition holds, stopping at
+# the first step that provides all of TARGETS:
 #
 #   1. the parent project already defines them;
 #   2. find_package(<FIND_PACKAGE arguments> QUIET);
 #   3. CPMAddPackage(<CPM arguments>), only with CORE_CPP_FETCH_DEPS=ON and never for
 #      a NO_FETCH row;
-#   4. otherwise a FATAL_ERROR that names the option that needed the dependency.
+#   4. otherwise a FATAL_ERROR that names the condition that needed the dependency.
 #
 # WRAP names a function that runs after find_package() or CPM has provided the
 # dependency and turns what it provides into TARGETS, for example an INTERFACE
@@ -28,7 +29,7 @@
 include_guard(GLOBAL)
 
 function(core_cpp_dependency name)
-    cmake_parse_arguments(PARSE_ARGV 1 arg "NO_FETCH" "WHEN;WRAP" "TARGETS;FIND_PACKAGE;CPM")
+    cmake_parse_arguments(PARSE_ARGV 1 arg "NO_FETCH" "WRAP" "WHEN;TARGETS;FIND_PACKAGE;CPM")
     if(arg_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "core_cpp_dependency(${name}): unexpected arguments: ${arg_UNPARSED_ARGUMENTS}")
     endif()
@@ -67,7 +68,7 @@ endfunction()
 ## behind stays local to it. Imported targets are directory-scoped, and fetched
 ## ones are global, so both outlive the call.
 function(core_cpp_resolve_dependency name)
-    set(when "${CORE_CPP_DEPENDENCY_${name}_WHEN}")
+    list(JOIN CORE_CPP_DEPENDENCY_${name}_WHEN " " when)
     set(wrap "${CORE_CPP_DEPENDENCY_${name}_WRAP}")
     set(targets "${CORE_CPP_DEPENDENCY_${name}_TARGETS}")
 
@@ -99,16 +100,16 @@ function(core_cpp_resolve_dependency name)
         endif()
     endif()
 
-    set(needs "${name} is needed because ${when} is ON")
+    set(needs "${name} is needed because `${when}` holds")
     if(CORE_CPP_DEPENDENCY_${name}_NO_FETCH)
         message(FATAL_ERROR
             "${needs}, but ${findCall} did not provide ${targets}, and it is never fetched. "
-            "Install it, or turn ${when} off.")
+            "Install it, or make `${when}` false.")
     endif()
     if(NOT CORE_CPP_FETCH_DEPS)
         message(FATAL_ERROR
             "${needs}, but neither the parent project nor ${findCall} provides ${targets}, and "
-            "CORE_CPP_FETCH_DEPS is OFF. Provide it, set CORE_CPP_FETCH_DEPS=ON, or turn ${when} off.")
+            "CORE_CPP_FETCH_DEPS is OFF. Provide it, set CORE_CPP_FETCH_DEPS=ON, or make `${when}` false.")
     endif()
 
     if(NOT COMMAND CPMAddPackage)
@@ -126,7 +127,7 @@ function(core_cpp_resolve_dependency name)
     message(STATUS "[core-cpp] ${name}: fetched by CPMAddPackage(${printable})")
 endfunction()
 
-## @brief Resolves every row of the table whose WHEN variable is true, in table order.
+## @brief Resolves every row of the table whose WHEN condition holds, in table order.
 function(core_cpp_resolve_dependencies)
     foreach(name IN LISTS CORE_CPP_DEPENDENCIES)
         if(${CORE_CPP_DEPENDENCY_${name}_WHEN})
@@ -150,8 +151,9 @@ core_cpp_dependency(Threads
     FIND_PACKAGE Threads
     NO_FETCH)
 
+# Catch2 for core-cpp's own tests and for core::testing_main, which consumers link to their tests.
 core_cpp_dependency(Catch2
-    WHEN CORE_CPP_TESTING
+    WHEN CORE_CPP_TESTING OR CORE_CPP_CATCH2_MAIN
     TARGETS Catch2::Catch2
     FIND_PACKAGE Catch2 3.8
     CPM NAME Catch2 VERSION 3.8.0 GITHUB_REPOSITORY catchorg/Catch2 EXCLUDE_FROM_ALL YES SYSTEM YES)

@@ -10,13 +10,18 @@
 # The pin (0.40.8 and its SHA-256) is endo's, from cmake/EndoThirdParties.cmake at
 # f774a210. The download shape is fastcached's cmake/CPM.cmake at eb9c9c68: a
 # bounded, status-checked transfer, with every argument quoted.
-
-# Bound this download, and every `git clone` CPM performs after it, so a stalled
-# transfer ends instead of hanging. The numbers and the reasoning behind them are
-# in FetchTransferBound.cmake. It has to come first: the git half works by
-# exporting environment variables that later subprocesses inherit, and the
-# download below reads a variable it defines.
-include("${CMAKE_CURRENT_LIST_DIR}/FetchTransferBound.cmake")
+#
+# The bound on stalled transfers comes from FetchTransferBound.cmake, which exports
+# environment variables to every git clone of the configure. That is process-wide
+# state, so only CoreCppTopLevel.cmake includes it, before any dependency is
+# resolved. As a subproject, core-cpp's download is bounded by the parent's
+# FASTCACHED_FETCH_SILENCE_SECONDS when the parent defines it, and is otherwise
+# unbounded. An empty INACTIVITY_TIMEOUT would break the argument list, so none is
+# passed.
+set(_coreCppCpmBound "")
+if(DEFINED FASTCACHED_FETCH_SILENCE_SECONDS)
+    set(_coreCppCpmBound INACTIVITY_TIMEOUT "${FASTCACHED_FETCH_SILENCE_SECONDS}")
+endif()
 
 set(CPM_DOWNLOAD_VERSION 0.40.8)
 set(CPM_HASH_SUM "78ba32abdf798bc616bab7c73aac32a17bbd7b06ad9e26a6add69de8f3ae4791")
@@ -42,7 +47,7 @@ file(DOWNLOAD
     "${CPM_DOWNLOAD_URL}"
     "${CPM_DOWNLOAD_LOCATION}"
     EXPECTED_HASH "SHA256=${CPM_HASH_SUM}"
-    INACTIVITY_TIMEOUT "${FASTCACHED_FETCH_SILENCE_SECONDS}"
+    ${_coreCppCpmBound}
     STATUS cpmDownloadStatus
 )
 list(GET cpmDownloadStatus 0 cpmDownloadCode)

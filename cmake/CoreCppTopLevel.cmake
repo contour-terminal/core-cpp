@@ -20,6 +20,13 @@ include("${CMAKE_CURRENT_LIST_DIR}/portable/CompileCache.cmake")
 set(CORE_CPP_CXX_COMPILER_LAUNCHER "${CMAKE_CXX_COMPILER_LAUNCHER}" CACHE INTERNAL
     "The compiler launcher cmake/portable/CompileCache.cmake selected for this build tree")
 
+# Bound every dependency transfer of this configure, so a stalled one ends instead of hanging:
+# the CPM bootstrap's download reads FASTCACHED_FETCH_SILENCE_SECONDS, and every git clone
+# inherits the GIT_HTTP_LOW_SPEED_* environment it exports. Here, because that environment is
+# process-wide, and before core_cpp_resolve_dependencies(), because it must precede every fetch.
+# The module is a verbatim copy from fastcached; its reasoning is in the file.
+include("${CMAKE_CURRENT_LIST_DIR}/FetchTransferBound.cmake")
+
 # The dependencies core-cpp fetches (Catch2) are compiled with the same standard
 # as the code that includes their headers. Catch2 in particular compiles parts of
 # itself only from C++17 on, and a test that uses them would fail to link otherwise.

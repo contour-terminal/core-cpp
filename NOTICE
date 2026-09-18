@@ -11,7 +11,7 @@ Contour Terminal Emulator
   https://github.com/contour-terminal/contour
   Imported at 6777ff05014f8ff163b071e8b0e942830119db80
   - .clang-format and .clang-tidy (adapted)
-  - src/core/testing/SuppressWindowsDialogs.hpp (merged from
+  - src/core/testing/SuppressWindowsDialogs.{hpp,cpp} (merged from
     src/crispy/SuppressWindowsDialogs.hpp and
     src/coro/testing/SuppressWindowsDialogs.hpp)
   - LICENSE
@@ -19,7 +19,7 @@ Contour Terminal Emulator
 Endo
   https://github.com/contour-terminal/endo
   Imported at f774a210ce989e5947b8f61d715068b1dc96088c
-  - src/core/testing/SuppressWindowsDialogs.hpp (merged from
+  - src/core/testing/SuppressWindowsDialogs.{hpp,cpp} (merged from
     src/testing/SuppressWindowsDialogs.hpp)
   - src/core/testing/SuppressWindowsDialogsAtStartup.cpp
   - tests/WindowsDialogCanary.cpp
@@ -32,6 +32,6 @@ fastcached
   - cmake/portable/CompileCache.cmake (verbatim)
   - cmake/FetchTransferBound.cmake (verbatim)
   - cmake/CPM.cmake (the bounded, status-checked bootstrap download)
-  - src/core/testing/SuppressWindowsDialogs.hpp (merged from
+  - src/core/testing/SuppressWindowsDialogs.{hpp,cpp} (merged from
     src/tests/WindowsErrorPopups.hpp)
   - the readability-identifier-naming IgnoredRegexp of .clang-tidy

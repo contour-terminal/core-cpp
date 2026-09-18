@@ -16,15 +16,8 @@
 /// This merges four copies that had drifted: contour's crispy and coro copies, endo's
 /// testing copy and fastcached's WindowsErrorPopups.hpp. The union is kept: every CRT report
 /// type, the abort() message box and fault report, the invalid-parameter handler, and the
-/// OS error modes including SEM_NOOPENFILEERRORBOX.
-
-#ifdef _WIN32
-    #include <cstdint>
-    #include <cstdlib>
-
-    #include <Windows.h>
-    #include <crtdbg.h>
-#endif
+/// OS error modes including SEM_NOOPENFILEERRORBOX. Unlike those copies it is defined out of
+/// line, so including this header does not include <Windows.h>.
 
 namespace core::testing
 {
@@ -37,28 +30,6 @@ namespace core::testing
 /// - General-protection faults, critical errors and open-file errors show no OS dialog.
 ///
 /// A no-op on every other platform.
-inline void suppressWindowsDialogs() noexcept
-{
-#ifdef _WIN32
-    // Spelled out rather than looped: in a Release CRT these are macros that expand
-    // to a constant, and a loop variable they drop would be an unused variable.
-    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
-    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
-    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
-    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
-    _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
-    _CrtSetReportFile(_CRT_WARN, _CRTDBG_FILE_STDERR);
-
-    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
-
-    _set_invalid_parameter_handler([]([[maybe_unused]] wchar_t const* expression,
-                                      [[maybe_unused]] wchar_t const* function,
-                                      [[maybe_unused]] wchar_t const* file,
-                                      [[maybe_unused]] unsigned int line,
-                                      [[maybe_unused]] std::uintptr_t reserved) {});
-
-    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
-#endif
-}
+void suppressWindowsDialogs() noexcept;
 
 } // namespace core::testing

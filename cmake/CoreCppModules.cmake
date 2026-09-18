@@ -84,4 +84,6 @@ endfunction()
 
 # --- the table -----------------------------------------------------------------
 
-core_cpp_module(NAME testing KIND STATIC PLATFORMS any WHEN CORE_CPP_TESTING)
+# No WHEN: core::testing needs no test framework and consumers use it with CORE_CPP_TESTING off.
+# Only core::testing_main needs Catch2, and CORE_CPP_CATCH2_MAIN gates that one target.
+core_cpp_module(NAME testing KIND STATIC PLATFORMS any)

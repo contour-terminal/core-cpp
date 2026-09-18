@@ -62,6 +62,12 @@ core_cpp_hygiene_rule(global-compile-options KIND cmake
 core_cpp_hygiene_rule(global-cmake-variable KIND cmake
     REGEX "^[ \t]*((set|unset)[ \t]*\\([ \t]*CMAKE_|(string|list)[ \t]*\\([ \t]*[A-Z_]+[ \t]+CMAKE_)"
     REASON "CMAKE_* variables are global state, which only cmake/CoreCppTopLevel.cmake may touch")
+core_cpp_hygiene_rule(process-environment KIND cmake
+    REGEX "^[ \t]*(set|unset)[ \t]*\\([ \t]*ENV\\{"
+    REASON "the environment is process-wide state, which only cmake/CoreCppTopLevel.cmake may touch")
+core_cpp_hygiene_rule(top-level-only-include KIND cmake
+    REGEX "^[ \t]*include[ \t]*\\(.*(CompileCache|FetchTransferBound)\\.cmake"
+    REASON "the compiler cache and the fetch bound change the whole configure, so only cmake/CoreCppTopLevel.cmake includes them")
 core_cpp_hygiene_rule(untyped-library KIND cmake
     REGEX "^[ \t]*add_library[ \t]*\\("
     EXCEPT "^[ \t]*add_library[ \t]*\\([ \t]*[^ \t)]+[ \t]+(STATIC|SHARED|MODULE|OBJECT|INTERFACE|ALIAS|IMPORTED|UNKNOWN)([ \t)]|$)"
@@ -99,7 +105,11 @@ core_cpp_hygiene_allow(unprefixed-function cmake/portable/CompileCache.cmake "${
 core_cpp_hygiene_allow(global-cmake-variable cmake/portable/CompileCache.cmake "${_compileCacheReason}")
 core_cpp_hygiene_allow(unprefixed-cache-variable cmake/FetchTransferBound.cmake
     "a verbatim copy of fastcached's module, whose FASTCACHED_FETCH_* bounds the organisation's projects share")
+core_cpp_hygiene_allow(process-environment cmake/FetchTransferBound.cmake
+    "a verbatim copy of fastcached's module, which only CoreCppTopLevel.cmake includes (rule top-level-only-include)")
 core_cpp_hygiene_allow(global-cmake-variable cmake/CoreCppTopLevel.cmake
+    "the one file that may touch global state, included only when core-cpp is the top-level project")
+core_cpp_hygiene_allow(top-level-only-include cmake/CoreCppTopLevel.cmake
     "the one file that may touch global state, included only when core-cpp is the top-level project")
 core_cpp_hygiene_allow(source-glob tests/cmake/check-cmake-hygiene.cmake
     "enumerates the tree it scans; it is not a source list")

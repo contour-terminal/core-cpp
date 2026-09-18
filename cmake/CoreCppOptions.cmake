@@ -6,7 +6,10 @@
 
 include(CMakeDependentOption)
 
-option(CORE_CPP_TESTING "Build core::testing and core-cpp's own tests" ${PROJECT_IS_TOP_LEVEL})
+option(CORE_CPP_TESTING "Build core-cpp's own tests" ${PROJECT_IS_TOP_LEVEL})
+option(CORE_CPP_CATCH2_MAIN
+       "Build core::testing_main, the Catch2 main() with core-cpp's exit-code contract (needs Catch2)"
+       ${CORE_CPP_TESTING})
 option(CORE_CPP_BUILD_EXAMPLES "Build core-cpp's examples" ${PROJECT_IS_TOP_LEVEL})
 option(CORE_CPP_FETCH_DEPS
        "Fetch a dependency with CPM when neither the parent project nor find_package() provides it"
@@ -24,6 +27,13 @@ option(CORE_CPP_CLANG_TIDY
 set(CORE_CPP_SANITIZERS "" CACHE STRING
     "Sanitizers for core-cpp's targets, a list of address, undefined, thread and leak (top-level builds only)")
 option(CORE_CPP_COVERAGE "Instrument core-cpp's targets for coverage" OFF)
+
+# core-cpp's own tests link core::testing_main, so testing forces it on. A normal variable
+# shadows the cache entry, as below for Emscripten, and leaves the parent's cache alone.
+if(CORE_CPP_TESTING AND NOT CORE_CPP_CATCH2_MAIN)
+    message(STATUS "[core-cpp] CORE_CPP_CATCH2_MAIN is ON because CORE_CPP_TESTING is ON")
+    set(CORE_CPP_CATCH2_MAIN ON)
+endif()
 
 # A sanitizer instruments core-cpp's targets only. As a subproject that would mix
 # instrumented and uninstrumented code under one parent, which is what makes TSan

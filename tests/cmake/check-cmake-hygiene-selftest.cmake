@@ -34,6 +34,8 @@ set(cases
     "unprefixed-function|cmake/Foo.cmake|# SPDX-License-Identifier: Apache-2.0\nfunction(foo)\nendfunction()\n"
     "global-compile-options|CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\nadd_compile_options(-Wall)\n"
     "global-cmake-variable|CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\nset(CMAKE_CXX_FLAGS \"-O2\")\n"
+    "process-environment|cmake/Foo.cmake|# SPDX-License-Identifier: Apache-2.0\nset(ENV{GIT_HTTP_LOW_SPEED_TIME} 120)\n"
+    "top-level-only-include|cmake/Foo.cmake|# SPDX-License-Identifier: Apache-2.0\ninclude(\"\${CMAKE_CURRENT_LIST_DIR}/FetchTransferBound.cmake\")\n"
     "untyped-library|src/core/foo/CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\nadd_library(x a.cpp)\n"
     "public-flags|src/core/foo/CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\nadd_library(x STATIC a.cpp)\ntarget_compile_options(x PUBLIC -Wall)\n"
     "source-glob|src/core/foo/CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\nfile(GLOB sources *.cpp)\n"

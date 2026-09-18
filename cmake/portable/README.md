@@ -9,8 +9,9 @@ the provenance below in the same commit. A fix goes upstream first.
 | `CompileCache.cmake` | [fastcached](https://github.com/LASTRADA-Software/fastcached) `cmake/portable/CompileCache.cmake` | `eb9c9c68da8fadfd43b0b36366919cb462689f48` (`origin/master`, 2026-09-18) |
 
 `../FetchTransferBound.cmake` is a verbatim copy from the same commit
-(`cmake/FetchTransferBound.cmake`). It stays next to `../CPM.cmake`, which
-includes it.
+(`cmake/FetchTransferBound.cmake`). It exports process-wide environment, so only
+`../CoreCppTopLevel.cmake` includes it, before any dependency is resolved.
+`../CPM.cmake` reads its bound when it is defined.
 
 To re-sync, read the upstream file as a blob so no line-ending conversion touches
 it, and check that it contains no CR byte:
