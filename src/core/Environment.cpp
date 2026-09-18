@@ -34,7 +34,8 @@ namespace core
 namespace
 {
 #ifndef _WIN32
-    /// Serializes this translation unit's reads of the environment block against one another.
+    /// Serializes this translation unit's reads of the environment block against one another and
+    /// against its writer, setProcessEnvironmentVariable().
     ///
     /// Process-wide rather than a member, because what it guards is process-wide: two
     /// LiveEnvironment instances read the same block, so a per-instance lock would serialize
@@ -118,17 +119,23 @@ namespace
 
         auto block = std::vector<char*> {};
         auto removed = false;
+        auto unchanged = false;
         auto* const* entry = processEnviron();
         while (entry != nullptr && *entry != nullptr)
         {
             if (isEntryFor(*entry, name))
+            {
                 removed = true;
+                unchanged = value && std::string_view { *entry }.substr(name.size() + 1) == *value;
+            }
             else
                 block.push_back(*entry);
             ++entry;
         }
-        if (!value && !removed)
-            return; // Nothing to remove: the block as it stands already says so.
+        // Nothing to remove, or the variable already reads so: the block as it stands is the
+        // answer, and publishing a copy would cost a block that is never freed.
+        if (value ? unchanged : !removed)
+            return;
 
         if (value)
             block.push_back(published.entries.emplace_back(std::format("{}={}", name, *value)).data());

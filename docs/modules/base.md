@@ -43,11 +43,13 @@ A process that must change its own environment, because a child process inherits
 `core::setProcessEnvironmentVariable()` and `core::unsetProcessEnvironmentVariable()`, never
 `setenv()`. On POSIX they never edit a block a reader may be walking: they publish a new
 `environ` block with one store, under the lock `LiveEnvironment` reads under, and never free what
-they published, because `getenv()` in another library reads without that lock. Each write so
-costs one block of pointers, which suits the few writes a process makes to its own environment.
-On Windows they are `SetEnvironmentVariableA()`, which the CRT's `getenv()` does not see; read
-through `LiveEnvironment`. Both refuse an empty name and a name with `=`
-(`std::errc::invalid_argument`).
+they published, because `getenv()` in another library reads without that lock. Each write that
+changes something so costs one block of pointers, which suits the few writes a process makes to
+its own environment; a write that changes nothing publishes nothing. On Windows they are
+`SetEnvironmentVariableA()`, which the CRT's `getenv()` does not see; read through
+`LiveEnvironment`. Both refuse an empty name and a name with `=`
+(`std::errc::invalid_argument`). They take a lock and allocate, so they are not for use between
+`fork()` and `exec()`: give the child its environment through `execve()` instead.
 
 ## Under Emscripten
 

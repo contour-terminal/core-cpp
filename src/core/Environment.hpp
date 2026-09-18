@@ -111,8 +111,13 @@ class CachingEnvironment final: public Environment
 /// freed, because a reader outside that lock -- `getenv()` in another library, `execvp()` -- may
 /// still hold a block published earlier. Each call so costs one block of pointers, which suits the
 /// rare writes a process makes to its own environment: an exported shell variable, a test fixture.
-/// On Windows it is `SetEnvironmentVariableA()`, which the operating system synchronizes; the
-/// CRT's own copy of the environment, which its `getenv()` reads, does not see it.
+/// A write that changes nothing (the variable already reads @p value) publishes nothing. On
+/// Windows it is `SetEnvironmentVariableA()`, which the operating system synchronizes; the CRT's
+/// own copy of the environment, which its `getenv()` reads, does not see it.
+///
+/// Not for use between `fork()` and `exec()`: it takes a lock and allocates, and in the child of a
+/// multi-threaded process the lock may be held by a thread that no longer exists. Build the
+/// child's environment before forking, or pass it to `execve()`.
 ///
 /// @param name Name of the variable to set: not empty, and without '=' or NUL.
 /// @param value The value it should read as, without NUL. An empty value sets the variable.

@@ -282,3 +282,25 @@ TEST_CASE("the process-environment writer leaves a block a reader holds intact",
     CHECK(entriesOf(held) == snapshot);
 }
 #endif
+
+#ifndef _WIN32
+TEST_CASE("the process-environment writer publishes nothing for a write that changes nothing",
+          "[environment]")
+{
+    // Each published block is kept for the rest of the process, so a repeated identical export --
+    // a shell re-reading its configuration, say -- must not cost one every time.
+    auto constexpr Name = "CORE_CPP_ENVIRONMENT_WRITER_TEST_VARIABLE";
+    auto const cleanup = WrittenVariable { Name };
+
+    REQUIRE(core::setProcessEnvironmentVariable(Name, "same").has_value());
+    auto* const* const published = processEnviron();
+
+    REQUIRE(core::setProcessEnvironmentVariable(Name, "same").has_value());
+    CHECK(processEnviron() == published);
+
+    // A different value, though, is a new block.
+    REQUIRE(core::setProcessEnvironmentVariable(Name, "different").has_value());
+    CHECK(processEnviron() != published);
+    CHECK(core::LiveEnvironment {}.get(Name) == "different");
+}
+#endif
