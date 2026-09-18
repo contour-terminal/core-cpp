@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -55,6 +56,18 @@ struct TestCategory
 #else
     return static_cast<int>(::getpid());
 #endif
+}
+
+/// @return What is left to read of @p stream.
+///
+/// Through a string stream rather than std::istreambuf_iterator: GCC 14 at -O2 inlines that
+/// iterator's reads into the caller and reports a possible null dereference inside libstdc++'s
+/// streambuf (-Wnull-dereference), which no caller can act on.
+[[nodiscard]] std::string contentsOf(std::istream& stream)
+{
+    auto buffer = std::ostringstream {};
+    buffer << stream.rdbuf();
+    return buffer.str();
 }
 
 /// A scratch log-file path, deleted when the test ends.
@@ -186,7 +199,7 @@ TEST_CASE("ScopedOutput writes to a file without escape sequences", "[log][logsi
 
     auto stream = std::ifstream { log.path() };
     REQUIRE(stream.is_open());
-    auto contents = std::string { std::istreambuf_iterator<char> { stream }, {} };
+    auto const contents = contentsOf(stream);
     CHECK(contents.contains("to the file"));
     CHECK(contents.contains("[test.filesink]"));
     // A file must never receive SGR escapes, whatever the terminal the daemon was started from.
@@ -208,7 +221,7 @@ TEST_CASE("ScopedOutput appends rather than truncating", "[log][logsink]")
     }
 
     auto stream = std::ifstream { log.path() };
-    auto const contents = std::string { std::istreambuf_iterator<char> { stream }, {} };
+    auto const contents = contentsOf(stream);
     CHECK(contents.contains("first run"));
     CHECK(contents.contains("second run"));
 }
