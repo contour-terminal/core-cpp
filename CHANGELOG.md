@@ -38,6 +38,12 @@ workflow refuses one without a section here.
 - `core::cli`: the command-line parser (`core::cli::parse`, help and usage text) and the
   application scaffold `core::cli::App`.
 
+### Fixed
+
+- `core::nextPowerOfTwo()` rounds a 16-, 32- or 64-bit value up to a power of two. crispy's, which
+  it was imported from, compared the type's width in bytes against bit counts and so smeared only
+  the eight bits below the highest set one: 257 became 511, and 0x10001 became 0x1fe01.
+
 ### Imported
 
 Each file was read as a git blob at the commit named, and none contains a CR byte.

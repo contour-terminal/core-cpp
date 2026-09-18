@@ -301,6 +301,21 @@ TEST_CASE("forEachKeyValue")
     CHECK(result["key_only"].empty());
 }
 
+TEST_CASE("utils.nextPowerOfTwo")
+{
+    STATIC_CHECK(core::nextPowerOfTwo(1U) == 1U);
+    STATIC_CHECK(core::nextPowerOfTwo(5U) == 8U);
+    STATIC_CHECK(core::nextPowerOfTwo(8U) == 8U);
+
+    // Set bits further apart than the smear reaches: every bit below the highest one must be
+    // filled, whatever the width of the type.
+    STATIC_CHECK(core::nextPowerOfTwo(std::uint32_t { 257 }) == 512U);
+    STATIC_CHECK(core::nextPowerOfTwo(std::uint32_t { 0x1'0001 }) == 0x2'0000U);
+    STATIC_CHECK(core::nextPowerOfTwo(std::uint32_t { 0x4000'0001 }) == 0x8000'0000U);
+    STATIC_CHECK(core::nextPowerOfTwo(std::uint64_t { 0x1'0000'0001 }) == 0x2'0000'0000U);
+    STATIC_CHECK(core::nextPowerOfTwo(std::uint64_t { 0x4000'0000'0000'0001 }) == 0x8000'0000'0000'0000U);
+}
+
 TEST_CASE("utils.trim")
 {
     // constexpr, so the whole table is settled at compile time -- these are the cases the

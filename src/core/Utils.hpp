@@ -693,24 +693,26 @@ inline std::string replaceVariables(std::string_view text, VariableReplacer cons
     return output;
 }
 
-// https://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2
-// 1U << (lg(v - 1) + 1)
+/// Rounds @p v up to a power of two: https://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2
+/// @param v An unsigned value, at most the largest power of two @p T holds.
+/// @return The smallest power of two not less than @p v; @p v itself if it is one.
 template <typename T>
 constexpr T nextPowerOfTwo(T v) noexcept
 {
     static_assert(std::is_integral_v<T>);
     static_assert(std::is_unsigned_v<T>);
 
-    // return 1U << (std::log(v - 1) + 1);
+    // Smear the highest set bit of v - 1 into every bit below it. The widths are in bits: the
+    // shifts by 8, 16 and 32 apply to types that wide, not to types that many bytes wide.
     v--;
     v |= v >> 1;
     v |= v >> 2;
     v |= v >> 4;
-    if constexpr (sizeof(T) >= 16)
+    if constexpr (std::numeric_limits<T>::digits > 8)
         v |= v >> 8;
-    if constexpr (sizeof(T) >= 32)
+    if constexpr (std::numeric_limits<T>::digits > 16)
         v |= v >> 16;
-    if constexpr (sizeof(T) >= 64)
+    if constexpr (std::numeric_limits<T>::digits > 32)
         v |= v >> 32;
     v++;
     return v;
