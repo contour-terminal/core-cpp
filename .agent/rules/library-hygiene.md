@@ -47,7 +47,8 @@ because its event loop could not wait on a console handle.
 - **Targets are `core-cpp-<name>`, aliased `core::<name>`, and their type is always explicit.**
   Consumers link the alias.
 - **A module's namespace is its directory:** `src/core/net/` is `core::net`. Headers directly
-  in `src/core/` are `core`.
+  in `src/core/` are `core`. The `style` job's hygiene scan checks the first named namespace of
+  every source under `src/core/` (`namespace-directory`).
 
 ## Layering
 

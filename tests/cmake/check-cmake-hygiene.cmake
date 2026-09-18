@@ -3,7 +3,8 @@
 # Refuses what the design spec (Part I §3) and the Global Constraints forbid in core-cpp's CMake and
 # C++ sources: global state outside cmake/CoreCppTopLevel.cmake, unprefixed options, cache variables
 # and functions, untyped libraries, PUBLIC flags, globbed sources, modules included by name, NOLINT,
-# diagnostic-muting pragmas, C-style index loops, and a missing SPDX header.
+# diagnostic-muting pragmas, C-style index loops, a missing SPDX header, and a source under src/core/
+# whose first namespace is not the one its directory names.
 #
 # The rules are a data table: what is refused, in which kind of file, and the reason printed with each
 # refusal. The allowlist is a second table of {rule, file, reason}, and it is the only way past a
@@ -92,6 +93,18 @@ core_cpp_hygiene_rule(c-style-for KIND cpp
     REGEX "(^|[^A-Za-z0-9_])for[ \t]*\\([^;]*;[^;]*;"
     REASON "no C-style for(;;) loops: use a range-for over a range, e.g. std::views::iota")
 
+# A rule over a file rather than a line: under src/core/, the first named namespace a C++ source
+# declares is the one its directory names. src/core/<dir>/... declares core::<dir>, or a namespace
+# nested in it (core::<dir>::detail), and spells it that way, not as `namespace core { namespace
+# <dir>`. A file directly in src/core/ declares core, or a namespace nested in it (core::base64).
+# Helper namespaces inside the first are free. A file that declares no named namespace (a main(), a
+# file of TU-local helpers, a header of macros) is not checked, and neither is a namespace alias.
+set(CORE_CPP_HYGIENE_RULES ${CORE_CPP_HYGIENE_RULES} namespace-directory)
+set(CORE_CPP_HYGIENE_namespace-directory_REASON
+    "a source's first namespace is the one its directory names: src/core/<dir>/ is core::<dir>, src/core/ is core (Part I §1)")
+set(CORE_CPP_HYGIENE_NAMESPACE_REGEX "^[ \t]*(inline[ \t]+)?namespace[ \t]+([A-Za-z_][A-Za-z0-9_:]*)([ \t{/].*)?$")
+set(CORE_CPP_HYGIENE_NAMESPACE_ALIAS_REGEX "^[ \t]*namespace[ \t]+[A-Za-z0-9_:]+[ \t]*=")
+
 # The rule the allowlist itself answers to.
 set(CORE_CPP_HYGIENE_RULES ${CORE_CPP_HYGIENE_RULES} stale-allowlist)
 
@@ -159,6 +172,28 @@ set(violations "")
 set(violationCount 0)
 set(allowUsed "")
 
+## @brief Refuses @p line of @p path under @p rule, unless an allowlist row allows the rule in that
+## file. @p shown is the text printed under the reason.
+function(core_cpp_hygiene_refuse rule path lineNumber shown)
+    set(allowed OFF)
+    foreach(index IN LISTS CORE_CPP_HYGIENE_ALLOWLIST)
+        if(CORE_CPP_HYGIENE_ALLOW_${index}_RULE STREQUAL rule
+           AND CORE_CPP_HYGIENE_ALLOW_${index}_FILE STREQUAL path)
+            set(allowed ON)
+            list(APPEND allowUsed ${index})
+        endif()
+    endforeach()
+    if(NOT allowed)
+        string(STRIP "${shown}" shown)
+        string(APPEND violations
+            "\n  ${path}:${lineNumber}: [${rule}] ${CORE_CPP_HYGIENE_${rule}_REASON}\n      ${shown}")
+        math(EXPR violationCount "${violationCount} + 1")
+    endif()
+    set(violations "${violations}" PARENT_SCOPE)
+    set(violationCount ${violationCount} PARENT_SCOPE)
+    set(allowUsed "${allowUsed}" PARENT_SCOPE)
+endfunction()
+
 foreach(path IN LISTS scanned)
     set(kind "")
     foreach(row IN LISTS kinds)
@@ -181,6 +216,14 @@ foreach(path IN LISTS scanned)
     string(REPLACE "]" "${closeBracketCode}" content "${content}")
     string(REPLACE "\n" ";" lines "${content}")
 
+    # The namespace this file's first named namespace must be, or be nested in (namespace-directory).
+    set(expectedNamespace "")
+    if(kind STREQUAL "cpp" AND path MATCHES "^src/core/([^/]+)/")
+        set(expectedNamespace "core::${CMAKE_MATCH_1}")
+    elseif(kind STREQUAL "cpp" AND path MATCHES "^src/core/[^/]+$")
+        set(expectedNamespace "core")
+    endif()
+
     set(lineNumber 0)
     foreach(encoded IN LISTS lines)
         math(EXPR lineNumber "${lineNumber} + 1")
@@ -188,6 +231,18 @@ foreach(path IN LISTS scanned)
         string(REPLACE "${openBracketCode}" "[" line "${line}")
         string(REPLACE "${closeBracketCode}" "]" line "${line}")
         string(REPLACE "${backslashCode}" "\\" line "${line}")
+
+        if(expectedNamespace AND NOT line MATCHES "${CORE_CPP_HYGIENE_NAMESPACE_ALIAS_REGEX}")
+            string(REGEX MATCH "${CORE_CPP_HYGIENE_NAMESPACE_REGEX}" declaration "${line}")
+            if(declaration)
+                set(declared "${CMAKE_MATCH_2}")
+                if(NOT declared STREQUAL expectedNamespace AND NOT declared MATCHES "^${expectedNamespace}::")
+                    core_cpp_hygiene_refuse(namespace-directory "${path}" ${lineNumber}
+                        "${line}    (expected ${expectedNamespace})")
+                endif()
+                set(expectedNamespace "")
+            endif()
+        endif()
 
         foreach(rule IN LISTS CORE_CPP_HYGIENE_RULES)
             if(NOT kind IN_LIST CORE_CPP_HYGIENE_${rule}_KIND)
@@ -202,21 +257,7 @@ foreach(path IN LISTS scanned)
             if(CORE_CPP_HYGIENE_${rule}_EXCEPT AND line MATCHES "${CORE_CPP_HYGIENE_${rule}_EXCEPT}")
                 continue()
             endif()
-
-            set(allowed OFF)
-            foreach(index IN LISTS CORE_CPP_HYGIENE_ALLOWLIST)
-                if(CORE_CPP_HYGIENE_ALLOW_${index}_RULE STREQUAL rule
-                   AND CORE_CPP_HYGIENE_ALLOW_${index}_FILE STREQUAL path)
-                    set(allowed ON)
-                    list(APPEND allowUsed ${index})
-                endif()
-            endforeach()
-            if(NOT allowed)
-                string(STRIP "${line}" shown)
-                string(APPEND violations
-                    "\n  ${path}:${lineNumber}: [${rule}] ${CORE_CPP_HYGIENE_${rule}_REASON}\n      ${shown}")
-                math(EXPR violationCount "${violationCount} + 1")
-            endif()
+            core_cpp_hygiene_refuse(${rule} "${path}" ${lineNumber} "${line}")
         endforeach()
     endforeach()
 endforeach()

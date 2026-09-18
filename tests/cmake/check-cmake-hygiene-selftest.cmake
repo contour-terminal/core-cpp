@@ -22,13 +22,18 @@ set(clean
     "CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\noption(CORE_CPP_FOO \"x\" ON)\ninclude(CMakeDependentOption)\ninclude(\"\${CMAKE_CURRENT_LIST_DIR}/cmake/Foo.cmake\")\n"
     "cmake/Foo.cmake|# SPDX-License-Identifier: Apache-2.0\nfunction(core_cpp_foo)\nendfunction()\nset(CORE_CPP_FOO_DIR \"\" CACHE PATH \"x\")\n"
     "src/core/foo/CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\nadd_library(core-cpp-foo STATIC Foo.cpp)\ntarget_compile_options(core-cpp-foo PRIVATE -Wall)\n"
-    "src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace foo {}\n"
+    "src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foo {}\n"
+    "src/core/foo/detail/Bar.hpp|// SPDX-License-Identifier: Apache-2.0\nnamespace fs = std::filesystem<semicolon>\nnamespace core::foo::detail\n{\n}\n"
+    "src/core/foo/Main.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace\n{\n}\nint main() { return 0<semicolon> }\n"
+    "src/core/Top.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core\n{\nnamespace views\n{\n}\n} // namespace core\n"
+    "src/core/Base64.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core::base64\n{\n}\n"
 )
 
-# One violating file per rule: "<rule>|<file>|<content>". The file replaces its clean namesake.
+# At least one violating file per rule: "<rule>|<file>|<content>". The file replaces its clean
+# namesake.
 # Content spells ';' as <semicolon>, which would otherwise split the row: rows are list elements.
 set(cases
-    "missing-spdx|src/core/foo/Foo.cpp|namespace foo {}\n"
+    "missing-spdx|src/core/foo/Foo.cpp|namespace core::foo {}\n"
     "unprefixed-option|CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\noption(FOO \"x\" ON)\n"
     "unprefixed-cache-variable|cmake/Foo.cmake|# SPDX-License-Identifier: Apache-2.0\nset(FOO_DIR \"\" CACHE PATH \"x\")\n"
     "unprefixed-function|cmake/Foo.cmake|# SPDX-License-Identifier: Apache-2.0\nfunction(foo)\nendfunction()\n"
@@ -40,10 +45,14 @@ set(cases
     "public-flags|src/core/foo/CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\nadd_library(x STATIC a.cpp)\ntarget_compile_options(x PUBLIC -Wall)\n"
     "source-glob|src/core/foo/CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\nfile(GLOB sources *.cpp)\n"
     "include-by-name|CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\ninclude(CoreCppOptions)\n"
-    "nolint|src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace foo {} // NOLINT\n"
+    "nolint|src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foo {} // NOLINT\n"
     "diagnostic-pragma|src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\n#pragma clang diagnostic ignored \"-Wshadow\"\n"
     "c-style-for|src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\nvoid count() { for (int i = 0<semicolon> i < 3<semicolon> ++i) {} }\n"
     "stale-allowlist|src/core/testing/SuppressWindowsDialogsAtStartup.cpp|// SPDX-License-Identifier: Apache-2.0\n"
+    "namespace-directory|src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace bar {}\n"
+    "namespace-directory|src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foobar {}\n"
+    "namespace-directory|src/core/foo/detail/Bar.hpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core\n{\nnamespace foo\n{\n}\n}\n"
+    "namespace-directory|src/core/Top.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace crispy\n{\n}\n"
 )
 
 ## @brief Writes the "<file>|<content>" rows of the list named @p rowsVar under @p dir.
@@ -107,6 +116,7 @@ if(NOT rc EQUAL 0)
 endif()
 
 # Each violation is refused by name, in the file that has it.
+set(caseIndex 0)
 foreach(row IN LISTS cases)
     string(FIND "${row}" "|" bar)
     string(SUBSTRING "${row}" 0 ${bar} rule)
@@ -114,7 +124,8 @@ foreach(row IN LISTS cases)
     string(SUBSTRING "${row}" ${fileAt} -1 fileRow)
     string(REGEX REPLACE "\\|.*$" "" path "${fileRow}")
 
-    set(dir "${WORK_DIR}/${rule}")
+    math(EXPR caseIndex "${caseIndex} + 1")
+    set(dir "${WORK_DIR}/${caseIndex}-${rule}")
     core_cpp_selftest_write("${dir}" clean)
     set(violation "${fileRow}")
     core_cpp_selftest_write("${dir}" violation)

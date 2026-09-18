@@ -58,6 +58,7 @@ jobs:
       - name: clang-format
         run: python scripts/clang-format.py --check
 
+      # Also namespace = directory: the first named namespace of every source under src/core/.
       - name: CMake and C++ hygiene
         run: cmake -DROOT="$GITHUB_WORKSPACE" -P tests/cmake/check-cmake-hygiene.cmake
 
