@@ -98,6 +98,24 @@ workflow refuses one without a section here.
   `core::base`: the one writer of the process environment, in place of `setenv()`. On POSIX they
   publish a new `environ` block under `LiveEnvironment`'s lock and never free a published one, so
   a reader elsewhere never sees a block change or disappear under it.
+- `core::net`, contour's event loop, sockets, TLS and HTTP server, as contour has them but for the
+  namespaces and `core::platform` in place of contour's `net/platform/`: `EventLoop` over an
+  injected `EventSource` (poll everywhere, epoll on Linux, kqueue on macOS and the BSDs,
+  `makeDefaultEventSource()`), `ISocket` and `IListener` with `listen()`, `connect()`,
+  `listenUnix()`, `connectUnix()` and `adoptFd()`, descriptor passing on POSIX,
+  `AsyncBufferedReader`, `WriteQueue`, `SplitSocket`, `withTimeout()`, an HTTP/1.1 server, the
+  diagnostic sink, and the test doubles `testing::ScriptedEventSource`,
+  `testing::makeSocketPair()`, `testing::AllBackends` and `testing/CoroTestSupport.hpp`. Its
+  error vocabulary, `NetError` and `IoResult`, is the header-only `core::net_types`, which builds
+  under Emscripten too; the rest is native only until Phase B, which also replaces the
+  `EventSource` API with `IoBackend`. `core::net` links `Threads::Threads` PUBLIC, because its
+  headers use `std::mutex`.
+- `core::net_tls` (`<core/net/Tls.hpp>`), with `CORE_CPP_WITH_TLS`: a TLS `ISocket` over any other,
+  behind `ITlsContext`, in server, client (a pinned CA and a host name, or trust on first use) and
+  self-signed form, and `constantTimeEquals()`. It links OpenSSL PRIVATE, and no OpenSSL type
+  appears in its header.
+- The OpenSSL dependency, taken from the system and never fetched, resolved when
+  `CORE_CPP_WITH_TLS` is on.
 - A module may declare further targets in the module table, each with a row of its own
   (`core_cpp_module_target()`), where its `PLATFORMS` or `WHEN` differ from its module's: a
   native-only module is entered under Emscripten when one of its targets builds there, and
@@ -137,6 +155,7 @@ Each file was read as a git blob at the commit named, and none contains a CR byt
 | [endo](https://github.com/contour-terminal/endo) | `f774a210ce989e5947b8f61d715068b1dc96088c` | the generic half of `src/platform` as `core::platform` (Types, PlatformError, Clock, Wakeup, SignalHandler, SystemPipe, WinsockInit, MessageQueue, FileSystem, NativeFileSystem, FileInfoProvider, EnvironmentProvider, UserPaths, PathUtils, GlobMatch, FileUri, SystemInfo, StringUtils, their `posix/`, `linux/` and `windows/` implementations and `testing/` doubles), with their tests (`WindowsPlatform_test.cpp` split into `PathUtils_test`, `Types_test` and `UserPaths_test`); `Generator.hpp` as `core::base` (`core::Generator`; Task A5b moved it out of `core::async`, which it needs nothing of). Process, Pipe, WaitResult, ProcessProvider, ProjectFileTree, InstallPaths and InterruptThrottle stay in endo; the `namespace endo` compatibility aliases were not imported |
 | [contour](https://github.com/contour-terminal/contour) | `6777ff05014f8ff163b071e8b0e942830119db80` | `src/net/platform/Clock.hpp`, merged into `core/platform/Clock.hpp`; `src/net/platform/SystemPipe.{hpp,cpp}`, whose non-blocking behaviour is merged into `core/platform/SystemPipe`; `src/net/platform/WinsockInit.{hpp,cpp}`, identical to endo's |
 | [contour](https://github.com/contour-terminal/contour) | `6777ff05014f8ff163b071e8b0e942830119db80` | `src/coro/{Awaitable,Cancellation,Task,UniqueCoroHandle,WhenAll,WhenAny}.hpp` and `{Task,WhenAll,WhenAny}_test.cpp` as `core::async`, `coro::` renamed `core::async::`; the `std::stop_token` aliases of `Cancellation.hpp` moved to `StopToken.hpp`, whose fallback replaces their `#error`; no `NOLINT`; two locals renamed for `-Wshadow`; two `WhenAny_test.cpp` helpers compiled only where the case using them is. `test_main.cpp` was not imported (`core::testing_main` replaces it), and `testing/SuppressWindowsDialogs.hpp` had been merged into `core::testing` already |
+| [contour](https://github.com/contour-terminal/contour) | `6777ff05014f8ff163b071e8b0e942830119db80` | `src/net` as `core::net`, `core::net_types` and `core::net_tls`, `net::` renamed `core::net::` and `coro::` `core::async::`, with its tests but `test_main.cpp`; `net/platform/{Clock,NativeHandle,SystemPipe,WinsockInit}` replaced by `core::platform`, whose `SystemPipe::read()` returns a `ChannelResult`; `platform/PeerAddress.hpp` moved to the module's root and `platform/WindowsLoopback.*` to `windows/`, so that no `core::net::platform` namespace hides `core::platform`; `NetError` split out of `IoResult.hpp` into `NetError.hpp`; `testing/TempDir.hpp` not imported (`core::testing::ScopedTempDir`); no `NOLINT`; the C-style `for` loops written as range-`for`s and `while`s; one lambda parameter renamed for GCC's `-Wshadow`, and a `CMSG_FIRSTHDR()` result checked for GCC's `-Wnull-dereference`; the TLS test makes its client context before its server thread starts |
 | [fastcached](https://github.com/LASTRADA-Software/fastcached) | `b461e8b6d367ed22e4bf2935717fa59360a64b7d` | `src/FastCache/Core/Clock.hpp`, merged into `core/platform/Clock.hpp` in camelBack (`Now`/`Refresh` as `now`/`refresh`, `TimePoint`/`Duration` as `SteadyTimePoint`/`SteadyDuration`); `Clock_test.cpp` and `WallClockRef_test.cpp`, merged into `core/platform/Clock_test.cpp` |
 
 The rulebook and CI configuration adapt text from fastcached at

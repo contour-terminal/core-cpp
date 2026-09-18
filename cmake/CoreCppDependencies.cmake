@@ -186,6 +186,15 @@ core_cpp_dependency(Catch2
     CPM NAME Catch2 VERSION 3.8.0 GITHUB_REPOSITORY catchorg/Catch2 EXCLUDE_FROM_ALL YES SYSTEM YES
     WRAP core_cpp_catch2_standard)
 
+# OpenSSL, for core::net_tls: taken from the system, never fetched (Part I §3). It is linked PRIVATE
+# and no OpenSSL type appears in a core-cpp header, so what a consumer's own code sees of OpenSSL is
+# whatever that consumer includes itself.
+core_cpp_dependency(OpenSSL
+    WHEN CORE_CPP_WITH_TLS
+    TARGETS OpenSSL::SSL OpenSSL::Crypto
+    FIND_PACKAGE OpenSSL
+    NO_FETCH)
+
 # Tracy, when core-cpp is instrumented for it: core::base links the client PUBLIC and
 # <core/Profiling.hpp> includes its header. The version is the one contour's cmake/Tracy.cmake
 # pins (6777ff05), because a client and the profiler that reads its captures must match. A fetched

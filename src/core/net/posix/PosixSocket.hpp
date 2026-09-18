@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: Apache-2.0
+#pragma once
+
+#ifndef _WIN32
+
+    #include <core/async/Task.hpp>
+    #include <core/net/EventLoop.hpp>
+    #include <core/net/ISocket.hpp>
+
+    #include <cstddef>
+    #include <span>
+    #include <string>
+
+namespace core::net
+{
+
+/// A reactor-driven, non-blocking POSIX stream socket. read/write try the syscall
+/// and, on EAGAIN, park the calling coroutine on the loop's
+/// waitReadable/waitWritable until the fd is ready, then retry — so a slow peer
+/// suspends the coroutine rather than blocking the thread.
+class PosixSocket final: public ISocket
+{
+  public:
+    /// Wraps an already-connected, non-blocking fd.
+    /// @param loop The loop whose reactor drives readiness (not owned).
+    /// @param fd The connected socket fd (ownership transferred; closed on close()).
+    /// @param peerAddress Printable peer address, or "" if unknown.
+    PosixSocket(EventLoop& loop, int fd, std::string peerAddress = {}) noexcept;
+    ~PosixSocket() override;
+
+    PosixSocket(PosixSocket const&) = delete;
+    PosixSocket& operator=(PosixSocket const&) = delete;
+    PosixSocket(PosixSocket&&) = delete;
+    PosixSocket& operator=(PosixSocket&&) = delete;
+
+    [[nodiscard]] async::Task<IoResult> read(std::span<std::byte> buffer) override;
+    [[nodiscard]] async::Task<std::expected<ReadWithFd, NetError>> readWithFd(
+        std::span<std::byte> buffer) override;
+    [[nodiscard]] async::Task<IoResult> write(std::span<std::byte const> buffer) override;
+
+    [[nodiscard]] std::string peerAddress() const override { return _peerAddress; }
+
+    void close() noexcept override;
+
+    [[nodiscard]] bool isClosed() const noexcept override { return _closed; }
+
+    /// @return The underlying fd (for diagnostics/tests).
+    [[nodiscard]] int native() const noexcept { return _fd; }
+
+  private:
+    /// Closes the fd, telling the loop first so a flow parked on it is resumed
+    /// rather than left waiting for readiness the poller can no longer report.
+    /// @param policy How a parked flow observes the close. The public @c close()
+    ///        passes @c Resume — this object is still alive, so the flow may safely
+    ///        re-read @c _closed. The destructor passes @c Cancel, because by the
+    ///        time it resumes the flow would be reading `this` through a dangling
+    ///        pointer; unwinding via @c OperationCancelled never re-enters the body.
+    void close(FdWakePolicy policy) noexcept;
+
+    EventLoop& _loop;
+    int _fd;
+    bool _plainFd = false; ///< Set on first ENOTSOCK: a PTY/pipe fd, served via read/write.
+    std::string _peerAddress;
+    bool _closed = false;
+};
+
+} // namespace core::net
+
+#endif // !_WIN32

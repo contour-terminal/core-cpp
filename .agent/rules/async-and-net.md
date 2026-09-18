@@ -4,10 +4,10 @@ Rules for `src/core/async/` and `src/core/net/`: what the layers may depend on, 
 dials behave, and the lifetime rules that keep a coroutine frame from being leaked, freed twice
 or resumed on the wrong thread.
 
-**Status.** The code these rules govern arrives in two steps: contour's `coro` and `net` are
-imported as they are (Tasks A5 and A6), then fastcached's async and networking layer is merged
-into them (Phase B). The rules are written against the merged design's names, from the design
-spec,
+**Status.** The code these rules govern arrives in two steps: contour's `coro` and `net` were
+imported as they are (Tasks A5 and A6: `core::async`, and `core::net` with its `EventSource`
+API), then fastcached's async and networking layer is merged into them (Phase B). The rules are
+written against the merged design's names, from the design spec,
 [Part I §2](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/specs/2026-09-18-core-cpp-design.md),
 so the tasks that implement it inherit them; each Phase B task extends this file with the rules
 it lands. Where a rule names a type that does not exist yet, it is the type the spec defines.

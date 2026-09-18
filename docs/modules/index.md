@@ -12,7 +12,7 @@ namespace is its directory (`src/core/net/` is `core::net`; headers directly in 
 | [cli](cli.md) | `core::cli` | `core::cli` | static | base, log | available |
 | [platform](platform.md) | `core::platform` | `core::platform` | static | base, log | available |
 | [async](async.md) | `core::async` | `core::async` | header-only | the standard library | `StopToken`, `Task`, `whenAll`, `whenAny` available; executors: Task B1 |
-| [net](net.md) | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | header-only, static, static | async, platform; OpenSSL for `net_tls` | planned: Tasks A6, B2 to B11 |
+| [net](net.md) | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | header-only, static, static | async, platform; OpenSSL for `net_tls` | contour's event loop, sockets, TLS and HTTP server available; the merge with fastcached's: Tasks B2 to B11 |
 | [tui](tui.md) | `core::tui` | `core::tui_output`, `core::tui` | static | `tui_output`: base; `tui`: also platform, async, net, libunicode, stb (optional) | planned: Tasks A7, B12 |
 | [testing](testing.md) | `core::testing` | `core::testing`, `core::testing_dialogs`, `core::testing_main` | static, object, static | base; log and Catch2 for `testing_main` | available |
 
@@ -24,7 +24,10 @@ The task numbers refer to the
 A module may link only the modules its row in
 [`cmake/CoreCppModules.cmake`](https://github.com/contour-terminal/core-cpp/blob/master/cmake/CoreCppModules.cmake)
 lists, and every one of those must appear in an earlier row. The configure refuses anything else,
-so the graph below is enforced rather than documented:
+so the graph below is enforced rather than documented. A module's further targets
+(`core::net_types` and `core::net_tls` beside `core::net`) link what their module may; a row of
+their own says where one builds when that differs from its module, which is how `core::net_types`
+builds under Emscripten while the rest of `net` does not:
 
 ```mermaid
 graph BT
@@ -66,7 +69,7 @@ subset builds, and CI runs its tests under node:
 | base, log, cli | fully |
 | async | everything except `ThreadPoolExecutor.hpp` |
 | platform | Types (with `NativeHandle`), PlatformError, Clock, StringUtils, PathUtils, GlobMatch, FileUri, and the POSIX `EnvironmentProvider` and `FileInfoProvider` behind `nativeEnvironmentProvider()` and `nativeFileInfoProvider()` |
-| net | `net_types`, `IoBackend`, `EventLoop`, timers, `DeadlineTimer`, `WithTimeout`, the host-driven backend and the test doubles; no sockets, DNS, TLS or HTTP |
+| net | `net_types` today; `IoBackend`, `EventLoop`, timers, `DeadlineTimer`, `WithTimeout`, the host-driven backend and the test doubles from Tasks B3 to B5; never sockets, DNS, TLS or HTTP |
 | testing | fully (the Windows parts are no-ops) |
 | tui | never |
 

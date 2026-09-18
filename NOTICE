@@ -25,6 +25,10 @@ Contour Terminal Emulator
   - src/core/async/{Awaitable,Cancellation,Task,UniqueCoroHandle,WhenAll,WhenAny}.hpp
     and {Task,WhenAll,WhenAny}_test.cpp (from src/coro/, adapted), and the std::
     aliases of src/core/async/StopToken.hpp (from src/coro/Cancellation.hpp)
+  - src/core/net/** and their tests (from src/net/, adapted; NetError.hpp split out
+    of IoResult.hpp, platform/PeerAddress.hpp moved to the module's root and
+    platform/WindowsLoopback.* to windows/), except NetError_test.cpp and
+    CMakeLists.txt
 
 Endo
   https://github.com/contour-terminal/endo

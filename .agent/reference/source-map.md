@@ -42,8 +42,13 @@ src/core/
   async/                    core::async, header-only: StopToken (std:: or the fallback); Task,
                             UniqueCoroHandle, Cancellation, Awaitable, whenAll/whenAny (contour);
                             executors, AsyncQueue (planned, B1)
-  net/                      (planned, A6 and B2-B11) core::net_types, core::net, core::net_tls:
-                            EventLoop, IoBackend and backend/, sockets, dialling, timers, TLS
+  net/                      core::net_types (NetError, IoResult; header-only, everywhere),
+                            core::net (contour: EventLoop over EventSource, poll/epoll/kqueue,
+                            sockets, AsyncBufferedReader, WriteQueue, WithTimeout, HttpServer,
+                            Diagnostics; native only), core::net_tls (Tls, OpenSSL private);
+                            posix/ windows/ detail/ and PeerAddress.hpp are private; testing/
+                            holds the fakes (ScriptedEventSource, makeSocketPair, AllBackends,
+                            CoroTestSupport); IoBackend, backend/, dialling (planned, B2-B11)
   tui/                      (planned, A7 and B12) core::tui_output (the leaf) and core::tui
   testing/                  core::testing: SuppressWindowsDialogs (no test framework needed),
                             Environment (FakeEnvironment), ScopedTempDir,

@@ -19,7 +19,11 @@ Most of these rules were paid for in fastcached; the full measurements are in
   (`cmake/CoreCppTargets.cmake`): it links `core::<module>` and `core::testing_main`, registers
   the ctest `core-cpp.<module>`, and sets `SKIP_RETURN_CODE 77` and the labels `core-cpp` and
   `<module>`. `NAME <name>` makes it the second binary, `core-cpp-<name>-test` and ctest
-  `core-cpp.<name>`, with the same labels; `DEFINITIONS` are that binary's alone.
+  `core-cpp.<name>`, with the same labels; `DEFINITIONS` are that binary's alone. A `NAME` that
+  is a target of the module (`core_cpp_add_test(net NAME net_types ...)`) links that target
+  rather than `core::<module>`, and builds only where its row in the module table says the target
+  does: `core-cpp.net_types` runs under Emscripten, `core-cpp.net_tls` only with
+  `CORE_CPP_WITH_TLS`.
 - **Labels:** `core-cpp` (everything), the module's name, `hygiene` (checks over the tree and
   the build contract), `canary` (a program that must fail), `loopback` (needs a loopback
   socket), `no-tsan` (excluded from the ThreadSanitizer job).
