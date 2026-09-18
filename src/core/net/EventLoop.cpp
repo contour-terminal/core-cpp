@@ -335,9 +335,17 @@ void EventLoop::pumpOnce()
         return;
     }
 
+    // The clock is re-sampled around the one blocking call, as IClock::refresh() asks of
+    // whoever owns the loop: before the timeout is computed, so the time this turn spent
+    // is not waited for again, and after the wait, so the timers fired and the flows
+    // resumed below see the instant the wait ended at. A clock that reads the OS on every
+    // now() ignores both; a CachedClock would otherwise never move.
+    _clock.refresh();
+
     // A pending close polls instead of blocking: the closed descriptor can no longer
     // produce readiness, so an indefinite wait would never return on its account.
     auto const outcome = _source.wait(closed.empty() ? computeTimeoutMs() : 0);
+    _clock.refresh();
 
     // A cross-thread post may have both queued work and signalled the self-pipe.
     if (_postToken && std::ranges::find(outcome.readyRead, _postToken) != outcome.readyRead.end())

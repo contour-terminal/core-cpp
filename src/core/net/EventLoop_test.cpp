@@ -45,6 +45,16 @@ Task<int> awaitDelayThenFire(EventLoop* loop, int delayMs, bool* fired)
     co_return delayMs;
 }
 
+/// Spends @p spent of @p clock's time, as a batch of work that long would, then parks on a delay of
+/// @p delayMs and sets *fired once it fires.
+Task<void> spendThenDelay(
+    EventLoop* loop, ManualClock* clock, std::chrono::milliseconds spent, int delayMs, bool* fired)
+{
+    clock->advance(spent);
+    co_await loop->delay(std::chrono::milliseconds { delayMs });
+    *fired = true;
+}
+
 /// Sets *flag true after @p delayMs — a stand-in for the async condition
 /// (queue drained, debounce fired) that pollUntil waits on.
 Task<void> setFlagAfter(EventLoop* loop, int delayMs, bool* flag)
@@ -189,6 +199,35 @@ TEST_CASE("A pending delay bounds the wait timeout and fires deterministically",
     REQUIRE(source.waitCount() == 2);
     REQUIRE(source.recordedTimeouts().front() == 500); // exact: no real-clock jitter
     REQUIRE(source.recordedTimeouts().back() == 250);  // the remaining half
+}
+
+TEST_CASE("The loop refreshes a caching clock before each timeout and after each wait", "[EventLoop][clock]")
+{
+    // A CachedClock serves the instant of its last refresh(), and IClock's contract makes whoever
+    // owns the loop refresh it: after the wait returns, so the turn sees the instant the wait ended
+    // at, and before a timeout is computed, so the time the turn spent is not waited for again.
+    // Each blockOn(justReturn()) below is one pump, and so one wait.
+    auto manual = ManualClock {};
+    auto cached = core::platform::CachedClock { manual };
+    auto source = ClockAdvancingSource { manual, std::chrono::milliseconds { 250 } };
+    source.pushTimeout();
+    source.pushTimeout();
+    auto fired = false; // declared before the loop, which may still hold the flow when it goes
+    auto loop = EventLoop { source, cached };
+
+    // The delay is scheduled against the clock's first sample, 0, and so is due at 500. The flow
+    // spends 100 of that before the first wait, which only a refresh before the timeout counts.
+    loop.spawn(spendThenDelay(&loop, &manual, std::chrono::milliseconds { 100 }, 500, &fired));
+    loop.blockOn(justReturn());
+    CHECK(source.recordedTimeouts().back() == 400);
+    CHECK_FALSE(fired);
+
+    // The first wait ended at 350 and the second ends at 600: only a refresh after each wait lets
+    // the loop see either, and so time the second wait by 150 and fire the delay after it.
+    loop.blockOn(justReturn());
+    CHECK(source.recordedTimeouts().back() == 150);
+    CHECK(fired);
+    CHECK(source.waitCount() == 2);
 }
 
 TEST_CASE("pollUntil returns as soon as its predicate holds", "[EventLoop][poll]")

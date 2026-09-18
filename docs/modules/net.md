@@ -64,6 +64,9 @@ From contour's `src/net/README.md` at `6777ff05`, as far as they hold here:
   interest nothing can resume.
 - **Readiness is level-triggered.** The sockets and the accept loop assume a descriptor that
   stays ready is reported again.
+- **Time is the injected `core::platform::IClock`,** which the loop refreshes before it computes
+  a wait's timeout and after the wait returns, so a `CachedClock` serves each turn the instant its
+  wait ended at. (contour's loop did not refresh; its clock had no `refresh()`.)
 - **A descriptor is announced before it closes** (`EventLoop::notifyHandleClosing()`), because
   epoll and kqueue cannot report a closed one. A socket's `close()` resumes a flow parked on it on
   its normal path; its destructor resumes it with `OperationCancelled`, so the flow never reads the

@@ -96,7 +96,9 @@ class EventLoop
     /// @param source The multiplexed wait the pump drives (not owned; outlives the loop).
     /// @param clock The monotonic time source for timers and delays (not owned;
     ///        outlives the loop). Defaults to the process steady clock; tests
-    ///        inject a @c platform::ManualClock for deterministic timing.
+    ///        inject a @c platform::ManualClock for deterministic timing. The loop
+    ///        calls its @c refresh() before it computes a wait's timeout and after
+    ///        the wait returns, so a @c platform::CachedClock serves the current turn.
     explicit EventLoop(EventSource& source, platform::IClock& clock = platform::defaultSteadyClock());
 
     EventLoop(EventLoop const&) = delete;

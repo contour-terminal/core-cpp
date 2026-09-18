@@ -116,6 +116,10 @@ workflow refuses one without a section here.
   appears in its header.
 - The OpenSSL dependency, taken from the system and never fetched, resolved when
   `CORE_CPP_WITH_TLS` is on.
+- `core::net::EventLoop` calls its clock's `refresh()` before it computes a wait's timeout and
+  after the wait returns, as `core::platform::IClock` asks of whoever owns a loop, so a
+  `CachedClock` can drive it. contour's loop did not, because contour's `IClock` had no
+  `refresh()`; for `SteadyClock` and `ManualClock` it does nothing.
 - A module may declare further targets in the module table, each with a row of its own
   (`core_cpp_module_target()`), where its `PLATFORMS` or `WHEN` differ from its module's: a
   native-only module is entered under Emscripten when one of its targets builds there, and
