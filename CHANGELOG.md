@@ -52,7 +52,9 @@ workflow refuses one without a section here.
   `MessageQueue`, `FileSystem` and `NativeFileSystem`, `FileInfoProvider`, `EnvironmentProvider`,
   `UserPaths`, `PathUtils`, `GlobMatch`, `FileUri`, `SystemInfo` and `StringUtils`, with the test
   doubles `testing::InMemoryFileSystem`, `testing::MockFileInfoProvider` and
-  `testing::TestEnvironmentProvider`. Under single-threaded Emscripten its row says
+  `testing::TestEnvironmentProvider`, and `nativeEnvironmentProvider()` and
+  `nativeFileInfoProvider()`, which give a composition root the private native implementations.
+  Under single-threaded Emscripten its row says
   `wasm-subset`: Types, PlatformError, Clock, StringUtils, PathUtils, GlobMatch and FileUri build,
   and their tests run under node.
 - `core::coro`, header-only, with `core::coro::Generator<T>`: `std::generator` where the standard

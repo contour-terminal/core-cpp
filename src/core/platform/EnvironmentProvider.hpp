@@ -5,6 +5,7 @@
 
 #include <expected>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -117,5 +118,17 @@ class EnvironmentProvider
         return std::nullopt;
     }
 };
+
+/// @brief Creates this operating system's own EnvironmentProvider, for a composition root.
+///
+/// On POSIX it is the provider that reads the process environment through
+/// @c core::LiveEnvironment and exports through @c core::setProcessEnvironmentVariable(); on
+/// Windows the one over `GetEnvironmentVariableA()`/`SetEnvironmentVariableA()`, which matches
+/// names case-insensitively. Both implementations are private (`posix/`, `windows/`), so this is
+/// the way to reach them. Each call makes a new provider, and the variables one was told to set
+/// but not to export are its own. Not in the WebAssembly subset.
+///
+/// @return The provider, owned by the caller.
+[[nodiscard]] std::unique_ptr<EnvironmentProvider> nativeEnvironmentProvider();
 
 } // namespace core::platform

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <memory>
 #include <string>
 
 namespace core::platform
@@ -70,6 +71,11 @@ namespace
     }
 
 } // namespace
+
+std::unique_ptr<FileInfoProvider> nativeFileInfoProvider()
+{
+    return std::make_unique<LinuxFileInfoProvider>();
+}
 
 std::vector<FileEntry> LinuxFileInfoProvider::listDirectory(std::string const& path) const
 {

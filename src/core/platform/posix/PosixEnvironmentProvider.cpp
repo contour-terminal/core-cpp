@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -41,6 +42,11 @@ PosixEnvironmentProvider& PosixEnvironmentProvider::instance()
 {
     static PosixEnvironmentProvider env;
     return env;
+}
+
+std::unique_ptr<EnvironmentProvider> nativeEnvironmentProvider()
+{
+    return std::make_unique<PosixEnvironmentProvider>();
 }
 
 void PosixEnvironmentProvider::set(std::string_view name, std::string_view value)

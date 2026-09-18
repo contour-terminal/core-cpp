@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/Environment.hpp>
+#include <core/platform/EnvironmentProvider.hpp>
 #include <core/platform/testing/TestEnvironmentProvider.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -123,31 +124,42 @@ TEST_CASE("TestEnvironmentProvider.changeDirectory_invalid", "[platform]")
     CHECK(env.currentDirectory() == "/home/user");
 }
 
+TEST_CASE("nativeEnvironmentProvider is this platform's own provider", "[platform]")
+{
+    // The implementations are private (posix/, windows/); a composition root reaches them only
+    // through the factory.
+    auto const provider = nativeEnvironmentProvider();
+    REQUIRE(provider != nullptr);
+    CHECK(dynamic_cast<NativeEnvironmentProvider const*>(provider.get()) != nullptr);
+}
+
 TEST_CASE("the native EnvironmentProvider exports what it was set to", "[platform]")
 {
     // The one provider that writes the process environment, the one a child process inherits
     // and LiveEnvironment reads. A variable set but not exported stays the provider's own.
     constexpr auto Name = "CORE_CPP_NATIVE_PROVIDER_TEST_VARIABLE";
-    auto provider = NativeEnvironmentProvider {};
+    auto const provider = nativeEnvironmentProvider();
+    REQUIRE(provider != nullptr);
     auto const live = core::LiveEnvironment {};
 
-    provider.set(Name, "local");
-    CHECK(provider.get(Name) == "local");
+    provider->set(Name, "local");
+    CHECK(provider->get(Name) == "local");
     CHECK(!live.get(Name).has_value());
 
-    provider.exportVariable(Name);
+    provider->exportVariable(Name);
     CHECK(live.get(Name) == "local");
-    auto const keys = provider.keys();
+    auto const keys = provider->keys();
     CHECK(std::ranges::find(keys, std::string { Name }) != keys.end());
 
-    provider.unset(Name);
-    CHECK(!provider.get(Name).has_value());
+    provider->unset(Name);
+    CHECK(!provider->get(Name).has_value());
     CHECK(!live.get(Name).has_value());
 }
 
 TEST_CASE("the native EnvironmentProvider reads what the process environment holds", "[platform]")
 {
     // PATH exists on every platform this builds for, and the provider was never told it.
-    auto const provider = NativeEnvironmentProvider {};
-    CHECK(provider.get("PATH") == core::LiveEnvironment {}.get("PATH"));
+    auto const provider = nativeEnvironmentProvider();
+    REQUIRE(provider != nullptr);
+    CHECK(provider->get("PATH") == core::LiveEnvironment {}.get("PATH"));
 }

@@ -36,8 +36,16 @@ The test doubles are in `testing/` and in `core::platform::testing`:
 `testing::InMemoryFileSystem` (a `FileSystem` held in maps, with symlinks, permissions and
 refused paths), `testing::MockFileInfoProvider` and `testing::TestEnvironmentProvider`, which never
 touches the process environment. The native implementations of `FileInfoProvider` and
-`EnvironmentProvider` are in the private `posix/`, `linux/` and `windows/` directories; a
-composition root picks one per platform.
+`EnvironmentProvider` are in the private `posix/`, `linux/` and `windows/` directories, which no
+consumer includes; a composition root gets them from `nativeEnvironmentProvider()` and
+`nativeFileInfoProvider()`, each a `std::unique_ptr` to the interface:
+
+| Factory | Windows | Every POSIX system (Linux, macOS, the BSDs) |
+|---|---|---|
+| `nativeEnvironmentProvider()` (`<core/platform/EnvironmentProvider.hpp>`) | `GetEnvironmentVariableA`/`SetEnvironmentVariableA`, names case-insensitive | reads through `core::LiveEnvironment`, exports through `core::setProcessEnvironmentVariable()` |
+| `nativeFileInfoProvider()` (`<core/platform/FileInfoProvider.hpp>`) | `std::filesystem`: the read-only flag as permissions, no blocks, device or inode | `lstat(2)`: the POSIX default, named `LinuxFileInfoProvider` for where it was written |
+
+Each call makes a new provider; neither factory is in the WebAssembly subset.
 
 ## Clocks
 

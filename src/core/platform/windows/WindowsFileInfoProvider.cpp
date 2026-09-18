@@ -8,6 +8,7 @@
     #include <algorithm>
     #include <chrono>
     #include <filesystem>
+    #include <memory>
     #include <string>
     #include <string_view>
     #include <vector>
@@ -107,6 +108,11 @@ namespace
     }
 
 } // namespace
+
+std::unique_ptr<FileInfoProvider> nativeFileInfoProvider()
+{
+    return std::make_unique<WindowsFileInfoProvider>();
+}
 
 std::vector<FileEntry> WindowsFileInfoProvider::listDirectory(std::string const& path) const
 {

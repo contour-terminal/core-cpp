@@ -7,6 +7,7 @@
     #include <algorithm>
     #include <cctype>
     #include <filesystem>
+    #include <memory>
 
     #include <windows.h>
 
@@ -26,6 +27,11 @@ WindowsEnvironmentProvider& WindowsEnvironmentProvider::instance()
 {
     static WindowsEnvironmentProvider provider;
     return provider;
+}
+
+std::unique_ptr<EnvironmentProvider> nativeEnvironmentProvider()
+{
+    return std::make_unique<WindowsEnvironmentProvider>();
 }
 
 void WindowsEnvironmentProvider::set(std::string_view name, std::string_view value)

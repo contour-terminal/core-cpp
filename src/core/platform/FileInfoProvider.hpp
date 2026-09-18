@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -36,7 +37,7 @@ struct FileEntry
 /// Abstract interface for listing directory contents.
 ///
 /// Implementations provide platform-specific directory enumeration.
-/// Inject via constructor for testability (the mock in tests, the native one in production).
+/// Inject via constructor for testability (the mock in tests, nativeFileInfoProvider() in production).
 class FileInfoProvider
 {
   public:
@@ -48,5 +49,17 @@ class FileInfoProvider
     /// @return A vector of FileEntry structs, sorted by name.
     [[nodiscard]] virtual std::vector<FileEntry> listDirectory(std::string const& path) const = 0;
 };
+
+/// @brief Creates this operating system's own FileInfoProvider, for a composition root.
+///
+/// On Windows it is the provider over `std::filesystem`, which reports the read-only flag as the
+/// permissions and has no block count, device or inode (the documented sentinels). On every POSIX
+/// system -- Linux, and by default macOS and the BSDs too -- it is the `lstat(2)` provider, which
+/// is named `LinuxFileInfoProvider` for where it was written but needs nothing Linux-specific.
+/// Both implementations are private (`linux/`, `windows/`), so this is the way to reach them. Not
+/// in the WebAssembly subset.
+///
+/// @return The provider, owned by the caller.
+[[nodiscard]] std::unique_ptr<FileInfoProvider> nativeFileInfoProvider();
 
 } // namespace core::platform

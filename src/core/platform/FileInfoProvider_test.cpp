@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/platform/FileInfoProvider.hpp>
 #include <core/platform/PathUtils.hpp>
 #include <core/platform/testing/MockFileInfoProvider.hpp>
 #include <core/testing/ScopedTempDir.hpp>
@@ -9,7 +10,9 @@
 #include <fstream>
 #include <string>
 
-#ifndef _WIN32
+#ifdef _WIN32
+    #include <core/platform/windows/WindowsFileInfoProvider.hpp>
+#else
     #include <core/platform/linux/LinuxFileInfoProvider.hpp>
 #endif
 
@@ -36,6 +39,35 @@ struct TempDir
     void createSubdir(std::string const& name) const { fs::create_directories(path / name); }
 };
 } // namespace
+
+// ===========================================================================
+// nativeFileInfoProvider
+// ===========================================================================
+
+TEST_CASE("nativeFileInfoProvider is this platform's own provider, and lists a directory", "[platform]")
+{
+    // The implementations are private (linux/, windows/); a composition root reaches them only
+    // through the factory. Every POSIX system gets the lstat(2) one named LinuxFileInfoProvider.
+    auto const provider = nativeFileInfoProvider();
+    REQUIRE(provider != nullptr);
+#ifdef _WIN32
+    CHECK(dynamic_cast<WindowsFileInfoProvider const*>(provider.get()) != nullptr);
+#else
+    CHECK(dynamic_cast<LinuxFileInfoProvider const*>(provider.get()) != nullptr);
+#endif
+
+    TempDir const tmp;
+    tmp.createFile("file.txt", "abc");
+    tmp.createSubdir("dir");
+
+    auto const entries = provider->listDirectory(tmp.path.string());
+    REQUIRE(entries.size() == 2);
+    CHECK(entries[0].name == "dir");
+    CHECK(entries[0].isDir);
+    CHECK(entries[1].name == "file.txt");
+    CHECK(!entries[1].isDir);
+    CHECK(entries[1].size == 3);
+}
 
 // ===========================================================================
 // MockFileInfoProvider tests
