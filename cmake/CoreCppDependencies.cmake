@@ -151,9 +151,37 @@ core_cpp_dependency(Threads
     FIND_PACKAGE Threads
     NO_FETCH)
 
+## @brief WRAP of the Catch2 row: a Catch2 that core-cpp built from source is compiled as C++23.
+##
+## Catch2 compiles parts of itself only when the standard has them: the
+## StringMaker<std::string_view> specialization needs C++17. Built at the compiler's default,
+## which is C++14 on MSVC, it lacks them, and a C++23 test that CHECKs a string_view fails to
+## link (LNK2019). A top-level build sets CMAKE_CXX_STANDARD, but core-cpp may not set that for a
+## parent, so the standard goes on the targets core-cpp created. It sets properties, not CPM
+## OPTIONS, which would write a cache entry into the parent's cache. An IMPORTED Catch2 (from
+## find_package) was built by someone else and is left alone; one the parent provided never
+## reaches a WRAP.
+function(core_cpp_catch2_standard name)
+    foreach(alias IN ITEMS Catch2::Catch2 Catch2::Catch2WithMain)
+        if(NOT TARGET ${alias})
+            continue()
+        endif()
+        get_target_property(imported ${alias} IMPORTED)
+        if(imported)
+            continue()
+        endif()
+        get_target_property(real ${alias} ALIASED_TARGET)
+        if(NOT real)
+            set(real ${alias})
+        endif()
+        set_target_properties(${real} PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    endforeach()
+endfunction()
+
 # Catch2 for core-cpp's own tests and for core::testing_main, which consumers link to their tests.
 core_cpp_dependency(Catch2
     WHEN CORE_CPP_TESTING OR CORE_CPP_CATCH2_MAIN
     TARGETS Catch2::Catch2
     FIND_PACKAGE Catch2 3.8
-    CPM NAME Catch2 VERSION 3.8.0 GITHUB_REPOSITORY catchorg/Catch2 EXCLUDE_FROM_ALL YES SYSTEM YES)
+    CPM NAME Catch2 VERSION 3.8.0 GITHUB_REPOSITORY catchorg/Catch2 EXCLUDE_FROM_ALL YES SYSTEM YES
+    WRAP core_cpp_catch2_standard)

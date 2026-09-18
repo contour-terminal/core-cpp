@@ -27,9 +27,10 @@ set(CORE_CPP_CXX_COMPILER_LAUNCHER "${CMAKE_CXX_COMPILER_LAUNCHER}" CACHE INTERN
 # The module is a verbatim copy from fastcached; its reasoning is in the file.
 include("${CMAKE_CURRENT_LIST_DIR}/FetchTransferBound.cmake")
 
-# The dependencies core-cpp fetches (Catch2) are compiled with the same standard
-# as the code that includes their headers. Catch2 in particular compiles parts of
-# itself only from C++17 on, and a test that uses them would fail to link otherwise.
+# The dependencies core-cpp fetches are compiled with the same standard as the code
+# that includes their headers. Catch2 in particular compiles parts of itself only from
+# C++17 on, and a test that uses them would fail to link otherwise. As a subproject,
+# the Catch2 row's WRAP (core_cpp_catch2_standard) sets it on the fetched targets instead.
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
