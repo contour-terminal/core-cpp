@@ -109,6 +109,8 @@ jobs:
           - { name: gcc-15, os: ubuntu-24.04, preset: gcc-release, compiler: gcc, gcc: "15" }
           - { name: clang-22-arm64, os: ubuntu-24.04-arm, preset: clang-release, compiler: clang }
           - { name: clang-22-cxx26, os: ubuntu-24.04, preset: clang-debug, compiler: clang, cxx_standard: "26" }
+          # CORE_CPP_WITH_TRACY: the fetched Tracy client, and the profiling macros' enabled branch.
+          - { name: clang-22-tracy, os: ubuntu-24.04, preset: clang-tracy, compiler: clang }
     steps:
       - uses: actions/checkout@v4
 

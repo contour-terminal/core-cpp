@@ -4,9 +4,10 @@ core-cpp is instrumented for the [Tracy](https://github.com/wolfpld/tracy) profi
 macros in `<core/Profiling.hpp>`. With `CORE_CPP_WITH_TRACY` off (the default) every macro
 expands to `(void) 0`, no Tracy header is included and nothing is linked.
 
-!!! note "Status"
-    `<core/Profiling.hpp>` arrives with `core::base` in Task A3; the Tracy dependency uses the
-    version contour pins.
+`CORE_CPP_WITH_TRACY=ON` resolves Tracy 0.14.1, the version contour pins, from the parent
+project, `find_package(Tracy)` or CPM, and `core::base` links `Tracy::TracyClient` PUBLIC. A client
+core-cpp fetches is built with `TRACY_ENABLE` (off upstream, which compiles the client away) and
+`TRACY_ONLY_LOCALHOST`, which keeps its socket and its announcement on the machine.
 
 ```cpp
 #include <core/Profiling.hpp>

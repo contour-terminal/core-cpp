@@ -185,3 +185,17 @@ core_cpp_dependency(Catch2
     FIND_PACKAGE Catch2 3.8
     CPM NAME Catch2 VERSION 3.8.0 GITHUB_REPOSITORY catchorg/Catch2 EXCLUDE_FROM_ALL YES SYSTEM YES
     WRAP core_cpp_catch2_standard)
+
+# Tracy, when core-cpp is instrumented for it: core::base links the client PUBLIC and
+# <core/Profiling.hpp> includes its header. The version is the one contour's cmake/Tracy.cmake
+# pins (6777ff05), because a client and the profiler that reads its captures must match. A fetched
+# client is built as contour builds it: TRACY_ENABLE, which is off upstream and would compile the
+# client away to nothing, and TRACY_ONLY_LOCALHOST, which keeps the listening socket and the
+# client's announcement on this machine. Those are Tracy's options, set only when core-cpp fetches it.
+core_cpp_dependency(Tracy
+    WHEN CORE_CPP_WITH_TRACY
+    TARGETS Tracy::TracyClient
+    FIND_PACKAGE Tracy 0.14.1
+    CPM NAME tracy VERSION 0.14.1 GITHUB_REPOSITORY wolfpld/tracy GIT_TAG v0.14.1
+        EXCLUDE_FROM_ALL YES SYSTEM YES
+        OPTIONS "TRACY_ENABLE ON" "TRACY_STATIC ON" "TRACY_ONLY_LOCALHOST ON")

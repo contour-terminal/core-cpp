@@ -6,6 +6,10 @@ set(_coreCppBaseLibs "")
 if(CORE_CPP_USE_THREADS)
     list(APPEND _coreCppBaseLibs Threads::Threads)
 endif()
+# PUBLIC, because <core/Profiling.hpp> includes <tracy/Tracy.hpp> when CORE_CPP_WITH_TRACY is on.
+if(CORE_CPP_WITH_TRACY)
+    list(APPEND _coreCppBaseLibs Tracy::TracyClient)
+endif()
 
 core_cpp_add_module(base KIND STATIC
     HEADERS

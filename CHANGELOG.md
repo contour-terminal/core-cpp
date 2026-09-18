@@ -37,6 +37,10 @@ workflow refuses one without a section here.
   (`ScopedOutput`, `ScopedCapture`), and `fatal()` and `SoftRequire()`, which report through it.
 - `core::cli`: the command-line parser (`core::cli::parse`, help and usage text) and the
   application scaffold `core::cli::App`.
+- The Tracy dependency, 0.14.1 as contour pins it, resolved when `CORE_CPP_WITH_TRACY` is on:
+  `core::base` then links `Tracy::TracyClient` and the `CORE_ZONE_*` macros record zones. A
+  fetched client is built with `TRACY_ENABLE` and `TRACY_ONLY_LOCALHOST`. CI builds and tests the
+  `clang-tracy` preset.
 - `core::testing_main` applies the `LOG` environment variable to `core::log` before it runs the
   tests (`LOG=net` enables the `net` category and writes it to standard output), and so links
   `core::log`.
