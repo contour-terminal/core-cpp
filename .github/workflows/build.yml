@@ -535,8 +535,10 @@ jobs:
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
           restore-keys: cpm-${{ runner.os }}-
 
-      - name: Install Ninja and GCC ${{ env.GCC_VERSION }}
-        run: sudo apt-get update -q && sudo apt-get install -y -q ninja-build "g++-$GCC_VERSION"
+      # The fastcached 0.2.0 release links libyaml-cpp.so.0.8, which the runner image lacks: without
+      # it the daemon exits 127 at start-up, and the module (correctly) disables caching.
+      - name: Install Ninja, GCC ${{ env.GCC_VERSION }} and the daemon's runtime library
+        run: sudo apt-get update -q && sudo apt-get install -y -q ninja-build "g++-$GCC_VERSION" libyaml-cpp0.8
 
       - name: No other compiler cache is installed
         run: |
