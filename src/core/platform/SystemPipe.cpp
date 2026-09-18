@@ -12,7 +12,9 @@
 
 #include <core/platform/WinsockInit.hpp>
 
+#include <algorithm>
 #include <array>
+#include <climits>
 
 #ifndef _WIN32
     #include <sys/socket.h>
@@ -105,12 +107,18 @@ namespace
             return static_cast<std::size_t>(n);
         }
 
-        [[nodiscard]] std::expected<std::size_t, PlatformError> read(void* data, std::size_t size) override
+        [[nodiscard]] std::expected<ChannelResult, PlatformError> read(void* data, std::size_t size) override
         {
+            if (size == 0)
+                return ChannelResult {};
             auto const n = ::recv(_readFd, data, size, 0);
-            if (n < 0)
-                return std::unexpected(PlatformError::IoError);
-            return static_cast<std::size_t>(n);
+            if (n > 0)
+                return ChannelResult::bytes(static_cast<std::size_t>(n));
+            if (n == 0)
+                return ChannelResult::endOfStream();
+            if (isWouldBlock(errno) || errno == EINTR)
+                return ChannelResult {};
+            return std::unexpected(PlatformError::IoError);
         }
 
         [[nodiscard]] bool good() const noexcept override { return _readFd >= 0 && _writeFd >= 0; }
@@ -172,15 +180,23 @@ namespace
             return static_cast<std::size_t>(n);
         }
 
-        [[nodiscard]] std::expected<std::size_t, PlatformError> read(void* data, std::size_t size) override
+        [[nodiscard]] std::expected<ChannelResult, PlatformError> read(void* data, std::size_t size) override
         {
+            if (size == 0)
+                return ChannelResult {};
             // Reset the readiness event before draining: WSAEventSelect is
             // edge-triggered per event type, and recv re-arms FD_READ if data remains.
             WSAResetEvent(_event);
-            auto const n = ::recv(_readSock, static_cast<char*>(data), static_cast<int>(size), 0);
-            if (n == SOCKET_ERROR)
-                return std::unexpected(PlatformError::IoError);
-            return static_cast<std::size_t>(n);
+            // recv() takes an int; a larger buffer is filled up to INT_MAX bytes.
+            auto const capacity = static_cast<int>(std::min<std::size_t>(size, INT_MAX));
+            auto const n = ::recv(_readSock, static_cast<char*>(data), capacity, 0);
+            if (n > 0)
+                return ChannelResult::bytes(static_cast<std::size_t>(n));
+            if (n == 0)
+                return ChannelResult::endOfStream();
+            if (WSAGetLastError() == WSAEWOULDBLOCK)
+                return ChannelResult {};
+            return std::unexpected(PlatformError::IoError);
         }
 
         [[nodiscard]] bool good() const noexcept override

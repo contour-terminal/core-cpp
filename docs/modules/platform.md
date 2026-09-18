@@ -18,7 +18,7 @@ the interrupt throttle.
 | `<core/platform/Types.hpp>` | `NativeHandle`, `InvalidHandle`, `ProcessId`, the standard handles, `platformRead()`/`platformWrite()`/`platformClose()`, `isTerminal()`, `nativeHandleToNumber()` |
 | `<core/platform/PlatformError.hpp>` | `PlatformError`, the error of this module's fallible operations, and `toString()` |
 | `<core/platform/Wakeup.hpp>` | `Wakeup`, a signal one thread raises to wake another out of `poll()` or `WaitForMultipleObjects()`: an eventfd on Linux, a self-pipe on macOS and the BSDs, an event on Windows |
-| `<core/platform/SystemPipe.hpp>` | `createSystemPipe()`: an in-process byte channel whose read end an event loop can wait on, on every platform |
+| `<core/platform/SystemPipe.hpp>` | `createSystemPipe()`: an in-process byte channel whose read end an event loop can wait on, on every platform; `ChannelResult`, what one read of it produced |
 | `<core/platform/WinsockInit.hpp>` | `ensureWinsockInitialized()`, once per process; a no-op off Windows |
 | `<core/platform/SignalHandler.hpp>` | `SignalHandler`: SIGCHLD, SIGTSTP, SIGCONT and SIGINT through signalfd on Linux and handlers elsewhere, Ctrl+C and Ctrl+Break on Windows, and an optional `Wakeup` to raise on an interrupt |
 | `<core/platform/MessageQueue.hpp>` | `MessageQueue<T>`, a thread-safe queue that can raise a `Wakeup` on every push |
@@ -73,8 +73,14 @@ Logic that schedules against a deadline takes an `IClock&` rather than calling
 
 - **`SystemPipe` never blocks.** On POSIX both ends are non-blocking and close-on-exec. A write
   that the full channel refuses reports success, because the bytes already pending wake the reader
-  just as well, and a read of an empty channel fails rather than parking the loop. On Windows the
-  channel is a loopback TCP pair whose read end is mapped to a waitable event.
+  just as well. On Windows the channel is a loopback TCP pair whose read end is mapped to a waitable
+  event.
+- **`SystemPipe::read()` tells three outcomes apart**, in a `ChannelResult`, before any failure:
+  the bytes it read (`bytesRead()`), nothing yet (`empty()`: the channel is empty and the writer still
+  there, so wait for readiness and read again) and the end of the stream (`isEndOfStream()`: the
+  writer has closed and every byte it wrote has been read). Only a read that fails is a
+  `PlatformError` (`IoError`), so a loop draining the channel never mistakes an empty channel for
+  a broken one, or a closed writer for either.
 - **`Types.hpp` does not include `<Windows.h>`.** `NativeHandle` is `void*` and `ProcessId`
   `unsigned long` there, and the calls into the Windows API are out of line. endo's copy defined
   `STDIN_FILENO` and the `SIG*` numbers on Windows for its process code; core-cpp's does not.

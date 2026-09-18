@@ -81,6 +81,10 @@ workflow refuses one without a section here.
 - `core::platform::SystemPipe` never blocks: both POSIX ends are non-blocking and close-on-exec,
   a write into a full channel reports done, and `send()` uses `MSG_NOSIGNAL`. endo's copy blocked;
   contour's, which an event loop's `post()` uses, already did this.
+- `core::platform::SystemPipe::read()` returns a `ChannelResult`, which tells the bytes read, an
+  empty channel and the end of the stream apart; only a failed read is a `PlatformError`. endo's
+  and contour's copies returned a count, 0 for the end of the stream, and failed a read of an
+  empty non-blocking channel with the same error as a broken one.
 
 ### Imported
 
