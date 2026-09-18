@@ -80,3 +80,9 @@ Under single-threaded Emscripten, `core::platform` builds only Types, NativeHand
 PlatformError, Clock, StringUtils, PathUtils, GlobMatch and FileUri (`SOURCES_EMSCRIPTEN`).
 Anything else in the module may use threads, sockets and the filesystem freely; anything on that
 list may not. See [`library-hygiene.md`](library-hygiene.md).
+
+## Open work
+
+- **[core-cpp#7](https://github.com/contour-terminal/core-cpp/issues/7)** — unify
+  `core::Environment` (`core::base`, from crispy) with `core::platform::EnvironmentProvider`
+  into one injectable seam.

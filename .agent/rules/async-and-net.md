@@ -223,3 +223,13 @@ synchronous leaf functions or in blocks containing no `co_await`; `CORE_FRAME_MA
 stackless event and is safe anywhere. See
 [`../guides/profiling-tracy.md`](../guides/profiling-tracy.md). Origin:
 [fastcached `.agent/guides/profiling-tracy.md`](https://github.com/LASTRADA-Software/fastcached/blob/b5ded89c5ae6ba5b45337335ce774c5ae6986d65/.agent/guides/profiling-tracy.md).
+
+## Open work
+
+- **[core-cpp#6](https://github.com/contour-terminal/core-cpp/issues/6)** — remove `WfmoBackend`
+  and `BackendKind::Wfmo` after one release in which the IOCP backend is the Windows default and
+  green.
+- **[core-cpp#9](https://github.com/contour-terminal/core-cpp/issues/9)** — resolve morph's
+  follow-up from its move onto `core::coro` (executors and strand, logger, `FileIoOps`, the
+  DateTime clock seam, `morph::net` on Windows), and graduate morph's strand into `core::coro`
+  once a second consumer needs one.

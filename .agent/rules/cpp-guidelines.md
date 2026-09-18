@@ -199,3 +199,9 @@ has the measurement that made this a rule.
 7. `/simplify` was run; findings outside the change were either addressed or reported.
 
 *(Lightweight's checklist, adapted to core-cpp's presets)*
+
+## Open work
+
+- **[core-cpp#10](https://github.com/contour-terminal/core-cpp/issues/10)** — document the
+  public API the Doxyfile selects, then set `WARN_AS_ERROR = FAIL_ON_WARNINGS` so an
+  undocumented declaration fails the Docs workflow.

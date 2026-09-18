@@ -87,7 +87,8 @@ presets, scripts and paths.
   green. Origin: [fastcached#315](https://github.com/LASTRADA-Software/fastcached/issues/315).
 - **Nothing in core-cpp states that level; it follows from `_DEBUG`, from the runtime flavour,
   from the build type.** Any of those moving removes the checks with no warning while the leg
-  stays green. A must-die canary is the remedy fastcached uses; core-cpp has none yet.
+  stays green. A must-die canary is the remedy fastcached uses; core-cpp's is
+  [core-cpp#11](https://github.com/contour-terminal/core-cpp/issues/11).
 
 ## No executable raises a modal error dialog, and the build installs that
 
@@ -282,3 +283,9 @@ Every one of these was first classified "mechanical" by a text scan, because a s
 toward "nothing unusual here". Read the body. Target `std::views::iota`; for `argv`,
 `std::span{argv, argc}.subspan(1)`. Origin:
 [fastcached#1452](https://github.com/LASTRADA-Software/fastcached/issues/1452).
+
+## Open work
+
+- **[core-cpp#11](https://github.com/contour-terminal/core-cpp/issues/11)** — a must-die canary
+  that proves `cl-debug` runs with `_ITERATOR_DEBUG_LEVEL=2`, accepted only on the runtime's own
+  `subscript out of range` diagnostic.

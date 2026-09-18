@@ -72,8 +72,9 @@ issue. The leading one may not: an entry whose issue has closed is a rule that h
 false, and the expensive version of that is an entry saying something *cannot* be done,
 which tells the next session not to try. Delete the heading when its last entry goes. The
 grammar is fastcached's, where a ctest reads and resolves it
-([fastcached#957](https://github.com/LASTRADA-Software/fastcached/issues/957)); nothing in
-core-cpp reads it yet, so keeping entries true is a review question here.
+([fastcached#957](https://github.com/LASTRADA-Software/fastcached/issues/957)); until core-cpp
+has that check ([core-cpp#12](https://github.com/contour-terminal/core-cpp/issues/12)),
+keeping entries true is a review question here.
 
 ## Do not `@`-import these
 
@@ -81,3 +82,9 @@ core-cpp reads it yet, so keeping entries true is a review question here.
 `@`-prefixed reference to a file in this directory, anywhere in `AGENT.md`, would pull every
 one of them into every session and undo the point of the split. Link them as plain markdown.
 Origin: [fastcached `.agent/rules/README.md`](https://github.com/LASTRADA-Software/fastcached/blob/b5ded89c5ae6ba5b45337335ce774c5ae6986d65/.agent/rules/README.md).
+
+## Open work
+
+- **[core-cpp#12](https://github.com/contour-terminal/core-cpp/issues/12)** — a check that reads
+  every `## Open work` entry and refuses one whose leading reference is not a core-cpp issue, or
+  whose issue has closed.

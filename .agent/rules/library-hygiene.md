@@ -138,4 +138,12 @@ packagers get no new dependency. The contract is in
 - **Consumers pin a tag, or temporarily a full SHA; never a branch.** A branch pin is a
   dependency that changes under a consumer's CI without a commit in its repository.
 - **No `install()` in 0.1.0.** Targets are install-ready through their file sets; exporting
-  them is open work after 0.1.0.
+  them is [core-cpp#5](https://github.com/contour-terminal/core-cpp/issues/5).
+
+## Open work
+
+- **[core-cpp#5](https://github.com/contour-terminal/core-cpp/issues/5)** — `install()` and an
+  exported package config for distro unbundling, then a vcpkg port.
+- **[core-cpp#8](https://github.com/contour-terminal/core-cpp/issues/8)** — graduate
+  fastcached's Logger, Base64/Sha256, Cli Options and EnumTable when a second consumer needs
+  them.

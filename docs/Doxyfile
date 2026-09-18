@@ -59,7 +59,8 @@ PREDEFINED             = CORE_CPP_WITH_TUI=1 \
                          CORE_CPP_WITH_TLS=1 \
                          CORE_CPP_WITH_TRACY=0
 
-# Undocumented public API is reported, and does not yet fail the build (open work after 0.1.0).
+# Undocumented public API is reported, and does not yet fail the build:
+# https://github.com/contour-terminal/core-cpp/issues/10
 QUIET                  = YES
 WARNINGS               = YES
 WARN_IF_UNDOCUMENTED   = YES
