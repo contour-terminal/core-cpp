@@ -125,14 +125,18 @@ namespace
         {
             if (isEntryFor(*entry, name))
             {
+                // Only a first and single entry that already reads the value leaves nothing to do.
+                // Readers take the first entry, and a second one (a block inherited through
+                // execve() can name a variable twice) is dropped by publishing.
+                unchanged =
+                    !removed && value && std::string_view { *entry }.substr(name.size() + 1) == *value;
                 removed = true;
-                unchanged = value && std::string_view { *entry }.substr(name.size() + 1) == *value;
             }
             else
                 block.push_back(*entry);
             ++entry;
         }
-        // Nothing to remove, or the variable already reads so: the block as it stands is the
+        // Nothing to remove, or one entry that already reads so: the block as it stands is the
         // answer, and publishing a copy would cost a block that is never freed.
         if (value ? unchanged : !removed)
             return;

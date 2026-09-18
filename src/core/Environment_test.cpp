@@ -12,6 +12,9 @@
 #ifdef _WIN32
     #include <Windows.h>
 #else
+    #include <algorithm>
+    #include <cstddef>
+    #include <string_view>
     #include <vector>
 
     #ifdef __APPLE__
@@ -225,6 +228,50 @@ class WrittenVariable
     }
     return entries;
 }
+
+/// Installs a copy of the environment block with entries appended for as long as it is alive, and
+/// puts the original block back afterwards, whatever the writer published in between. The way to
+/// hand the writer a block it could otherwise only have inherited, such as one naming a variable
+/// twice.
+class InstalledBlock
+{
+  public:
+    /// @param extra "name=value" entries to append, in order.
+    explicit InstalledBlock(std::vector<std::string> extra): _extra { std::move(extra) }
+    {
+        auto* const* entry = _saved;
+        while (entry != nullptr && *entry != nullptr)
+        {
+            _block.push_back(*entry);
+            ++entry;
+        }
+        for (auto& line: _extra)
+            _block.push_back(line.data());
+        _block.push_back(nullptr);
+        processEnviron() = _block.data();
+    }
+
+    ~InstalledBlock() { processEnviron() = _saved; }
+
+    InstalledBlock(InstalledBlock const&) = delete;
+    InstalledBlock& operator=(InstalledBlock const&) = delete;
+    InstalledBlock(InstalledBlock&&) = delete;
+    InstalledBlock& operator=(InstalledBlock&&) = delete;
+
+  private:
+    /// The block to put back, captured before the constructor body installs its own.
+    char** _saved = processEnviron();
+    std::vector<std::string> _extra;
+    std::vector<char*> _block;
+};
+
+/// @return How many entries of the current environment block are for @p name.
+[[nodiscard]] std::ptrdiff_t entriesNaming(std::string_view name)
+{
+    auto const prefix = std::string { name } + "=";
+    return std::ranges::count_if(entriesOf(processEnviron()),
+                                 [&](std::string const& line) { return line.starts_with(prefix); });
+}
 #endif
 } // namespace
 
@@ -288,7 +335,7 @@ TEST_CASE("the process-environment writer publishes nothing for a write that cha
           "[environment]")
 {
     // Each published block is kept for the rest of the process, so a repeated identical export --
-    // a shell re-reading its configuration, say -- must not cost one every time.
+    // a program re-applying its configuration, say -- must not cost one every time.
     auto constexpr Name = "CORE_CPP_ENVIRONMENT_WRITER_TEST_VARIABLE";
     auto const cleanup = WrittenVariable { Name };
 
@@ -302,5 +349,39 @@ TEST_CASE("the process-environment writer publishes nothing for a write that cha
     REQUIRE(core::setProcessEnvironmentVariable(Name, "different").has_value());
     CHECK(processEnviron() != published);
     CHECK(core::LiveEnvironment {}.get(Name) == "different");
+}
+
+TEST_CASE("the process-environment writer publishes for a variable named twice", "[environment]")
+{
+    // A block inherited through execve() can name a variable twice. Readers -- LiveEnvironment and
+    // getenv() alike -- take the first entry, so only a single entry that already reads the value
+    // makes a write one that changes nothing. With a second entry the writer publishes, and the
+    // block it publishes names the variable once.
+    auto constexpr Name = "CORE_CPP_ENVIRONMENT_WRITER_TEST_VARIABLE";
+    auto const live = core::LiveEnvironment {};
+    auto const entry = [&](std::string_view value) {
+        return std::string { Name } + "=" + std::string { value };
+    };
+
+    SECTION("the value only the second entry holds")
+    {
+        auto const installed = InstalledBlock { { entry("old"), entry("same") } };
+        REQUIRE(live.get(Name) == "old");
+
+        REQUIRE(core::setProcessEnvironmentVariable(Name, "same").has_value());
+        CHECK(live.get(Name) == "same");
+        CHECK(entriesNaming(Name) == 1);
+    }
+
+    SECTION("the value the first entry already holds")
+    {
+        auto const installed = InstalledBlock { { entry("same"), entry("old") } };
+        auto* const* const before = processEnviron();
+
+        REQUIRE(core::setProcessEnvironmentVariable(Name, "same").has_value());
+        CHECK(processEnviron() != before);
+        CHECK(live.get(Name) == "same");
+        CHECK(entriesNaming(Name) == 1);
+    }
 }
 #endif
