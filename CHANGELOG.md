@@ -98,6 +98,10 @@ workflow refuses one without a section here.
   `core::base`: the one writer of the process environment, in place of `setenv()`. On POSIX they
   publish a new `environ` block under `LiveEnvironment`'s lock and never free a published one, so
   a reader elsewhere never sees a block change or disappear under it.
+- A module may declare further targets in the module table, each with a row of its own
+  (`core_cpp_module_target()`), where its `PLATFORMS` or `WHEN` differ from its module's: a
+  native-only module is entered under Emscripten when one of its targets builds there, and
+  `core_cpp_add_test(<module> NAME <target>)` links that target and builds where it does.
 
 ### Fixed
 

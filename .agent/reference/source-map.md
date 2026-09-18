@@ -18,7 +18,8 @@ cmake/
   CoreCppTargets.cmake      core_cpp_add_module() (targets, FILE_SET HEADERS, layering check,
                             platform source lists) and core_cpp_add_test()
   CoreCppDependencies.cmake the dependency table: parent target, find_package, then CPM
-  CoreCppModules.cmake      the module table, in dependency order, and the walker that enters it
+  CoreCppModules.cmake      the module table, in dependency order, the rows of targets whose
+                            platforms or option differ from their module's, and the walker
   CPM.cmake                 CPM 0.40.8, bounded and hash-checked download
   FetchTransferBound.cmake  verbatim from fastcached: bounds every dependency transfer
   portable/

@@ -29,13 +29,17 @@
 # It must be called from a directory that core_cpp_add_modules() entered for a row
 # of the module table, and a target it links as core::<x> must belong to that same
 # module or to one the row lists in DEPS. That is how the table's layering is
-# enforced rather than merely documented.
+# enforced rather than merely documented. A target with a core_cpp_module_target()
+# row follows that row rather than its module's: its KIND is checked against it, and
+# where its PLATFORMS or WHEN say it does not build, it is not created.
 #
 # core_cpp_add_test() builds core-cpp-<module>-test from the module's *_test.cpp
 # files, links it with core::<module> (when that target exists) and
 # core::testing_main, and registers it with ctest as core-cpp.<module>. A module
 # with a second test binary names it: NAME <name> builds core-cpp-<name>-test and
-# registers core-cpp.<name>, with the module's labels all the same. DEFINITIONS
+# registers core-cpp.<name>, with the module's labels all the same. When <name> is a
+# target of the module, the binary links that target instead of core::<module>, and
+# builds where that target's row says it does. DEFINITIONS
 # are compile definitions of that binary alone, PRIVATE like every flag here: a
 # definition that changes what a header declares must hold for every translation
 # unit of a program, so it gets a binary of its own rather than a few of its files.
@@ -94,6 +98,44 @@ function(core_cpp_selected_sources prefix platforms outVar)
     set(${outVar} "${sources}" PARENT_SCOPE)
 endfunction()
 
+## @brief Sets @p outVar to ON when a table row with PLATFORMS @p platforms and WHEN
+## @p when builds in this configuration: its option, if it names one, is ON, and it is
+## not native-only in an Emscripten build.
+function(core_cpp_row_builds platforms when outVar)
+    set(builds ON)
+    if(when AND NOT ${when})
+        set(builds OFF)
+    endif()
+    if(EMSCRIPTEN AND platforms STREQUAL "native")
+        set(builds OFF)
+    endif()
+    set(${outVar} ${builds} PARENT_SCOPE)
+endfunction()
+
+## @brief Sets @p outPrefix_PLATFORMS, _WHEN and _KIND to the table row that holds target
+## @p name of module @p module: its own core_cpp_module_target() row when it has one,
+## else the module's row. _KIND is empty for a target other than the module's own that has
+## no row, whose kind the table does not state.
+function(core_cpp_target_row name module outPrefix)
+    if(DEFINED CORE_CPP_TARGET_${name}_MODULE)
+        if(NOT CORE_CPP_TARGET_${name}_MODULE STREQUAL module)
+            message(FATAL_ERROR
+                "core-cpp target ${name} is declared for module '${CORE_CPP_TARGET_${name}_MODULE}' in "
+                "cmake/CoreCppModules.cmake, but module '${module}' builds it.")
+        endif()
+        set(prefix CORE_CPP_TARGET_${name})
+    else()
+        set(prefix CORE_CPP_MODULE_${module})
+    endif()
+    set(kind "${${prefix}_KIND}")
+    if(NOT name STREQUAL module AND NOT DEFINED CORE_CPP_TARGET_${name}_MODULE)
+        set(kind "")
+    endif()
+    set(${outPrefix}_PLATFORMS "${${prefix}_PLATFORMS}" PARENT_SCOPE)
+    set(${outPrefix}_WHEN "${${prefix}_WHEN}" PARENT_SCOPE)
+    set(${outPrefix}_KIND "${kind}" PARENT_SCOPE)
+endfunction()
+
 ## @brief Refuses a core::<x> in @p libs that belongs neither to @p module nor to a
 ## module its table row lists in DEPS.
 function(core_cpp_check_layering target module libs)
@@ -129,12 +171,19 @@ function(core_cpp_add_module name)
             "row to cmake/CoreCppModules.cmake; core_cpp_add_modules() enters its directory.")
     endif()
     set(module "${CORE_CPP_CURRENT_MODULE}")
-    if(name STREQUAL module AND NOT arg_KIND STREQUAL CORE_CPP_MODULE_${module}_KIND)
+    core_cpp_target_row(${name} ${module} row)
+    if(row_KIND AND NOT arg_KIND STREQUAL row_KIND)
         message(FATAL_ERROR
             "core_cpp_add_module(${name}) says KIND ${arg_KIND}; its row in cmake/CoreCppModules.cmake "
-            "says ${CORE_CPP_MODULE_${module}_KIND}.")
+            "says ${row_KIND}.")
     endif()
-    core_cpp_selected_sources(arg "${CORE_CPP_MODULE_${module}_PLATFORMS}" sources)
+    # A target whose row does not build here is not created; its directory asks
+    # `if(TARGET core::<name>)` before it touches the target again.
+    core_cpp_row_builds("${row_PLATFORMS}" "${row_WHEN}" builds)
+    if(NOT builds)
+        return()
+    endif()
+    core_cpp_selected_sources(arg "${row_PLATFORMS}" sources)
 
     set(target core-cpp-${name})
     if(arg_KIND STREQUAL "STATIC")
@@ -199,7 +248,13 @@ function(core_cpp_add_test module)
     if(DEFINED arg_NAME)
         set(name "${arg_NAME}")
     endif()
-    core_cpp_selected_sources(arg "${CORE_CPP_MODULE_${module}_PLATFORMS}" sources)
+    # A binary named after a target with a row of its own tests that target, and builds where it does.
+    core_cpp_target_row(${name} ${module} row)
+    core_cpp_row_builds("${row_PLATFORMS}" "${row_WHEN}" builds)
+    if(NOT builds)
+        return()
+    endif()
+    core_cpp_selected_sources(arg "${row_PLATFORMS}" sources)
     if(NOT sources)
         message(FATAL_ERROR "core_cpp_add_test(${module}): no test sources for this platform.")
     endif()
@@ -207,8 +262,15 @@ function(core_cpp_add_test module)
     set(target core-cpp-${name}-test)
     add_executable(${target} ${sources})
     set(libs ${arg_LIBS} core::testing_main)
-    if(TARGET core::${module})
-        list(PREPEND libs core::${module})
+    set(tested core::${module})
+    if(TARGET core-cpp-${name})
+        get_target_property(owner core-cpp-${name} CORE_CPP_MODULE)
+        if(owner STREQUAL module)
+            set(tested core::${name})
+        endif()
+    endif()
+    if(TARGET ${tested})
+        list(PREPEND libs ${tested})
     endif()
     target_link_libraries(${target} PRIVATE ${libs})
     if(arg_DEFINITIONS)

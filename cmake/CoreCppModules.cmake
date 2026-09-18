@@ -17,10 +17,22 @@
 #
 # core_cpp_add_module() and core_cpp_add_test() apply it (cmake/CoreCppTargets.cmake).
 #
+#   core_cpp_module_target(NAME <target> MODULE <module> KIND STATIC|INTERFACE|OBJECT
+#                          PLATFORMS any|native|wasm-subset [WHEN <option>])
+#
+# A module builds the target named after it, and may build more in the same directory
+# and namespace (core::net_types and core::net_tls beside core::net). Such a target
+# follows its module's row unless it has a row of its own, which it needs where that
+# row does not describe it: a part that builds under Emscripten while the rest of the
+# module does not, or a part that needs an option the module does not. Its PLATFORMS
+# and WHEN then apply to it alone, and its KIND is checked like the module's. It links
+# what its module may: the module's DEPS bound every target of the module.
+#
 # core_cpp_add_modules() walks the rows in order and enters each enabled module's
 # directory. That directory declares its targets with core_cpp_add_module(), which
-# holds them to the row: the KIND of the target named after the module, and the
-# DEPS every core::<x> it links must come from.
+# holds them to the row: the KIND of the target named after the module or with a row
+# of its own, the DEPS every core::<x> it links must come from, and whether the
+# target builds here at all.
 
 include_guard(GLOBAL)
 
@@ -56,12 +68,45 @@ function(core_cpp_module)
     foreach(field IN ITEMS DIR KIND DEPS PLATFORMS WHEN)
         set(CORE_CPP_MODULE_${arg_NAME}_${field} "${arg_${field}}" PARENT_SCOPE)
     endforeach()
+    set(CORE_CPP_MODULE_${arg_NAME}_TARGETS "" PARENT_SCOPE)
+endfunction()
+
+function(core_cpp_module_target)
+    cmake_parse_arguments(PARSE_ARGV 0 arg "" "NAME;MODULE;KIND;PLATFORMS;WHEN" "")
+    if(arg_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR "core_cpp_module_target(${arg_NAME}): unexpected arguments: ${arg_UNPARSED_ARGUMENTS}")
+    endif()
+    if(NOT arg_NAME OR NOT arg_MODULE)
+        message(FATAL_ERROR "core_cpp_module_target(): NAME and MODULE are required.")
+    endif()
+    if(NOT arg_MODULE IN_LIST CORE_CPP_MODULES)
+        message(FATAL_ERROR
+            "core_cpp_module_target(${arg_NAME}): MODULE names '${arg_MODULE}', which is not declared in an earlier row.")
+    endif()
+    if(arg_NAME IN_LIST CORE_CPP_MODULES OR DEFINED CORE_CPP_TARGET_${arg_NAME}_MODULE)
+        message(FATAL_ERROR "core_cpp_module_target(${arg_NAME}): declared twice.")
+    endif()
+    if(NOT arg_KIND MATCHES "^(STATIC|INTERFACE|OBJECT)$")
+        message(FATAL_ERROR
+            "core_cpp_module_target(${arg_NAME}): KIND must be STATIC, INTERFACE or OBJECT, not '${arg_KIND}'.")
+    endif()
+    if(NOT arg_PLATFORMS MATCHES "^(any|native|wasm-subset)$")
+        message(FATAL_ERROR
+            "core_cpp_module_target(${arg_NAME}): PLATFORMS must be any, native or wasm-subset, not '${arg_PLATFORMS}'.")
+    endif()
+
+    set(CORE_CPP_MODULE_${arg_MODULE}_TARGETS ${CORE_CPP_MODULE_${arg_MODULE}_TARGETS} ${arg_NAME} PARENT_SCOPE)
+    foreach(field IN ITEMS MODULE KIND PLATFORMS WHEN)
+        set(CORE_CPP_TARGET_${arg_NAME}_${field} "${arg_${field}}" PARENT_SCOPE)
+    endforeach()
 endfunction()
 
 ## @brief Enters the directory of every module the configuration enables, in table order.
 ##
-## A module whose WHEN option is OFF, or which is native-only in an Emscripten build,
-## is skipped. An enabled module whose DEPS include a skipped one stops the configure.
+## A module whose WHEN option is OFF is skipped. So is a module that builds nothing on
+## this platform: one that is native-only in an Emscripten build, unless a target of it
+## has a row of its own that builds there, in which case only that target is created.
+## An enabled module whose DEPS include a skipped one stops the configure.
 function(core_cpp_add_modules)
     set(enabled "")
     foreach(module IN LISTS CORE_CPP_MODULES)
@@ -70,9 +115,18 @@ function(core_cpp_add_modules)
             message(STATUS "[core-cpp] module ${module}: off (${when}=OFF)")
             continue()
         endif()
+        set(only "")
         if(EMSCRIPTEN AND CORE_CPP_MODULE_${module}_PLATFORMS STREQUAL "native")
-            message(STATUS "[core-cpp] module ${module}: off (native only, and this is Emscripten)")
-            continue()
+            foreach(target IN LISTS CORE_CPP_MODULE_${module}_TARGETS)
+                core_cpp_row_builds("${CORE_CPP_TARGET_${target}_PLATFORMS}" "${CORE_CPP_TARGET_${target}_WHEN}" builds)
+                if(builds)
+                    list(APPEND only core::${target})
+                endif()
+            endforeach()
+            if(NOT only)
+                message(STATUS "[core-cpp] module ${module}: off (native only, and this is Emscripten)")
+                continue()
+            endif()
         endif()
         foreach(dep IN LISTS CORE_CPP_MODULE_${module}_DEPS)
             if(NOT dep IN_LIST enabled)
@@ -86,7 +140,12 @@ function(core_cpp_add_modules)
         add_subdirectory("${CORE_CPP_SOURCE_DIR}/src/core/${CORE_CPP_MODULE_${module}_DIR}"
                          "${CORE_CPP_BINARY_DIR}/src/core/${CORE_CPP_MODULE_${module}_DIR}")
         list(APPEND enabled ${module})
-        message(STATUS "[core-cpp] module ${module}: on")
+        if(only)
+            list(JOIN only ", " only)
+            message(STATUS "[core-cpp] module ${module}: ${only} only (the rest is native only, and this is Emscripten)")
+        else()
+            message(STATUS "[core-cpp] module ${module}: on")
+        endif()
     endforeach()
 endfunction()
 
