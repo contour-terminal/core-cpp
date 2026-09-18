@@ -37,6 +37,9 @@ workflow refuses one without a section here.
   (`ScopedOutput`, `ScopedCapture`), and `fatal()` and `SoftRequire()`, which report through it.
 - `core::cli`: the command-line parser (`core::cli::parse`, help and usage text) and the
   application scaffold `core::cli::App`.
+- `core::testing_main` applies the `LOG` environment variable to `core::log` before it runs the
+  tests (`LOG=net` enables the `net` category and writes it to standard output), and so links
+  `core::log`.
 
 ### Fixed
 

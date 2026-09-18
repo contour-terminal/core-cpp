@@ -14,13 +14,14 @@ core_cpp_add_module(testing_dialogs KIND OBJECT
     SOURCES SuppressWindowsDialogsAtStartup.cpp
     PUBLIC_LIBS core::testing)
 
-# main() for every test binary: Catch2 with core-cpp's exit-code contract. The only part of this
-# module that needs Catch2, so the only part CORE_CPP_CATCH2_MAIN gates.
+# main() for every test binary: Catch2 with core-cpp's exit-code contract, after the LOG filter is
+# applied to core::log. The only part of this module that needs Catch2, so the only part
+# CORE_CPP_CATCH2_MAIN gates.
 if(CORE_CPP_CATCH2_MAIN)
     core_cpp_add_module(testing_main KIND STATIC
         HEADERS ExitCode.hpp
         SOURCES CatchMain.cpp ExitCode.cpp
-        PUBLIC_LIBS core::testing Catch2::Catch2)
+        PUBLIC_LIBS core::testing core::log Catch2::Catch2)
     set_target_properties(core-cpp-testing_main PROPERTIES CORE_CPP_SKIP_EXIT_CODE ${CORE_CPP_SKIP_EXIT_CODE})
 
     # The dialog suppression's object goes onto the link line of every executable that links
@@ -29,4 +30,8 @@ if(CORE_CPP_CATCH2_MAIN)
         core::testing_dialogs "$<TARGET_OBJECTS:core-cpp-testing_dialogs>")
 endif()
 
-core_cpp_add_test(testing SOURCES ExitCode_test.cpp)
+core_cpp_add_test(testing SOURCES CatchMain_test.cpp ExitCode_test.cpp)
+if(TEST core-cpp.testing)
+    # CatchMain_test.cpp asserts what main() makes of it.
+    set_tests_properties(core-cpp.testing PROPERTIES ENVIRONMENT "LOG=net")
+endif()

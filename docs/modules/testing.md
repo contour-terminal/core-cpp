@@ -6,9 +6,9 @@ happened. Namespace `core::testing`, directory `src/core/testing/`.
 
 | Target | Kind | Needs | What it is |
 |---|---|---|---|
-| `core::testing` | static | nothing | `core::testing::suppressWindowsDialogs()` |
+| `core::testing` | static | `core::base` | `core::testing::suppressWindowsDialogs()`, and `core::testing::FakeEnvironment` (`<core/testing/Environment.hpp>`) |
 | `core::testing_dialogs` | object | `core::testing` | calls it during static initialisation, in every executable that links it |
-| `core::testing_main` | static | Catch2 3.8 | `main()` for a Catch2 test binary, with the exit-code contract |
+| `core::testing_main` | static | Catch2 3.8, `core::log` | `main()` for a Catch2 test binary, with the `LOG` filter and the exit-code contract |
 
 `core::testing` and `core::testing_dialogs` are always built, including under Emscripten, where
 they do nothing. `core::testing_main` is built when `CORE_CPP_CATCH2_MAIN` is on, which
@@ -57,7 +57,28 @@ contract from outside the binary, natively and under node.
 To use it in your own tests, see
 [Using core-cpp with CPM](../getting-started/cpm.md#using-coretesting_main-in-your-own-tests).
 
+## The LOG filter
+
+Before it runs the tests, `core::testing_main`'s `main()` reads `LOG` from the environment and
+applies it to [`core::log`](log.md) with `core::log::configure()`: `LOG=net` enables the `net`
+category and disables every other one but `error`, and `LOG=all` or `LOG=net.*` work as
+`configure()` says. It also gives the categories the standard formatter and enables the console
+sink, so what they log appears on standard output, interleaved with Catch2's. An unset or empty
+`LOG` changes nothing. This is endo's `test_main` convention.
+
+```sh
+LOG=all ctest --preset clang-debug -R core-cpp.log --output-on-failure
+```
+
+A category the filter should reach must exist when `main()` runs, which a namespace-scope
+`core::log::Category` does. Under node the WebAssembly build sees no host environment, so `LOG`
+has no effect there.
+
+## A test double
+
+`core::testing::FakeEnvironment` is a `core::Environment` that holds exactly the variables a
+test gives it, for code that takes its environment by reference instead of reading the process's.
+
 ## Planned additions
 
-Task A4 adds `ScopedTempDir`, `ScopedWorkingDirectory` and `EnvHelper` from endo. Task A3 adds a
-`LOG` filter to `core::testing_main`, so `LOG=net` enables the `net` log category in a test run.
+Task A4 adds `ScopedTempDir`, `ScopedWorkingDirectory` and `EnvHelper` from endo.
