@@ -211,6 +211,19 @@
         "CMAKE_CXX_COMPILER": "cl",
         "CORE_CPP_WITH_TLS": "ON"
       }
+    },
+    {
+      "name": "emscripten",
+      "displayName": "Emscripten, single-threaded WebAssembly, Release, tests under node",
+      "inherits": "base",
+      "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CORE_CPP_WITH_TUI": "OFF",
+        "CMAKE_CROSSCOMPILING_EMULATOR": "node",
+        "CMAKE_CXX_FLAGS": "-fexceptions",
+        "CMAKE_EXE_LINKER_FLAGS": "-fexceptions"
+      }
     }
   ],
   "buildPresets": [
@@ -331,6 +344,10 @@
       "name": "cl-release-tls",
       "configurePreset": "cl-release-tls",
       "inherits": "windows"
+    },
+    {
+      "name": "emscripten",
+      "configurePreset": "emscripten"
     }
   ],
   "testPresets": [
@@ -465,6 +482,17 @@
       "name": "cl-release-tls",
       "configurePreset": "cl-release-tls",
       "inherits": "windows"
+    },
+    {
+      "name": "emscripten",
+      "configurePreset": "emscripten",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "timeout": 300
+      }
     }
   ],
   "workflowPresets": [
@@ -753,6 +781,24 @@
         {
           "type": "test",
           "name": "cl-release-tls"
+        }
+      ]
+    },
+    {
+      "name": "ci-emscripten",
+      "displayName": "CI: Emscripten, single-threaded WebAssembly, Release, tests under node",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "emscripten"
+        },
+        {
+          "type": "build",
+          "name": "emscripten"
+        },
+        {
+          "type": "test",
+          "name": "emscripten"
         }
       ]
     }
