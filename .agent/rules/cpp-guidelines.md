@@ -107,8 +107,8 @@ has the measurement that made this a rule.
   telling you something. *(endo, fastcached, tuidu)*
 - **A surviving `bool` reads as a predicate:** `_isVisible`, not `_visible`. *(contour)*
 - **A header's outermost namespace is `core::<directory>`.** Headers directly in `src/core/`
-  are `core`; nested helper namespaces (`detail`, `testing`, `base64`, `views`) are allowed
-  inside. Spell it `namespace core::<directory>`, not `namespace core { namespace <directory>`.
+  are `core`; nested helper namespaces (`detail`, `testing`, `base64`, `views`, `ranges`) are
+  allowed inside. Spell it `namespace core::<directory>`, not `namespace core { namespace <directory>`.
   The hygiene scan (`namespace-directory` in `tests/cmake/check-cmake-hygiene.cmake`) refuses
   a source under `src/core/` whose first named namespace is anything else. *(core-cpp; the
   design spec, Part I §1)*

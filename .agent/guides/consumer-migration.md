@@ -65,7 +65,9 @@ target_link_libraries(myapp PRIVATE core::coro core::net core::tui)
 |---|---|
 | `crispy::` (generic half) | `core::` |
 | `crispy::cli::` | `core::cli::` |
+| `crispy::App` | `core::cli::App` |
 | `crispy::base64::` | `core::base64::` |
+| `crispy::testing::FakeEnvironment` | `core::testing::FakeEnvironment` |
 | `logstore::` | `core::log::` |
 | `coro::`, `endo::coro::` | `core::coro::` |
 | `net::` | `core::net::` |
@@ -73,7 +75,11 @@ target_link_libraries(myapp PRIVATE core::coro core::net core::tui)
 | `endo::testing::` | `core::testing::` |
 | `tui::` | `core::tui::` |
 | `endo::Generator` | `core::coro::Generator` |
-| `<crispy/X.hpp>`, `<coro/X.hpp>`, `<net/X.hpp>`, ... | `<core/X.hpp>`, `<core/coro/X.hpp>`, `<core/net/X.hpp>`, ... |
+| `<crispy/X.hpp>` for Assert, Base64, Deferred, Defines, Environment, Escape, FNV, Flags, Overloaded, Times, UserInfo, Utils | `<core/X.hpp>` |
+| `<crispy/LogStore.hpp>`, `<crispy/LogSink.hpp>` | `<core/log/LogStore.hpp>`, `<core/log/LogSink.hpp>` |
+| `<crispy/CLI.hpp>`, `<crispy/App.hpp>` | `<core/cli/CLI.hpp>`, `<core/cli/App.hpp>` |
+| `<crispy/testing/Environment.hpp>` | `<core/testing/Environment.hpp>` |
+| `<coro/X.hpp>`, `<net/X.hpp>`, ... | `<core/coro/X.hpp>`, `<core/net/X.hpp>`, ... |
 
 ### API deltas (contour, endo, tuidu)
 
@@ -84,6 +90,12 @@ target_link_libraries(myapp PRIVATE core::coro core::net core::tui)
 | `NetErrorCode::Other` | `SystemError` |
 | `EventSource`, `makeDefaultEventSource`, `FdInterest` | `IoBackend`, `makeDefaultBackend`, `Interest` |
 | `gsl::not_null<T*>` | a reference, or an asserted pointer |
+| `crispy::fatal(...)`, from `<crispy/Assert.hpp>` | `core::log::fatal(...)`, from `<core/log/Assert.hpp>` |
+| `SoftRequire(...)`, from `<crispy/Assert.hpp>` | the same macro, from `<core/log/Assert.hpp>`; `Require` and `Guarantee` stay in `<core/Assert.hpp>` |
+| `CRISPY_PACKED`, `CRISPY_REQUIRES`, `CRISPY_CONSTEVAL`, `CRISPY_CONSTEXPR`, `CRISPY_CONCEPTS_SUPPORTED` | `CORE_PACKED`, `CORE_REQUIRES`, `CORE_CONSTEVAL`, `CORE_CONSTEXPR`, `CORE_CONCEPTS_SUPPORTED` |
+| the global `Overloaded` of `<crispy/Overloaded.hpp>`, and `crispy::Overloaded` of `<crispy/Utils.hpp>` | `core::Overloaded`, in `<core/Overloaded.hpp>` (which `<core/Utils.hpp>` includes) |
+| `logstore::SourceLocationCustom` | removed: `core::log::SourceLocation` is `std::source_location` |
+| `crispy::views::enumerate`, a function object | `core::views::enumerate`, a function template: `enumerate(r)` is unchanged, but it cannot be passed as a value |
 
 ### fastcached (PascalCase to camelBack)
 
@@ -103,7 +115,11 @@ The full table has 44 rows and is seeded into `tools/migrate/renames.json` (Task
 | `*Listener::Bind(...)` | `listen(loop, ListenOptions)` |
 | `NetErrorCode::BadFileHandle` | `BadHandle` |
 | `IClock::Now`, `Refresh` | `now`, `refresh` |
-| `FC_ZONE_*`, `FC_TRACY_ENABLED` | `CORE_ZONE_*`, `CORE_CPP_WITH_TRACY` |
+| `FC_ZONE_*`, `FC_FRAME_MARK*`, `FC_THREAD_NAME`, `FC_PLOT`, `FC_TRACY_ENABLED` | `CORE_ZONE_*`, `CORE_FRAME_MARK*`, `CORE_THREAD_NAME`, `CORE_PLOT`, `CORE_CPP_WITH_TRACY` (0 or 1 in `<core/Config.hpp>`) |
+| `<FastCache/Core/Profiling.hpp>`, `<FastCache/Core/Ranges.hpp>` | `<core/Profiling.hpp>`, `<core/Ranges.hpp>` |
+| `FastCache::FindOrNull`, `FastCache::FindIfOrNull` | `core::findOrNull`, `core::findIfOrNull` |
+| `FastCache::Ranges::Iota`, `FoldLeft`, `Ranges::Detail::*` | `core::ranges::Iota`, `FoldLeft`, `core::ranges::detail::*` |
+| `FC_RANGES_FORCE_FALLBACK` | `CORE_RANGES_FORCE_FALLBACK` |
 
 ## What a migration must not do
 
