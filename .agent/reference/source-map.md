@@ -51,7 +51,20 @@ src/core/
                             holds the fakes (ScriptedEventSource, makeSocketPair, AllBackends,
                             CoroTestSupport), makeSocketPair's halves in testing/posix/ and
                             testing/windows/; IoBackend, dialling (planned, B2-B11)
-  tui/                      (planned, A7 and B12) core::tui_output (the leaf) and core::tui
+  tui/                      core::tui_output (endo: TerminalOutput, SyncGuard, SgrBuilder,
+                            TerminalProtocols, CursorShape, Error; links base alone), and
+                            core::tui (TerminalInput, VtParser, Terminal, Buffer, Canvas,
+                            Screen, the components and popups, completer/, MarkdownRenderer,
+                            GenericSyntaxHighlighter, Sixel, images behind
+                            CORE_CPP_WITH_IMAGES, runtime/ with TuiRuntime and its event
+                            sources; native only, and only with CORE_CPP_WITH_TUI);
+                            posix/ (termios, SIGWINCH, poll, clipboard tools) windows/
+                            (console modes, input records, resize event) detail/ are
+                            private, and so are runtime/posix/ and runtime/windows/;
+                            MockTerminalOutput, runtime/testing/MockEventSource and
+                            TestHelpers.hpp are the fakes; .clang-tidy is the one directory
+                            override (see its own comment); the move onto
+                            core::net::EventLoop is planned (B12)
   testing/                  core::testing: SuppressWindowsDialogs (no test framework needed),
                             Environment (FakeEnvironment), ScopedTempDir,
                             ScopedWorkingDirectory, EnvHelper (ScopedEnv);

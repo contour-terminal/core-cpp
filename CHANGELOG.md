@@ -143,6 +143,25 @@ workflow refuses one without a section here.
 - The libunicode dependency (0.9.3, `unicode::unicode`) when `CORE_CPP_WITH_TUI` is on, and stb
   (`stb_image`, `DOWNLOAD_ONLY`, pinned to a commit because stb publishes no releases) when
   `CORE_CPP_WITH_IMAGES` is on. Both are off under Emscripten.
+- `core::tui`, endo's terminal UI (`f774a210`), native only: `TerminalInput` and `VtParser` over
+  the Kitty keyboard protocol, SGR mouse reporting, bracketed paste and focus tracking;
+  `Terminal`, which pairs input with output and owns the bounded query round-trips on an injected
+  clock; `Buffer`, `Canvas` and the diffing `Screen` (inline, full-screen and fixed viewports);
+  the components (`InputField`, `List`, `TreeTableView`, `Dialog`, `StatusBar`, `LogPanel`,
+  `Spinner`, `ProgressBar`, `Tooltip`, `QuestionComponent`, the completion, command-palette and
+  fuzzy-picker popups); `core::tui::completer`; `MarkdownRenderer` and `GenericSyntaxHighlighter`;
+  sixel encoding, and with `CORE_CPP_WITH_IMAGES` the stb-backed loader, scaler and
+  `FilesystemImageProvider`; and `core::tui::runtime`, whose `TuiRuntime` drives coroutines
+  against an `EventSource` (`TerminalEventSource`, `PollEventSource`, `runModal()`,
+  `withTimeout()`). Test doubles: `MockTerminalOutput`, `runtime::testing::MockEventSource` and
+  `TestHelpers.hpp`. `runtime/TuiRuntime.hpp` and its test come from fastcached's copy
+  (`5389e29a`), which carries one fix endo has not taken back: `DelayAwaiter::await_ready()` is a
+  constant and an elapsed deadline is decided in `await_suspend()`, because MSVC 19.44's ARM64
+  code generator loses the enclosing `try` of a `co_await` on an awaiter whose `await_ready()`
+  reads the clock through a virtual `now()`.
+- `core::tui` does not link `core::net`: Task B12 moves the runtime onto `core::net::EventLoop`
+  and deletes `runtime/EventSource.hpp`, `runtime/PollEventSource.*` and `runtime/WithTimeout.hpp`,
+  and the module table's row gains `net` then.
 
 ### Fixed
 

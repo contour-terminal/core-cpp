@@ -62,6 +62,17 @@
 #     `[[nodiscard]]`, where the attribute then appertains to the return type.
 #   * `readability-redundant-member-init` -- its fix drops a load-bearing `T member {};`
 #     from aggregates built with designated initializers that omit fields.
+#   * `readability-enum-initial-value` -- an enumeration whose enumerators are grouped into
+#     numbered ranges (`core::tui::KeyCode`: Unicode codepoints, then 0x10000 for the
+#     non-printable keys, then 0x20000 for Kitty's) initializes the first of each range and
+#     lets the rest follow. The check reads that as inconsistent, and its two options
+#     (AllowExplicitZeroFirstInitialValue, AllowExplicitSequentialInitialValues) do not cover
+#     it. Satisfying it would mean spelling out a hundred values, where the point is that they
+#     are consecutive within a range.
+#
+# One directory departs from this list, and says so in its own file:
+# `src/core/tui/.clang-tidy` turns `readability-function-cognitive-complexity` off for
+# core::tui alone, where eighteen lexers, dispatchers and renderers are over the threshold.
 #
 # Re-check this list when bumping LLVM: new checks arrive through the `cppcoreguidelines-*`,
 # `modernize-*` and `readability-*` globs and can silently contradict the policy above.
@@ -138,6 +149,7 @@ Checks: >-
   -readability-braces-around-statements,
   -readability-convert-member-functions-to-static,
   -readability-else-after-return,
+  -readability-enum-initial-value,
   -readability-function-size,
   -readability-identifier-length,
   -readability-implicit-bool-conversion,

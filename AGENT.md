@@ -19,14 +19,16 @@ is [the plan](docs/superpowers/plans/2026-09-18-core-cpp.md).
 | platform | `core::platform` | `core::platform` | base, log |
 | async | `core::async` | `core::async` (INTERFACE) | std only |
 | net | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | async, platform |
-| tui | `core::tui` | `core::tui_output`, `core::tui` | base (leaf); + platform, async, net, libunicode |
+| tui | `core::tui` | `core::tui_output`, `core::tui` | base (leaf); + platform, async, libunicode |
 | testing | `core::testing` | `core::testing`, `core::testing_dialogs`, `core::testing_main` | base; log and Catch2 for `testing_main` |
 
-`base`, `log`, `cli`, `platform` and `testing` exist, with `Generator` in base (Task A5b: it needs
-only std, and `core::async::Generator` would read as an asynchronous, `co_await`-able stream);
-`async` has `StopToken`, `Task` and the combinators; and `net` is contour's `EventSource` design
-(Task A6), native only but for the header-only `net_types`. `tui` arrives with Task A7, and Phase B
-merges fastcached's async and networking layer into `async` and `net`. The module DAG is the
+Every module exists. `Generator` is in base (Task A5b: it needs only std, and
+`core::async::Generator` would read as an asynchronous, `co_await`-able stream); `async` has
+`StopToken`, `Task` and the combinators; `net` is contour's `EventSource` design (Task A6), native
+only but for the header-only `net_types`; and `tui` is endo's terminal UI (Task A7), native only,
+with `tui_output` split off as a leaf that links base alone. Phase B merges fastcached's async and
+networking layer into `async` and `net`, and Task B12 moves the TUI runtime onto
+`core::net::EventLoop` -- which is why the `tui` row does not list `net` yet. The module DAG is the
 table in `cmake/CoreCppModules.cmake`, and configure refuses a link it does not list.
 
 Consumers: contour (vendored), endo, fastcached, tuidu, Lightweight's `dbtool`, morph (CPM). Who

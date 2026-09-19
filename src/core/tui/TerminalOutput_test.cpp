@@ -95,8 +95,8 @@ TEST_CASE("tui.TerminalOutput: isTerminal() reflects the destination")
 
     // Through the base, which is how a renderer holds it: the answer is the destination's, not
     // the process's standard output.
-    core::tui::TerminalOutput& fileRef = file;
-    core::tui::TerminalOutput& terminalRef = terminal;
+    core::tui::TerminalOutput const& fileRef = file;
+    core::tui::TerminalOutput const& terminalRef = terminal;
     CHECK_FALSE(fileRef.isTerminal());
     CHECK(terminalRef.isTerminal());
 }

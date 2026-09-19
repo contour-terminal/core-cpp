@@ -86,7 +86,7 @@ namespace
             }
 
             // Check for ST (String Terminator): ESC \ or 0x9C
-            if (response.find("\033\\") != std::string::npos || response.find('\x9C') != std::string::npos)
+            if (response.contains("\033\\") || response.contains('\x9C'))
                 break;
         }
 

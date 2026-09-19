@@ -13,11 +13,12 @@ coroutine and networking designs into one. Everything is in namespace `core`, on
 directory. A defined subset (base, log, cli, async and testing, and parts of platform and net) is
 held to building and passing its tests under single-threaded WebAssembly.
 
-**Status: 0.1.0 is in development.** The build framework, `core::base`, `core::log`,
-`core::cli`, `core::platform`, `core::async`, `core::net` and `core::testing` exist. The tasks of
-the [implementation plan](docs/superpowers/plans/2026-09-18-core-cpp.md) still import `core::tui`
-and merge fastcached's executors and networking layer into `core::async` and `core::net`; the
-table below says what each module has today. Nothing is tagged yet.
+**Status: 0.1.0 is in development.** The build framework and every module exist:
+`core::base`, `core::log`, `core::cli`, `core::platform`, `core::async`, `core::net`,
+`core::tui` and `core::testing`. The remaining tasks of the
+[implementation plan](docs/superpowers/plans/2026-09-18-core-cpp.md) merge fastcached's executors
+and networking layer into `core::async` and `core::net`, and move the TUI runtime onto the event
+loop; the table below says what each module has today. Nothing is tagged yet.
 
 ## Modules
 
@@ -29,7 +30,7 @@ table below says what each module has today. Nothing is tagged yet.
 | platform | `core::platform` | `core::platform` | base, log | clocks, wakeup, signals, pipes, file system, environment, paths | **available** |
 | async | `core::async` | `core::async` (header-only) | the standard library | `StopToken`, `Task`, cancellation, `whenAll`/`whenAny`, executors, `AsyncQueue` | `StopToken`, `Task`, cancellation and the combinators **available** (A5); executors and `AsyncQueue` planned (B1) |
 | net | `core::net` | `core::net_types` (header-only), `core::net`, `core::net_tls` (with `CORE_CPP_WITH_TLS`) | async, platform; OpenSSL for TLS | event loop and backends (epoll, kqueue, poll; IOCP and host-driven planned), TCP and AF_UNIX sockets, descriptor passing, buffered reading, a write queue, timeouts, TLS, HTTP server; dialling planned | contour's event loop, sockets, TLS and HTTP server **available** (A6), native only but for `core::net_types`; the merge with fastcached's planned (B2-B11) |
-| tui | `core::tui` | `core::tui_output`, `core::tui` | base; the full TUI also platform, async, net, libunicode | terminal output, input, widgets, runtime | planned (A7, B12) |
+| tui | `core::tui` | `core::tui_output`, `core::tui` (with `CORE_CPP_WITH_TUI`) | base; the full TUI also platform, async, libunicode, and stb with `CORE_CPP_WITH_IMAGES` | terminal output and input, screen and widgets, completion, Markdown and syntax highlighting, sixel images, a coroutine runtime | endo's terminal UI **available** (A7), native only; its runtime moves onto `core::net::EventLoop` in B12 |
 | testing | `core::testing` | `core::testing`, `core::testing_dialogs`, `core::testing_main` | base; log and Catch2 for `testing_main` | Windows dialog suppression, a fake environment, scoped temporary directory, working directory and environment variable, a Catch2 `main()` with the `LOG` filter and a normalised exit code | **available** |
 
 The layering is enforced: a module links only the modules its row in

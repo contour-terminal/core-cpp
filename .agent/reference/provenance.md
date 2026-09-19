@@ -219,18 +219,167 @@ others in notes.
 | `src/core/testing/SuppressWindowsDialogs.cpp` | contour-terminal/contour | `src/crispy/SuppressWindowsDialogs.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | the out-of-line body added in core-cpp (`26de633`); same four-way merge as `SuppressWindowsDialogs.hpp` below |
 | `src/core/testing/SuppressWindowsDialogs.hpp` | contour-terminal/contour | `src/crispy/SuppressWindowsDialogs.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | merged with contour `src/coro/testing/SuppressWindowsDialogs.hpp` (same commit), endo `src/testing/SuppressWindowsDialogs.hpp` (`f774a210ce989e5947b8f61d715068b1dc96088c`) and fastcached `src/tests/WindowsErrorPopups.hpp` (`eb9c9c68da8fadfd43b0b36366919cb462689f48`) |
 | `src/core/testing/SuppressWindowsDialogsAtStartup.cpp` | contour-terminal/endo | `src/testing/SuppressWindowsDialogsAtStartup.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | verbatim |
+| `src/core/tui/.clang-tidy` | origin: core-cpp | - | - | the one directory that departs from the root `.clang-tidy`, and says why |
+| `src/core/tui/Box.cpp` | contour-terminal/endo | `src/tui/Box.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Box.hpp` | contour-terminal/endo | `src/tui/Box.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Buffer.cpp` | contour-terminal/endo | `src/tui/Buffer.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Buffer.hpp` | contour-terminal/endo | `src/tui/Buffer.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/CMakeLists.txt` | origin: core-cpp | - | - | endo's `src/tui/CMakeLists.txt` is one `add_library`; this is the module-table form, and where the `core::tui_output` split is spelled |
+| `src/core/tui/Canvas.cpp` | contour-terminal/endo | `src/tui/Canvas.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Canvas.hpp` | contour-terminal/endo | `src/tui/Canvas.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Cell.cpp` | contour-terminal/endo | `src/tui/Cell.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Cell.hpp` | contour-terminal/endo | `src/tui/Cell.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/CommandPalettePopup.cpp` | contour-terminal/endo | `src/tui/CommandPalettePopup.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/CommandPalettePopup.hpp` | contour-terminal/endo | `src/tui/CommandPalettePopup.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/CommandPalettePopup_test.cpp` | contour-terminal/endo | `src/tui/CommandPalettePopup_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/CommandRegistry.cpp` | contour-terminal/endo | `src/tui/CommandRegistry.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/CommandRegistry.hpp` | contour-terminal/endo | `src/tui/CommandRegistry.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/CommandRegistry_test.cpp` | contour-terminal/endo | `src/tui/CommandRegistry_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Completer_test.cpp` | contour-terminal/endo | `src/tui/Completer_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/CompletionPopup.cpp` | contour-terminal/endo | `src/tui/CompletionPopup.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/CompletionPopup.hpp` | contour-terminal/endo | `src/tui/CompletionPopup.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/CompletionPopup_test.cpp` | contour-terminal/endo | `src/tui/CompletionPopup_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Component.cpp` | contour-terminal/endo | `src/tui/Component.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Component.hpp` | contour-terminal/endo | `src/tui/Component.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/CursorShape.hpp` | contour-terminal/endo | `src/tui/CursorShape.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Dialog.cpp` | contour-terminal/endo | `src/tui/Dialog.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Dialog.hpp` | contour-terminal/endo | `src/tui/Dialog.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/EditAction.hpp` | contour-terminal/endo | `src/tui/EditAction.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Element.hpp` | contour-terminal/endo | `src/tui/Element.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Error.hpp` | contour-terminal/endo | `src/tui/Error.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/FilesystemImageProvider.cpp` | contour-terminal/endo | `src/tui/ImageProvider.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | renamed with the class it defines; see `FilesystemImageProvider.hpp` |
+| `src/core/tui/FilesystemImageProvider.hpp` | contour-terminal/endo | `src/tui/ImageProvider.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `FilesystemImageProvider` and `isRemoteImageSource()` split out of `ImageProvider.hpp`, because they are the part that needs a decoder and so exist only with `CORE_CPP_WITH_IMAGES` |
+| `src/core/tui/FuzzyMatch_test.cpp` | contour-terminal/endo | `src/tui/FuzzyMatch_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/FuzzyPickerPopup.cpp` | contour-terminal/endo | `src/tui/FuzzyPickerPopup.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/FuzzyPickerPopup.hpp` | contour-terminal/endo | `src/tui/FuzzyPickerPopup.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/FuzzyPickerPopup_test.cpp` | contour-terminal/endo | `src/tui/FuzzyPickerPopup_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/GenericSyntaxHighlighter.cpp` | contour-terminal/endo | `src/tui/GenericSyntaxHighlighter.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/GenericSyntaxHighlighter.hpp` | contour-terminal/endo | `src/tui/GenericSyntaxHighlighter.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/GenericSyntaxHighlighter_test.cpp` | contour-terminal/endo | `src/tui/GenericSyntaxHighlighter_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/GhostTextHelper.hpp` | contour-terminal/endo | `src/tui/GhostTextHelper.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/HoverState.cpp` | contour-terminal/endo | `src/tui/HoverState.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/HoverState.hpp` | contour-terminal/endo | `src/tui/HoverState.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/HyperlinkEmitter.cpp` | contour-terminal/endo | `src/tui/HyperlinkEmitter.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/HyperlinkEmitter.hpp` | contour-terminal/endo | `src/tui/HyperlinkEmitter.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/ImageLoader.cpp` | contour-terminal/endo | `src/tui/ImageLoader.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `readClipboardImage()`, which was an `#ifdef` with a platform in each arm, is in `posix/` and `windows/` (Ruling R41); the `#pragma clang diagnostic` around stb's headers is gone, because core-cpp includes stb as a SYSTEM directory |
+| `src/core/tui/ImageLoader.hpp` | contour-terminal/endo | `src/tui/ImageLoader.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/ImageLoader_test.cpp` | contour-terminal/endo | `src/tui/ImageLoader_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/ImageProvider.hpp` | contour-terminal/endo | `src/tui/ImageProvider.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the interface and its configuration only; `FilesystemImageProvider` moved to a header of its own |
+| `src/core/tui/InputEvent.hpp` | contour-terminal/endo | `src/tui/InputEvent.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/InputField.cpp` | contour-terminal/endo | `src/tui/InputField.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/InputField.hpp` | contour-terminal/endo | `src/tui/InputField.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/InputField_test.cpp` | contour-terminal/endo | `src/tui/InputField_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/KeyBindings.cpp` | contour-terminal/endo | `src/tui/KeyBindings.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/KeyBindings.hpp` | contour-terminal/endo | `src/tui/KeyBindings.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/KeyBindings_test.cpp` | contour-terminal/endo | `src/tui/KeyBindings_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/KeyCode.hpp` | contour-terminal/endo | `src/tui/KeyCode.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/List.cpp` | contour-terminal/endo | `src/tui/List.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/List.hpp` | contour-terminal/endo | `src/tui/List.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/LogPanel.cpp` | contour-terminal/endo | `src/tui/LogPanel.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/LogPanel.hpp` | contour-terminal/endo | `src/tui/LogPanel.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/MarkdownHtml.cpp` | contour-terminal/endo | `src/tui/MarkdownHtml.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/MarkdownHtml.hpp` | contour-terminal/endo | `src/tui/MarkdownHtml.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/MarkdownHtml_test.cpp` | contour-terminal/endo | `src/tui/MarkdownHtml_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/MarkdownImage_test.cpp` | contour-terminal/endo | `src/tui/MarkdownImage_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/MarkdownInline.hpp` | contour-terminal/endo | `src/tui/MarkdownInline.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/MarkdownRenderer.cpp` | contour-terminal/endo | `src/tui/MarkdownRenderer.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/MarkdownRenderer.hpp` | contour-terminal/endo | `src/tui/MarkdownRenderer.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/MarkdownRenderer_test.cpp` | contour-terminal/endo | `src/tui/MarkdownRenderer_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/MarkdownTable.cpp` | contour-terminal/endo | `src/tui/MarkdownTable.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/MarkdownTable.hpp` | contour-terminal/endo | `src/tui/MarkdownTable.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/MarkdownTable_test.cpp` | contour-terminal/endo | `src/tui/MarkdownTable_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/MockTerminalOutput.cpp` | contour-terminal/endo | `src/tui/MockTerminalOutput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/MockTerminalOutput.hpp` | contour-terminal/endo | `src/tui/MockTerminalOutput.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Modifier.hpp` | contour-terminal/endo | `src/tui/Modifier.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/PopupKeyDispatch.hpp` | contour-terminal/endo | `src/tui/PopupKeyDispatch.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/PopupKeyDispatch_test.cpp` | contour-terminal/endo | `src/tui/PopupKeyDispatch_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/QuestionComponent.cpp` | contour-terminal/endo | `src/tui/QuestionComponent.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/QuestionComponent.hpp` | contour-terminal/endo | `src/tui/QuestionComponent.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/QuestionComponent_test.cpp` | contour-terminal/endo | `src/tui/QuestionComponent_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Rect.hpp` | contour-terminal/endo | `src/tui/Rect.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Renderer_test.cpp` | contour-terminal/endo | `src/tui/Renderer_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Screen.cpp` | contour-terminal/endo | `src/tui/Screen.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Screen.hpp` | contour-terminal/endo | `src/tui/Screen.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Screen_test.cpp` | contour-terminal/endo | `src/tui/Screen_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/ScrollableSelection.hpp` | contour-terminal/endo | `src/tui/ScrollableSelection.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/ScrollableSelection_test.cpp` | contour-terminal/endo | `src/tui/ScrollableSelection_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/SemanticBlockClient.cpp` | contour-terminal/endo | `src/tui/SemanticBlockClient.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/SemanticBlockClient.hpp` | contour-terminal/endo | `src/tui/SemanticBlockClient.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/SemanticBlockClient_test.cpp` | contour-terminal/endo | `src/tui/SemanticBlockClient_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/SgrBuilder.cpp` | contour-terminal/endo | `src/tui/SgrBuilder.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/SgrBuilder.hpp` | contour-terminal/endo | `src/tui/SgrBuilder.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Sixel.cpp` | contour-terminal/endo | `src/tui/Sixel.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Sixel.hpp` | contour-terminal/endo | `src/tui/Sixel.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Sixel_test.cpp` | contour-terminal/endo | `src/tui/Sixel_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/SmartCaseMatch_test.cpp` | contour-terminal/endo | `src/tui/SmartCaseMatch_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Spinner.cpp` | contour-terminal/endo | `src/tui/Spinner.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Spinner.hpp` | contour-terminal/endo | `src/tui/Spinner.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/StatusBar.cpp` | contour-terminal/endo | `src/tui/StatusBar.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/StatusBar.hpp` | contour-terminal/endo | `src/tui/StatusBar.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/StbImageImpl.cpp` | contour-terminal/endo | `src/tui/StbImageImpl.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the warning pragmas are gone: the module's CMakeLists.txt compiles this file with warnings off and `-fno-sanitize=undefined`, as per-source PRIVATE options |
+| `src/core/tui/StyledText.cpp` | contour-terminal/endo | `src/tui/StyledText.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/StyledText.hpp` | contour-terminal/endo | `src/tui/StyledText.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/StyledText_test.cpp` | contour-terminal/endo | `src/tui/StyledText_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Terminal.cpp` | contour-terminal/endo | `src/tui/platform/TerminalShared.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | plus every `Terminal` member endo defined identically in `src/tui/platform/Terminal.cpp` and `src/tui/platform/TerminalWin32.cpp` (same commit) |
+| `src/core/tui/Terminal.hpp` | contour-terminal/endo | `src/tui/Terminal.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/TerminalInput.cpp` | contour-terminal/endo | `src/tui/platform/TerminalInput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the members that touch no OS state, which endo had in both platform files |
+| `src/core/tui/TerminalInput.hpp` | contour-terminal/endo | `src/tui/TerminalInput.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the OS state is the opaque `NativeState` the platform sources define, so this header includes neither `<windows.h>` nor `<termios.h>` (Ruling R41) |
 | `src/core/tui/TerminalOutput.cpp` | contour-terminal/endo | `src/tui/platform/TerminalOutput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `SyncGuard` and `syncGuard()` are here rather than per platform, because the sequences now go through `writeToDestination()`; the members that only compose bytes, which endo duplicated in `src/tui/platform/TerminalOutputWin32.cpp` (same commit); `copyToClipboard()` encodes through `core::base64::encode()` rather than a third copy of a base64 encoder |
 | `src/core/tui/TerminalOutput.hpp` | contour-terminal/endo | `src/tui/TerminalOutput.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | post-import fix: `SyncGuard` holds the `TerminalOutput` it brackets instead of a native handle, so its `#if _WIN32` `NativeHandle` alias is gone (Ruling R41); `isTerminal()` added |
 | `src/core/tui/TerminalOutput_test.cpp` | origin: core-cpp | - | - | the upstream file has no test; written for the `SyncGuard` and `isTerminal()` fix |
 | `src/core/tui/TerminalProtocols.hpp` | contour-terminal/endo | `src/tui/TerminalProtocols.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/TerminalProtocols_test.cpp` | contour-terminal/endo | `src/tui/TerminalProtocols_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/TerminalQuery_test.cpp` | contour-terminal/endo | `src/tui/TerminalQuery_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/TestHelpers.hpp` | contour-terminal/endo | `src/tui/TestHelpers.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Text.cpp` | contour-terminal/endo | `src/tui/Text.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Text.hpp` | contour-terminal/endo | `src/tui/Text.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/TextDecorator.hpp` | contour-terminal/endo | `src/tui/TextDecorator.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Theme.cpp` | contour-terminal/endo | `src/tui/Theme.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Theme.hpp` | contour-terminal/endo | `src/tui/Theme.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/TimerUtils.hpp` | contour-terminal/endo | `src/tui/TimerUtils.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Tooltip.cpp` | contour-terminal/endo | `src/tui/Tooltip.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Tooltip.hpp` | contour-terminal/endo | `src/tui/Tooltip.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/TreeTableView.cpp` | contour-terminal/endo | `src/tui/TreeTableView.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/TreeTableView.hpp` | contour-terminal/endo | `src/tui/TreeTableView.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/TreeTableView_test.cpp` | contour-terminal/endo | `src/tui/TreeTableView_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Unicode.cpp` | contour-terminal/endo | `src/tui/Unicode.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Unicode.hpp` | contour-terminal/endo | `src/tui/Unicode.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Unicode_test.cpp` | contour-terminal/endo | `src/tui/Unicode_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/VtParser.cpp` | contour-terminal/endo | `src/tui/VtParser.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/VtParser.hpp` | contour-terminal/endo | `src/tui/VtParser.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/VtParser_test.cpp` | contour-terminal/endo | `src/tui/VtParser_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/completer/Completer.cpp` | contour-terminal/endo | `src/tui/completer/Completer.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/completer/Completer.hpp` | contour-terminal/endo | `src/tui/completer/Completer.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/completer/CompletionItem.hpp` | contour-terminal/endo | `src/tui/completer/CompletionItem.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/completer/CompletionProvider.hpp` | contour-terminal/endo | `src/tui/completer/CompletionProvider.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/completer/FuzzyMatch.cpp` | contour-terminal/endo | `src/tui/completer/FuzzyMatch.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/completer/FuzzyMatch.hpp` | contour-terminal/endo | `src/tui/completer/FuzzyMatch.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/completer/SmartCaseMatch.cpp` | contour-terminal/endo | `src/tui/completer/SmartCaseMatch.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/completer/SmartCaseMatch.hpp` | contour-terminal/endo | `src/tui/completer/SmartCaseMatch.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/detail/XtVersion.hpp` | contour-terminal/endo | `src/tui/platform/TerminalOutput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `parseXTVersionName()` and the unscroll terminal list, which endo had verbatim in `src/tui/platform/TerminalOutputWin32.cpp` too; spelled `parseXtVersionName()` and `supportsUnscroll()` here |
+| `src/core/tui/posix/ImageLoader.cpp` | contour-terminal/endo | `src/tui/ImageLoader.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the POSIX `readClipboardImage()` and its helper |
 | `src/core/tui/posix/PosixIO.hpp` | contour-terminal/endo | `src/tui/platform/PosixIO.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | moved out of `tui/platform/`, which Ruling R40 does not keep |
+| `src/core/tui/posix/Terminal.cpp` | contour-terminal/endo | `src/tui/platform/Terminal.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the destructor, `initialize()` and `shutdown()`: what SIGWINCH makes different. The NOLINTs on the file-scope signal state are gone with the `g` prefixes |
+| `src/core/tui/posix/TerminalInput.cpp` | contour-terminal/endo | `src/tui/platform/TerminalInput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the POSIX half, over `TerminalInput::NativeState`, which this file defines: Ruling R41 keeps `<termios.h>` out of `TerminalInput.hpp` |
 | `src/core/tui/posix/TerminalOutput.cpp` | contour-terminal/endo | `src/tui/platform/TerminalOutput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | only what goes through the OS: the write, the window size, the XTVERSION read and `isTerminal()` (core-cpp) |
+| `src/core/tui/runtime/EventSource.hpp` | contour-terminal/endo | `src/tui/runtime/EventSource.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/runtime/Modal.hpp` | contour-terminal/endo | `src/tui/runtime/Modal.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/runtime/ModalComponent.hpp` | contour-terminal/endo | `src/tui/runtime/ModalComponent.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/runtime/Modal_test.cpp` | contour-terminal/endo | `src/tui/runtime/Modal_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/runtime/PollEventSource.cpp` | contour-terminal/endo | `src/tui/runtime/PollEventSource.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/runtime/PollEventSource.hpp` | contour-terminal/endo | `src/tui/runtime/PollEventSource.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/runtime/TerminalEventSource.hpp` | contour-terminal/endo | `src/tui/runtime/TerminalEventSource.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/runtime/TuiRuntime.cpp` | contour-terminal/endo | `src/tui/runtime/TuiRuntime.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/runtime/TuiRuntime.hpp` | LASTRADA-Software/fastcached | `vendor/endo/tui/runtime/TuiRuntime.hpp` | `5389e29a5eeca9c2319f43757bd7d6d0ac1c1a13` | endo `f774a210` plus fastcached `6483abd8`, which makes `DelayAwaiter::await_ready()` a constant and decides an elapsed deadline in `await_suspend()`: MSVC 19.44's ARM64 code generator loses the enclosing `try` of a `co_await` on an awaiter whose `await_ready()` reads the clock through a virtual `now()` |
+| `src/core/tui/runtime/TuiRuntime_test.cpp` | LASTRADA-Software/fastcached | `vendor/endo/tui/runtime/TuiRuntime_test.cpp` | `5389e29a5eeca9c2319f43757bd7d6d0ac1c1a13` | endo `f774a210` plus fastcached `6483abd8`, which makes `DelayAwaiter::await_ready()` a constant and decides an elapsed deadline in `await_suspend()`: MSVC 19.44's ARM64 code generator loses the enclosing `try` of a `co_await` on an awaiter whose `await_ready()` reads the clock through a virtual `now()` |
+| `src/core/tui/runtime/WithTimeout.hpp` | contour-terminal/endo | `src/tui/runtime/WithTimeout.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/runtime/posix/PollHelpers.hpp` | contour-terminal/endo | `src/tui/runtime/platform/PollHelpers.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | moved out of `runtime/platform/`; the file-wide `#if !defined(_WIN32)` is gone, because only POSIX translation units include it |
+| `src/core/tui/runtime/posix/TerminalEventSource.cpp` | contour-terminal/endo | `src/tui/runtime/platform/TerminalEventSourcePosix.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | moved out of `runtime/platform/`; the file-wide `#if !defined(_WIN32)` is gone, because SOURCES_POSIX selects the file |
+| `src/core/tui/runtime/testing/MockEventSource.hpp` | contour-terminal/endo | `src/tui/runtime/testing/MockEventSource.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/runtime/windows/TerminalEventSource.cpp` | contour-terminal/endo | `src/tui/runtime/platform/TerminalEventSourceWin32.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | moved out of `runtime/platform/`; the file-wide `#if defined(_WIN32)` is gone, because SOURCES_WINDOWS selects the file |
+| `src/core/tui/windows/ImageLoader.cpp` | contour-terminal/endo | `src/tui/ImageLoader.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the Windows `readClipboardImage()` |
+| `src/core/tui/windows/Terminal.cpp` | contour-terminal/endo | `src/tui/platform/TerminalWin32.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | as `posix/Terminal.cpp`, for Windows; the file-wide `#if defined(_WIN32)` is gone, because SOURCES_WINDOWS selects the file |
+| `src/core/tui/windows/TerminalInput.cpp` | contour-terminal/endo | `src/tui/platform/TerminalInputWin32.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the Windows half, over `TerminalInput::NativeState`, which this file defines; the file-wide `#if defined(_WIN32)` is gone, because SOURCES_WINDOWS selects the file |
+| `src/core/tui/windows/TerminalInput_test.cpp` | contour-terminal/endo | `src/tui/TerminalInputWin32_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | a Windows-only test source; the file-wide `#if defined(_WIN32)` is gone, and the named-mutex serialisation of its cases is kept |
 | `src/core/tui/windows/TerminalOutput.cpp` | contour-terminal/endo | `src/tui/platform/TerminalOutputWin32.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | as `posix/TerminalOutput.cpp`, for Windows; the file-wide `#if defined(_WIN32)` is gone, because SOURCES_WINDOWS selects the file |
 | `src/core/tui/windows/Win32Utf.hpp` | contour-terminal/endo | `src/tui/platform/Win32Utf.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | moved out of `tui/platform/`, which Ruling R40 does not keep |
