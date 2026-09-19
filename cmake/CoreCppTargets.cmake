@@ -27,11 +27,13 @@
 # module only SOURCES_EMSCRIPTEN, which lists the subset (Part I §1).
 #
 # It must be called from a directory that core_cpp_add_modules() entered for a row
-# of the module table, and a target it links as core::<x> must belong to that same
-# module or to one the row lists in DEPS. That is how the table's layering is
-# enforced rather than merely documented. A target with a core_cpp_module_target()
-# row follows that row rather than its module's: its KIND is checked against it, and
-# where its PLATFORMS or WHEN say it does not build, it is not created.
+# of the module table, and a target it links as core::<x> must be one its row allows:
+# under the module's row, one of the same module or of a module the row lists in
+# DEPS. That is how the table's layering is enforced rather than merely
+# documented. A target with a core_cpp_module_target() row follows that row rather
+# than its module's: it links only what the row's DEPS name, its KIND is checked
+# against it, and where its PLATFORMS or WHEN say it does not build, it is not
+# created. tests/cmake/check-layering.cmake proves each refusal.
 #
 # core_cpp_add_test() builds core-cpp-<module>-test from the module's *_test.cpp
 # files, links it with core::<module> (when that target exists) and
@@ -112,11 +114,12 @@ function(core_cpp_row_builds platforms when outVar)
     set(${outVar} ${builds} PARENT_SCOPE)
 endfunction()
 
-## @brief Sets @p outPrefix_PLATFORMS, _WHEN and _KIND to the table row that holds target
-## @p name of module @p module: its own core_cpp_module_target() row when it has one,
-## else the module's row. _KIND is empty for a target other than the module's own that has
-## no row, whose kind the table does not state.
+## @brief Sets @p outPrefix_PLATFORMS, _WHEN, _KIND and _DEPS to the table row that holds
+## target @p name of module @p module: its own core_cpp_module_target() row when it has one,
+## else the module's row, and @p outPrefix_OWN to ON for the former. _KIND is empty for a
+## target other than the module's own that has no row, whose kind the table does not state.
 function(core_cpp_target_row name module outPrefix)
+    set(own OFF)
     if(DEFINED CORE_CPP_TARGET_${name}_MODULE)
         if(NOT CORE_CPP_TARGET_${name}_MODULE STREQUAL module)
             message(FATAL_ERROR
@@ -124,37 +127,58 @@ function(core_cpp_target_row name module outPrefix)
                 "cmake/CoreCppModules.cmake, but module '${module}' builds it.")
         endif()
         set(prefix CORE_CPP_TARGET_${name})
+        set(own ON)
     else()
         set(prefix CORE_CPP_MODULE_${module})
     endif()
     set(kind "${${prefix}_KIND}")
-    if(NOT name STREQUAL module AND NOT DEFINED CORE_CPP_TARGET_${name}_MODULE)
+    if(NOT name STREQUAL module AND NOT own)
         set(kind "")
     endif()
-    set(${outPrefix}_PLATFORMS "${${prefix}_PLATFORMS}" PARENT_SCOPE)
-    set(${outPrefix}_WHEN "${${prefix}_WHEN}" PARENT_SCOPE)
+    foreach(field IN ITEMS PLATFORMS WHEN DEPS)
+        set(${outPrefix}_${field} "${${prefix}_${field}}" PARENT_SCOPE)
+    endforeach()
     set(${outPrefix}_KIND "${kind}" PARENT_SCOPE)
+    set(${outPrefix}_OWN ${own} PARENT_SCOPE)
 endfunction()
 
-## @brief Refuses a core::<x> in @p libs that belongs neither to @p module nor to a
-## module its table row lists in DEPS.
-function(core_cpp_check_layering target module libs)
+## @brief Refuses a core::<x> in @p libs that target @p name of module @p module may not link,
+## by the row that holds it (core_cpp_target_row). A row of the target's own is the whole
+## list: its DEPS name a target of the same module by that target's name, and another module
+## by the module's. The module's row lets a target link any target of the module besides
+## those of the modules it lists.
+function(core_cpp_check_layering name module libs)
+    core_cpp_target_row(${name} ${module} row)
+    set(target core-cpp-${name})
     foreach(lib IN LISTS libs)
         if(NOT lib MATCHES "^core::(.+)$")
             continue()
         endif()
-        set(real "core-cpp-${CMAKE_MATCH_1}")
-        if(NOT TARGET ${real})
+        set(linked "${CMAKE_MATCH_1}")
+        if(NOT TARGET core-cpp-${linked})
             message(FATAL_ERROR
                 "${target} links ${lib}, which does not exist (yet). A module may only link modules "
                 "declared above it in cmake/CoreCppModules.cmake.")
         endif()
-        get_target_property(owner ${real} CORE_CPP_MODULE)
-        if(NOT owner STREQUAL module AND NOT owner IN_LIST CORE_CPP_MODULE_${module}_DEPS)
+        get_target_property(owner core-cpp-${linked} CORE_CPP_MODULE)
+        if(row_OWN)
+            set(entry "${owner}")
+            if(owner STREQUAL module)
+                set(entry "${linked}")
+            endif()
+            if(NOT entry IN_LIST row_DEPS)
+                set(named "they name: '${row_DEPS}'")
+                if(NOT row_DEPS)
+                    set(named "it has none, so the target links no core-cpp target")
+                endif()
+                message(FATAL_ERROR
+                    "${target} links ${lib}, which the '${name}' row of cmake/CoreCppModules.cmake does not "
+                    "allow: its DEPS do not name '${entry}' (${named}).")
+            endif()
+        elseif(NOT owner STREQUAL module AND NOT owner IN_LIST row_DEPS)
             message(FATAL_ERROR
                 "${target} links ${lib} from module '${owner}', which the '${module}' row of "
-                "cmake/CoreCppModules.cmake does not list in DEPS (it lists: "
-                "'${CORE_CPP_MODULE_${module}_DEPS}').")
+                "cmake/CoreCppModules.cmake does not list in DEPS (it lists: '${row_DEPS}').")
         endif()
     endforeach()
 endfunction()
@@ -221,7 +245,7 @@ function(core_cpp_add_module name)
         "$<BUILD_INTERFACE:${CORE_CPP_SOURCE_DIR}/src>"
         "$<BUILD_INTERFACE:${CORE_CPP_GENERATED_INCLUDE_DIR}>")
 
-    core_cpp_check_layering(${target} ${module} "${arg_PUBLIC_LIBS};${arg_PRIVATE_LIBS}")
+    core_cpp_check_layering(${name} ${module} "${arg_PUBLIC_LIBS};${arg_PRIVATE_LIBS}")
     if(arg_PUBLIC_LIBS)
         target_link_libraries(${target} ${usage} ${arg_PUBLIC_LIBS})
     endif()

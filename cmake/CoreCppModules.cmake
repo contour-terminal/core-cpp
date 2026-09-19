@@ -18,15 +18,23 @@
 # core_cpp_add_module() and core_cpp_add_test() apply it (cmake/CoreCppTargets.cmake).
 #
 #   core_cpp_module_target(NAME <target> MODULE <module> KIND STATIC|INTERFACE|OBJECT
+#                          [DEPS <target or module>...]
 #                          PLATFORMS any|native|wasm-subset [WHEN <option>])
 #
 # A module builds the target named after it, and may build more in the same directory
 # and namespace (core::net_types and core::net_tls beside core::net). Such a target
 # follows its module's row unless it has a row of its own, which it needs where that
 # row does not describe it: a part that builds under Emscripten while the rest of the
-# module does not, or a part that needs an option the module does not. Its PLATFORMS
-# and WHEN then apply to it alone, and its KIND is checked like the module's. It links
-# what its module may: the module's DEPS bound every target of the module.
+# module does not, a part that needs an option the module does not, or a part that
+# links less than the module does. Its PLATFORMS and WHEN then apply to it alone, and
+# its KIND is checked like the module's.
+#
+# A row's DEPS are all that its target may link, and a row without DEPS links no
+# core-cpp target at all. Each entry is another target of the same module, by its
+# name (the module's own, or one with an earlier row), or a module the module's row
+# lists in DEPS, whose targets it may then link; anything else is refused here. A
+# target that follows its module's row links what that row lists and the module's
+# other targets.
 #
 # core_cpp_add_modules() walks the rows in order and enters each enabled module's
 # directory. That directory declares its targets with core_cpp_add_module(), which
@@ -72,7 +80,7 @@ function(core_cpp_module)
 endfunction()
 
 function(core_cpp_module_target)
-    cmake_parse_arguments(PARSE_ARGV 0 arg "" "NAME;MODULE;KIND;PLATFORMS;WHEN" "")
+    cmake_parse_arguments(PARSE_ARGV 0 arg "" "NAME;MODULE;KIND;PLATFORMS;WHEN" "DEPS")
     if(arg_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "core_cpp_module_target(${arg_NAME}): unexpected arguments: ${arg_UNPARSED_ARGUMENTS}")
     endif()
@@ -94,9 +102,19 @@ function(core_cpp_module_target)
         message(FATAL_ERROR
             "core_cpp_module_target(${arg_NAME}): PLATFORMS must be any, native or wasm-subset, not '${arg_PLATFORMS}'.")
     endif()
+    foreach(dep IN LISTS arg_DEPS)
+        if(dep STREQUAL arg_MODULE OR CORE_CPP_TARGET_${dep}_MODULE STREQUAL arg_MODULE
+           OR dep IN_LIST CORE_CPP_MODULE_${arg_MODULE}_DEPS)
+            continue()
+        endif()
+        message(FATAL_ERROR
+            "core_cpp_module_target(${arg_NAME}): DEPS names '${dep}', which is neither a target of module "
+            "'${arg_MODULE}' declared in an earlier row nor a module the '${arg_MODULE}' row lists in DEPS "
+            "(it lists: '${CORE_CPP_MODULE_${arg_MODULE}_DEPS}').")
+    endforeach()
 
     set(CORE_CPP_MODULE_${arg_MODULE}_TARGETS ${CORE_CPP_MODULE_${arg_MODULE}_TARGETS} ${arg_NAME} PARENT_SCOPE)
-    foreach(field IN ITEMS MODULE KIND PLATFORMS WHEN)
+    foreach(field IN ITEMS MODULE KIND DEPS PLATFORMS WHEN)
         set(CORE_CPP_TARGET_${arg_NAME}_${field} "${arg_${field}}" PARENT_SCOPE)
     endforeach()
 endfunction()
@@ -169,8 +187,8 @@ core_cpp_module(NAME async KIND INTERFACE PLATFORMS any)
 core_cpp_module(NAME platform KIND STATIC DEPS base log PLATFORMS wasm-subset)
 
 # contour's event loop, sockets and HTTP server, native only until Tasks B3 to B5 bring its
-# WebAssembly subset. Its error vocabulary, core::net_types, is header-only and builds everywhere;
-# core::net_tls is the part that needs OpenSSL.
+# WebAssembly subset. Its error vocabulary, core::net_types, is header-only, links nothing and
+# builds everywhere; core::net_tls is the part that needs OpenSSL, on top of core::net.
 core_cpp_module(NAME net KIND STATIC DEPS async platform PLATFORMS native)
 core_cpp_module_target(NAME net_types MODULE net KIND INTERFACE PLATFORMS any)
-core_cpp_module_target(NAME net_tls MODULE net KIND STATIC PLATFORMS native WHEN CORE_CPP_WITH_TLS)
+core_cpp_module_target(NAME net_tls MODULE net KIND STATIC DEPS net PLATFORMS native WHEN CORE_CPP_WITH_TLS)

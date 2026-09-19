@@ -55,6 +55,13 @@ because its event loop could not wait on a console handle.
 - **The module table is the dependency graph.** `cmake/CoreCppModules.cmake` lists every
   module in dependency order, with the modules it may link. `core_cpp_add_module` refuses a
   `core::<x>` link that the row does not list, so the layering is enforced at configure time.
+- **A target that links less than its module has a row of its own, and its `DEPS` are the whole
+  list** (`core_cpp_module_target`): another target of the module by name, or a module its
+  module's row lists; no `DEPS` links no core-cpp target, not even the module's own. That is
+  what holds `core::net_types` to nothing while `core::net` links `async` and `platform`, and
+  what will hold `core::tui_output` to `base` (Task A7). Before rows had `DEPS`, the module's
+  row bounded all its targets, so `core::net_types` could have linked `core::async` unrefused.
+  `tests/cmake/check-layering.cmake` proves each refusal by name.
 - **An include across modules is an edge of that table.** `core::async` depends on the
   standard library only; `core::net` on `async` and `platform`; `core::tui_output` on `base`
   only. A header that includes across modules without a table edge is a layering violation

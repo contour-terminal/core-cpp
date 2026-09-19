@@ -25,9 +25,12 @@ A module may link only the modules its row in
 [`cmake/CoreCppModules.cmake`](https://github.com/contour-terminal/core-cpp/blob/master/cmake/CoreCppModules.cmake)
 lists, and every one of those must appear in an earlier row. The configure refuses anything else,
 so the graph below is enforced rather than documented. A module's further targets
-(`core::net_types` and `core::net_tls` beside `core::net`) link what their module may; a row of
-their own says where one builds when that differs from its module, which is how `core::net_types`
-builds under Emscripten while the rest of `net` does not:
+(`core::net_types` and `core::net_tls` beside `core::net`) have rows of their own. A row says where
+its target builds when that differs from its module, which is how `core::net_types` builds under
+Emscripten while the rest of `net` does not, and its `DEPS` are all that target may link: another
+target of the module by name, or a module its module's row lists. `core::net_types` names none and
+links nothing; `core::net_tls` names `net`. A target that follows its module's row links what that
+row lists and the module's other targets:
 
 ```mermaid
 graph BT

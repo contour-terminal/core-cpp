@@ -32,6 +32,17 @@ add_test(NAME core-cpp.platform-sources
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-platform-sources.cmake")
 set_tests_properties(core-cpp.platform-sources PROPERTIES LABELS "core-cpp;hygiene")
 
+# What each row of the module table lets its target link, and that a link or a row outside it is
+# refused by name. Each scenario configures a project of its own, with no language enabled.
+add_test(NAME core-cpp.layering
+         COMMAND "${CMAKE_COMMAND}"
+                 "-DROOT=${CORE_CPP_SOURCE_DIR}"
+                 "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/layering"
+                 "-DGENERATOR=${CMAKE_GENERATOR}"
+                 "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-layering.cmake")
+set_tests_properties(core-cpp.layering PROPERTIES LABELS "core-cpp;hygiene")
+
 # A release tag must name the tree it releases (Part I §4). The release workflow runs
 # check-release.cmake on the pushed tag; this proves that it accepts a matching tree and refuses
 # each mismatch by name.

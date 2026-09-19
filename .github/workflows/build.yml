@@ -80,6 +80,12 @@ jobs:
           cmake -DTARGETS="$GITHUB_WORKSPACE/cmake/CoreCppTargets.cmake"
           -P tests/cmake/check-platform-sources.cmake
 
+      # Each scenario configures a project with no language enabled, so the default generator will do.
+      - name: Module table layering
+        run: >-
+          cmake -DROOT="$GITHUB_WORKSPACE" -DWORK_DIR="$RUNNER_TEMP/layering"
+          -P tests/cmake/check-layering.cmake
+
       # .gitattributes normalises text to LF, so a CR byte in a tracked file means a file git
       # treated as binary, which a text import must never be.
       - name: No tracked file contains a CR byte

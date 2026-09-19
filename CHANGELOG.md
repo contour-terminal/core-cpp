@@ -124,9 +124,13 @@ workflow refuses one without a section here.
   `CachedClock` can drive it. contour's loop did not, because contour's `IClock` had no
   `refresh()`; for `SteadyClock` and `ManualClock` it does nothing.
 - A module may declare further targets in the module table, each with a row of its own
-  (`core_cpp_module_target()`), where its `PLATFORMS` or `WHEN` differ from its module's: a
-  native-only module is entered under Emscripten when one of its targets builds there, and
-  `core_cpp_add_test(<module> NAME <target>)` links that target and builds where it does.
+  (`core_cpp_module_target()`), where its `PLATFORMS`, `WHEN` or links differ from its module's:
+  a native-only module is entered under Emscripten when one of its targets builds there, and
+  `core_cpp_add_test(<module> NAME <target>)` links that target and builds where it does. A
+  row's `DEPS` are all its target may link, another target of the module or a module its
+  module's row lists, and a row without `DEPS` links no core-cpp target; the configure refuses
+  a row or a link outside that by name (`core::net_types` links nothing, `core::net_tls` only
+  `core::net`).
 
 ### Fixed
 

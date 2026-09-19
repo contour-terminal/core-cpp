@@ -19,7 +19,7 @@ cmake/
                             platform source lists) and core_cpp_add_test()
   CoreCppDependencies.cmake the dependency table: parent target, find_package, then CPM
   CoreCppModules.cmake      the module table, in dependency order, the rows of targets whose
-                            platforms or option differ from their module's, and the walker
+                            platforms, option or links differ from their module's, and the walker
   CPM.cmake                 CPM 0.40.8, bounded and hash-checked download
   FetchTransferBound.cmake  verbatim from fastcached: bounds every dependency transfer
   portable/
@@ -66,6 +66,7 @@ tests/
     check-cmake-hygiene.cmake       the rules of Part I §3 as a table, plus an allowlist
     check-cmake-hygiene-selftest.cmake  proves every hygiene rule refuses
     check-platform-sources.cmake    which source lists each platform compiles, Emscripten included
+    check-layering.cmake            each module-table row bounds what its target links; refusals by name
     check-release.cmake             a release tag equals project(VERSION) and has a CHANGELOG section
     check-release-selftest.cmake    proves each refusal of check-release.cmake
 scripts/
