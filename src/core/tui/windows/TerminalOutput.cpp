@@ -13,8 +13,9 @@
 
 /// @file
 /// What @c TerminalOutput does through the operating system on Windows: the write
-/// itself, the console size and the XTVERSION probe. Everything that only composes
-/// bytes is in the shared `TerminalOutput.cpp`.
+/// itself, the console size, the XTVERSION probe and whether standard output is a
+/// console. Everything that only composes bytes is in the shared
+/// `TerminalOutput.cpp`.
 
 namespace core::tui
 {
@@ -108,17 +109,17 @@ void TerminalOutput::detectCapabilities()
     _unscrollSupported = detail::supportsUnscroll(detail::parseXtVersionName(queryXtVersion()));
 }
 
-auto TerminalOutput::syncGuard() -> SyncGuard
-{
-    flush();
-    return SyncGuard(GetStdHandle(STD_OUTPUT_HANDLE));
-}
-
 void TerminalOutput::writeToDestination(std::string_view bytes)
 {
     auto const hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD written = 0;
     WriteFile(hStdout, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr);
+}
+
+bool TerminalOutput::isTerminal() const noexcept
+{
+    DWORD mode = 0;
+    return GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &mode) != 0;
 }
 
 void TerminalOutput::updateDimensions()
@@ -129,53 +130,6 @@ void TerminalOutput::updateDimensions()
         _cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
         _rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
     }
-}
-
-// --- SyncGuard ---
-
-SyncGuard::SyncGuard(): _handle(reinterpret_cast<NativeHandle>(-1))
-{
-}
-
-SyncGuard::SyncGuard(NativeHandle handle): _handle(handle)
-{
-    if (_handle != reinterpret_cast<NativeHandle>(-1))
-    {
-        static constexpr auto Begin = "\033[?2026h";
-        DWORD written = 0;
-        WriteFile(_handle, Begin, static_cast<DWORD>(std::strlen(Begin)), &written, nullptr);
-    }
-}
-
-SyncGuard::~SyncGuard()
-{
-    if (_handle != reinterpret_cast<NativeHandle>(-1))
-    {
-        static constexpr auto End = "\033[?2026l";
-        DWORD written = 0;
-        WriteFile(_handle, End, static_cast<DWORD>(std::strlen(End)), &written, nullptr);
-    }
-}
-
-SyncGuard::SyncGuard(SyncGuard&& other) noexcept: _handle(other._handle)
-{
-    other._handle = reinterpret_cast<NativeHandle>(-1);
-}
-
-auto SyncGuard::operator=(SyncGuard&& other) noexcept -> SyncGuard&
-{
-    if (this != &other)
-    {
-        if (_handle != reinterpret_cast<NativeHandle>(-1))
-        {
-            static constexpr auto End = "\033[?2026l";
-            DWORD written = 0;
-            WriteFile(_handle, End, static_cast<DWORD>(std::strlen(End)), &written, nullptr);
-        }
-        _handle = other._handle;
-        other._handle = reinterpret_cast<NativeHandle>(-1);
-    }
-    return *this;
 }
 
 } // namespace core::tui

@@ -6,11 +6,13 @@
 #include <core/tui/TerminalProtocols.hpp>
 
 #include <format>
+#include <string_view>
+#include <utility>
 
 /// @file
 /// Every @c TerminalOutput member that only composes bytes into the buffer. What
-/// touches the operating system — the write itself, the terminal's size and the
-/// capability probe — is in `posix/TerminalOutput.cpp` and
+/// touches the operating system — the write itself, the terminal's size, the
+/// capability probe and the terminal test — is in `posix/TerminalOutput.cpp` and
 /// `windows/TerminalOutput.cpp`, which is all that differs between the two. In
 /// endo those two files each carried a full copy of this composition (`platform/
 /// TerminalOutput.cpp` and `platform/TerminalOutputWin32.cpp`, f774a210), so an
@@ -18,6 +20,8 @@
 
 namespace core::tui
 {
+
+using namespace std::string_view_literals;
 
 void TerminalOutput::writeText(std::string_view text, Style const& style)
 {
@@ -246,6 +250,12 @@ void TerminalOutput::writeHyperlink(std::string_view text, std::string_view url,
     endHyperlink();
 }
 
+auto TerminalOutput::syncGuard() -> SyncGuard
+{
+    flush(); // Flush any pending output before entering sync mode
+    return SyncGuard(*this);
+}
+
 void TerminalOutput::flush()
 {
     if (!_buffer.empty())
@@ -273,6 +283,45 @@ void TerminalOutput::appendSgr(Style const& style)
 void TerminalOutput::appendSgrReset()
 {
     _buffer += "\033[m";
+}
+
+// --- SyncGuard ---
+//
+// The sequences go through TerminalOutput::writeToDestination() rather than to a native handle,
+// so they land wherever that output's bytes land. Writing them directly to the process's standard
+// output, as endo did (src/tui/platform/TerminalOutput.cpp:355-359 at f774a210), put the begin and
+// end of a retargeted output's synchronised frame on a stream that never saw the frame's contents.
+
+namespace
+{
+    constexpr auto BeginSynchronizedOutput = "[?2026h"sv;
+    constexpr auto EndSynchronizedOutput = "[?2026l"sv;
+} // namespace
+
+SyncGuard::SyncGuard(TerminalOutput& output): _output(&output)
+{
+    _output->writeToDestination(BeginSynchronizedOutput);
+}
+
+SyncGuard::~SyncGuard()
+{
+    if (_output != nullptr)
+        _output->writeToDestination(EndSynchronizedOutput);
+}
+
+SyncGuard::SyncGuard(SyncGuard&& other) noexcept: _output(std::exchange(other._output, nullptr))
+{
+}
+
+auto SyncGuard::operator=(SyncGuard&& other) noexcept -> SyncGuard&
+{
+    if (this != &other)
+    {
+        if (_output != nullptr)
+            _output->writeToDestination(EndSynchronizedOutput);
+        _output = std::exchange(other._output, nullptr);
+    }
+    return *this;
 }
 
 } // namespace core::tui

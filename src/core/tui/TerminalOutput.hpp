@@ -81,28 +81,29 @@ struct Style
     Color underlineColor;                                 ///< Underline color (SGR 58;2;r;g;b or 58;5;idx).
 };
 
+class TerminalOutput;
+
 /// @brief RAII guard for synchronized terminal output.
 ///
 /// Uses CSI ?2026h/l (synchronized output mode) to prevent tearing.
-/// The constructor writes the begin sequence, the destructor writes the end sequence
-/// and flushes.
+/// The constructor writes the begin sequence, the destructor writes the end sequence.
+///
+/// Both go to the @c TerminalOutput the guard was made from, through the same
+/// @c writeToDestination() every other byte takes, so a retargeted output (a test capture, a
+/// pipe, a second terminal) is bracketed by its own sequences and the process's standard output
+/// is left alone. It is also why the guard carries no native handle, and this header no
+/// `<windows.h>` type.
 class SyncGuard
 {
   public:
-#if defined(_WIN32)
-    using NativeHandle = void*; ///< Windows HANDLE, avoids #include <windows.h>.
-#else
-    using NativeHandle = int; ///< POSIX file descriptor.
-#endif
-
     /// @brief Constructs a no-op guard (no synchronized output).
-    SyncGuard();
+    SyncGuard() noexcept = default;
 
-    /// @brief Begins synchronized output mode.
-    /// @param handle Native file handle to write to.
-    explicit SyncGuard(NativeHandle handle);
+    /// @brief Begins synchronized output mode on @p output.
+    /// @param output The output to bracket; it must outlive the guard.
+    explicit SyncGuard(TerminalOutput& output);
 
-    /// @brief Ends synchronized output mode and flushes.
+    /// @brief Ends synchronized output mode.
     ~SyncGuard();
 
     SyncGuard(SyncGuard const&) = delete;
@@ -111,7 +112,7 @@ class SyncGuard
     auto operator=(SyncGuard&&) noexcept -> SyncGuard&;
 
   private:
-    NativeHandle _handle;
+    TerminalOutput* _output = nullptr; ///< The bracketed output, or nullptr for a no-op guard.
 };
 
 /// @brief Handles styled terminal output, cursor control, and screen management.
@@ -318,6 +319,16 @@ class TerminalOutput
     /// @brief Flushes the internal buffer to stdout.
     virtual void flush();
 
+    /// @brief Whether the destination this writes to is a terminal.
+    ///
+    /// The default destination is the process's standard output, and the default answer is what
+    /// the operating system says about it. A subclass that retargets @c writeToDestination()
+    /// answers for its own destination, so a caller deciding whether to emit colour, progress or
+    /// synchronised output asks the output it actually holds rather than the process.
+    ///
+    /// @return true when the destination is a terminal.
+    [[nodiscard]] virtual bool isTerminal() const noexcept;
+
     /// @brief Returns the terminal width in columns.
     [[nodiscard]] virtual auto columns() const noexcept -> int;
 
@@ -361,6 +372,10 @@ class TerminalOutput
     virtual void writeToDestination(std::string_view bytes);
 
   private:
+    /// The guard's begin and end sequences take the same destination as every other byte, which
+    /// is what this friendship is for and all it is used for.
+    friend class SyncGuard;
+
     std::string _buffer; ///< Output buffer for batching writes.
     int _cols = 80;
     int _rows = 24;

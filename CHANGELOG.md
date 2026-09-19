@@ -133,8 +133,9 @@ workflow refuses one without a section here.
   `core::net`).
 - `core::tui_output` (`CORE_CPP_WITH_TUI`, native only), the leaf of endo's terminal UI: styled
   output and cursor, screen, scroll-region, sixel, OSC 52 and OSC 8 control through
-  `TerminalOutput`, whose `writeToDestination()` a subclass overrides to retarget the stream;
-  `SyncGuard` (DEC mode 2026); `buildSgrSequence()`; the protocol sequence constants and the DA1
+  `TerminalOutput`, whose `writeToDestination()` a subclass overrides to retarget the stream and
+  whose `isTerminal()` says what that stream is; `SyncGuard` (DEC mode 2026), which brackets the
+  output it was made from; `buildSgrSequence()`; the protocol sequence constants and the DA1
   reader in `core::tui::protocols`; `CursorShape`; and the module's `Result`/`VoidResult`. It links
   `core::base` and nothing else — no libunicode, no coroutines, not even `core::platform` — so a
   program that only prints styled text takes nothing else with it, and its row in the module table
@@ -145,6 +146,15 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- `core::tui::SyncGuard` writes its begin and end sequences (DEC mode 2026) through the
+  `TerminalOutput` it brackets, so they follow that output's `writeToDestination()` wherever its
+  bytes go. endo's guard wrote them to the process's standard output whatever the output was
+  (`src/tui/platform/TerminalOutput.cpp:355-359` at `f774a210`), which put the frame's begin and
+  end on a stream that never saw the frame's contents, and left a retargeted output's own stream
+  unsynchronised. The guard therefore carries no native handle, and `<core/tui/TerminalOutput.hpp>`
+  no longer declares a `void*` handle alias under `_WIN32`. `TerminalOutput::isTerminal()` is new
+  beside it: whether the destination is a terminal, answered by the operating system for the
+  default one and by the subclass for a retargeted one.
 - `core::nextPowerOfTwo()` rounds a 16-, 32- or 64-bit value up to a power of two. crispy's, which
   it was imported from, compared the type's width in bytes against bit counts and so smeared only
   the eight bits below the highest set one: 257 became 511, and 0x10001 became 0x1fe01.

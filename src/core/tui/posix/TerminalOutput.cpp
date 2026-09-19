@@ -15,8 +15,9 @@
 
 /// @file
 /// What @c TerminalOutput does through the operating system on POSIX: the write
-/// itself, the window size and the XTVERSION probe. Everything that only composes
-/// bytes is in the shared `TerminalOutput.cpp`.
+/// itself, the window size, the XTVERSION probe and whether standard output is a
+/// terminal. Everything that only composes bytes is in the shared
+/// `TerminalOutput.cpp`.
 
 namespace core::tui
 {
@@ -80,15 +81,14 @@ void TerminalOutput::detectCapabilities()
     _unscrollSupported = detail::supportsUnscroll(detail::parseXtVersionName(queryXtVersion()));
 }
 
-auto TerminalOutput::syncGuard() -> SyncGuard
-{
-    flush(); // Flush any pending output before entering sync mode
-    return SyncGuard(STDOUT_FILENO);
-}
-
 void TerminalOutput::writeToDestination(std::string_view bytes)
 {
     safeWrite(STDOUT_FILENO, bytes.data(), bytes.size());
+}
+
+bool TerminalOutput::isTerminal() const noexcept
+{
+    return ::isatty(STDOUT_FILENO) != 0;
 }
 
 void TerminalOutput::updateDimensions()
@@ -99,50 +99,6 @@ void TerminalOutput::updateDimensions()
         _cols = ws.ws_col;
         _rows = ws.ws_row;
     }
-}
-
-// --- SyncGuard ---
-
-SyncGuard::SyncGuard(): _handle(-1)
-{
-}
-
-SyncGuard::SyncGuard(NativeHandle handle): _handle(handle)
-{
-    if (_handle >= 0)
-    {
-        static constexpr auto Begin = "\033[?2026h";
-        safeWrite(_handle, Begin, std::strlen(Begin));
-    }
-}
-
-SyncGuard::~SyncGuard()
-{
-    if (_handle >= 0)
-    {
-        static constexpr auto End = "\033[?2026l";
-        safeWrite(_handle, End, std::strlen(End));
-    }
-}
-
-SyncGuard::SyncGuard(SyncGuard&& other) noexcept: _handle(other._handle)
-{
-    other._handle = -1;
-}
-
-auto SyncGuard::operator=(SyncGuard&& other) noexcept -> SyncGuard&
-{
-    if (this != &other)
-    {
-        if (_handle >= 0)
-        {
-            static constexpr auto End = "\033[?2026l";
-            safeWrite(_handle, End, std::strlen(End));
-        }
-        _handle = other._handle;
-        other._handle = -1;
-    }
-    return *this;
 }
 
 } // namespace core::tui
