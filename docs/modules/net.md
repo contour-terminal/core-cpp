@@ -51,10 +51,14 @@ The module's own directory holds only platform-independent code. What one platfo
 private, and CMake's per-platform source lists choose it: `posix/` (`poll(2)`, the listeners,
 `PosixSocket`, the accept loop), `linux/` (epoll), `bsd/` (kqueue, for Apple and the BSDs) and
 `windows/` (`WaitForMultipleObjects`, `WindowsSocket` and `WindowsListener` over
-`WSAEventSelect`, the loopback pair). contour's `PollEventSource.cpp` is split along its
-`#ifdef` into `posix/` and `windows/`; `DefaultEventSource.cpp` keeps its `#ifdef`s until Task
-B3 replaces it. `detail/` has the rest that is private: the chunking arithmetic of the Windows
-wait, `PeerAddress.hpp` (which includes `<winsock2.h>`), and two helpers.
+`WSAEventSelect`, the loopback pair). No file there guards itself with an `#ifdef` of its
+platform. contour's `PollEventSource.cpp` is split along its `#ifdef` into `posix/` and
+`windows/`, and `makeSocketPair()` into `testing/posix/` and `testing/windows/`. Two exceptions
+remain: `DefaultEventSource.cpp` keeps its `#ifdef`s until Task B3 replaces it, and
+`EventSourceParity_test.cpp` keeps two POSIX-only cases (a closed descriptor's registration,
+descriptor exhaustion) under `#ifndef _WIN32`. `detail/` has the rest that is private: the
+chunking arithmetic of the Windows wait, `PeerAddress.hpp` (which includes `<winsock2.h>`), and
+two helpers.
 
 ## Invariants
 

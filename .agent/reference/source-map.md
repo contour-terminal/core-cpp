@@ -49,7 +49,8 @@ src/core/
                             posix/ (poll, sockets) linux/ (epoll) bsd/ (kqueue) windows/
                             (WaitForMultipleObjects, sockets) detail/ are private; testing/
                             holds the fakes (ScriptedEventSource, makeSocketPair, AllBackends,
-                            CoroTestSupport); IoBackend, dialling (planned, B2-B11)
+                            CoroTestSupport), makeSocketPair's halves in testing/posix/ and
+                            testing/windows/; IoBackend, dialling (planned, B2-B11)
   tui/                      (planned, A7 and B12) core::tui_output (the leaf) and core::tui
   testing/                  core::testing: SuppressWindowsDialogs (no test framework needed),
                             Environment (FakeEnvironment), ScopedTempDir,

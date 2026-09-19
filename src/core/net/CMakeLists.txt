@@ -29,9 +29,12 @@ endif()
 #
 # The module's root holds only platform-independent code. What one platform needs lives in posix/,
 # linux/ (epoll), bsd/ (kqueue, for Apple and the BSDs) and windows/, and the source lists below
-# choose it, so no file there guards itself with an #ifdef of its platform; contour's
-# PollEventSource.cpp is split along its #ifdef into posix/ and windows/. DefaultEventSource.cpp
-# keeps its #ifdefs until Task B3 replaces it.
+# choose it, so no file there guards itself with an #ifdef of its platform. contour's
+# PollEventSource.cpp is split along its #ifdef into posix/ and windows/, and so is the socket pair
+# of testing/InMemoryTransport.cpp, into testing/posix/ and testing/windows/. Two exceptions remain:
+# DefaultEventSource.cpp keeps its #ifdefs until Task B3 replaces it, and EventSourceParity_test.cpp
+# keeps two POSIX-only cases (a closed descriptor's registration, descriptor exhaustion), and the
+# includes they need, under #ifndef _WIN32.
 core_cpp_add_module(net KIND STATIC
     HEADERS
         AsyncBufferedReader.hpp
@@ -60,7 +63,6 @@ core_cpp_add_module(net KIND STATIC
         WriteQueue.cpp
         detail/PeerAddress.hpp
         detail/WaitChunking.hpp
-        testing/InMemoryTransport.cpp
     SOURCES_POSIX
         detail/WouldBlock.hpp
         posix/AcceptLoop.cpp
@@ -74,6 +76,7 @@ core_cpp_add_module(net KIND STATIC
         posix/SocketsPosix.cpp
         posix/UnixListener.cpp
         posix/UnixListener.hpp
+        testing/posix/InMemoryTransport.cpp
     SOURCES_LINUX
         linux/EpollEventSource.cpp
         linux/EpollEventSource.hpp
@@ -81,6 +84,7 @@ core_cpp_add_module(net KIND STATIC
         bsd/KqueueEventSource.cpp
         bsd/KqueueEventSource.hpp
     SOURCES_WINDOWS
+        testing/windows/InMemoryTransport.cpp
         windows/PollEventSource.cpp
         windows/SocketsWin32.cpp
         windows/WindowsListener.cpp
