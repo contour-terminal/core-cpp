@@ -192,3 +192,14 @@ core_cpp_module(NAME platform KIND STATIC DEPS base log PLATFORMS wasm-subset)
 core_cpp_module(NAME net KIND STATIC DEPS async platform PLATFORMS native)
 core_cpp_module_target(NAME net_types MODULE net KIND INTERFACE PLATFORMS any)
 core_cpp_module_target(NAME net_tls MODULE net KIND STATIC DEPS net PLATFORMS native WHEN CORE_CPP_WITH_TLS)
+
+# endo's terminal UI. Native only: there is no terminal under Emscripten, where CORE_CPP_WITH_TUI is
+# forced off. core::tui_output is the part that composes and writes bytes, and it has a row of its
+# own because it links less than the module does: base alone, no libunicode and no coroutines, so a
+# program that only prints styled text (Lightweight's dbtool) takes nothing else with it.
+#
+# The module's own DEPS are what it links today. Task B12 moves the runtime onto core::net::EventLoop
+# and adds net here; until then nothing in tui includes it, so nothing may link it.
+core_cpp_module(NAME tui KIND STATIC DEPS base platform async PLATFORMS native WHEN CORE_CPP_WITH_TUI)
+core_cpp_module_target(NAME tui_output MODULE tui KIND STATIC DEPS base
+                       PLATFORMS native WHEN CORE_CPP_WITH_TUI)

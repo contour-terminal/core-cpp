@@ -43,6 +43,11 @@ Endo
   - src/core/Generator.hpp and its test (from src/platform/, adapted)
   - src/core/testing/{ScopedTempDir,ScopedWorkingDirectory,EnvHelper}.hpp and
     ScopedTempDir_test.cpp (from src/testing/, adapted)
+  - src/core/tui/{TerminalOutput,SgrBuilder,TerminalProtocols,CursorShape,Error}.*
+    and TerminalProtocols_test.cpp (from src/tui/, adapted), and
+    src/core/tui/{posix,windows}/ and src/core/tui/detail/XtVersion.hpp (from
+    src/tui/platform/, adapted; the byte composition the two platform files shared
+    is in src/core/tui/TerminalOutput.cpp)
 
 fastcached
   https://github.com/LASTRADA-Software/fastcached

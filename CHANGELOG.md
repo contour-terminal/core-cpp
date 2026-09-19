@@ -131,6 +131,17 @@ workflow refuses one without a section here.
   module's row lists, and a row without `DEPS` links no core-cpp target; the configure refuses
   a row or a link outside that by name (`core::net_types` links nothing, `core::net_tls` only
   `core::net`).
+- `core::tui_output` (`CORE_CPP_WITH_TUI`, native only), the leaf of endo's terminal UI: styled
+  output and cursor, screen, scroll-region, sixel, OSC 52 and OSC 8 control through
+  `TerminalOutput`, whose `writeToDestination()` a subclass overrides to retarget the stream;
+  `SyncGuard` (DEC mode 2026); `buildSgrSequence()`; the protocol sequence constants and the DA1
+  reader in `core::tui::protocols`; `CursorShape`; and the module's `Result`/`VoidResult`. It links
+  `core::base` and nothing else — no libunicode, no coroutines, not even `core::platform` — so a
+  program that only prints styled text takes nothing else with it, and its row in the module table
+  is what refuses any other link.
+- The libunicode dependency (0.9.3, `unicode::unicode`) when `CORE_CPP_WITH_TUI` is on, and stb
+  (`stb_image`, `DOWNLOAD_ONLY`, pinned to a commit because stb publishes no releases) when
+  `CORE_CPP_WITH_IMAGES` is on. Both are off under Emscripten.
 
 ### Fixed
 

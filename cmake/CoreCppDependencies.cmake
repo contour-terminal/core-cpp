@@ -195,6 +195,50 @@ core_cpp_dependency(OpenSSL
     FIND_PACKAGE OpenSSL
     NO_FETCH)
 
+# libunicode, for core::tui: grapheme segmentation, east-asian width and the codepoint property
+# tables. 0.9.3 is what endo pins (f774a210), and its scan_text() fix (a zero-width codepoint after
+# an ASCII base) is what core::tui's grapheme handling is written against; it is also at or above
+# contour's LIBUNICODE_MINIMAL_VERSION, so a consumer that has both gets one library.
+#
+# PEDANTIC_COMPILER OFF because libunicode's own warning set is not core-cpp's to satisfy: a fetched
+# copy is built here, and a warning of a compiler libunicode 0.9.3 predates would land in this
+# build. PEDANTIC_COMPILER_WERROR is already OFF upstream and is pinned so a default change cannot
+# make someone else's warning fatal here. The four LIBUNICODE_* options drop the parts of it nothing
+# links: its tests, benchmarks, CLI tools and examples.
+core_cpp_dependency(libunicode
+    WHEN CORE_CPP_WITH_TUI
+    TARGETS unicode::unicode
+    FIND_PACKAGE libunicode 0.9.3
+    CPM NAME libunicode VERSION 0.9.3 GITHUB_REPOSITORY contour-terminal/libunicode GIT_TAG v0.9.3
+        EXCLUDE_FROM_ALL YES SYSTEM YES
+        OPTIONS "LIBUNICODE_TESTING OFF" "LIBUNICODE_BENCHMARK OFF" "LIBUNICODE_TOOLS OFF"
+                "LIBUNICODE_EXAMPLES OFF" "PEDANTIC_COMPILER OFF" "PEDANTIC_COMPILER_WERROR OFF")
+
+## @brief WRAP of the stb row: the INTERFACE target over the DOWNLOAD_ONLY source tree.
+##
+## stb is a set of single-header libraries with no build system, so there is nothing to add as a
+## subdirectory and nothing to find: the row fetches the sources and this turns them into a target.
+## SYSTEM, because stb_image.h and stb_image_resize2.h do not compile clean under core-cpp's
+## pedantic set and are not core-cpp's to fix.
+function(core_cpp_stb_target name)
+    if(TARGET stb_image OR NOT ${name}_SOURCE_DIR)
+        return()
+    endif()
+    add_library(stb_image INTERFACE)
+    target_include_directories(stb_image SYSTEM INTERFACE "${${name}_SOURCE_DIR}")
+endfunction()
+
+# stb, for core::tui's image loading and scaling (stb_image.h, stb_image_resize2.h). Pinned to a
+# commit: stb publishes no releases, and endo's `GIT_TAG master` (f774a210) is not a build anyone
+# can reproduce. The pin is the commit endo's own CPM cache holds, so this is the code endo's tui
+# was written against. Never fetched under Emscripten, where CORE_CPP_WITH_IMAGES is off.
+core_cpp_dependency(stb
+    WHEN CORE_CPP_WITH_IMAGES
+    TARGETS stb_image
+    CPM NAME stb GITHUB_REPOSITORY nothings/stb
+        GIT_TAG f1c79c02822848a9bed4315b12c8c8f3761e1296 DOWNLOAD_ONLY YES
+    WRAP core_cpp_stb_target)
+
 # Tracy, when core-cpp is instrumented for it: core::base links the client PUBLIC and
 # <core/Profiling.hpp> includes its header. The version is the one contour's cmake/Tracy.cmake
 # pins (6777ff05), because a client and the profiler that reads its captures must match. A fetched
