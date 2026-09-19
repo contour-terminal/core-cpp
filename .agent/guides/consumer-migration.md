@@ -53,7 +53,7 @@ target_link_libraries(myapp PRIVATE core::async core::net core::tui)
 | fastcached, PR A (`claude/<n>-core-cpp-tui`) | CPM | Deletes `vendor/` and its vendor checks; its TUI adapter moves to `core::tui` |
 | fastcached, PR B (`claude/<m>-core-cpp-async-net`) | CPM | Deletes its async and networking layers and the core files that moved; a staged semantic rename; a benchmark gate (GET throughput within 5%) |
 | Lightweight (`feat/dbtool-core-tui`) | CPM, only under `LIGHTWEIGHT_BUILD_TOOLS` | `dbtool`'s progress output and `main.cpp` use `core::tui_output` |
-| contour (`build/vendor-core-cpp`) | a verbatim `vendor/core-cpp` (base, log, cli, platform, async, net, testing) | Deletes `src/{coro,net}` and crispy's generic half; a link-what-you-include commit first; vtparser's includes become `<core/...>`; stays a draft until endo and tuidu merge |
+| contour (`build/vendor-core-cpp`) | a verbatim `vendor/core-cpp` (base, log, cli, platform, async, net, testing) | Deletes `src/{coro,net}` and crispy's generic half; a link-what-you-include commit first; vtparser's includes become `<core/...>`; turns `CORE_CPP_WITH_TLS` on and links `core::net_tls` where it used `net`'s TLS (the daemon); stays a draft until endo and tuidu merge |
 | morph, PR 1 (`build/core-cpp`) | CPM, replacing FetchContent | Its timeout scheduler becomes one wrapper over core-cpp's event-loop timers (native: its own thread; WebAssembly: the host-driven backend); base64 and the wakeup pipe come from core-cpp |
 | morph, PR 2 (`feat/coroutines`) | CPM | An awaitable `Completion<T>` and `core::async::Task<R>` model handlers on the model's strand, with stop-token cancellation for execute deadlines |
 
@@ -96,6 +96,7 @@ target_link_libraries(myapp PRIVATE core::async core::net core::tui)
 | From | To |
 |---|---|
 | `net::IClock` | `core::platform::IClock` |
+| contour's `net` target, which built `Tls.hpp`/`Tls.cpp` into itself and always required OpenSSL | `<core/net/Tls.hpp>` is `core::net_tls`, a target of its own that exists only with `CORE_CPP_WITH_TLS`: configure core-cpp with `CORE_CPP_WITH_TLS ON` (the CPM snippet above has it OFF) and link `core::net_tls`, which links `core::net`, and OpenSSL PRIVATE |
 | `IListener::localPort` | `boundPort` |
 | `NetErrorCode::Other` | `SystemError` |
 | `EventSource`, `makeDefaultEventSource`, `FdInterest` | `IoBackend`, `makeDefaultBackend`, `Interest` |
