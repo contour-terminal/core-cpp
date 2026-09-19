@@ -59,9 +59,21 @@ because its event loop could not wait on a console handle.
   list** (`core_cpp_module_target`): another target of the module by name, or a module its
   module's row lists; no `DEPS` links no core-cpp target, not even the module's own. That is
   what holds `core::net_types` to nothing while `core::net` links `async` and `platform`, and
-  what will hold `core::tui_output` to `base` (Task A7). Before rows had `DEPS`, the module's
+  what holds `core::tui_output` to `base`. Before rows had `DEPS`, the module's
   row bounded all its targets, so `core::net_types` could have linked `core::async` unrefused.
   `tests/cmake/check-layering.cmake` proves each refusal by name.
+- **`DEPS` bounds only a target that is *given* a row.** A secondary target without one falls
+  back to its module's row, which allows everything that row allows *and* the module's other
+  targets. So a target that must link less than its module needs a row; leaving it out is not a
+  tighter default, it is the module's default.
+- **A module's targets may link each other by design** (Ruling R43). `core::net` links
+  `core::net_types`, `core::net_tls` links `core::net`, `core::tui` links `core::tui_output`:
+  that is one module split into the parts a consumer may take separately, not a layering
+  violation, and a row's `DEPS` name a sibling by the sibling's own name.
+- **The check sees the links it is given, and only those.** It reads the `PUBLIC_LIBS` and
+  `PRIVATE_LIBS` of `core_cpp_add_module()`. A `core::` library behind a generator expression,
+  or added by a bare `target_link_libraries()` after the call, is invisible to it — so a link
+  that has to be spelled either way is a link the table is no longer enforcing.
 - **An include across modules is an edge of that table.** `core::async` depends on the
   standard library only; `core::net` on `async` and `platform`; `core::tui_output` on `base`
   only. A header that includes across modules without a table edge is a layering violation
