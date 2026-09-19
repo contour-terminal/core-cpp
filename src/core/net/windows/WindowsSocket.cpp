@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/windows/WindowsSocket.hpp>
 
-#ifdef _WIN32
-
-    #include <utility>
+#include <utility>
 
 namespace core::net
 {
@@ -185,5 +183,3 @@ async::Task<IoResult> WindowsSocket::write(std::span<std::byte const> buffer)
 }
 
 } // namespace core::net
-
-#endif // _WIN32

@@ -9,14 +9,10 @@
 
 // winsock2.h defines SOCKET; keep it ahead of any windows.h a later include pulls in.
 // clang-format off
-#ifdef _WIN32
-    #include <winsock2.h>
-#endif
+#include <winsock2.h>
 // clang-format on
 
-#ifdef _WIN32
-
-    #include <array>
+#include <array>
 
 namespace core::net
 {
@@ -28,5 +24,3 @@ namespace core::net
 [[nodiscard]] bool makeLoopbackPair(std::array<SOCKET, 2>& out) noexcept;
 
 } // namespace core::net
-
-#endif // _WIN32

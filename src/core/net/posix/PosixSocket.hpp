@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#ifndef _WIN32
+#include <core/async/Task.hpp>
+#include <core/net/EventLoop.hpp>
+#include <core/net/ISocket.hpp>
 
-    #include <core/async/Task.hpp>
-    #include <core/net/EventLoop.hpp>
-    #include <core/net/ISocket.hpp>
-
-    #include <cstddef>
-    #include <span>
-    #include <string>
+#include <cstddef>
+#include <span>
+#include <string>
 
 namespace core::net
 {
@@ -65,5 +63,3 @@ class PosixSocket final: public ISocket
 };
 
 } // namespace core::net
-
-#endif // !_WIN32

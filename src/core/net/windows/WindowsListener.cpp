@@ -3,33 +3,28 @@
 // winsock2.h MUST precede windows.h / ws2tcpip.h (which project headers pull in),
 // so this block leads every Win32 net translation unit.
 // clang-format off
-#ifdef _WIN32
-    #include <winsock2.h>
-    #include <windows.h>
-    #include <ws2tcpip.h>
-#endif
+#include <winsock2.h>
+#include <windows.h>
+#include <ws2tcpip.h>
 // clang-format on
 
 #include <core/net/windows/WindowsListener.hpp>
 
+#include <core/net/detail/PeerAddress.hpp>
 #include <core/net/windows/WindowsSocket.hpp>
 
-#ifdef _WIN32
+#include <cstring>
+#include <string>
+#include <utility>
 
-    #include <core/net/detail/PeerAddress.hpp>
+#include <afunix.h>
 
-    #include <cstring>
-    #include <string>
-    #include <utility>
-
-    #include <afunix.h>
-
-    // A bound AF_UNIX socket is a file-system reparse point carrying this tag. The
-    // constant lives in the WDK's ntifs.h; user-mode SDK headers omit it, so define
-    // it exactly as libuv and Go's runtime do for their AF_UNIX support.
-    #ifndef IO_REPARSE_TAG_AF_UNIX
-        #define IO_REPARSE_TAG_AF_UNIX 0x80000023
-    #endif
+// A bound AF_UNIX socket is a file-system reparse point carrying this tag. The
+// constant lives in the WDK's ntifs.h; user-mode SDK headers omit it, so define
+// it exactly as libuv and Go's runtime do for their AF_UNIX support.
+#ifndef IO_REPARSE_TAG_AF_UNIX
+    #define IO_REPARSE_TAG_AF_UNIX 0x80000023
+#endif
 
 namespace core::net
 {
@@ -291,5 +286,3 @@ async::Task<AcceptResult> WindowsListener::accept()
 }
 
 } // namespace core::net
-
-#endif // _WIN32

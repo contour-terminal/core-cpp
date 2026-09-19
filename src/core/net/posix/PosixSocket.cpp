@@ -1,29 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/posix/PosixSocket.hpp>
 
-#ifndef _WIN32
+#include <core/net/detail/WouldBlock.hpp>
+#include <core/net/posix/FdUtils.hpp> // MSG_NOSIGNAL fallback, makeNonBlockingCloexec
 
-    #include <core/net/detail/WouldBlock.hpp>
-    #include <core/net/posix/FdUtils.hpp> // MSG_NOSIGNAL fallback, makeNonBlockingCloexec
+#include <sys/socket.h>
 
-    #include <sys/socket.h>
+#include <algorithm>
+#include <cerrno>
+#include <cstring>
+#include <ranges>
+#include <utility>
 
-    #include <algorithm>
-    #include <cerrno>
-    #include <cstring>
-    #include <ranges>
-    #include <utility>
+#include <fcntl.h>
+#include <unistd.h>
 
-    #include <fcntl.h>
-    #include <unistd.h>
-
-    // macOS / BSD also lack MSG_CMSG_CLOEXEC (atomic close-on-exec for received
-    // descriptors); there readWithFd sets FD_CLOEXEC via fcntl right after
-    // receipt instead — a tiny fork race, matching what every portable imsg
-    // implementation accepts on those platforms.
-    #ifndef MSG_CMSG_CLOEXEC
-        #define MSG_CMSG_CLOEXEC 0
-    #endif
+// macOS / BSD also lack MSG_CMSG_CLOEXEC (atomic close-on-exec for received
+// descriptors); there readWithFd sets FD_CLOEXEC via fcntl right after
+// receipt instead — a tiny fork race, matching what every portable imsg
+// implementation accepts on those platforms.
+#ifndef MSG_CMSG_CLOEXEC
+    #define MSG_CMSG_CLOEXEC 0
+#endif
 
 namespace core::net
 {
@@ -50,13 +48,13 @@ namespace
 PosixSocket::PosixSocket(EventLoop& loop, int fd, std::string peerAddress) noexcept:
     _loop(loop), _fd(fd), _peerAddress(std::move(peerAddress))
 {
-    #ifdef SO_NOSIGPIPE
+#ifdef SO_NOSIGPIPE
     // macOS / BSD: suppress SIGPIPE on writes to a peer-closed socket at the socket
     // level (the portable analogue of Linux's MSG_NOSIGNAL send flag).
     int const one = 1;
     if (_fd >= 0)
         ::setsockopt(_fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
-    #endif
+#endif
 }
 
 PosixSocket::~PosixSocket()
@@ -246,5 +244,3 @@ async::Task<IoResult> PosixSocket::write(std::span<std::byte const> buffer)
 }
 
 } // namespace core::net
-
-#endif // !_WIN32

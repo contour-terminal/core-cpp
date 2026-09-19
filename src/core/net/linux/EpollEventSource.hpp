@@ -19,15 +19,12 @@
 ///
 /// Ported from the reactor in the fastcached project (Apache-2.0, same author).
 
+#include <core/net/EventSource.hpp>
+#include <core/platform/Types.hpp>
+
 #include <cstddef>
 #include <cstdint>
-
-#ifdef __linux__
-
-    #include <core/net/EventSource.hpp>
-    #include <core/platform/Types.hpp>
-
-    #include <unordered_map>
+#include <unordered_map>
 
 namespace core::net
 {
@@ -108,5 +105,3 @@ class EpollEventSource: public EventSource
 };
 
 } // namespace core::net
-
-#endif // __linux__

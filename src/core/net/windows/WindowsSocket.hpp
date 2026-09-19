@@ -1,22 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#ifdef _WIN32
-
-    #include <core/net/ISocket.hpp>
+#include <core/net/ISocket.hpp>
 
 // clang-format off
-    #include <winsock2.h>
-    #include <windows.h>
+#include <winsock2.h>
+#include <windows.h>
 // clang-format on
 
-    #include <core/async/Task.hpp>
-    #include <core/net/EventLoop.hpp>
+#include <core/async/Task.hpp>
+#include <core/net/EventLoop.hpp>
 
-    #include <cstddef>
-    #include <optional>
-    #include <span>
-    #include <string>
+#include <cstddef>
+#include <optional>
+#include <span>
+#include <string>
 
 namespace core::net
 {
@@ -110,5 +108,3 @@ class WindowsSocket final: public ISocket
 };
 
 } // namespace core::net
-
-#endif // _WIN32

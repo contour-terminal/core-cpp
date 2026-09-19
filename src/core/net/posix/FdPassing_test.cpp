@@ -1,27 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
-#ifndef _WIN32
 
-    #include <core/async/Task.hpp>
-    #include <core/net/EventLoop.hpp>
-    #include <core/net/PollEventSource.hpp>
-    #include <core/net/Sockets.hpp>
-    #include <core/net/SplitSocket.hpp>
-    #include <core/net/testing/InMemoryTransport.hpp>
+#include <core/async/Task.hpp>
+#include <core/net/EventLoop.hpp>
+#include <core/net/PollEventSource.hpp>
+#include <core/net/Sockets.hpp>
+#include <core/net/SplitSocket.hpp>
+#include <core/net/testing/InMemoryTransport.hpp>
 
-    #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_test_macros.hpp>
 
-    #include <sys/socket.h>
+#include <sys/socket.h>
 
-    #include <array>
-    #include <cstddef>
-    #include <cstring>
-    #include <memory>
-    #include <span>
-    #include <string>
-    #include <string_view>
+#include <array>
+#include <cstddef>
+#include <cstring>
+#include <memory>
+#include <span>
+#include <string>
+#include <string_view>
 
-    #include <fcntl.h>
-    #include <unistd.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 using core::async::Task;
 
@@ -165,9 +164,9 @@ TEST_CASE("readWithFd keeps at most one descriptor and leaks none", "[net][fdpas
     auto const fromExtra = ::read(extraPipe[0], proof.data(), proof.size());
     // Nothing is ever readable: this end only ever carried descriptors, never data.
     CHECK(fromExtra <= 0);
-    #ifndef __APPLE__
+#ifndef __APPLE__
     CHECK(fromExtra == 0); // and on Linux the kernel closed the write end, so it is EOF
-    #endif
+#endif
 
     ::close(keepPipe[1]);
     ::close(extraPipe[0]);
@@ -289,5 +288,3 @@ TEST_CASE("a split socket is closed once either half closes", "[net][fdpass]")
     CHECK(split->isClosed()); // the duplex socket is now unusable either way
     ::close(outbound[0]);
 }
-
-#endif // !_WIN32

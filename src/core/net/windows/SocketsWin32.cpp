@@ -3,27 +3,22 @@
 // winsock2.h MUST precede windows.h / ws2tcpip.h (which project headers pull in),
 // so this block leads every Win32 net translation unit.
 // clang-format off
-#ifdef _WIN32
-    #include <winsock2.h>
-    #include <windows.h>
-    #include <ws2tcpip.h>
-#endif
+#include <winsock2.h>
+#include <windows.h>
+#include <ws2tcpip.h>
 // clang-format on
 
 #include <core/net/Sockets.hpp>
+#include <core/net/windows/WindowsListener.hpp>
+#include <core/net/windows/WindowsSocket.hpp>
+#include <core/platform/WinsockInit.hpp>
 
-#ifdef _WIN32
+#include <cstring>
+#include <filesystem>
+#include <string>
+#include <utility>
 
-    #include <core/net/windows/WindowsListener.hpp>
-    #include <core/net/windows/WindowsSocket.hpp>
-    #include <core/platform/WinsockInit.hpp>
-
-    #include <cstring>
-    #include <filesystem>
-    #include <string>
-    #include <utility>
-
-    #include <afunix.h>
+#include <afunix.h>
 
 namespace core::net
 {
@@ -187,5 +182,3 @@ std::expected<std::unique_ptr<ISocket>, NetError> adoptFd(EventLoop& /*loop*/, i
 }
 
 } // namespace core::net
-
-#endif // _WIN32

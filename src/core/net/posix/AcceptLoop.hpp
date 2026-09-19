@@ -6,10 +6,8 @@
 /// definition of the accept / EAGAIN-park / EINTR-retry / error-map machinery,
 /// so a fix to the accept or cancellation logic cannot drift between them.
 
-#ifndef _WIN32
-
-    #include <core/async/Task.hpp>
-    #include <core/net/IListener.hpp>
+#include <core/async/Task.hpp>
+#include <core/net/IListener.hpp>
 
 namespace core::net
 {
@@ -30,5 +28,3 @@ class EventLoop;
 [[nodiscard]] async::Task<AcceptResult> acceptOne(EventLoop* loop, int const* fd, bool const* closed);
 
 } // namespace core::net
-
-#endif // !_WIN32

@@ -3,15 +3,11 @@
 // winsock2.h MUST precede windows.h (which project headers pull in), so this
 // block leads the translation unit, mirroring every Win32 net TU.
 // clang-format off
-#ifdef _WIN32
-    #include <winsock2.h>
-    #include <windows.h>
-#endif
+#include <winsock2.h>
+#include <windows.h>
 // clang-format on
 
 #include <core/net/windows/WindowsLoopback.hpp>
-
-#ifdef _WIN32
 
 namespace core::net
 {
@@ -70,5 +66,3 @@ bool makeLoopbackPair(std::array<SOCKET, 2>& out) noexcept
 }
 
 } // namespace core::net
-
-#endif // _WIN32

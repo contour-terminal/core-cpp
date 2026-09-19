@@ -1,26 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/Sockets.hpp>
+#include <core/net/posix/FdUtils.hpp>
+#include <core/net/posix/PosixListener.hpp>
+#include <core/net/posix/PosixSocket.hpp>
+#include <core/net/posix/UnixListener.hpp>
+#include <core/platform/WinsockInit.hpp>
 
-#ifndef _WIN32
+#include <sys/socket.h>
+#include <sys/un.h>
 
-    #include <core/net/posix/FdUtils.hpp>
-    #include <core/net/posix/PosixListener.hpp>
-    #include <core/net/posix/PosixSocket.hpp>
-    #include <core/net/posix/UnixListener.hpp>
-    #include <core/platform/WinsockInit.hpp>
+#include <cerrno>
+#include <cstring>
+#include <filesystem>
+#include <string>
+#include <utility>
 
-    #include <sys/socket.h>
-    #include <sys/un.h>
-
-    #include <cerrno>
-    #include <cstring>
-    #include <filesystem>
-    #include <string>
-    #include <utility>
-
-    #include <fcntl.h>
-    #include <netdb.h>
-    #include <unistd.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <unistd.h>
 
 namespace core::net
 {
@@ -202,5 +199,3 @@ std::expected<std::unique_ptr<ISocket>, NetError> adoptFd(EventLoop& loop, int f
 }
 
 } // namespace core::net
-
-#endif // !_WIN32

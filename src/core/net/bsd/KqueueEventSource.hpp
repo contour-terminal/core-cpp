@@ -16,15 +16,12 @@
 /// including the `EV_RECEIPT` handling described at @c applyInterest — without it,
 /// a write that parks while no read is outstanding never gets its filter armed.
 
+#include <core/net/EventSource.hpp>
+#include <core/platform/Types.hpp>
+
 #include <cstddef>
 #include <cstdint>
-
-#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-
-    #include <core/net/EventSource.hpp>
-    #include <core/platform/Types.hpp>
-
-    #include <unordered_map>
+#include <unordered_map>
 
 namespace core::net
 {
@@ -114,5 +111,3 @@ class KqueueEventSource: public EventSource
 };
 
 } // namespace core::net
-
-#endif // kqueue platforms

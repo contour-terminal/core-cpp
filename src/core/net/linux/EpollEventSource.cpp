@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/linux/EpollEventSource.hpp>
 
-#ifdef __linux__
+#include <sys/epoll.h>
 
-    #include <sys/epoll.h>
+#include <algorithm>
+#include <array>
+#include <ranges>
+#include <span>
 
-    #include <algorithm>
-    #include <array>
-    #include <ranges>
-    #include <span>
-
-    #include <unistd.h>
+#include <unistd.h>
 
 namespace core::net
 {
@@ -163,5 +161,3 @@ WaitOutcome EpollEventSource::wait(int timeoutMs)
 }
 
 } // namespace core::net
-
-#endif // __linux__

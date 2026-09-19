@@ -28,6 +28,12 @@ project file tree, install paths and the interrupt throttle.
      `windows/PollEventSource.cpp`, epoll is in `linux/` and kqueue in `bsd/`. A public header
      stays portable: a member only one platform uses is declared on all of them. Origin: user
      direction, 2026-09-18 (core-cpp's Task A6).
+   - **A file in a platform subdirectory has no file-wide guard of its platform**, such as an
+     `#ifndef _WIN32` around the whole file: its source list already chooses it, and a guard
+     would compile a file listed for the wrong platform to nothing, so a test binary loses its
+     cases without a build error. An `#if` that chooses between variants within the platform
+     family stays (`__linux__`'s `accept4()` in `posix/`, a constant an older SDK lacks), and
+     the file's provenance row names it. Origin: Ruling R42, from the Task A6 review.
 3. **Inject it through a constructor.** The concrete type is named once, at the composition
    root; logic never checks the platform.
 

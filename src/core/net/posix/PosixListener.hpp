@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#ifndef _WIN32
+#include <core/async/Task.hpp>
+#include <core/net/EventLoop.hpp>
+#include <core/net/IListener.hpp>
 
-    #include <core/async/Task.hpp>
-    #include <core/net/EventLoop.hpp>
-    #include <core/net/IListener.hpp>
-
-    #include <cstdint>
-    #include <memory>
-    #include <string_view>
+#include <cstdint>
+#include <memory>
+#include <string_view>
 
 namespace core::net
 {
@@ -63,5 +61,3 @@ class PosixListener final: public IListener
 };
 
 } // namespace core::net
-
-#endif // !_WIN32

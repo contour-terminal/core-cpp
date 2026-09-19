@@ -1,20 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/posix/UnixListener.hpp>
 
-#ifndef _WIN32
+#include <core/net/detail/WouldBlock.hpp>
+#include <core/net/posix/AcceptLoop.hpp>
+#include <core/net/posix/FdUtils.hpp>
 
-    #include <core/net/detail/WouldBlock.hpp>
-    #include <core/net/posix/AcceptLoop.hpp>
-    #include <core/net/posix/FdUtils.hpp>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
 
-    #include <sys/socket.h>
-    #include <sys/stat.h>
-    #include <sys/un.h>
+#include <cerrno>
+#include <cstring>
 
-    #include <cerrno>
-    #include <cstring>
-
-    #include <unistd.h>
+#include <unistd.h>
 
 namespace core::net
 {
@@ -208,5 +206,3 @@ async::Task<AcceptResult> UnixListener::accept()
 }
 
 } // namespace core::net
-
-#endif // !_WIN32

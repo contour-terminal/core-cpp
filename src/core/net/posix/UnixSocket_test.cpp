@@ -1,28 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
-#ifndef _WIN32
 
-    #include <core/async/Task.hpp>
-    #include <core/async/WhenAll.hpp>
-    #include <core/net/EventLoop.hpp>
-    #include <core/net/PollEventSource.hpp>
-    #include <core/net/Sockets.hpp>
-    #include <core/net/posix/UnixListener.hpp>
+#include <core/async/Task.hpp>
+#include <core/async/WhenAll.hpp>
+#include <core/net/EventLoop.hpp>
+#include <core/net/PollEventSource.hpp>
+#include <core/net/Sockets.hpp>
+#include <core/net/posix/UnixListener.hpp>
 
-    #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_test_macros.hpp>
 
-    #include <sys/socket.h>
-    #include <sys/stat.h>
-    #include <sys/un.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
 
-    #include <array>
-    #include <cstddef>
-    #include <cstdio>
-    #include <cstring>
-    #include <filesystem>
-    #include <span>
-    #include <string>
+#include <array>
+#include <cstddef>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <span>
+#include <string>
 
-    #include <unistd.h>
+#include <unistd.h>
 
 using core::async::Task;
 using core::net::EventLoop;
@@ -290,5 +289,3 @@ TEST_CASE("connectUnix to a missing socket reports connection refused", "[net][u
 
     REQUIRE(failed);
 }
-
-#endif // !_WIN32

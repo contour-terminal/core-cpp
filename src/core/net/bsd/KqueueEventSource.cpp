@@ -1,21 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/bsd/KqueueEventSource.hpp>
 
-#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+#include <sys/event.h>
+#include <sys/types.h>
 
-    #include <sys/event.h>
-    #include <sys/types.h>
+#include <algorithm>
+#include <array>
+#include <cerrno>
+#include <chrono>
+#include <iterator>
+#include <optional>
+#include <ranges>
+#include <span>
 
-    #include <algorithm>
-    #include <array>
-    #include <cerrno>
-    #include <chrono>
-    #include <iterator>
-    #include <optional>
-    #include <ranges>
-    #include <span>
-
-    #include <unistd.h>
+#include <unistd.h>
 
 namespace core::net
 {
@@ -247,5 +245,3 @@ WaitOutcome KqueueEventSource::wait(int timeoutMs)
 }
 
 } // namespace core::net
-
-#endif // kqueue platforms

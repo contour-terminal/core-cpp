@@ -29,8 +29,9 @@ endif()
 #
 # The module's root holds only platform-independent code. What one platform needs lives in posix/,
 # linux/ (epoll), bsd/ (kqueue, for Apple and the BSDs) and windows/, and the source lists below
-# choose it; contour's PollEventSource.cpp is split along its #ifdef into posix/ and windows/.
-# DefaultEventSource.cpp keeps its #ifdefs until Task B3 replaces it.
+# choose it, so no file there guards itself with an #ifdef of its platform; contour's
+# PollEventSource.cpp is split along its #ifdef into posix/ and windows/. DefaultEventSource.cpp
+# keeps its #ifdefs until Task B3 replaces it.
 core_cpp_add_module(net KIND STATIC
     HEADERS
         AsyncBufferedReader.hpp

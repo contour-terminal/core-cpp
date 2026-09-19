@@ -1,21 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/posix/PosixListener.hpp>
 
-#ifndef _WIN32
+#include <core/net/posix/AcceptLoop.hpp>
+#include <core/net/posix/FdUtils.hpp>
 
-    #include <core/net/posix/AcceptLoop.hpp>
-    #include <core/net/posix/FdUtils.hpp>
+#include <sys/socket.h>
 
-    #include <sys/socket.h>
+#include <cerrno>
+#include <utility>
 
-    #include <cerrno>
-    #include <utility>
+#include <netdb.h>
+#include <unistd.h>
 
-    #include <netdb.h>
-    #include <unistd.h>
-
-    #include <arpa/inet.h>
-    #include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 
 namespace core::net
 {
@@ -126,5 +124,3 @@ async::Task<AcceptResult> PosixListener::accept()
 }
 
 } // namespace core::net
-
-#endif // !_WIN32
