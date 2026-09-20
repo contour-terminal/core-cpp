@@ -7,6 +7,7 @@
 #include <array>
 #include <cerrno>
 #include <chrono>
+#include <cstdio>
 #include <ctime>
 #include <format>
 #include <functional>
@@ -18,6 +19,7 @@
 #ifndef _WIN32
     #include <unistd.h>
 #else
+    #include <io.h>
     #include <process.h>
 #endif
 
@@ -240,7 +242,7 @@ ScopedOutput::ScopedOutput(OutputConfig const& config, std::ofstream file):
         // A file must never receive SGR escapes. For stderr the gate is stderr's own
         // tty-ness, not stdout's, which Sink::console() writes to and which can be redirected
         // independently.
-        .colorize = !_file.is_open() && isStdErrTty(),
+        .colorize = !_file.is_open() && isStdErrTerminal(),
         .showTimestamp = true,
         .showProcessId = config.showProcessId,
     };
@@ -270,12 +272,23 @@ ScopedOutput::~ScopedOutput()
     }
 }
 
-bool ScopedOutput::isStdErrTty() noexcept
+bool isStdOutTerminal() noexcept
+{
+#ifndef _WIN32
+    return ::isatty(STDOUT_FILENO) != 0;
+#else
+    return ::_isatty(::_fileno(stdout)) != 0;
+#endif
+}
+
+bool isStdErrTerminal() noexcept
 {
 #ifndef _WIN32
     return ::isatty(STDERR_FILENO) != 0;
 #else
-    return true;
+    // This answered `true` unconditionally, so a redirected standard error received SGR escapes
+    // -- against this header's own contract.
+    return ::_isatty(::_fileno(stderr)) != 0;
 #endif
 }
 

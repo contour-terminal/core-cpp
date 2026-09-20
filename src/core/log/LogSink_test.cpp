@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <cstdio>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -24,6 +25,7 @@
 #endif
 
 #ifdef _WIN32
+    #include <io.h>
     #include <process.h>
 #else
     #include <unistd.h>
@@ -105,6 +107,105 @@ class ScratchLog
     }
 
     std::filesystem::path _path;
+};
+
+/// Puts a category's enablement back when the test leaves, however it leaves.
+///
+/// A plain `disable()` with a re-enable at the end of the body is not enough: a failing REQUIRE
+/// unwinds past it, and the category stays off for every later case in the binary.
+class ScopedCategoryState
+{
+  public:
+    explicit ScopedCategoryState(core::log::Category& category):
+        _category { category }, _wasEnabled { category.isEnabled() }
+    {
+    }
+
+    ~ScopedCategoryState() { _category.enable(_wasEnabled); }
+
+    ScopedCategoryState(ScopedCategoryState const&) = delete;
+    ScopedCategoryState& operator=(ScopedCategoryState const&) = delete;
+    ScopedCategoryState(ScopedCategoryState&&) = delete;
+    ScopedCategoryState& operator=(ScopedCategoryState&&) = delete;
+
+  private:
+    core::log::Category& _category;
+    bool _wasEnabled;
+};
+
+/// Points one of this process's standard descriptors at a file for this object's lifetime.
+class ScopedRedirect
+{
+  public:
+    ScopedRedirect(int fd, std::filesystem::path const& path): _fd { fd }
+    {
+        _file = std::fopen(path.string().c_str(), "w");
+        if (_file == nullptr)
+            return;
+        _saved = duplicate(fd);
+        if (_saved != -1)
+            duplicate2(descriptorOf(_file), fd);
+    }
+
+    ~ScopedRedirect()
+    {
+        if (_saved != -1)
+        {
+            duplicate2(_saved, _fd);
+            closeDescriptor(_saved);
+        }
+        if (_file != nullptr)
+            std::fclose(_file);
+    }
+
+    ScopedRedirect(ScopedRedirect const&) = delete;
+    ScopedRedirect& operator=(ScopedRedirect const&) = delete;
+    ScopedRedirect(ScopedRedirect&&) = delete;
+    ScopedRedirect& operator=(ScopedRedirect&&) = delete;
+
+    /// @return Whether the descriptor could actually be redirected.
+    [[nodiscard]] bool isActive() const noexcept { return _saved != -1; }
+
+  private:
+    [[nodiscard]] static int duplicate(int fd) noexcept
+    {
+#ifdef _WIN32
+        return ::_dup(fd);
+#else
+        return ::dup(fd);
+#endif
+    }
+
+    static void duplicate2(int from, int to) noexcept
+    {
+#ifdef _WIN32
+        (void) ::_dup2(from, to);
+#else
+        (void) ::dup2(from, to);
+#endif
+    }
+
+    static void closeDescriptor(int fd) noexcept
+    {
+#ifdef _WIN32
+        (void) ::_close(fd);
+#else
+        (void) ::close(fd);
+#endif
+    }
+
+    [[nodiscard]] static int descriptorOf(std::FILE* file) noexcept
+    {
+#ifdef _WIN32
+        return ::_fileno(file);
+#else
+        return ::fileno(file);
+#endif
+    }
+
+    int _fd;
+    int _saved = -1;
+    std::FILE* _file = nullptr;
 };
 } // namespace
 
@@ -354,6 +455,10 @@ TEST_CASE("an explicit filter never silences the error category", "[log][logsink
     // operator turned logging on to see. Caught by running a real daemon, not by a unit test —
     // hence this one.
     auto category = TestCategory { "test.filterkeepserror" };
+
+    // errorLog is process-wide and this case turns it off on purpose; the guard puts it back
+    // even when a REQUIRE below unwinds out of the body.
+    auto const restoreErrorLog = ScopedCategoryState { core::log::errorLog };
     core::log::errorLog.disable();
 
     auto output = core::log::ScopedOutput::create({ .filter = "test.filterkeepserror" });
@@ -361,4 +466,27 @@ TEST_CASE("an explicit filter never silences the error category", "[log][logsink
 
     CHECK(category.value.isEnabled());
     CHECK(core::log::errorLog.isEnabled());
+}
+
+// The Windows half of this answered `true` unconditionally, so a redirected stream was
+// colourised -- against the header's contract, and into whatever file or pipe was reading.
+TEST_CASE("a redirected standard stream is not a terminal", "[log][logsink]")
+{
+    auto const scratch = ScratchLog { "redirect" };
+
+    SECTION("standard output")
+    {
+        auto const redirect = ScopedRedirect { 1, scratch.path() };
+        if (!redirect.isActive())
+            SKIP("standard output could not be redirected");
+        CHECK(!core::log::isStdOutTerminal());
+    }
+
+    SECTION("standard error")
+    {
+        auto const redirect = ScopedRedirect { 2, scratch.path() };
+        if (!redirect.isActive())
+            SKIP("standard error could not be redirected");
+        CHECK(!core::log::isStdErrTerminal());
+    }
 }

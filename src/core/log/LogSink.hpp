@@ -75,6 +75,20 @@ struct OutputConfig
 /// @return The unmatched patterns, in the order given; empty for "all" or an empty filter.
 [[nodiscard]] std::vector<std::string> unmatchedFilters(std::string_view filterString);
 
+/// @return Whether this process's standard output is a terminal.
+///
+/// The colourisation gate for anything written there -- core::log::Sink::console(), and a help
+/// text. It is asked here, in one place, rather than spelled out at each call site: the Windows
+/// half of the branch that used to do the asking answered `true` unconditionally, so a redirected
+/// stream received SGR escapes.
+[[nodiscard]] bool isStdOutTerminal() noexcept;
+
+/// @return Whether this process's standard error is a terminal.
+///
+/// The gate for a destination that writes there, which can be redirected independently of
+/// standard output.
+[[nodiscard]] bool isStdErrTerminal() noexcept;
+
 /// Installs a process-wide log destination for its own lifetime, restoring the console
 /// defaults on destruction.
 ///
@@ -122,10 +136,6 @@ class ScopedOutput
         Sink* previousSink;
         Category::Formatter previousFormatter;
     };
-
-    /// @return Whether standard error is a terminal — the only correct colourisation gate for
-    ///         a stream that can be redirected independently of standard output.
-    [[nodiscard]] static bool isStdErrTty() noexcept;
 
     std::mutex _mutex;
     std::ofstream _file;
