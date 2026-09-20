@@ -6,7 +6,7 @@
 #include <core/log/LogStore.hpp>
 
 #include <algorithm>
-#include <cassert>
+#include <cctype>
 #include <cstddef>
 #include <deque>
 #include <ranges>
@@ -380,7 +380,6 @@ namespace // {{{ helper
                 continue; // Do not prefill options that are required anyways.
 
             auto const fqdn = prefix + Name(option.name.longName);
-            context.output.values[fqdn] = option.v;
             setOption(context, fqdn, option.v);
         }
 
@@ -425,10 +424,9 @@ namespace // {{{ helper
             }
         }
 
-        if (context.pos == context.args.size())
-            context.output.values[namePrefix(context)] = Value { true };
-
-        // A command must not leave any trailing tokens at the end of parsing
+        // A command must not leave any trailing tokens at the end of parsing.
+        // (Its own flag was set at the top of this function; re-setting it here set the same key
+        // to the same value.)
         return context.pos == context.args.size();
     }
 
@@ -552,7 +550,9 @@ namespace // {{{ helpers
                     break;
 
                 size_t left = b;
-                while (left > 0 && isalpha(text.at(left - 1)))
+                // Through unsigned char: isalpha() is undefined for a negative value, and every
+                // continuation byte of a UTF-8 sequence in a help text is one.
+                while (left > 0 && std::isalpha(static_cast<unsigned char>(text.at(left - 1))) != 0)
                     --left;
 
                 size_t right = b + 3;
@@ -594,11 +594,14 @@ namespace // {{{ helpers
         auto const linefeed = text.find('\n');
         if (linefeed != string_view::npos)
         {
-            auto i = linefeed - 1; // Position before the found LF and trim off right whitespaces.
-            while (i > 0 && text[i] == ' ')
-                --i;
+            // The chunk ends at the line feed, with its trailing spaces trimmed off. Counted
+            // down from the line feed rather than up from `linefeed - 1`, which is SIZE_MAX
+            // when the text begins with one.
+            auto end = linefeed;
+            while (end > 0 && text[end - 1] == ' ')
+                --end;
             *trimLeadingWhitespaces = false;
-            return text.substr(0, i + 1);
+            return text.substr(0, end);
         }
 
         *trimLeadingWhitespaces = true;
@@ -607,16 +610,23 @@ namespace // {{{ helpers
         if (unwrappedLength <= margin)
             return text;
 
-        // Cut string at right margin, then shift left until we've hit a whitespace character.
-        auto const rightMargin = margin - cursor + 1;
-        if (rightMargin <= 0)
+        // How much of the line is left. This was `margin - cursor + 1` with a `<= 0` guard below
+        // it, which is dead for an unsigned type: a cursor at or past the margin -- an option
+        // column wider than the terminal, or a pty reporting no width at all -- wrapped to about
+        // four billion, and the index below walked off the end of the text.
+        auto const available = margin > cursor ? margin - cursor + 1 : 1u;
+        if (available >= text.size())
             return text;
 
-        auto i = rightMargin - 1;
+        // Cut at the right margin, then shift left until we've hit a whitespace character.
+        auto i = static_cast<size_t>(available - 1);
         while (i > 0 && (text[i] != ' ' && text[i] != '\n'))
             --i;
 
-        return text.substr(0, i);
+        // A word longer than the line has no whitespace to shift to. Cut it hard: an empty chunk
+        // makes no progress, and the caller loops until it has emitted an indent per iteration
+        // for as long as the process lives.
+        return text.substr(0, i > 0 ? i : available);
     }
 
     string wordWrapped(string_view text, unsigned indent, unsigned margin, unsigned* cursor)
@@ -782,8 +792,14 @@ namespace // {{{ helpers
         os << indent(2) << stylize("Options:", HelpElement::Header) << "\n\n";
 
         auto const leftPadding = indent(3);
-        auto const minRightPadSize = 2;
-        auto const maxOptionTextSize = longestOptionText(com.options, style.optionStyle);
+        auto const minRightPadSize = size_t { 2 };
+        // The verbatim row shares this column, so its placeholder (plus its two brackets) decides
+        // the width as much as any option does. Measured against the options alone, a placeholder
+        // longer than the longest option underflowed the padding below into a string of about
+        // four billion spaces.
+        auto const verbatimTextSize = com.verbatim.has_value() ? com.verbatim->placeholder.size() + 2 : 0;
+        auto const maxOptionTextSize =
+            max(longestOptionText(com.options, style.optionStyle), verbatimTextSize);
         auto const columnWidth =
             static_cast<unsigned>(leftPadding.size() + maxOptionTextSize + minRightPadSize);
 
@@ -793,8 +809,8 @@ namespace // {{{ helpers
             //     continue;
 
             auto const leftSize = leftPadding.size() + printOption(option, nullopt, style.optionStyle).size();
-            assert(columnWidth >= leftSize);
-            auto const actualRightPaddingSize = columnWidth - leftSize;
+            auto const actualRightPaddingSize =
+                columnWidth > leftSize ? columnWidth - leftSize : size_t { 1 };
             auto const left = leftPadding + printOption(option, style.colors, style.optionStyle)
                               + spaces(actualRightPaddingSize);
 
@@ -837,8 +853,7 @@ namespace // {{{ helpers
         {
             auto const& verbatim = com.verbatim.value();
             auto const leftSize = static_cast<unsigned>(leftPadding.size() + 2 + verbatim.placeholder.size());
-            assert(columnWidth > leftSize);
-            auto const actualRightPaddingSize = columnWidth - leftSize;
+            auto const actualRightPaddingSize = columnWidth > leftSize ? columnWidth - leftSize : 1u;
             auto const left = leftPadding + stylize("[", HelpElement::Braces)
                               + stylize(verbatim.placeholder, HelpElement::Verbatim)
                               + stylize("]", HelpElement::Braces) + spaces(actualRightPaddingSize);
@@ -974,8 +989,8 @@ string usageText(Command const& com, HelpDisplayStyle const& style, unsigned mar
         stringstream sstr;
         for (Command const& subcmd: com.children)
             sstr << usageText(subcmd, style, margin, prefixStr);
-        if (com.children.empty())
-            sstr << '\n';
+        // (This is the `else` of `if (com.children.empty())`, so there is no empty case to
+        // terminate with a line feed here.)
         return sstr.str();
     }
 }

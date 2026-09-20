@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <format>
+#include <stdexcept>
 
 // TODO API / impl:
 //
@@ -119,4 +120,133 @@ TEST_CASE("CLI.contour-full-test")
     CHECK(flags.values.at("contour.capture.logical") == cli::Value { true });
     CHECK(flags.values.at("contour.capture.output") == cli::Value { "out.vt"s });
     CHECK(flags.values.at("contour.capture.timeout") == cli::Value { 1.0 });
+}
+
+namespace
+{
+cli::HelpDisplayStyle plainStyle()
+{
+    auto style = cli::HelpDisplayStyle {};
+    style.colors.reset();
+    style.hyperlink = false;
+    return style;
+}
+
+cli::Command commandWithOptions()
+{
+    return cli::Command {
+        .name = "contour",
+        .helpText = "Terminal emulator.",
+        .options =
+            cli::OptionList {
+                cli::Option { .name = "config"sv,
+                              .v = cli::Value { "~/.config/contour/contour.yml"s },
+                              .helpText = "Path to configuration file to load at startup."sv },
+                cli::Option { .name = "profile"sv,
+                              .v = cli::Value { ""s },
+                              .helpText = "Overrides the profile to use in the configuration."sv },
+            },
+    };
+}
+} // namespace
+
+// printOptions() sets the cursor to the option column and hands it to wordWrapped() as the
+// starting position. `margin - cursor + 1` is unsigned: any margin at or below that column --
+// a narrow terminal, or a pty that reports no size at all -- wrapped to about 4294967295, the
+// `rightMargin <= 0` guard below it is dead for an unsigned type, and the index walked far off
+// the end of the help text.
+TEST_CASE("CLI.helpText.narrow-margin")
+{
+    auto const cmd = commandWithOptions();
+
+    for (auto const margin: { 0u, 1u, 8u, 20u, 40u, 79u, 80u })
+    {
+        INFO("margin " << margin);
+        auto const text = cli::helpText(cmd, plainStyle(), margin);
+        CHECK(text.contains("config"));
+        CHECK(text.contains("profile"));
+    }
+}
+
+// wordWrapped() computed the position before the line feed as `linefeed - 1` on a size_t, so a
+// help text whose first character is a line feed indexed text[SIZE_MAX].
+TEST_CASE("CLI.helpText.leading-linefeed")
+{
+    auto const cmd = cli::Command {
+        .name = "contour",
+        .helpText = "Terminal emulator."sv,
+        .options =
+            cli::OptionList { cli::Option { .name = "config"sv,
+                                            .v = cli::Value { ""s },
+                                            .helpText = "\nIts help text starts on the next line."sv } },
+    };
+
+    auto const text = cli::helpText(cmd, plainStyle(), 80);
+    CHECK(text.contains("Its help text starts on the next line."));
+}
+
+// The verbatim row's left column was measured against a column width computed from the options
+// alone: `columnWidth - leftSize` underflowed, the assert above it is compiled out under NDEBUG,
+// and spaces(n) became a string of about four billion characters.
+TEST_CASE("CLI.helpText.verbatim-longer-than-the-options")
+{
+    auto const cmd = cli::Command {
+        .name = "contour",
+        .helpText = "Terminal emulator."sv,
+        .verbatim = cli::Verbatim { "A_PLACEHOLDER_LONGER_THAN_ANY_OPTION", "Extra arguments." },
+    };
+
+    auto const text = cli::helpText(cmd, plainStyle(), 80);
+    CHECK(text.contains("A_PLACEHOLDER_LONGER_THAN_ANY_OPTION"));
+    CHECK(text.contains("Extra arguments."));
+}
+
+// The hyperlink scan walks back over the scheme with isalpha(), which is undefined for a char
+// whose value is negative -- every continuation byte of a UTF-8 sequence, and help text is
+// written by a human.
+TEST_CASE("CLI.helpText.non-ascii-help-text")
+{
+    auto const cmd = cli::Command {
+        .name = "contour",
+        .helpText = "Terminal emulator."sv,
+        .options = cli::OptionList { cli::Option {
+            .name = "config"sv,
+            .v = cli::Value { ""s },
+            .helpText = "Grüße — siehe https://contour-terminal.org/ für mehr."sv } },
+    };
+
+    auto style = plainStyle();
+    style.hyperlink = true;
+    auto const text = cli::helpText(cmd, style, 80);
+    CHECK(text.contains("https://contour-terminal.org/"));
+}
+
+// The declaration says which failures are a value and which are an exception; these pin it.
+TEST_CASE("CLI.parse.failure-modes")
+{
+    auto const cmd = cli::Command {
+        .name = "contour",
+        .helpText = "Terminal emulator."sv,
+        .options =
+            cli::OptionList {
+                cli::Option { .name = "count"sv, .v = cli::Value { 0 }, .helpText = "A number."sv },
+                cli::Option { .name = "profile"sv,
+                              .v = cli::Value { ""s },
+                              .helpText = "Which profile."sv,
+                              .placeholder = {},
+                              .presence = cli::Presence::Required },
+            },
+    };
+
+    SECTION("a value of the wrong type throws ParserError")
+    {
+        auto const args = cli::StringViewList { "contour", "profile", "p", "count", "not-a-number" };
+        CHECK_THROWS_AS(cli::parse(cmd, args), cli::ParserError);
+    }
+
+    SECTION("a missing required option throws std::invalid_argument")
+    {
+        auto const args = cli::StringViewList { "contour", "count", "1" };
+        CHECK_THROWS_AS(cli::parse(cmd, args), std::invalid_argument);
+    }
 }

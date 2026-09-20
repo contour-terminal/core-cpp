@@ -132,7 +132,13 @@ using StringViewList = std::vector<std::string_view>;
 /**
  * Parses the command line arguments with respect to @p command as passed via @p args.
  *
- * @returns a @c FlagStore containing the parsed result or std::nullopt on failure.
+ * @returns a @c FlagStore containing the parsed result, or std::nullopt when the arguments do not
+ *          form a complete command -- tokens left over at the end, above all.
+ * @throw ParserError when a value cannot be read as the type its option declares.
+ * @throw std::invalid_argument when an option marked Presence::Required was not given.
+ *
+ * A caller whose own contract is a value rather than an exception -- core::cli::App::run() and
+ * App::reparseParameters() -- catches both.
  */
 std::optional<FlagStore> parse(Command const& command, StringViewList const& args);
 
@@ -140,7 +146,10 @@ std::optional<FlagStore> parse(Command const& command, StringViewList const& arg
  * Parses the command line arguments with respect to @p command as passed via (argc, argv) suitable
  * for a general main() functions's argc and argv.
  *
- * @returns a @c FlagStore containing the parsed result or std::nullopt on failure.
+ * @returns a @c FlagStore containing the parsed result, or std::nullopt when the arguments do not
+ *          form a complete command.
+ * @throw ParserError when a value cannot be read as the type its option declares.
+ * @throw std::invalid_argument when an option marked Presence::Required was not given.
  */
 std::optional<FlagStore> parse(Command const& command, int argc, char const* const* argv);
 
