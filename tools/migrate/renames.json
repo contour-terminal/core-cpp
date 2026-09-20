@@ -4474,9 +4474,11 @@
         "contour",
         "endo"
       ],
-      "status": "pending",
-      "task": "B2",
-      "note": "NetErrorCode::Other is still its name at HEAD. The row carries no target yet, so the gate checks nothing here; Task B2 adds \"target\": {\"header\": \"core/net/NetError.hpp\", \"symbol\": \"core::net::NetErrorCode::SystemError\"} and marks the row delivered"
+      "target": {
+        "header": "core/net/NetError.hpp",
+        "symbol": "core::net::NetErrorCode::SystemError"
+      },
+      "note": "Task B2 landed the rename; contour's NetErrorCode::Other is core::net::NetErrorCode::SystemError"
     },
     {
       "kind": "symbol",
@@ -4486,9 +4488,11 @@
         "contour",
         "endo"
       ],
-      "status": "pending",
-      "task": "B2",
-      "note": "NetErrorCode::Other is still its name at HEAD. The row carries no target yet, so the gate checks nothing here; Task B2 adds \"target\": {\"header\": \"core/net/NetError.hpp\", \"symbol\": \"core::net::NetErrorCode::SystemError\"} and marks the row delivered"
+      "target": {
+        "header": "core/net/NetError.hpp",
+        "symbol": "core::net::NetErrorCode::SystemError"
+      },
+      "note": "Task B2 landed the rename; contour's NetErrorCode::Other is core::net::NetErrorCode::SystemError"
     },
     {
       "kind": "symbol",
