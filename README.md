@@ -61,8 +61,11 @@ A project that must build without fetching anything can carry a verbatim copy in
 consumes core-cpp this way:
 
 ```sh
-# Copy a tag into your tree, then commit the result as one change.
-cmake -DMODE=sync -DREF=v0.1.0 -DDEST=vendor/core-cpp -P cmake/CoreCppVendor.cmake
+# Copy a tag into your tree, then commit the result as one change. The script is a core-cpp
+# checkout's, not the copy's: sync reads a repository, and the repository it reads by default is
+# the one the script itself is in.
+cmake -DMODE=sync -DREF=v0.1.0 -DDEST=vendor/core-cpp \
+      -P /path/to/core-cpp/cmake/CoreCppVendor.cmake
 
 # Verify it. Needs no git, so register it as a test of your own suite.
 cmake -DMODE=check -DDEST=vendor/core-cpp -P vendor/core-cpp/cmake/CoreCppVendor.cmake

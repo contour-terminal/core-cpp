@@ -20,20 +20,34 @@ a CMake script run with `cmake -P`. It needs nothing but CMake and, for `sync`, 
 ## The commands
 
 ```sh
-# Copy a ref's files into <dir> and write <dir>/MANIFEST.
-cmake -DMODE=sync -DREF=<tag or full SHA> -DDEST=<dir> [-DREPO=<url or path>] \
-      [-DMODULES=base;log;cli;platform;async;net;testing] \
-      -P <core-cpp>/cmake/CoreCppVendor.cmake
+# Copy a ref's files into <dir> and write <dir>/MANIFEST. The script is a core-cpp checkout's:
+# sync reads a git repository, and REPO defaults to the one the script itself is in.
+cmake -DMODE=sync -DREF=<tag or full SHA> -DDEST=<dir> \
+      -P <core-cpp checkout>/cmake/CoreCppVendor.cmake
 
-# Verify <dir> against its MANIFEST. Needs no git.
+# The same, choosing the modules and the repository explicitly. MODULES is a CMake list, so the
+# shell must not see its semicolons: quote the whole -D argument.
+cmake -DMODE=sync -DREF=<tag or full SHA> -DDEST=<dir> -DREPO=<url or path> \
+      "-DMODULES=base;log;cli;platform;async;net;testing" \
+      -P <core-cpp checkout>/cmake/CoreCppVendor.cmake
+
+# Verify <dir> against its MANIFEST. Needs no git, and this one IS the copy's own script.
 cmake -DMODE=check -DDEST=<dir> -P <dir>/cmake/CoreCppVendor.cmake
 ```
 
 - **`REPO`** is a local checkout, a bare repository, or a URL, which is cloned once into a
-  temporary directory under `DEST`. It defaults to the repository the script itself is part of.
+  temporary directory under `DEST`. It defaults to the repository the script itself is part of,
+  which is why `sync` is run with a *checkout's* script and never with the copy's: from inside a
+  copy that default is the repository the copy lives in — yours. `sync` refuses a `REPO` that is
+  not the root of its own repository, and a ref whose tree is not core-cpp's, so that
+  mis-invocation stops with a message instead of replacing the copy with your own files.
 - **`MODULES`** selects which module directories are copied; it defaults to every module the ref
-  has. A module that no option can switch off must be in the list, or the copy will not configure:
-  `CORE_CPP_WITH_TUI=OFF` is what lets contour leave `tui` out.
+  has. A module that no option can switch off must be in the list, and `sync` reads the ref's own
+  `cmake/CoreCppModules.cmake` to refuse a list that leaves one out; `CORE_CPP_WITH_TUI=OFF` is
+  what lets contour leave `tui` out.
+- **`REF`** is a tag or a full 40-character commit SHA, and `sync` refuses anything else. A branch,
+  `HEAD` or a short SHA names a different tree from one day to the next, and the manifest would
+  then record a ref that cannot restore the copy it describes.
 - **`sync` reads git blobs** with `git -c core.autocrlf=false -c core.eol=lf cat-file blob`, so no
   working tree's line-ending settings reach the copy, and it refuses a file containing a CR byte,
   a symbolic link and a submodule. It writes nothing into `DEST` until the whole copy is legal, so
@@ -43,12 +57,18 @@ cmake -DMODE=check -DDEST=<dir> -P <dir>/cmake/CoreCppVendor.cmake
   is refused, because it is not a copy of ours to delete.
 - **`MANIFEST`** starts with header lines naming the repository, the ref, the commit, the modules
   and the file count (`# repository ...`, `# ref ...`, `# commit ...`, `# modules ...`,
-  `# files ...`), followed by one `<sha256>  <path>` line per file, sorted by path. Its own line
-  endings are those of the host that ran `sync`; `check` ignores them, so a copy made on Windows
-  verifies on Linux and the other way round. The copied files themselves are the commit's bytes
-  whatever the host.
-- **`check` refuses** a hash mismatch, a file the manifest lists that is missing, and a file the
-  manifest does not list. It reports every one of them, not only the first.
+  `# files ...`), followed by one `<sha256>  <path>` line per file, sorted by path. It is written
+  with LF endings whatever the host ran `sync`, because you commit this file: two correct syncs of
+  the same tag from a Windows and a Linux machine must not differ in every line. The copied files
+  themselves are the commit's bytes whatever the host.
+- **`check` refuses** a hash mismatch, a file the manifest lists that is missing, a file the
+  manifest does not list, and a manifest that says nothing — no `# files` count, a count of zero or
+  a count that disagrees with the lines below it, so an emptied copy beside an emptied manifest
+  fails rather than passing with nothing to compare. It reports every refusal, not only the first.
+- **File modes are outside the contract.** The copy is bytes and paths; `sync` writes every blob as
+  an ordinary file and `check` compares no mode, so a `100755` blob arrives without its execute
+  bit and a `chmod` inside a copy is invisible. Nothing in the file set is executable today, and
+  nothing in it may become executable without this line changing first.
 
 ## What is copied
 
