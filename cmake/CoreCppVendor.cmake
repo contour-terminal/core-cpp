@@ -4,10 +4,12 @@
 # a consumer's tree, and it verifies that such a copy is still verbatim.
 #
 #   cmake -DMODE=sync -DREF=<tag or full SHA> -DDEST=<dir> [-DREPO=<url or path>]
-#         [-DMODULES=base;log;cli;platform;async;net;testing]
-#         -P <core-cpp>/cmake/CoreCppVendor.cmake
+#         ["-DMODULES=base;log;cli;platform;async;net;testing"]
+#         -P <core-cpp checkout>/cmake/CoreCppVendor.cmake
 #
 #   cmake -DMODE=check -DDEST=<dir> -P <dir>/cmake/CoreCppVendor.cmake
+#
+# MODULES is a CMake list, so its -D argument is quoted: an unquoted semicolon is the shell's.
 #
 # sync reads git BLOBS, never a working tree: `git -c core.autocrlf=false -c core.eol=lf cat-file
 # blob` hands over the bytes the commit records, whatever the machine's line-ending configuration
@@ -17,10 +19,18 @@
 # file git treated as binary (a text import never is), and neither of the other two survives being
 # copied into another repository as the bytes it names.
 #
+# sync also refuses what it cannot copy correctly: a REF that is not a tag or a full commit SHA, a
+# REPO that is not the root of its own repository, a ref whose tree is not core-cpp's, and a
+# MODULES list that leaves out a module the build enters unconditionally. The first three are one
+# mistake seen from three sides -- running sync with a VENDORED COPY's own script, where REPO
+# defaults to the copy's directory and git reads the CONSUMER's repository instead.
+#
 # check needs no git at all, because a consumer runs it as a test in its own CI, where core-cpp is
 # a directory of files and nothing else. It re-hashes every file the MANIFEST lists and refuses a
 # hash mismatch, a file that is missing and a file the manifest does not list -- so a local edit,
-# the one thing a vendored copy may never carry, fails the consumer's own test suite.
+# the one thing a vendored copy may never carry, fails the consumer's own test suite. It also
+# refuses a manifest that says nothing: an emptied copy beside an emptied manifest would otherwise
+# have no file to disagree about and would pass.
 #
 # Every refusal that applies is reported, not only the first.
 # tests/cmake/check-vendor-selftest.cmake proves each of them by name.
@@ -49,6 +59,23 @@ set(CORE_CPP_VENDOR_NAMED_FILES
 # before it replaces the old one (so a refusal leaves the previous copy intact).
 set(CORE_CPP_VENDOR_MANIFEST "MANIFEST")
 set(CORE_CPP_VENDOR_STAGING ".core-cpp-vendor-staging")
+
+# The staging directory this run owns, empty until MODE=sync creates one.
+set(CORE_CPP_VENDOR_STAGING_DIR "")
+
+## @brief Removes the staging directory this run created, if it has one.
+##
+## Every message(FATAL_ERROR) of MODE=sync is preceded by a call to this. A refusal that left the
+## staging directory behind would leave `.core-cpp-vendor-staging/` inside a copy the run never
+## replaced, and the consumer's own MODE=check would then report every staged file as unlisted --
+## on a copy nothing touched. "A refusal leaves the previous copy exactly as it was" is a promise
+## docs/vendoring.md makes, so it is this macro's job to keep it on every path, not only on the
+## ones that happen to remember.
+macro(core_cpp_vendor_unstage)
+    if(CORE_CPP_VENDOR_STAGING_DIR)
+        file(REMOVE_RECURSE "${CORE_CPP_VENDOR_STAGING_DIR}")
+    endif()
+endmacro()
 
 ## @brief Sets @p outVar to ON when @p path belongs to the file set for @p modules.
 ##
@@ -90,10 +117,32 @@ function(core_cpp_vendor_git outVar repo what)
         OUTPUT_VARIABLE out
         ERROR_VARIABLE err)
     if(NOT rc EQUAL 0)
+        core_cpp_vendor_unstage()
         message(FATAL_ERROR "core-cpp-vendor: ${what} failed (git exited ${rc}): ${out}${err}")
     endif()
     string(REGEX REPLACE "[\r\n]+$" "" out "${out}")
     set(${outVar} "${out}" PARENT_SCOPE)
+endfunction()
+
+## @brief Sets @p outVar to whether @p left and @p right name the same directory.
+##
+## Both are resolved through their symbolic links first, and on a Windows host the comparison is
+## case-insensitive: git and CMake spell a drive letter differently often enough to matter, and a
+## path comparison that says "different" there would refuse a correct invocation.
+function(core_cpp_vendor_same_directory left right outVar)
+    get_filename_component(left "${left}" REALPATH)
+    get_filename_component(right "${right}" REALPATH)
+    set(same OFF)
+    if(left STREQUAL right)
+        set(same ON)
+    elseif(CMAKE_HOST_WIN32)
+        string(TOLOWER "${left}" left)
+        string(TOLOWER "${right}" right)
+        if(left STREQUAL right)
+            set(same ON)
+        endif()
+    endif()
+    set(${outVar} ${same} PARENT_SCOPE)
 endfunction()
 
 ## @brief Lists the files of @p dir, relative to it, with @p ARGN excluded.
@@ -113,8 +162,8 @@ endfunction()
 if(NOT DEFINED MODE OR NOT MODE MATCHES "^(sync|check)$")
     message(FATAL_ERROR
         "core-cpp-vendor: MODE must be sync or check, not '${MODE}'.\n"
-        "  cmake -DMODE=sync -DREF=<tag> -DDEST=<dir> [-DREPO=<url or path>] [-DMODULES=<a;b>] "
-        "-P <core-cpp>/cmake/CoreCppVendor.cmake\n"
+        "  cmake -DMODE=sync -DREF=<tag> -DDEST=<dir> [-DREPO=<url or path>] [\"-DMODULES=<a;b>\"] "
+        "-P <core-cpp checkout>/cmake/CoreCppVendor.cmake\n"
         "  cmake -DMODE=check -DDEST=<dir> -P <dir>/cmake/CoreCppVendor.cmake")
 endif()
 if(NOT DEFINED DEST OR DEST STREQUAL "")
@@ -137,12 +186,18 @@ if(MODE STREQUAL "check")
     set(refusals "")
     set(listed "")
     set(statedCount "")
-    set(commit "unknown")
+    set(statedRepository "")
+    set(statedRef "")
+    set(commit "")
     foreach(line IN LISTS manifestLines)
         if(line MATCHES "^# files (.+)$")
             set(statedCount "${CMAKE_MATCH_1}")
         elseif(line MATCHES "^# commit (.+)$")
             set(commit "${CMAKE_MATCH_1}")
+        elseif(line MATCHES "^# repository (.+)$")
+            set(statedRepository "${CMAKE_MATCH_1}")
+        elseif(line MATCHES "^# ref (.+)$")
+            set(statedRef "${CMAKE_MATCH_1}")
         elseif(line MATCHES "^#")
             continue()
         elseif(line MATCHES "^([0-9a-f]+)  (.+)$")
@@ -170,8 +225,35 @@ if(MODE STREQUAL "check")
         endif()
     endforeach()
 
+    # The header is required, and required to say something. Without this, a manifest that is gone
+    # or truncated beside a copy that is gone has nothing left to disagree about: no file is listed,
+    # so no hash is compared, none is missing and none is unlisted, and the tool would report "0
+    # file(s)" and exit 0 -- passing the consumer's gate over an empty directory, which is the one
+    # state it exists to catch.
+    string(LENGTH "${commit}" commitLength)
+    if(statedRepository STREQUAL "")
+        string(APPEND refusals
+            "\n  ${CORE_CPP_VENDOR_MANIFEST}: has no '# repository <url or path>' header line")
+    endif()
+    if(statedRef STREQUAL "")
+        string(APPEND refusals "\n  ${CORE_CPP_VENDOR_MANIFEST}: has no '# ref <tag or SHA>' header line")
+    endif()
+    if(NOT commitLength EQUAL 40 OR NOT commit MATCHES "^[0-9a-f]+$")
+        string(APPEND refusals
+            "\n  ${CORE_CPP_VENDOR_MANIFEST}: has no '# commit <40-character SHA>' header line "
+            "(it says '${commit}')")
+    endif()
+
     list(LENGTH listed listedCount)
-    if(NOT statedCount STREQUAL "" AND NOT statedCount STREQUAL "${listedCount}")
+    if(statedCount STREQUAL "")
+        string(APPEND refusals "\n  ${CORE_CPP_VENDOR_MANIFEST}: has no '# files <count>' header line")
+    elseif(NOT statedCount MATCHES "^[0-9]+$")
+        string(APPEND refusals
+            "\n  ${CORE_CPP_VENDOR_MANIFEST}: says '# files ${statedCount}', which is not a count")
+    elseif(statedCount EQUAL 0)
+        string(APPEND refusals
+            "\n  ${CORE_CPP_VENDOR_MANIFEST}: says '# files 0', and a core-cpp copy is never empty")
+    elseif(NOT statedCount STREQUAL "${listedCount}")
         string(APPEND refusals
             "\n  ${CORE_CPP_VENDOR_MANIFEST}: says '# files ${statedCount}' but lists ${listedCount}")
     endif()
@@ -188,6 +270,9 @@ if(MODE STREQUAL "check")
 endif()
 
 # --- MODE=sync -----------------------------------------------------------------
+#
+# From the point the staging directory exists, every message(FATAL_ERROR) below -- and the one in
+# core_cpp_vendor_git() -- is preceded by core_cpp_vendor_unstage(). See its comment for why.
 
 if(NOT DEFINED REF OR REF STREQUAL "")
     message(FATAL_ERROR
@@ -205,6 +290,45 @@ endif()
 # and once, into the staging area; a local path (a checkout or a bare repository) is read in place.
 if(NOT DEFINED REPO OR REPO STREQUAL "")
     get_filename_component(REPO "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
+elseif(IS_DIRECTORY "${REPO}")
+    # One spelling in the messages, in the comparison below and in the manifest's own header.
+    get_filename_component(REPO "${REPO}" ABSOLUTE)
+endif()
+
+# A local REPO must be the ROOT of its own repository, because `git -C` ascends out of a directory
+# that is not one. This is the guard against the one mis-invocation that is otherwise silent and
+# destructive: running sync with a VENDORED COPY's own script. REPO then defaults to the copy's
+# directory, git reads the repository that CONTAINS the copy -- the consumer's -- and the run would
+# empty the copy and refill it from whatever of the consumer's tree matches the file set, leaving a
+# MANIFEST that MODE=check happily accepts. The tree check further down is the second half of it.
+#
+# Nothing is written before this: DEST is not even looked at yet.
+if(IS_DIRECTORY "${REPO}")
+    execute_process(
+        COMMAND "${CORE_CPP_VENDOR_GIT}" -c core.autocrlf=false -c core.eol=lf -C "${REPO}"
+                rev-parse --is-bare-repository
+        RESULT_VARIABLE rc OUTPUT_VARIABLE isBare ERROR_VARIABLE err)
+    if(NOT rc EQUAL 0)
+        message(FATAL_ERROR
+            "core-cpp-vendor: REPO '${REPO}' is in no git repository (git exited ${rc}): ${err}"
+            "MODE=sync reads git blobs, so REPO is a core-cpp checkout, a bare repository or a URL.")
+    endif()
+    string(STRIP "${isBare}" isBare)
+    if(NOT isBare STREQUAL "true")
+        core_cpp_vendor_git(topLevel "${REPO}" "finding the root of the repository at ${REPO}"
+                            rev-parse --show-toplevel)
+        core_cpp_vendor_same_directory("${REPO}" "${topLevel}" sameRoot)
+        if(NOT sameRoot)
+            message(FATAL_ERROR
+                "core-cpp-vendor: REPO is '${REPO}', but that directory is not a repository root: "
+                "the repository it belongs to has its root at '${topLevel}', and sync would copy "
+                "THAT repository's files.\n"
+                "This is what running sync with a VENDORED COPY's own script does -- REPO defaults "
+                "to the script's parent directory, and git then reads the repository containing the "
+                "copy. A vendored copy's own script is for MODE=check. To re-vendor, run sync from "
+                "a core-cpp checkout, or pass -DREPO=<core-cpp checkout, bare repository or URL>.")
+        endif()
+    endif()
 endif()
 
 set(stagingDir "${DEST}/${CORE_CPP_VENDOR_STAGING}")
@@ -225,6 +349,7 @@ if(EXISTS "${DEST}" AND NOT EXISTS "${DEST}/${CORE_CPP_VENDOR_MANIFEST}")
 endif()
 
 file(MAKE_DIRECTORY "${stagingDir}")
+set(CORE_CPP_VENDOR_STAGING_DIR "${stagingDir}")
 
 set(repoPath "${REPO}")
 set(clonePath "")
@@ -236,13 +361,38 @@ if(NOT IS_DIRECTORY "${REPO}")
                 clone --quiet --bare "${REPO}" "${clonePath}"
         RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
     if(NOT rc EQUAL 0)
-        file(REMOVE_RECURSE "${stagingDir}")
+        core_cpp_vendor_unstage()
         message(FATAL_ERROR "core-cpp-vendor: cloning ${REPO} failed (git exited ${rc}): ${out}${err}")
     endif()
     set(repoPath "${clonePath}")
 endif()
 
-core_cpp_vendor_git(commit "${repoPath}" "resolving REF '${REF}' in ${REPO}" rev-parse --verify "${REF}^{commit}")
+# REF is a tag or a full commit SHA, and the tool enforces what its own message and
+# docs/vendoring.md both promise. A branch is not a valid source, and neither is HEAD or a short
+# SHA: the copy would carry `# ref master` in its manifest, and the recovery MODE=check recommends
+# -- "re-run sync with the manifest's ref" -- would then restore whatever that branch points at
+# today rather than the tree the manifest pins.
+#
+# CMake's regular expressions have no bounded repetition, so the length is its own test.
+string(LENGTH "${REF}" refLength)
+if(refLength EQUAL 40 AND REF MATCHES "^[0-9a-f]+$")
+    core_cpp_vendor_git(commit "${repoPath}" "resolving the commit ${REF} in ${REPO}"
+                        rev-parse --verify "${REF}^{commit}")
+else()
+    execute_process(
+        COMMAND "${CORE_CPP_VENDOR_GIT}" -c core.autocrlf=false -c core.eol=lf -C "${repoPath}"
+                rev-parse --verify --quiet "refs/tags/${REF}^{commit}"
+        RESULT_VARIABLE rc OUTPUT_VARIABLE commit ERROR_VARIABLE err)
+    if(NOT rc EQUAL 0)
+        core_cpp_vendor_unstage()
+        message(FATAL_ERROR
+            "core-cpp-vendor: REF '${REF}' is neither a full 40-character commit SHA nor a tag of "
+            "${REPO}. A branch, HEAD or a short SHA is not a valid source: it names a different "
+            "tree from one day to the next, and the copy's manifest would record a ref that cannot "
+            "restore it.")
+    endif()
+    string(REGEX REPLACE "[\r\n]+$" "" commit "${commit}")
+endif()
 
 # One `ls-tree -r -z` for the whole tree: NUL-separated, so no path needs quoting, and
 # file(STRINGS) splits a NUL-separated file into exactly one entry per record.
@@ -252,20 +402,47 @@ execute_process(
             ls-tree -r -z "${commit}"
     RESULT_VARIABLE rc OUTPUT_FILE "${lsTreeFile}" ERROR_VARIABLE err)
 if(NOT rc EQUAL 0)
-    file(REMOVE_RECURSE "${stagingDir}")
+    core_cpp_vendor_unstage()
     message(FATAL_ERROR "core-cpp-vendor: listing the tree of ${commit} failed (git exited ${rc}): ${err}")
 endif()
 file(STRINGS "${lsTreeFile}" entries)
 
-# Pass one: what the ref has. A module is a directory under src/core/; `base` is src/core/ itself.
+# Pass one: what the ref has. A module is a directory under src/core/; `base` is src/core/ itself,
+# and cmake/CoreCppModules.cmake is the table that says which of them the build enters.
 set(availableModules "base")
+set(moduleTableBlob "")
+set(hasCoreDirectory OFF)
 foreach(entry IN LISTS entries)
-    if(entry MATCHES "^[0-7]+ [a-z]+ [0-9a-f]+\t(src/core/([^/]+)/)")
+    if(entry MATCHES "^[0-7]+ [a-z]+ ([0-9a-f]+)\tcmake/CoreCppModules\\.cmake$")
+        set(moduleTableBlob "${CMAKE_MATCH_1}")
+    elseif(entry MATCHES "^[0-7]+ [a-z]+ [0-9a-f]+\t(src/core/([^/]+)/)")
+        set(hasCoreDirectory ON)
         if(NOT "${CMAKE_MATCH_2}" IN_LIST availableModules)
             list(APPEND availableModules "${CMAKE_MATCH_2}")
         endif()
+    elseif(entry MATCHES "^[0-7]+ [a-z]+ [0-9a-f]+\tsrc/core/")
+        set(hasCoreDirectory ON)
     endif()
 endforeach()
+
+# The second half of the guard against syncing the wrong repository: whatever REPO resolved to, the
+# ref's tree has to be core-cpp's. A consumer's own repository carries neither of these, so a sync
+# aimed at one stops here instead of filling the copy with the consumer's CMakeLists.txt.
+set(notCoreCpp "")
+if(NOT moduleTableBlob)
+    list(APPEND notCoreCpp "cmake/CoreCppModules.cmake")
+endif()
+if(NOT hasCoreDirectory)
+    list(APPEND notCoreCpp "src/core/")
+endif()
+if(notCoreCpp)
+    core_cpp_vendor_unstage()
+    list(JOIN notCoreCpp " and no " absent)
+    message(FATAL_ERROR
+        "core-cpp-vendor: the tree of ${REF} (${commit}) in ${REPO} is not a core-cpp tree -- it "
+        "has no ${absent}. REPO names the repository to copy core-cpp OUT of; it is not the "
+        "consumer's own repository, and not the directory a vendored copy lives in.")
+endif()
 
 if(NOT DEFINED MODULES OR MODULES STREQUAL "")
     set(MODULES ${availableModules})
@@ -277,11 +454,48 @@ foreach(module IN LISTS MODULES)
     endif()
 endforeach()
 if(unknownModules)
-    file(REMOVE_RECURSE "${stagingDir}")
-    list(JOIN availableModules ";" known)
+    core_cpp_vendor_unstage()
+    list(JOIN availableModules ", " known)
+    list(JOIN unknownModules ", " unknown)
     message(FATAL_ERROR
-        "core-cpp-vendor: MODULES names '${unknownModules}', which ${REF} has no module for "
+        "core-cpp-vendor: MODULES names ${unknown}, which ${REF} has no module for "
         "(it has: ${known}).")
+endif()
+
+# A module whose row names no WHEN option is one core_cpp_add_modules() enters unconditionally, so
+# a copy without its directory does not configure -- and CMake's own message for that is the
+# generic "source directory does not exist", naming a path rather than the argument that dropped
+# it. The list is read from the ref's own table, so it cannot drift from the hand-written MODULES
+# strings in build.yml, docs/vendoring.md and tests/consumer-vendored/CMakeLists.txt.
+core_cpp_vendor_git(moduleTable "${repoPath}" "reading cmake/CoreCppModules.cmake of ${commit}"
+                    cat-file blob "${moduleTableBlob}")
+string(REGEX REPLACE "(^|\n)[ \t]*#[^\n]*" "\\1" moduleTable "${moduleTable}")
+string(REGEX MATCHALL "core_cpp_module\\([^)]*\\)" moduleRows "${moduleTable}")
+set(unconditionalModules "")
+foreach(row IN LISTS moduleRows)
+    if(NOT row MATCHES "NAME[ \t\r\n]+([A-Za-z0-9_]+)")
+        continue()
+    endif()
+    set(rowName "${CMAKE_MATCH_1}")
+    if(row MATCHES "[ \t\r\n]WHEN[ \t\r\n]")
+        continue()
+    endif()
+    list(APPEND unconditionalModules "${rowName}")
+endforeach()
+set(omittedModules "")
+foreach(module IN LISTS unconditionalModules)
+    if(NOT module IN_LIST MODULES)
+        list(APPEND omittedModules "${module}")
+    endif()
+endforeach()
+if(omittedModules)
+    core_cpp_vendor_unstage()
+    list(JOIN omittedModules ", " omitted)
+    message(FATAL_ERROR
+        "core-cpp-vendor: MODULES omits ${omitted}, which ${REF} builds unconditionally (the row "
+        "in cmake/CoreCppModules.cmake names no WHEN option that could switch it off). The copy "
+        "would not configure: core_cpp_add_modules() enters that module's directory, and the copy "
+        "would not have one.")
 endif()
 
 # Pass two: copy every selected blob into the staging tree, and collect every reason not to.
@@ -333,25 +547,39 @@ foreach(entry IN LISTS entries)
     #
     # Read as hex, because a plain file(READ) opens the file in text mode on Windows and hands back
     # a string a CRLF has already been taken out of. "0d" also occurs straddling two bytes (0x40
-    # 0xd9 reads "40d9"), so the cheap search only decides whether the exact one is worth its cost.
+    # 0xd9 reads "40d9"), so a hit only counts at an even offset; the search walks past the odd
+    # ones rather than splitting the whole file into a list of one element per byte.
     file(READ "${target}" hexContent HEX)
-    string(FIND "${hexContent}" "0d" maybeCarriageReturn)
-    if(NOT maybeCarriageReturn EQUAL -1)
-        string(REGEX REPLACE "(..)" "\\1;" hexBytes "${hexContent}")
-        list(FIND hexBytes "0d" carriageReturnAt)
-        if(NOT carriageReturnAt EQUAL -1)
-            string(APPEND refusals "\n  ${path}: contains a CR byte (at offset ${carriageReturnAt})")
-            continue()
+    set(scanned 0)
+    set(carriageReturnAt -1)
+    while(TRUE)
+        string(FIND "${hexContent}" "0d" at)
+        if(at EQUAL -1)
+            break()
         endif()
+        math(EXPR absolute "${scanned} + ${at}")
+        math(EXPR straddling "${absolute} % 2")
+        if(straddling EQUAL 0)
+            math(EXPR carriageReturnAt "${absolute} / 2")
+            break()
+        endif()
+        math(EXPR skip "${at} + 1")
+        string(SUBSTRING "${hexContent}" ${skip} -1 hexContent)
+        math(EXPR scanned "${scanned} + ${skip}")
+    endwhile()
+    if(NOT carriageReturnAt EQUAL -1)
+        string(APPEND refusals "\n  ${path}: contains a CR byte (at offset ${carriageReturnAt})")
+        continue()
     endif()
     list(APPEND copied "${path}")
 endforeach()
 
 if(NOT copied AND NOT refusals)
-    string(APPEND refusals "\n  ${REF} has no file of the vendored set for modules '${MODULES}'")
+    list(JOIN MODULES ", " requested)
+    string(APPEND refusals "\n  ${REF} has no file of the vendored set for modules ${requested}")
 endif()
 if(refusals)
-    file(REMOVE_RECURSE "${stagingDir}")
+    core_cpp_vendor_unstage()
     message(FATAL_ERROR
         "core-cpp-vendor: refusing to vendor ${REF} from ${REPO}:${refusals}\n"
         "${DEST} is unchanged.")
@@ -380,27 +608,31 @@ file(REMOVE_RECURSE "${stagingDir}")
 # The manifest, hashed from the files as they now lie in DEST, sorted by path so the same ref
 # always lists the same files in the same order.
 #
-# Its own line endings are the writing host's -- CMake writes a text file in the host's convention,
-# and there is no binary file write in script mode. That decides nothing: MODE=check reads it with
-# file(STRINGS), which ignores CR, so a copy made on Windows verifies on Linux and the other way
-# round. The FILES are unaffected: each is written from git's blob through a process's stdout,
-# which is never translated.
+# It is written with LF endings whatever the host, because the consumer COMMITS this file: a
+# file(WRITE) opens the file in text mode, so a sync on Windows would write CRLF and two correct
+# syncs of the same tag from two machines would differ in every line. file(CONFIGURE) is the one
+# write in script mode that takes NEWLINE_STYLE. Its @ substitution is why the content's own '@'
+# characters -- `git@github.com:...` is an ordinary REPO -- are routed through a variable that
+# holds one. The FILES are unaffected either way: each is written from git's blob through a
+# process's stdout, which is never translated.
 list(SORT copied)
 list(LENGTH copied fileCount)
-list(JOIN MODULES ";" modulesLine)
 set(manifest "# core-cpp vendored copy -- verify it with:\n")
 string(APPEND manifest "#   cmake -DMODE=check -DDEST=<this directory> -P <this directory>/cmake/CoreCppVendor.cmake\n")
 string(APPEND manifest "# repository ${REPO}\n")
 string(APPEND manifest "# ref ${REF}\n")
 string(APPEND manifest "# commit ${commit}\n")
-string(APPEND manifest "# modules ${modulesLine}\n")
+string(APPEND manifest "# modules ${MODULES}\n")
 string(APPEND manifest "# files ${fileCount}\n")
 foreach(path IN LISTS copied)
     file(SHA256 "${DEST}/${path}" hash)
     string(APPEND manifest "${hash}  ${path}\n")
 endforeach()
-file(WRITE "${DEST}/${CORE_CPP_VENDOR_MANIFEST}" "${manifest}")
+set(CORE_CPP_VENDOR_AT "@")
+string(REPLACE "@" "@CORE_CPP_VENDOR_AT@" manifest "${manifest}")
+file(CONFIGURE OUTPUT "${DEST}/${CORE_CPP_VENDOR_MANIFEST}" CONTENT "${manifest}"
+     @ONLY NEWLINE_STYLE UNIX)
 
 message(STATUS
     "core-cpp-vendor: ${REF} (${commit}) copied into ${DEST}: ${fileCount} file(s), "
-    "modules ${modulesLine}")
+    "modules ${MODULES}")

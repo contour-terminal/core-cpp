@@ -56,12 +56,22 @@ set_tests_properties(core-cpp.check-release-selftest PROPERTIES LABELS "core-cpp
 # The vendoring tool exports the file set of Part I §5 byte for byte, and refuses each way a copy
 # can stop being verbatim. Every case builds a git repository of its own; the tool's MODE=check
 # needs no git, and one case proves that by running it with an empty PATH.
+#
+# This is the only test in the tree that needs an external program, and a build from a release
+# tarball on a machine without git is a legitimate build, so a missing git is a SKIP rather than a
+# red (.agent/rules/testing.md). The script leaves with the skip code where cmake_language(EXIT)
+# exists (CMake 3.29) and says so in its output either way, so both properties are set: whichever
+# of the two ctest can see, the skip is reported and never reads as a pass.
 add_test(NAME core-cpp.vendor-selftest
          COMMAND "${CMAKE_COMMAND}"
                  "-DTOOL=${CORE_CPP_SOURCE_DIR}/cmake/CoreCppVendor.cmake"
                  "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/vendor-selftest"
+                 "-DSKIP_EXIT_CODE=${CORE_CPP_SKIP_EXIT_CODE}"
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-vendor-selftest.cmake")
-set_tests_properties(core-cpp.vendor-selftest PROPERTIES LABELS "core-cpp;hygiene")
+set_tests_properties(core-cpp.vendor-selftest PROPERTIES
+    SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
+    SKIP_REGULAR_EXPRESSION "check-vendor-selftest: SKIPPED"
+    LABELS "core-cpp;hygiene")
 
 # A CRT assert, abort(), invalid parameter or crash must end the process instead of opening a dialog
 # that waits for a click. Each run must fail (WILL_FAIL) within the timeout; a run that hangs has hit a
