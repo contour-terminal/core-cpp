@@ -650,7 +650,7 @@ void VtParser::processPaste(std::uint8_t byte, std::vector<InputEvent>& events)
     _pasteBuf += static_cast<char>(byte);
 
     // Check for bracketed paste end: ESC[201~
-    if (_pasteBuf.size() >= PasteEnd.size() && _pasteBuf.ends_with(PasteEnd))
+    if (_pasteBuf.ends_with(PasteEnd))
     {
         // Remove the end sequence from the paste buffer
         _pasteBuf.resize(_pasteBuf.size() - PasteEnd.size());

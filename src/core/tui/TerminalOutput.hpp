@@ -86,11 +86,10 @@ class TerminalOutput;
 /// @brief RAII guard for synchronized terminal output.
 ///
 /// Uses CSI ?2026h/l (synchronized output mode) to prevent tearing.
-/// The constructor writes the begin sequence and the destructor flushes what was composed inside
-/// the region and writes the end sequence, so nothing composed within the region is emitted after
-/// it. The flush on the way IN is @c TerminalOutput::syncGuard()'s, not the constructor's: it
-/// flushes what was composed before the region and then makes the guard. Construct a guard
-/// directly and anything still buffered is emitted inside the region instead.
+/// Both ends flush: the constructor flushes what was composed BEFORE the region and then writes
+/// the begin sequence, and the destructor flushes what was composed INSIDE it and then writes the
+/// end sequence. So the region carries its own bytes and only its own, whether the guard was made
+/// by @c TerminalOutput::syncGuard() or constructed directly.
 ///
 /// Both go to the @c TerminalOutput the guard was made from, through the same
 /// @c writeToDestination() every other byte takes, so a retargeted output (a test capture, a

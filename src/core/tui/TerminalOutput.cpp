@@ -252,8 +252,7 @@ void TerminalOutput::writeHyperlink(std::string_view text, std::string_view url,
 
 auto TerminalOutput::syncGuard() -> SyncGuard
 {
-    flush(); // Flush any pending output before entering sync mode
-    return SyncGuard(*this);
+    return SyncGuard(*this); // The flush on the way in is the guard's constructor's.
 }
 
 void TerminalOutput::flush()
@@ -300,6 +299,12 @@ namespace
 
 SyncGuard::SyncGuard(TerminalOutput& output): _output(&output)
 {
+    // Flush first, as the destructor does: what was composed BEFORE the region belongs before it.
+    // Left buffered, it would be emitted inside the synchronized region on the next flush -- the
+    // frame would carry bytes that are not its own, which is the tearing this class exists to
+    // prevent, and the natural RAII spelling `auto guard = SyncGuard { output };` would be the one
+    // that got it wrong.
+    _output->flush();
     _output->writeToDestination(BeginSynchronizedOutput);
 }
 

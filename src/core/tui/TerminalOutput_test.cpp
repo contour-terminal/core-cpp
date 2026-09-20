@@ -65,6 +65,25 @@ TEST_CASE("tui.TerminalOutput: SyncGuard writes through writeToDestination")
     CHECK(output.captured() == "before\033[?2026hinside\033[?2026l");
 }
 
+TEST_CASE("tui.TerminalOutput: a directly constructed SyncGuard flushes what came before it")
+{
+    auto output = CapturingOutput { Destination::File };
+    output.writeRaw("before"); // Composed, not yet flushed.
+
+    {
+        // The natural RAII spelling, and the one that used to get this wrong: while the flush on
+        // the way in belonged to syncGuard() rather than to the constructor, "before" was still in
+        // the buffer here and reached the terminal INSIDE the synchronized region -- a frame
+        // carrying bytes composed before it, which is the tearing the class exists to prevent.
+        auto const guard = core::tui::SyncGuard { output };
+        CHECK(output.captured() == "before\033[?2026h");
+
+        output.writeRaw("inside");
+    }
+
+    CHECK(output.captured() == "before\033[?2026hinside\033[?2026l");
+}
+
 TEST_CASE("tui.TerminalOutput: ~SyncGuard flushes before it ends the synchronized region")
 {
     auto output = CapturingOutput { Destination::File };
