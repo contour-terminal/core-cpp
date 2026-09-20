@@ -13,6 +13,19 @@ moved since it was synced. A consumer migration's delta check (`.agent/guides/`)
 way. `NOTICE` and `CHANGELOG.md` record the same commits at the granularity of a whole import; this
 table is the per-file index into them.
 
+**Do not sweep this table by hand.** [`scripts/check-upstream-drift.py`](../../scripts/check-upstream-drift.py)
+does the reading and the `git log`: `python scripts/check-upstream-drift.py` fetches each upstream
+once and reports, per row, the commits that touched it since its synced SHA, with `--repo` and
+`--path-prefix` to ask about one module. Drift is reported and never fails; a row that is wrong
+about its own upstream does fail, which is the distinction that lets a nightly run it. It is
+registered as `core-cpp.upstream-drift` under `ctest -L hygiene`, where it skips on a machine
+without the upstream checkouts rather than passing silently.
+
+Because it is mechanical, **every row's upstream path must name exactly one file**: a pattern like
+`Foo.{hpp,cpp}` cannot be read by `git log -- <path>`, so the row stops being checkable without
+anything saying so. A file merged from several upstream files names its primary one here and the
+rest in notes, as below.
+
 **A `-` in the notes column does not mean "byte-identical to upstream."** Every import applies the
 rewrites this repository's rules require — the namespace, the include paths, the header guard, the
 SPDX line — and a row records what is left over. For the endo `src/tui/*` rows in particular,

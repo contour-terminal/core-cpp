@@ -138,6 +138,49 @@ set_tests_properties(core-cpp.migrate-renames core-cpp.migrate-codemods PROPERTI
     LABELS "core-cpp;hygiene"
     TIMEOUT 300)
 
+# Which provenance rows have an upstream that moved since they were synced (Task B12b), and the
+# proof that the checker tells drift, a deletion, a malformed row and an unreachable upstream apart.
+#
+# The checker runs with --no-fetch here: a test that reaches the network is a test that fails for
+# reasons that have nothing to do with the tree. Answering "has upstream moved" for real means
+# fetching first, which is what a person or a nightly does by running it without that flag; what
+# this registration gates is the part that needs no network -- a row whose SHA, whose upstream path
+# or whose core-cpp path is wrong, which is a defect in the table itself.
+#
+# It SKIPS (77) where the upstream checkouts are absent, which is every CI runner: there it reports
+# which upstream it could not read rather than reporting nothing and reading as a pass.
+#
+# Bounds from measurement, worst of the runs on each platform. The checker: 11.3s on Windows, 58.2s
+# under WSL, where ~1200 git invocations against /mnt/d cost five times what they cost natively --
+# 600 is ten times the slower of the two. The self-test builds fourteen throwaway git repositories:
+# 4.2s on Windows, 1.8s on Linux, so 120 is nearly thirty times the slower.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME core-cpp.upstream-drift
+             COMMAND "${Python3_EXECUTABLE}" "${CORE_CPP_SOURCE_DIR}/scripts/check-upstream-drift.py"
+                     --no-fetch)
+    set_tests_properties(core-cpp.upstream-drift PROPERTIES
+        SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
+        LABELS "core-cpp;hygiene"
+        TIMEOUT 600)
+    add_test(NAME core-cpp.upstream-drift-selftest
+             COMMAND "${Python3_EXECUTABLE}"
+                     "${CORE_CPP_SOURCE_DIR}/scripts/check-upstream-drift-selftest.py")
+    set_tests_properties(core-cpp.upstream-drift-selftest PROPERTIES
+        LABELS "core-cpp;hygiene"
+        TIMEOUT 120)
+else()
+    # Same reasoning as the migrate checks above: say why it did not run rather than registering
+    # nothing (.agent/rules/build-and-toolchain.md).
+    add_test(NAME core-cpp.upstream-drift COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.upstream-drift: SKIPPED -- no Python 3 interpreter was found at configure time")
+    add_test(NAME core-cpp.upstream-drift-selftest COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.upstream-drift-selftest: SKIPPED -- no Python 3 interpreter was found at configure time")
+    set_tests_properties(core-cpp.upstream-drift core-cpp.upstream-drift-selftest PROPERTIES
+        SKIP_REGULAR_EXPRESSION "SKIPPED"
+        LABELS "core-cpp;hygiene"
+        TIMEOUT 60)
+endif()
+
 # A CRT assert, abort(), invalid parameter or crash must end the process instead of opening a dialog
 # that waits for a click. Each run must fail (WILL_FAIL) within the timeout; a run that hangs has hit a
 # dialog. The canary's main() asks for no suppression: linking core::testing_dialogs installs it.
