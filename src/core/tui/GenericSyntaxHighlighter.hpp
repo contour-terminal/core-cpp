@@ -5,8 +5,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <functional>
+#include <ranges>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -33,7 +37,11 @@ enum class HighlightCategory : std::uint8_t
     Preprocessor, ///< Preprocessor directives (#include, #define).
 };
 
-/// @brief Supported languages for syntax highlighting.
+/// @brief The languages core::tui highlights out of the box.
+///
+/// An application's own language is not one of these: it is taught to a
+/// SyntaxHighlighterRegistry, which hands back an id of its own from the range that begins at
+/// FirstRegisteredLanguageId.
 enum class LanguageId : std::uint8_t
 {
     None,       ///< No language — no highlighting applied.
@@ -50,8 +58,24 @@ enum class LanguageId : std::uint8_t
     Cmd,        ///< Windows CMD / batch scripts.
     Xml,        ///< XML and XML-based dialects (.props, .csproj, .xaml, .svg, …).
     Ini,        ///< INI / .editorconfig configuration files.
-    Endo,       ///< Endo shell language (via registered callback).
+    Last,       ///< Not a language: how many built-ins there are, which BuiltinLanguageTable uses.
 };
+
+/// @brief The first id SyntaxHighlighterRegistry::registerLanguage() hands out.
+///
+/// Values below it are the enumerators of LanguageId; values from here up are registered
+/// languages, numbered in registration order. The gap is deliberate: a built-in can be appended
+/// without renumbering anything a registry handed out.
+inline constexpr auto FirstRegisteredLanguageId = std::uint8_t { 128 };
+
+/// @brief Whether @p language was handed out by a SyntaxHighlighterRegistry.
+///
+/// A registered id only means something to the registry that produced it; passing one anywhere
+/// else highlights the line as plain text rather than as some other language.
+[[nodiscard]] constexpr auto isRegisteredLanguage(LanguageId language) noexcept -> bool
+{
+    return std::to_underlying(language) >= FirstRegisteredLanguageId;
+}
 
 /// @brief State carried across lines for multi-line constructs.
 enum class HighlightState : std::uint8_t
@@ -67,20 +91,30 @@ enum class HighlightState : std::uint8_t
 /// @brief Per-character highlight category for a line.
 using HighlightMap = std::vector<HighlightCategory>;
 
+class SyntaxHighlighterRegistry;
+
 /// @brief Detects language from a file extension (e.g. ".cpp", ".py").
 /// @param ext The file extension including the leading dot.
+/// @param registry Languages registered beside the built-in ones, or nullptr for built-ins only.
 /// @return The detected language, or LanguageId::None.
-[[nodiscard]] constexpr auto detectLanguageFromExtension(std::string_view ext) -> LanguageId;
+[[nodiscard]] constexpr auto detectLanguageFromExtension(std::string_view ext,
+                                                         SyntaxHighlighterRegistry const* registry = nullptr)
+    -> LanguageId;
 
 /// @brief Detects language from a markdown fence tag (e.g. "cpp", "python").
 /// @param tag The fence language tag (without the backticks).
+/// @param registry Languages registered beside the built-in ones, or nullptr for built-ins only.
 /// @return The detected language, or LanguageId::None.
-[[nodiscard]] constexpr auto detectLanguageFromFenceTag(std::string_view tag) -> LanguageId;
+[[nodiscard]] constexpr auto detectLanguageFromFenceTag(std::string_view tag,
+                                                        SyntaxHighlighterRegistry const* registry = nullptr)
+    -> LanguageId;
 
 /// @brief Detects language from a full file path by extracting the extension.
 /// @param filePath The file path.
+/// @param registry Languages registered beside the built-in ones, or nullptr for built-ins only.
 /// @return The detected language, or LanguageId::None.
-[[nodiscard]] auto detectLanguageFromPath(std::string_view filePath) -> LanguageId;
+[[nodiscard]] auto detectLanguageFromPath(std::string_view filePath,
+                                          SyntaxHighlighterRegistry const* registry = nullptr) -> LanguageId;
 
 /// @brief Highlights a single line of source code.
 ///
@@ -91,10 +125,12 @@ using HighlightMap = std::vector<HighlightCategory>;
 /// @param line The source line to highlight.
 /// @param language The language to use for highlighting rules.
 /// @param state The current multi-line state (from previous line's output).
+/// @param registry Languages registered beside the built-in ones, or nullptr for built-ins only.
 /// @return A pair of (per-character highlight map, updated state for next line).
 [[nodiscard]] auto highlightLine(std::string_view line,
                                  LanguageId language,
-                                 HighlightState state = HighlightState::Normal)
+                                 HighlightState state = HighlightState::Normal,
+                                 SyntaxHighlighterRegistry const* registry = nullptr)
     -> std::pair<HighlightMap, HighlightState>;
 
 /// @brief Maps a highlight category to its color from the theme's syntax palette.
@@ -136,14 +172,113 @@ void renderHighlightedLine(TerminalOutput& output,
 using HighlightFunction =
     std::function<std::pair<HighlightMap, HighlightState>(std::string_view line, HighlightState state)>;
 
-/// @brief Registers the Endo language highlighter callback.
+/// @brief A language an application teaches a SyntaxHighlighterRegistry.
+struct LanguageDefinition
+{
+    std::string name;                    ///< Identifies the language; non-empty and not already taken.
+    std::vector<std::string> extensions; ///< File extensions, each with its leading dot (".toy").
+    std::vector<std::string> fenceTags;  ///< Markdown fence tags, lowercase, without backticks.
+    HighlightFunction highlight;         ///< Highlights one line of this language; must be callable.
+};
+
+/// @brief What SyntaxHighlighterRegistry::registerLanguage() refused a definition for.
+enum class LanguageRegistrationError : std::uint8_t
+{
+    EmptyName,       ///< The definition carried no name.
+    NoHighlighter,   ///< The definition carried no highlight function.
+    NameInUse,       ///< A built-in or already-registered language answers to that name.
+    TokenInUse,      ///< A built-in or already-registered language claims that extension or tag.
+    CapacityReached, ///< Every id in the registered range has been handed out.
+};
+
+/// @brief Why a registration was refused, and what in the definition caused it.
 ///
-/// Called once at shell startup to wire the Endo tokenizer into the
-/// generic highlighter without creating a build dependency from tui
-/// to endo-language.
+/// The token is carried because the caller has several of them in one definition and cannot tell
+/// from the code alone which extension or fence tag was already claimed.
+struct LanguageRegistrationFailure
+{
+    LanguageRegistrationError error; ///< What was wrong.
+    std::string token;               ///< The name, extension or fence tag at fault; empty if none applies.
+};
+
+/// @brief The languages an application registers, beside the built-in ones.
 ///
-/// @param fn The highlighting function to call for LanguageId::Endo.
-void registerEndoHighlighter(HighlightFunction fn);
+/// core::tui ships the languages of LanguageId and no others. An application that has its own
+/// teaches it here — a name, the extensions and Markdown fence tags that select it, and the
+/// function that highlights a line of it — and passes the registry to whatever renders it
+/// (MarkdownRenderer, StyledText::fromMarkdown, the free detection and highlighting functions).
+/// There is no process-wide registry: a registry is constructed, filled and injected, so two
+/// parts of one program can hold different ones and a test never has to undo a registration.
+///
+/// A registry answers for the built-in languages too, so registering one does not cost an
+/// application the ones core::tui ships.
+///
+/// @note Copyable and movable. Ids are per registry: one handed out here means nothing to
+///       another registry, where it highlights as plain text.
+class SyntaxHighlighterRegistry
+{
+  public:
+    /// @brief Teaches this registry one language.
+    ///
+    /// Refuses a definition whose name, extension or fence tag is already claimed, by a built-in
+    /// language or by one registered earlier, rather than shadowing what is there: replacing
+    /// would repoint an id already handed out, and the holder of that id would then get a wrong
+    /// answer that looks right. A refused definition changes nothing — the registry is left
+    /// exactly as it was.
+    ///
+    /// @param definition The language to register.
+    /// @return Its id, or why it was refused.
+    [[nodiscard]] auto registerLanguage(LanguageDefinition definition)
+        -> std::expected<LanguageId, LanguageRegistrationFailure>;
+
+    /// @brief Returns the language registered or built in under @p name, or LanguageId::None.
+    [[nodiscard]] auto find(std::string_view name) const noexcept -> LanguageId;
+
+    /// @brief Returns the name of @p language, or an empty view if this registry does not know it.
+    [[nodiscard]] auto name(LanguageId language) const noexcept -> std::string_view;
+
+    /// @brief Returns how many languages were registered here (built-ins are not counted).
+    [[nodiscard]] auto registeredCount() const noexcept -> std::size_t;
+
+    /// @brief Detects a language from a file extension, built-in rows first.
+    /// @param ext The file extension including the leading dot.
+    [[nodiscard]] auto detectFromExtension(std::string_view ext) const noexcept -> LanguageId;
+
+    /// @brief Detects a language from a Markdown fence tag, built-in rows first.
+    /// @param tag The fence language tag, without the backticks.
+    [[nodiscard]] auto detectFromFenceTag(std::string_view tag) const noexcept -> LanguageId;
+
+    /// @brief Detects a language from a file path, by well-known name and then by extension.
+    ///
+    /// @note Only the built-in languages are selected by a well-known file name: an application
+    ///       knows what its own configuration file is called and names the language itself.
+    [[nodiscard]] auto detectFromPath(std::string_view filePath) const -> LanguageId;
+
+    /// @brief Highlights one line, through a registered highlighter or a built-in one.
+    ///
+    /// An id this registry did not hand out and does not recognise yields plain text.
+    ///
+    /// @param line The source line to highlight.
+    /// @param language The language to use for highlighting rules.
+    /// @param state The current multi-line state (from the previous line's output).
+    /// @return A pair of (per-character highlight map, updated state for the next line).
+    [[nodiscard]] auto highlightLine(std::string_view line,
+                                     LanguageId language,
+                                     HighlightState state = HighlightState::Normal) const
+        -> std::pair<HighlightMap, HighlightState>;
+
+  private:
+    /// @brief Finds the registered language whose @p tokens list holds @p token.
+    ///
+    /// The extension list and the fence-tag list are searched the same way, so the member to
+    /// search is a parameter rather than the difference between two copies of this loop.
+    [[nodiscard]] auto findByToken(std::string_view token,
+                                   std::vector<std::string> LanguageDefinition::* tokens) const noexcept
+        -> LanguageId;
+
+    /// @brief Registered languages, in registration order; index i holds id FirstRegisteredLanguageId + i.
+    std::vector<LanguageDefinition> _languages;
+};
 
 // --- Data-driven language detection tables ---
 
@@ -153,6 +288,53 @@ struct LanguageToken
     std::string_view token; ///< The extension (with leading dot) or fence tag to match.
     LanguageId language;    ///< The language this token maps to.
 };
+
+/// @brief Associates a built-in language with the name it answers to.
+struct LanguageName
+{
+    LanguageId language;   ///< The built-in language.
+    std::string_view name; ///< Its canonical name, lowercase.
+};
+
+/// @brief Every built-in language, indexed by its enumerator.
+///
+/// This is the list of languages core::tui ships. It gives each one a name, so a registration
+/// that would shadow one is refused by name as well as by token, and so a diagnostic can say
+/// which language a line was highlighted as.
+inline constexpr auto BuiltinLanguageTable = std::to_array<LanguageName>({
+    { .language = LanguageId::None, .name = "none" },
+    { .language = LanguageId::Cpp, .name = "cpp" },
+    { .language = LanguageId::CMake, .name = "cmake" },
+    { .language = LanguageId::Python, .name = "python" },
+    { .language = LanguageId::Bash, .name = "bash" },
+    { .language = LanguageId::Markdown, .name = "markdown" },
+    { .language = LanguageId::Json, .name = "json" },
+    { .language = LanguageId::Yaml, .name = "yaml" },
+    { .language = LanguageId::GitDiff, .name = "gitdiff" },
+    { .language = LanguageId::Assembly, .name = "assembly" },
+    { .language = LanguageId::PowerShell, .name = "powershell" },
+    { .language = LanguageId::Cmd, .name = "cmd" },
+    { .language = LanguageId::Xml, .name = "xml" },
+    { .language = LanguageId::Ini, .name = "ini" },
+});
+
+/// @brief Checks that every row of BuiltinLanguageTable sits at its own enumerator's index.
+///
+/// Anchoring the table's extent on LanguageId::Last rather than on the last language by name is
+/// what makes appending an enumerator and forgetting its row a compile error instead of a
+/// silent read past the end.
+[[nodiscard]] consteval auto builtinLanguageTableIsIndexedByLanguageId() -> bool
+{
+    if (BuiltinLanguageTable.size() != static_cast<std::size_t>(LanguageId::Last))
+        return false;
+    for (auto const i: std::views::iota(std::size_t { 0 }, BuiltinLanguageTable.size()))
+        if (static_cast<std::size_t>(std::to_underlying(BuiltinLanguageTable[i].language)) != i)
+            return false;
+    return true;
+}
+
+static_assert(builtinLanguageTableIsIndexedByLanguageId(),
+              "BuiltinLanguageTable must hold one row per LanguageId, in enumerator order.");
 
 /// @brief File extension → language table (extensions include the leading dot).
 ///
@@ -227,8 +409,6 @@ inline constexpr auto ExtensionLanguageTable = std::to_array<LanguageToken>({
     { .token = ".plist", .language = LanguageId::Xml },
     { .token = ".xsd", .language = LanguageId::Xml },
     { .token = ".wxs", .language = LanguageId::Xml },
-    // Endo.
-    { .token = ".endo", .language = LanguageId::Endo },
 });
 
 /// @brief Markdown fence tag → language table (lowercase tags, without backticks).
@@ -302,7 +482,6 @@ inline constexpr auto FenceTagLanguageTable = std::to_array<LanguageToken>({
     { .token = "ini", .language = LanguageId::Ini },
     { .token = "editorconfig", .language = LanguageId::Ini },
     { .token = "dosini", .language = LanguageId::Ini },
-    { .token = "endo", .language = LanguageId::Endo },
 });
 
 /// @brief Looks up a token in a language table, returning the mapped language or None.
@@ -319,13 +498,19 @@ template <std::size_t N>
 
 // --- Inline constexpr implementations ---
 
-constexpr auto detectLanguageFromExtension(std::string_view ext) -> LanguageId
+constexpr auto detectLanguageFromExtension(std::string_view ext, SyntaxHighlighterRegistry const* registry)
+    -> LanguageId
 {
+    if (registry != nullptr)
+        return registry->detectFromExtension(ext);
     return lookupLanguage(ExtensionLanguageTable, ext);
 }
 
-constexpr auto detectLanguageFromFenceTag(std::string_view tag) -> LanguageId
+constexpr auto detectLanguageFromFenceTag(std::string_view tag, SyntaxHighlighterRegistry const* registry)
+    -> LanguageId
 {
+    if (registry != nullptr)
+        return registry->detectFromFenceTag(tag);
     return lookupLanguage(FenceTagLanguageTable, tag);
 }
 

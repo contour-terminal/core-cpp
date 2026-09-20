@@ -4,9 +4,13 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <ranges>
+#include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 
 using namespace core::tui;
 using Cat = HighlightCategory;
@@ -153,14 +157,15 @@ TEST_CASE("GenericSyntaxHighlighter.detectLanguageFromPath", "[tui][highlight]")
     CHECK(detectLanguageFromPath(".clang-format") == LanguageId::Yaml);
     CHECK(detectLanguageFromPath(".clang-tidy") == LanguageId::Yaml);
     CHECK(detectLanguageFromPath(".editorconfig") == LanguageId::Ini);
-    // A consumer's own dotfile is not in the table: `.endo-format` was, and a consumer that
-    // wants its configuration file highlighted names the language itself.
-    CHECK(detectLanguageFromPath(".endo-format") == LanguageId::None);
+    // A consumer's own dotfile is not in the table: one was, and a consumer that wants its
+    // configuration file highlighted names the language itself.
+    CHECK(detectLanguageFromPath(".acme-format") == LanguageId::None);
     // Filename detection works with leading directories too.
     CHECK(detectLanguageFromPath("/home/user/project/.clang-format") == LanguageId::Yaml);
     CHECK(detectLanguageFromPath(R"(C:\proj\.editorconfig)") == LanguageId::Ini);
-    // A dotted name is matched whole, not read as the extension that follows its first dot.
-    CHECK(detectLanguageFromPath("main.endo") == LanguageId::Endo);
+    // An extension core::tui does not ship falls through to None; a consumer teaches it one
+    // through a SyntaxHighlighterRegistry rather than by adding a row here.
+    CHECK(detectLanguageFromPath("main.acme") == LanguageId::None);
     // New extensions resolve through the path entry point as well.
     CHECK(detectLanguageFromPath("Build.props") == LanguageId::Xml);
     CHECK(detectLanguageFromPath("deploy.ps1") == LanguageId::PowerShell);
@@ -455,20 +460,6 @@ TEST_CASE("GenericSyntaxHighlighter.markdown_code_span", "[tui][highlight]")
 {
     auto const [map, state] = highlightLine("use `code` here", LanguageId::Markdown);
     CHECK(hasCategory(map, 4, 6, Cat::String)); // `code`
-}
-
-// =============================================================================
-// Endo detection
-// =============================================================================
-
-TEST_CASE("GenericSyntaxHighlighter.endo_detection_extension", "[tui][highlight]")
-{
-    CHECK(detectLanguageFromExtension(".endo") == LanguageId::Endo);
-}
-
-TEST_CASE("GenericSyntaxHighlighter.endo_detection_fence", "[tui][highlight]")
-{
-    CHECK(detectLanguageFromFenceTag("endo") == LanguageId::Endo);
 }
 
 // =============================================================================
@@ -802,4 +793,481 @@ TEST_CASE("GenericSyntaxHighlighter.none_language", "[tui][highlight]")
 {
     auto const [map, state] = highlightLine("some code here", LanguageId::None);
     CHECK(map.empty());
+}
+
+// =============================================================================
+// The built-in language set is fixed
+// =============================================================================
+
+namespace
+{
+/// @brief What ExtensionLanguageTable ships, row for row.
+///
+/// A golden copy. The built-in languages are the ones core::tui offers every consumer; an
+/// application's own language is registered with a SyntaxHighlighterRegistry instead of being
+/// added here. Editing the shipped table without editing this copy fails, so a new row is a
+/// decision taken on purpose rather than one a code review has to catch.
+constexpr auto ExpectedExtensionTable = std::to_array<LanguageToken>({
+    // C / C++ and C-family languages sharing the C++ highlighter.
+    { .token = ".cpp", .language = LanguageId::Cpp },
+    { .token = ".cxx", .language = LanguageId::Cpp },
+    { .token = ".cc", .language = LanguageId::Cpp },
+    { .token = ".c", .language = LanguageId::Cpp },
+    { .token = ".hpp", .language = LanguageId::Cpp },
+    { .token = ".hxx", .language = LanguageId::Cpp },
+    { .token = ".hh", .language = LanguageId::Cpp },
+    { .token = ".h", .language = LanguageId::Cpp },
+    { .token = ".ipp", .language = LanguageId::Cpp },
+    { .token = ".js", .language = LanguageId::Cpp },
+    { .token = ".jsx", .language = LanguageId::Cpp },
+    { .token = ".ts", .language = LanguageId::Cpp },
+    { .token = ".tsx", .language = LanguageId::Cpp },
+    { .token = ".rs", .language = LanguageId::Cpp },
+    { .token = ".go", .language = LanguageId::Cpp },
+    { .token = ".java", .language = LanguageId::Cpp },
+    { .token = ".kt", .language = LanguageId::Cpp },
+    { .token = ".cs", .language = LanguageId::Cpp },
+    // Python and Python-like languages.
+    { .token = ".py", .language = LanguageId::Python },
+    { .token = ".pyw", .language = LanguageId::Python },
+    { .token = ".pyi", .language = LanguageId::Python },
+    { .token = ".rb", .language = LanguageId::Python },
+    { .token = ".lua", .language = LanguageId::Python },
+    // Shell.
+    { .token = ".sh", .language = LanguageId::Bash },
+    { .token = ".bash", .language = LanguageId::Bash },
+    { .token = ".zsh", .language = LanguageId::Bash },
+    // Data / config.
+    { .token = ".json", .language = LanguageId::Json },
+    { .token = ".jsonl", .language = LanguageId::Json },
+    { .token = ".yml", .language = LanguageId::Yaml },
+    { .token = ".yaml", .language = LanguageId::Yaml },
+    { .token = ".toml", .language = LanguageId::Yaml },
+    { .token = ".ini", .language = LanguageId::Ini },
+    // Markup / build / diff.
+    { .token = ".md", .language = LanguageId::Markdown },
+    { .token = ".markdown", .language = LanguageId::Markdown },
+    { .token = ".cmake", .language = LanguageId::CMake },
+    { .token = ".diff", .language = LanguageId::GitDiff },
+    { .token = ".patch", .language = LanguageId::GitDiff },
+    { .token = ".asm", .language = LanguageId::Assembly },
+    { .token = ".s", .language = LanguageId::Assembly },
+    { .token = ".S", .language = LanguageId::Assembly },
+    { .token = ".nasm", .language = LanguageId::Assembly },
+    // PowerShell.
+    { .token = ".ps1", .language = LanguageId::PowerShell },
+    { .token = ".psm1", .language = LanguageId::PowerShell },
+    { .token = ".psd1", .language = LanguageId::PowerShell },
+    { .token = ".ps1xml", .language = LanguageId::PowerShell },
+    // Windows CMD / batch.
+    { .token = ".cmd", .language = LanguageId::Cmd },
+    { .token = ".bat", .language = LanguageId::Cmd },
+    // XML and XML-based dialects.
+    { .token = ".xml", .language = LanguageId::Xml },
+    { .token = ".props", .language = LanguageId::Xml },
+    { .token = ".csproj", .language = LanguageId::Xml },
+    { .token = ".targets", .language = LanguageId::Xml },
+    { .token = ".vcxproj", .language = LanguageId::Xml },
+    { .token = ".nuspec", .language = LanguageId::Xml },
+    { .token = ".resx", .language = LanguageId::Xml },
+    { .token = ".xaml", .language = LanguageId::Xml },
+    { .token = ".svg", .language = LanguageId::Xml },
+    { .token = ".plist", .language = LanguageId::Xml },
+    { .token = ".xsd", .language = LanguageId::Xml },
+    { .token = ".wxs", .language = LanguageId::Xml },
+});
+
+/// @brief What FenceTagLanguageTable ships, row for row. Same contract as the table above.
+constexpr auto ExpectedFenceTagTable = std::to_array<LanguageToken>({
+    { .token = "cpp", .language = LanguageId::Cpp },
+    { .token = "c++", .language = LanguageId::Cpp },
+    { .token = "cxx", .language = LanguageId::Cpp },
+    { .token = "c", .language = LanguageId::Cpp },
+    { .token = "h", .language = LanguageId::Cpp },
+    { .token = "hpp", .language = LanguageId::Cpp },
+    { .token = "javascript", .language = LanguageId::Cpp },
+    { .token = "js", .language = LanguageId::Cpp },
+    { .token = "jsx", .language = LanguageId::Cpp },
+    { .token = "typescript", .language = LanguageId::Cpp },
+    { .token = "ts", .language = LanguageId::Cpp },
+    { .token = "tsx", .language = LanguageId::Cpp },
+    { .token = "rust", .language = LanguageId::Cpp },
+    { .token = "rs", .language = LanguageId::Cpp },
+    { .token = "go", .language = LanguageId::Cpp },
+    { .token = "golang", .language = LanguageId::Cpp },
+    { .token = "java", .language = LanguageId::Cpp },
+    { .token = "kotlin", .language = LanguageId::Cpp },
+    { .token = "kt", .language = LanguageId::Cpp },
+    { .token = "csharp", .language = LanguageId::Cpp },
+    { .token = "cs", .language = LanguageId::Cpp },
+    { .token = "c#", .language = LanguageId::Cpp },
+    { .token = "python", .language = LanguageId::Python },
+    { .token = "py", .language = LanguageId::Python },
+    { .token = "ruby", .language = LanguageId::Python },
+    { .token = "rb", .language = LanguageId::Python },
+    { .token = "lua", .language = LanguageId::Python },
+    { .token = "bash", .language = LanguageId::Bash },
+    { .token = "sh", .language = LanguageId::Bash },
+    { .token = "shell", .language = LanguageId::Bash },
+    { .token = "zsh", .language = LanguageId::Bash },
+    { .token = "dockerfile", .language = LanguageId::Bash },
+    { .token = "docker", .language = LanguageId::Bash },
+    { .token = "json", .language = LanguageId::Json },
+    { .token = "jsonl", .language = LanguageId::Json },
+    { .token = "yaml", .language = LanguageId::Yaml },
+    { .token = "yml", .language = LanguageId::Yaml },
+    { .token = "toml", .language = LanguageId::Yaml },
+    { .token = "markdown", .language = LanguageId::Markdown },
+    { .token = "md", .language = LanguageId::Markdown },
+    { .token = "cmake", .language = LanguageId::CMake },
+    { .token = "diff", .language = LanguageId::GitDiff },
+    { .token = "patch", .language = LanguageId::GitDiff },
+    { .token = "asm", .language = LanguageId::Assembly },
+    { .token = "assembly", .language = LanguageId::Assembly },
+    { .token = "nasm", .language = LanguageId::Assembly },
+    { .token = "x86", .language = LanguageId::Assembly },
+    { .token = "x86asm", .language = LanguageId::Assembly },
+    { .token = "intel", .language = LanguageId::Assembly },
+    { .token = "att", .language = LanguageId::Assembly },
+    { .token = "gas", .language = LanguageId::Assembly },
+    { .token = "powershell", .language = LanguageId::PowerShell },
+    { .token = "pwsh", .language = LanguageId::PowerShell },
+    { .token = "ps", .language = LanguageId::PowerShell },
+    { .token = "ps1", .language = LanguageId::PowerShell },
+    { .token = "posh", .language = LanguageId::PowerShell },
+    { .token = "bat", .language = LanguageId::Cmd },
+    { .token = "batch", .language = LanguageId::Cmd },
+    { .token = "cmd", .language = LanguageId::Cmd },
+    { .token = "dosbatch", .language = LanguageId::Cmd },
+    { .token = "dos", .language = LanguageId::Cmd },
+    { .token = "xml", .language = LanguageId::Xml },
+    { .token = "xaml", .language = LanguageId::Xml },
+    { .token = "svg", .language = LanguageId::Xml },
+    { .token = "html", .language = LanguageId::Xml },
+    { .token = "xhtml", .language = LanguageId::Xml },
+    { .token = "ini", .language = LanguageId::Ini },
+    { .token = "editorconfig", .language = LanguageId::Ini },
+    { .token = "dosini", .language = LanguageId::Ini },
+});
+
+/// @brief Compares a shipped language table against its golden copy, row for row.
+void checkTableMatchesGolden(std::span<LanguageToken const> shipped, std::span<LanguageToken const> golden)
+{
+    REQUIRE(shipped.size() == golden.size());
+    for (auto const i: std::views::iota(std::size_t { 0 }, golden.size()))
+    {
+        INFO("row " << i << ", expected token \"" << golden[i].token << '"');
+        CHECK(shipped[i].token == golden[i].token);
+        CHECK(shipped[i].language == golden[i].language);
+    }
+}
+} // namespace
+
+TEST_CASE("GenericSyntaxHighlighter.extension_table_is_the_shipped_set", "[tui][highlight]")
+{
+    checkTableMatchesGolden(ExtensionLanguageTable, ExpectedExtensionTable);
+}
+
+TEST_CASE("GenericSyntaxHighlighter.fence_tag_table_is_the_shipped_set", "[tui][highlight]")
+{
+    checkTableMatchesGolden(FenceTagLanguageTable, ExpectedFenceTagTable);
+}
+
+// =============================================================================
+// Registered languages
+// =============================================================================
+
+namespace
+{
+/// @brief One built-in language, with an extension and a fence tag that must select it.
+struct BuiltinProbe
+{
+    LanguageId language;        ///< The language the two tokens must resolve to.
+    std::string_view extension; ///< An extension from ExtensionLanguageTable.
+    std::string_view fenceTag;  ///< A tag from FenceTagLanguageTable.
+};
+
+/// @brief A probe per built-in language, None excepted.
+///
+/// The static_assert below ties this table's length to the built-in list, so a new built-in
+/// language does not compile until somebody says which extension and which fence tag select it.
+constexpr auto BuiltinProbes = std::to_array<BuiltinProbe>({
+    { .language = LanguageId::Cpp, .extension = ".cpp", .fenceTag = "cpp" },
+    { .language = LanguageId::CMake, .extension = ".cmake", .fenceTag = "cmake" },
+    { .language = LanguageId::Python, .extension = ".py", .fenceTag = "python" },
+    { .language = LanguageId::Bash, .extension = ".sh", .fenceTag = "bash" },
+    { .language = LanguageId::Markdown, .extension = ".md", .fenceTag = "markdown" },
+    { .language = LanguageId::Json, .extension = ".json", .fenceTag = "json" },
+    { .language = LanguageId::Yaml, .extension = ".yml", .fenceTag = "yaml" },
+    { .language = LanguageId::GitDiff, .extension = ".diff", .fenceTag = "diff" },
+    { .language = LanguageId::Assembly, .extension = ".asm", .fenceTag = "asm" },
+    { .language = LanguageId::PowerShell, .extension = ".ps1", .fenceTag = "powershell" },
+    { .language = LanguageId::Cmd, .extension = ".bat", .fenceTag = "bat" },
+    { .language = LanguageId::Xml, .extension = ".xml", .fenceTag = "xml" },
+    { .language = LanguageId::Ini, .extension = ".ini", .fenceTag = "ini" },
+});
+
+static_assert(BuiltinProbes.size() + 1 == BuiltinLanguageTable.size(),
+              "Every built-in language except None needs a row in BuiltinProbes.");
+
+/// @brief A highlighter that paints every character of a line with one category.
+auto uniformHighlighter(Cat category) -> HighlightFunction
+{
+    return [category](std::string_view line, HighlightState state) {
+        return std::pair { HighlightMap(line.size(), category), state };
+    };
+}
+} // namespace
+
+TEST_CASE("GenericSyntaxHighlighter.builtin_language_list_is_the_shipped_set", "[tui][highlight]")
+{
+    // The names core::tui answers to. A consumer's language is not among them: it is registered.
+    constexpr auto ExpectedNames = std::to_array<std::string_view>({
+        "none",
+        "cpp",
+        "cmake",
+        "python",
+        "bash",
+        "markdown",
+        "json",
+        "yaml",
+        "gitdiff",
+        "assembly",
+        "powershell",
+        "cmd",
+        "xml",
+        "ini",
+    });
+
+    REQUIRE(BuiltinLanguageTable.size() == ExpectedNames.size());
+    for (auto const i: std::views::iota(std::size_t { 0 }, ExpectedNames.size()))
+    {
+        INFO("built-in " << i << ", expected name " << ExpectedNames[i]);
+        CHECK(BuiltinLanguageTable[i].name == ExpectedNames[i]);
+        CHECK(static_cast<std::size_t>(std::to_underlying(BuiltinLanguageTable[i].language)) == i);
+    }
+}
+
+TEST_CASE("GenericSyntaxHighlighter.every_builtin_detects_from_extension_and_fence_tag", "[tui][highlight]")
+{
+    auto registry = SyntaxHighlighterRegistry {};
+    REQUIRE(registry
+                .registerLanguage({ .name = "toy",
+                                    .extensions = { ".toy" },
+                                    .fenceTags = { "toy" },
+                                    .highlight = uniformHighlighter(Cat::Keyword) })
+                .has_value());
+
+    for (auto const& probe: BuiltinProbes)
+    {
+        INFO("built-in " << probe.extension << " / " << probe.fenceTag);
+        CHECK(detectLanguageFromExtension(probe.extension) == probe.language);
+        CHECK(detectLanguageFromFenceTag(probe.fenceTag) == probe.language);
+        // A registry answers for the built-ins too, so registering a language does not cost a
+        // consumer the ones core::tui ships.
+        CHECK(registry.detectFromExtension(probe.extension) == probe.language);
+        CHECK(registry.detectFromFenceTag(probe.fenceTag) == probe.language);
+    }
+}
+
+TEST_CASE("SyntaxHighlighterRegistry.a_registered_language_is_selected_and_highlights", "[tui][highlight]")
+{
+    auto registry = SyntaxHighlighterRegistry {};
+    auto const toy = registry.registerLanguage({ .name = "toy",
+                                                 .extensions = { ".toy" },
+                                                 .fenceTags = { "toy" },
+                                                 .highlight = uniformHighlighter(Cat::Keyword) });
+    REQUIRE(toy.has_value());
+    CHECK(isRegisteredLanguage(*toy));
+    CHECK(registry.find("toy") == *toy);
+    CHECK(registry.name(*toy) == "toy");
+
+    // The extension path.
+    CHECK(registry.detectFromExtension(".toy") == *toy);
+    CHECK(detectLanguageFromExtension(".toy", &registry) == *toy);
+    CHECK(detectLanguageFromPath("/src/main.toy", &registry) == *toy);
+
+    // The Markdown fence path.
+    CHECK(registry.detectFromFenceTag("toy") == *toy);
+    CHECK(detectLanguageFromFenceTag("toy", &registry) == *toy);
+
+    // The highlight path: the registered function is what runs.
+    auto const [map, state] = highlightLine("let x", *toy, HighlightState::Normal, &registry);
+    CHECK(map == HighlightMap(5, Cat::Keyword));
+    CHECK(state == HighlightState::Normal);
+}
+
+TEST_CASE("SyntaxHighlighterRegistry.a_second_registration_does_not_clobber_the_first", "[tui][highlight]")
+{
+    auto registry = SyntaxHighlighterRegistry {};
+    auto const toy = registry.registerLanguage({ .name = "toy",
+                                                 .extensions = { ".toy" },
+                                                 .fenceTags = { "toy" },
+                                                 .highlight = uniformHighlighter(Cat::Keyword) });
+    auto const doll = registry.registerLanguage({ .name = "doll",
+                                                  .extensions = { ".doll" },
+                                                  .fenceTags = { "doll" },
+                                                  .highlight = uniformHighlighter(Cat::String) });
+    REQUIRE(toy.has_value());
+    REQUIRE(doll.has_value());
+    CHECK(*toy != *doll);
+    CHECK(registry.registeredCount() == 2);
+
+    CHECK(registry.detectFromExtension(".toy") == *toy);
+    CHECK(registry.detectFromExtension(".doll") == *doll);
+    CHECK(registry.detectFromFenceTag("toy") == *toy);
+    CHECK(registry.detectFromFenceTag("doll") == *doll);
+
+    CHECK(highlightLine("ab", *toy, HighlightState::Normal, &registry).first
+          == HighlightMap(2, Cat::Keyword));
+    CHECK(highlightLine("ab", *doll, HighlightState::Normal, &registry).first
+          == HighlightMap(2, Cat::String));
+}
+
+TEST_CASE("SyntaxHighlighterRegistry.re_registering_a_name_is_refused", "[tui][highlight]")
+{
+    auto registry = SyntaxHighlighterRegistry {};
+    auto const toy = registry.registerLanguage({ .name = "toy",
+                                                 .extensions = { ".toy" },
+                                                 .fenceTags = { "toy" },
+                                                 .highlight = uniformHighlighter(Cat::Keyword) });
+    REQUIRE(toy.has_value());
+
+    // Refused, not replaced: replacing would repoint an id already handed out, which turns every
+    // holder of it into a wrong answer that looks right.
+    auto const again = registry.registerLanguage({ .name = "toy",
+                                                   .extensions = { ".toy2" },
+                                                   .fenceTags = { "toy2" },
+                                                   .highlight = uniformHighlighter(Cat::Number) });
+    REQUIRE_FALSE(again.has_value());
+    CHECK(again.error().error == LanguageRegistrationError::NameInUse);
+    CHECK(again.error().token == "toy");
+
+    // And nothing of the refused definition took effect.
+    CHECK(registry.registeredCount() == 1);
+    CHECK(registry.detectFromExtension(".toy2") == LanguageId::None);
+    CHECK(registry.detectFromFenceTag("toy2") == LanguageId::None);
+    CHECK(highlightLine("ab", *toy, HighlightState::Normal, &registry).first
+          == HighlightMap(2, Cat::Keyword));
+}
+
+TEST_CASE("SyntaxHighlighterRegistry.a_claimed_token_is_refused", "[tui][highlight]")
+{
+    auto registry = SyntaxHighlighterRegistry {};
+    REQUIRE(registry
+                .registerLanguage({ .name = "toy",
+                                    .extensions = { ".toy" },
+                                    .fenceTags = { "toy" },
+                                    .highlight = uniformHighlighter(Cat::Keyword) })
+                .has_value());
+
+    SECTION("an extension another registered language claimed")
+    {
+        auto const clash = registry.registerLanguage({ .name = "doll",
+                                                       .extensions = { ".toy" },
+                                                       .fenceTags = { "doll" },
+                                                       .highlight = uniformHighlighter(Cat::String) });
+        REQUIRE_FALSE(clash.has_value());
+        CHECK(clash.error().error == LanguageRegistrationError::TokenInUse);
+        CHECK(clash.error().token == ".toy");
+    }
+
+    SECTION("an extension a built-in language claims")
+    {
+        auto const clash = registry.registerLanguage({ .name = "doll",
+                                                       .extensions = { ".cpp" },
+                                                       .fenceTags = { "doll" },
+                                                       .highlight = uniformHighlighter(Cat::String) });
+        REQUIRE_FALSE(clash.has_value());
+        CHECK(clash.error().error == LanguageRegistrationError::TokenInUse);
+        CHECK(clash.error().token == ".cpp");
+    }
+
+    SECTION("a fence tag a built-in language claims")
+    {
+        auto const clash = registry.registerLanguage({ .name = "doll",
+                                                       .extensions = { ".doll" },
+                                                       .fenceTags = { "python" },
+                                                       .highlight = uniformHighlighter(Cat::String) });
+        REQUIRE_FALSE(clash.has_value());
+        CHECK(clash.error().error == LanguageRegistrationError::TokenInUse);
+        CHECK(clash.error().token == "python");
+    }
+
+    SECTION("a name a built-in language answers to")
+    {
+        auto const clash = registry.registerLanguage({ .name = "cpp",
+                                                       .extensions = { ".doll" },
+                                                       .fenceTags = { "doll" },
+                                                       .highlight = uniformHighlighter(Cat::String) });
+        REQUIRE_FALSE(clash.has_value());
+        CHECK(clash.error().error == LanguageRegistrationError::NameInUse);
+        CHECK(clash.error().token == "cpp");
+    }
+
+    // Whatever was refused, the registry is as it was.
+    CHECK(registry.registeredCount() == 1);
+    CHECK(registry.detectFromExtension(".doll") == LanguageId::None);
+    CHECK(registry.detectFromFenceTag("doll") == LanguageId::None);
+    CHECK(registry.detectFromExtension(".cpp") == LanguageId::Cpp);
+    CHECK(registry.detectFromFenceTag("python") == LanguageId::Python);
+}
+
+TEST_CASE("SyntaxHighlighterRegistry.a_nameless_or_mute_definition_is_refused", "[tui][highlight]")
+{
+    auto registry = SyntaxHighlighterRegistry {};
+
+    auto const unnamed = registry.registerLanguage({ .name = "",
+                                                     .extensions = { ".toy" },
+                                                     .fenceTags = {},
+                                                     .highlight = uniformHighlighter(Cat::Keyword) });
+    REQUIRE_FALSE(unnamed.has_value());
+    CHECK(unnamed.error().error == LanguageRegistrationError::EmptyName);
+
+    auto const mute = registry.registerLanguage(
+        { .name = "toy", .extensions = { ".toy" }, .fenceTags = {}, .highlight = {} });
+    REQUIRE_FALSE(mute.has_value());
+    CHECK(mute.error().error == LanguageRegistrationError::NoHighlighter);
+
+    CHECK(registry.registeredCount() == 0);
+}
+
+TEST_CASE("SyntaxHighlighterRegistry.an_unregistered_token_falls_through_to_none", "[tui][highlight]")
+{
+    auto registry = SyntaxHighlighterRegistry {};
+    REQUIRE(registry
+                .registerLanguage({ .name = "toy",
+                                    .extensions = { ".toy" },
+                                    .fenceTags = { "toy" },
+                                    .highlight = uniformHighlighter(Cat::Keyword) })
+                .has_value());
+
+    // Exactly as without a registry: an unknown extension or fence tag is None, not the last
+    // language registered and not the first row of a table.
+    CHECK(registry.detectFromExtension(".nope") == LanguageId::None);
+    CHECK(registry.detectFromFenceTag("nope") == LanguageId::None);
+    CHECK(registry.detectFromPath("/src/main.nope") == LanguageId::None);
+    CHECK(detectLanguageFromExtension(".nope", &registry) == LanguageId::None);
+    CHECK(detectLanguageFromFenceTag("nope", &registry) == LanguageId::None);
+    CHECK(detectLanguageFromPath("/src/main.nope", &registry) == LanguageId::None);
+    CHECK(detectLanguageFromExtension(".nope") == LanguageId::None);
+    CHECK(detectLanguageFromFenceTag("nope") == LanguageId::None);
+    CHECK(detectLanguageFromPath("/src/main.nope") == LanguageId::None);
+}
+
+TEST_CASE("SyntaxHighlighterRegistry.a_registered_id_without_its_registry_is_plain_text", "[tui][highlight]")
+{
+    auto registry = SyntaxHighlighterRegistry {};
+    auto const toy = registry.registerLanguage({ .name = "toy",
+                                                 .extensions = { ".toy" },
+                                                 .fenceTags = { "toy" },
+                                                 .highlight = uniformHighlighter(Cat::Keyword) });
+    REQUIRE(toy.has_value());
+
+    // An id means something only to the registry that handed it out. Anywhere else it highlights
+    // as plain text rather than as some other language.
+    CHECK(highlightLine("let x", *toy).first == HighlightMap(5, Cat::Default));
+    auto const other = SyntaxHighlighterRegistry {};
+    CHECK(highlightLine("let x", *toy, HighlightState::Normal, &other).first
+          == HighlightMap(5, Cat::Default));
 }

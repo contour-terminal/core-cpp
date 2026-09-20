@@ -63,7 +63,8 @@ and on stb when `CORE_CPP_WITH_IMAGES` is on. Native only: there is no terminal 
   `runtime/` is `core::tui::runtime`; endo's TUI is one flat `namespace tui`, and the import kept
   that until [core-cpp#30](https://github.com/contour-terminal/core-cpp/issues/30).
 - **Markdown and syntax.** `MarkdownRenderer` with `MarkdownTable`, `MarkdownHtml` and the inline
-  grammar, and `GenericSyntaxHighlighter`, a lexer per language.
+  grammar, and `GenericSyntaxHighlighter`, a lexer per language, with
+  `SyntaxHighlighterRegistry` for the languages core::tui does not ship (below).
 - **Images.** With `CORE_CPP_WITH_IMAGES`: `loadImage()`, `resizeImage()` and `readClipboardImage()`
   over stb, `encodeSixel()`, and `FilesystemImageProvider`, which implements the always-present
   `ImageProvider` interface `MarkdownRenderer` takes.
@@ -74,6 +75,56 @@ and on stb when `CORE_CPP_WITH_IMAGES` is on. Native only: there is no terminal 
 - **Test doubles.** `MockTerminalOutput` records what a renderer did semantically instead of
   emitting VT, `runtime::testing::MockEventSource` scripts a wait, and `TestHelpers.hpp` reads a
   rendered `Buffer` back as text.
+
+## Registering a language
+
+`GenericSyntaxHighlighter` ships a lexer for the languages of `LanguageId` — C and C++, CMake,
+Python, Bash, Markdown, JSON, YAML, git diffs, assembly, PowerShell, CMD, XML and INI — and for no
+others. An application that has its own language teaches it to core::tui rather than core::tui
+shipping it, which is what keeps one application's vocabulary out of a library four of them link
+([core-cpp#24](https://github.com/contour-terminal/core-cpp/issues/24)).
+
+A `SyntaxHighlighterRegistry` is that seam. It is an ordinary object: construct one, fill it, and
+pass it to whatever renders the text. There is no process-wide registry, so two parts of one
+program can hold different ones and a test never has to undo a registration.
+
+```cpp
+auto highlighters = core::tui::SyntaxHighlighterRegistry {};
+
+auto const wobble = highlighters.registerLanguage({
+    .name = "wobble",
+    .extensions = { ".wob" },
+    .fenceTags = { "wobble", "wob" },
+    .highlight = [](std::string_view line, core::tui::HighlightState state) {
+        return highlightWobbleLine(line, state); // the application's own lexer
+    },
+});
+if (!wobble)
+    log("wobble was refused: {}", wobble.error().token);
+```
+
+`registerLanguage()` returns a `LanguageId` of its own, from the reserved range that begins at
+`FirstRegisteredLanguageId`, or a `LanguageRegistrationFailure` saying which name, extension or
+fence tag was already claimed. It refuses rather than shadows — replacing would repoint an id
+already handed out, and whoever held that id would get a wrong answer that looks right — and a
+refused definition leaves the registry exactly as it was.
+
+Every entry point then takes the registry as a trailing argument that defaults to `nullptr`,
+meaning the built-in languages alone:
+
+```cpp
+auto renderer = core::tui::MarkdownRenderer { output, theme, &highlighters };  // ```wobble fences
+auto const styled = core::tui::StyledText::fromMarkdown(text, width, &theme, &highlighters);
+auto const language = core::tui::detectLanguageFromPath("draft.wob", &highlighters);
+auto const [map, next] = core::tui::highlightLine(line, language, state, &highlighters);
+```
+
+A registry answers for the built-in languages too — built-in rows are consulted first — so
+registering one costs an application nothing it already had. An id is meaningful only to the
+registry that handed it out: passing one to a different registry, or to a call with no registry,
+highlights the line as plain text rather than as some other language. Well-known *file names*
+(`CMakeLists.txt`, `.clang-format`, `.editorconfig`) stay built-in: an application knows what its
+own configuration file is called and names the language itself.
 
 ## Layout
 

@@ -11,6 +11,7 @@
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 using namespace core::tui;
@@ -539,10 +540,10 @@ TEST_CASE("MarkdownRenderer.link.absolute_url_is_hyperlinked")
     RecordingOutput output;
     MarkdownRenderer renderer(output);
 
-    renderer.render("See [Docs](https://endo-lang.org/) now\n");
+    renderer.render("See [Docs](https://example.org/) now\n");
 
     REQUIRE(output.count(OpKind::BeginHyperlink) == 1);
-    CHECK(firstOf(output, OpKind::BeginHyperlink).url == "https://endo-lang.org/");
+    CHECK(firstOf(output, OpKind::BeginHyperlink).url == "https://example.org/");
     CHECK(output.count(OpKind::EndHyperlink) == 1);
     CHECK(output.text().contains("Docs"));
 }
@@ -643,12 +644,12 @@ TEST_CASE("MarkdownRenderer.link.html_anchor_in_paragraph_is_hyperlinked")
     RecordingOutput output;
     MarkdownRenderer renderer(output);
 
-    renderer.render("See <a href=\"https://endo-lang.org/\">docs</a> here.\n");
+    renderer.render("See <a href=\"https://example.org/\">docs</a> here.\n");
 
     // Regression: the attribute's "://" used to trip the autolink branch, emitting
-    // a hyperlink whose URL was the literal `a href="https://endo-lang.org/"`.
+    // a hyperlink whose URL was the literal `a href="https://example.org/"`.
     REQUIRE(output.count(OpKind::BeginHyperlink) == 1);
-    CHECK(firstOf(output, OpKind::BeginHyperlink).url == "https://endo-lang.org/");
+    CHECK(firstOf(output, OpKind::BeginHyperlink).url == "https://example.org/");
     CHECK(output.text().contains("docs"));
     CHECK_FALSE(output.text().contains("a href"));
     CHECK_FALSE(output.text().contains("</a>"));
@@ -831,11 +832,11 @@ TEST_CASE("MarkdownRenderer.center.markdown_heading_inside_centered_div")
     RecordingOutput output(80);
     MarkdownRenderer renderer(output);
 
-    renderer.render("<div align=\"center\">\n\n# Endo\n\n</div>\n");
+    renderer.render("<div align=\"center\">\n\n# Home\n\n</div>\n");
 
     // Single-width heading: pad against the full 80 columns.
     CHECK(firstPadWidth(output) == (80 - 4) / 2);
-    CHECK(output.text().contains("Endo"));
+    CHECK(output.text().contains("Home"));
 }
 
 TEST_CASE("MarkdownRenderer.center.double_width_h1_uses_half_field")
@@ -844,7 +845,7 @@ TEST_CASE("MarkdownRenderer.center.double_width_h1_uses_half_field")
     MarkdownRenderer renderer(output);
     renderer.setFullWidthMode(true);
 
-    renderer.render("<div align=\"center\">\n\n# Endo\n\n</div>\n");
+    renderer.render("<div align=\"center\">\n\n# Home\n\n</div>\n");
 
     // Under DECDHL every cell is two columns wide, so the field is 40, not 80.
     CHECK(firstPadWidth(output) == ((80 / 2) - 4) / 2);
@@ -858,7 +859,7 @@ TEST_CASE("MarkdownRenderer.center.double_width_h2_uses_half_field")
     MarkdownRenderer renderer(output);
     renderer.setFullWidthMode(true);
 
-    renderer.render("<div align=\"center\">\n\n## Endo\n\n</div>\n");
+    renderer.render("<div align=\"center\">\n\n## Home\n\n</div>\n");
 
     CHECK(firstPadWidth(output) == ((80 / 2) - 4) / 2);
     CHECK(output.count(OpKind::DoubleWidth) == 1);
@@ -869,10 +870,10 @@ TEST_CASE("MarkdownRenderer.center.html_heading_tag_inside_div")
     RecordingOutput output(80);
     MarkdownRenderer renderer(output);
 
-    renderer.render("<div align=\"center\">\n<h1>Endo</h1>\n</div>\n");
+    renderer.render("<div align=\"center\">\n<h1>Home</h1>\n</div>\n");
 
     CHECK(firstPadWidth(output) == (80 - 4) / 2);
-    CHECK(output.text().contains("Endo"));
+    CHECK(output.text().contains("Home"));
     CHECK_FALSE(output.text().contains("<h1>"));
 }
 
@@ -881,7 +882,7 @@ TEST_CASE("MarkdownRenderer.center.h1_align_center_standalone")
     RecordingOutput output(80);
     MarkdownRenderer renderer(output);
 
-    renderer.render("<h1 align=\"center\">Endo</h1>\n");
+    renderer.render("<h1 align=\"center\">Home</h1>\n");
 
     CHECK(firstPadWidth(output) == (80 - 4) / 2);
 }
@@ -1097,7 +1098,7 @@ TEST_CASE("MarkdownRenderer.indent.double_width_heading_costs_two_columns_per_ce
     renderer.setFullWidthMode(true);
     renderer.setIndent(2);
 
-    renderer.render("<div align=\"center\">\n\n# Endo\n\n</div>\n");
+    renderer.render("<div align=\"center\">\n\n# Home\n\n</div>\n");
 
     // A double-width line holds 40 cells; the indent consumes 2 of them.
     CHECK(firstPadWidth(output) == 2 + (((80 / 2) - 2 - 4) / 2));
@@ -1179,10 +1180,10 @@ TEST_CASE("MarkdownRenderer.link.title_is_stripped_from_url")
     RecordingOutput output;
     MarkdownRenderer renderer(output);
 
-    renderer.render("[Docs](https://endo-lang.org/ \"The docs\")\n");
+    renderer.render("[Docs](https://example.org/ \"The docs\")\n");
 
     REQUIRE(output.count(OpKind::BeginHyperlink) == 1);
-    CHECK(firstOf(output, OpKind::BeginHyperlink).url == "https://endo-lang.org/");
+    CHECK(firstOf(output, OpKind::BeginHyperlink).url == "https://example.org/");
     CHECK_FALSE(output.text().contains("The docs"));
 }
 
@@ -1468,4 +1469,101 @@ TEST_CASE("MarkdownRenderer.image.indent_offsets_alt_text_fallback")
     renderer.render("![alt](x.png)\n");
 
     CHECK(output.text() == "  alt\n");
+}
+
+// =============================================================================
+// Registered syntax highlighters
+// =============================================================================
+
+namespace
+{
+/// @brief A TerminalOutput that records the text of every styled write, in order.
+///
+/// A code line that is highlighted arrives as one write per run of equal category; an
+/// unhighlighted one arrives whole. That difference is what these cases assert.
+class SpanRecordingOutput: public TerminalOutput
+{
+  public:
+    std::vector<std::string> spans;
+
+    void writeText(std::string_view text, [[maybe_unused]] Style const& style) override
+    {
+        spans.emplace_back(text);
+    }
+
+    void writeRaw([[maybe_unused]] std::string_view text) override {}
+
+    void flush() override {}
+};
+
+/// @brief A highlighter that marks the first character of a line and leaves the rest alone.
+auto firstCharacterHighlighter() -> HighlightFunction
+{
+    return [](std::string_view line, HighlightState state) {
+        auto map = HighlightMap(line.size(), HighlightCategory::Default);
+        if (!map.empty())
+            map[0] = HighlightCategory::Keyword;
+        return std::pair { std::move(map), state };
+    };
+}
+} // namespace
+
+TEST_CASE("MarkdownRenderer.a_registered_fence_tag_highlights_its_code_block")
+{
+    auto registry = SyntaxHighlighterRegistry {};
+    REQUIRE(registry
+                .registerLanguage({ .name = "toy",
+                                    .extensions = { ".toy" },
+                                    .fenceTags = { "toy" },
+                                    .highlight = firstCharacterHighlighter() })
+                .has_value());
+
+    SpanRecordingOutput output;
+    MarkdownRenderer renderer(output, MarkdownRenderer::defaultTheme(), &registry);
+
+    renderer.render("```toy\nlet x\n```\n");
+
+    // Split at the category boundary the registered highlighter reported.
+    CHECK(output.spans == std::vector<std::string> { "l", "et x" });
+}
+
+TEST_CASE("MarkdownRenderer.an_unregistered_fence_tag_stays_plain_text")
+{
+    auto const registry = SyntaxHighlighterRegistry {};
+    SpanRecordingOutput output;
+    MarkdownRenderer renderer(output, MarkdownRenderer::defaultTheme(), &registry);
+
+    renderer.render("```toy\nlet x\n```\n");
+
+    // No language, no spans: the line is written once, exactly as without a registry.
+    CHECK(output.spans == std::vector<std::string> { "let x" });
+}
+
+TEST_CASE("MarkdownRenderer.without_a_registry_a_registered_fence_tag_is_plain_text")
+{
+    SpanRecordingOutput output;
+    MarkdownRenderer renderer(output);
+
+    renderer.render("```toy\nlet x\n```\n");
+
+    CHECK(output.spans == std::vector<std::string> { "let x" });
+}
+
+TEST_CASE("MarkdownRenderer.a_builtin_fence_tag_still_highlights_beside_a_registered_one")
+{
+    auto registry = SyntaxHighlighterRegistry {};
+    REQUIRE(registry
+                .registerLanguage({ .name = "toy",
+                                    .extensions = { ".toy" },
+                                    .fenceTags = { "toy" },
+                                    .highlight = firstCharacterHighlighter() })
+                .has_value());
+
+    SpanRecordingOutput output;
+    MarkdownRenderer renderer(output, MarkdownRenderer::defaultTheme(), &registry);
+
+    renderer.render("```cpp\nint x;\n```\n");
+
+    // The C++ highlighter splits the line into more than one span; which spans is its business.
+    CHECK(output.spans.size() > 1);
 }

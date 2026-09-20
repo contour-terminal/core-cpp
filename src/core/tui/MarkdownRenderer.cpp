@@ -135,8 +135,10 @@ namespace
 
 } // namespace
 
-MarkdownRenderer::MarkdownRenderer(TerminalOutput& output, MarkdownTheme theme):
-    _output(output), _theme(theme)
+MarkdownRenderer::MarkdownRenderer(TerminalOutput& output,
+                                   MarkdownTheme theme,
+                                   SyntaxHighlighterRegistry const* highlighters):
+    _output(output), _theme(theme), _highlighters(highlighters)
 {
 }
 
@@ -393,7 +395,8 @@ void MarkdownRenderer::render(std::string_view markdown)
                 writeIndent();
                 if (_codeLanguage != LanguageId::None)
                 {
-                    auto [highlights, newState] = highlightLine(line, _codeLanguage, _codeHighlightState);
+                    auto [highlights, newState] =
+                        highlightLine(line, _codeLanguage, _codeHighlightState, _highlighters);
                     _codeHighlightState = newState;
                     renderHighlightedLine(_output, line, highlights, _theme.codeBlock, currentTheme());
                 }
@@ -418,7 +421,7 @@ void MarkdownRenderer::render(std::string_view markdown)
                 {
                     _inCodeBlock = true;
                     _codeFence = std::string(fence);
-                    _codeLanguage = detectLanguageFromFenceTag(extractFenceLanguage(line));
+                    _codeLanguage = detectLanguageFromFenceTag(extractFenceLanguage(line), _highlighters);
                     _codeHighlightState = HighlightState::Normal;
                 }
                 else
@@ -824,7 +827,8 @@ void MarkdownRenderer::processStreamBuffer()
                 writeIndent();
                 if (_codeLanguage != LanguageId::None)
                 {
-                    auto [highlights, newState] = highlightLine(line, _codeLanguage, _codeHighlightState);
+                    auto [highlights, newState] =
+                        highlightLine(line, _codeLanguage, _codeHighlightState, _highlighters);
                     _codeHighlightState = newState;
                     renderHighlightedLine(_output, line, highlights, _theme.codeBlock, currentTheme());
                 }
@@ -848,7 +852,7 @@ void MarkdownRenderer::processStreamBuffer()
                 {
                     _inCodeBlock = true;
                     _codeFence = std::string(fence);
-                    _codeLanguage = detectLanguageFromFenceTag(extractFenceLanguage(line));
+                    _codeLanguage = detectLanguageFromFenceTag(extractFenceLanguage(line), _highlighters);
                     _codeHighlightState = HighlightState::Normal;
                 }
                 else

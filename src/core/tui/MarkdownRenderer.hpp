@@ -63,7 +63,12 @@ class MarkdownRenderer
     /// @brief Constructs a renderer targeting the given terminal output.
     /// @param output The terminal output to render to.
     /// @param theme The styling theme (defaults to defaultTheme()).
-    explicit MarkdownRenderer(TerminalOutput& output, MarkdownTheme theme = defaultTheme());
+    /// @param highlighters The languages a fenced code block may be tagged with beyond the
+    ///        built-in ones, or nullptr (the default) for the built-in ones alone. Non-owning:
+    ///        the registry must outlive this renderer.
+    explicit MarkdownRenderer(TerminalOutput& output,
+                              MarkdownTheme theme = defaultTheme(),
+                              SyntaxHighlighterRegistry const* highlighters = nullptr);
 
     /// @brief Renders a complete markdown string.
     /// @param markdown The markdown text to render.
@@ -144,6 +149,9 @@ class MarkdownRenderer
     std::string _codeFence; ///< The fence string (e.g. "```") that opened the current code block.
     LanguageId _codeLanguage = LanguageId::None;                 ///< Detected language of current code block.
     HighlightState _codeHighlightState = HighlightState::Normal; ///< Multi-line highlight state.
+
+    /// @brief Languages registered beside the built-in ones; nullptr means built-ins only.
+    SyntaxHighlighterRegistry const* _highlighters = nullptr;
 
     // Table buffering state
     bool _inTable = false;                ///< Currently buffering table rows.

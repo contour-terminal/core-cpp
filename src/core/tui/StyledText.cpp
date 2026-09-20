@@ -246,7 +246,10 @@ StyledText StyledText::fromPlainText(std::string_view text, int maxWidth, Style 
     return result;
 }
 
-StyledText StyledText::fromMarkdown(std::string_view markdown, int maxWidth, MarkdownTheme const* theme)
+StyledText StyledText::fromMarkdown(std::string_view markdown,
+                                    int maxWidth,
+                                    MarkdownTheme const* theme,
+                                    SyntaxHighlighterRegistry const* highlighters)
 {
     static auto const defaultTheme = MarkdownRenderer::defaultTheme();
     MarkdownTheme const& mdTheme = theme ? *theme : defaultTheme;
@@ -433,7 +436,8 @@ StyledText StyledText::fromMarkdown(std::string_view markdown, int maxWidth, Mar
             {
                 if (codeLanguage != LanguageId::None)
                 {
-                    auto [highlights, newState] = highlightLine(line, codeLanguage, codeHighlightState);
+                    auto [highlights, newState] =
+                        highlightLine(line, codeLanguage, codeHighlightState, highlighters);
                     codeHighlightState = newState;
                     auto const& currentTh = currentTheme();
                     // Build styled spans from highlight categories
@@ -466,7 +470,7 @@ StyledText StyledText::fromMarkdown(std::string_view markdown, int maxWidth, Mar
             {
                 inCodeBlock = true;
                 codeFence = std::string(fence);
-                codeLanguage = detectLanguageFromFenceTag(extractFenceLanguage(line));
+                codeLanguage = detectLanguageFromFenceTag(extractFenceLanguage(line), highlighters);
                 codeHighlightState = HighlightState::Normal;
             }
             else if (line.empty())

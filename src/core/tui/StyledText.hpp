@@ -11,6 +11,7 @@ namespace core::tui
 {
 
 class Canvas;
+class SyntaxHighlighterRegistry;
 struct MarkdownTheme;
 
 /// A segment of styled text within a line.
@@ -49,10 +50,13 @@ class StyledText
     /// @param markdown The markdown content.
     /// @param maxWidth Maximum line width (0 = no wrapping).
     /// @param theme Theme for markdown styling (uses defaults if not provided).
+    /// @param highlighters The languages a fenced code block may be tagged with beyond the
+    ///        built-in ones, or nullptr (the default) for the built-in ones alone.
     /// @return The parsed StyledText.
     [[nodiscard]] static StyledText fromMarkdown(std::string_view markdown,
                                                  int maxWidth = 0,
-                                                 MarkdownTheme const* theme = nullptr);
+                                                 MarkdownTheme const* theme = nullptr,
+                                                 SyntaxHighlighterRegistry const* highlighters = nullptr);
 
     /// @brief Returns all lines.
     [[nodiscard]] std::vector<StyledLine> const& lines() const noexcept { return _lines; }

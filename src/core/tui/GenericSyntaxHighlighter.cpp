@@ -6,24 +6,23 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
+#include <expected>
 #include <format>
 #include <functional>
+#include <limits>
 #include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace core::tui
 {
 
 namespace
 {
-    auto endoHighlighter() -> HighlightFunction&
-    {
-        static HighlightFunction instance;
-        return instance;
-    }
-
     // -------------------------------------------------------------------------
     // Helper: check if character is part of an identifier
     // -------------------------------------------------------------------------
@@ -2309,10 +2308,11 @@ namespace
     /// .clang-format and .clang-tidy tool configs are YAML, and .editorconfig is INI. Build
     /// files (Makefile, Dockerfile, …) are folded onto their closest existing highlighter.
     ///
-    /// A row belongs here only when the name is well known beyond any one project. A consumer's
-    /// own dotfile is that consumer's business: it knows what its configuration file is called
-    /// and passes the language to highlightLine() rather than asking this table to guess. endo's
-    /// `.endo-format` was a row here and is not one any more, for that reason.
+    /// A row belongs here only when the name is well known beyond any one project. An
+    /// application's own dotfile is that application's business: it knows what its configuration
+    /// file is called and passes the language to highlightLine() rather than asking this table to
+    /// guess. One consumer's own `-format` dotfile was a row here and is not one any more, for
+    /// that reason, and a registered language does not claim a file name either.
     constexpr auto FilenameLanguageTable = std::to_array<LanguageToken>({
         { .token = "CMakeLists.txt", .language = LanguageId::CMake },
         { .token = "Makefile", .language = LanguageId::Bash },
@@ -2323,9 +2323,56 @@ namespace
         { .token = ".clang-tidy", .language = LanguageId::Yaml },
         { .token = ".editorconfig", .language = LanguageId::Ini },
     });
+
+    /// @brief How many languages one registry can hand ids out for.
+    constexpr auto RegisteredLanguageCapacity =
+        std::size_t { std::numeric_limits<std::uint8_t>::max() } + 1 - FirstRegisteredLanguageId;
+
+    /// @brief The id of the @p index-th registered language of a registry.
+    constexpr auto registeredLanguageId(std::size_t index) noexcept -> LanguageId
+    {
+        return static_cast<LanguageId>(static_cast<std::uint8_t>(FirstRegisteredLanguageId + index));
+    }
+
+    /// @brief The index into a registry's languages of a registered id.
+    constexpr auto registeredLanguageIndex(LanguageId language) noexcept -> std::size_t
+    {
+        return static_cast<std::size_t>(std::to_underlying(language)) - FirstRegisteredLanguageId;
+    }
+
+    /// @brief Highlights one line with a built-in language; any other id yields plain text.
+    auto highlightBuiltin(std::string_view line, LanguageId language, HighlightState state)
+        -> std::pair<HighlightMap, HighlightState>
+    {
+        if (line.empty() || language == LanguageId::None)
+            return { HighlightMap {}, state };
+
+        switch (language)
+        {
+            case LanguageId::Cpp: return highlightCpp(line, state);
+            case LanguageId::Python: return highlightPython(line, state);
+            case LanguageId::Bash: return highlightBash(line, state);
+            case LanguageId::CMake: return highlightCMake(line, state);
+            case LanguageId::Markdown: return highlightMarkdown(line, state);
+            case LanguageId::Json: return highlightJson(line, state);
+            case LanguageId::Yaml: return highlightYaml(line, state);
+            case LanguageId::GitDiff: return highlightGitDiff(line, state);
+            case LanguageId::Assembly: return highlightAssembly(line, state);
+            case LanguageId::PowerShell: return highlightPowerShell(line, state);
+            case LanguageId::Cmd: return highlightBatch(line, state);
+            case LanguageId::Xml: return highlightXml(line, state);
+            case LanguageId::Ini: return highlightIni(line, state);
+            case LanguageId::None:
+            case LanguageId::Last: break;
+        }
+
+        // A registered id belongs to a registry, which dispatches it; here it is plain text.
+        return { HighlightMap(line.size(), HighlightCategory::Default), state };
+    }
 } // namespace
 
-auto detectLanguageFromPath(std::string_view filePath) -> LanguageId
+auto detectLanguageFromPath(std::string_view filePath, SyntaxHighlighterRegistry const* registry)
+    -> LanguageId
 {
     // Reduce to the basename so directory components can't fool the match.
     auto const slash = filePath.find_last_of("/\\");
@@ -2340,43 +2387,143 @@ auto detectLanguageFromPath(std::string_view filePath) -> LanguageId
     if (dotPos == std::string_view::npos)
         return LanguageId::None;
 
-    return detectLanguageFromExtension(fileName.substr(dotPos));
+    return detectLanguageFromExtension(fileName.substr(dotPos), registry);
 }
 
-void registerEndoHighlighter(HighlightFunction fn)
+auto highlightLine(std::string_view line,
+                   LanguageId language,
+                   HighlightState state,
+                   SyntaxHighlighterRegistry const* registry) -> std::pair<HighlightMap, HighlightState>
 {
-    endoHighlighter() = std::move(fn);
+    if (registry != nullptr)
+        return registry->highlightLine(line, language, state);
+
+    return highlightBuiltin(line, language, state);
 }
 
-auto highlightLine(std::string_view line, LanguageId language, HighlightState state)
-    -> std::pair<HighlightMap, HighlightState>
-{
-    if (line.empty() || language == LanguageId::None)
-        return { HighlightMap {}, state };
+// -------------------------------------------------------------------------
+// SyntaxHighlighterRegistry
+// -------------------------------------------------------------------------
 
-    switch (language)
+auto SyntaxHighlighterRegistry::registerLanguage(LanguageDefinition definition)
+    -> std::expected<LanguageId, LanguageRegistrationFailure>
+{
+    using enum LanguageRegistrationError;
+
+    auto const refuse = [](LanguageRegistrationError error, std::string token) {
+        return std::unexpected(LanguageRegistrationFailure { .error = error, .token = std::move(token) });
+    };
+
+    if (definition.name.empty())
+        return refuse(EmptyName, {});
+
+    if (!definition.highlight)
+        return refuse(NoHighlighter, definition.name);
+
+    if (_languages.size() >= RegisteredLanguageCapacity)
+        return refuse(CapacityReached, definition.name);
+
+    // Every check runs before anything is stored, so a refused definition leaves the registry
+    // exactly as it was.
+    if (std::ranges::find(BuiltinLanguageTable, definition.name, &LanguageName::name)
+            != BuiltinLanguageTable.end()
+        || std::ranges::find(_languages, definition.name, &LanguageDefinition::name) != _languages.end())
+        return refuse(NameInUse, definition.name);
+
+    for (auto const& extension: definition.extensions)
+        if (detectFromExtension(extension) != LanguageId::None)
+            return refuse(TokenInUse, extension);
+
+    for (auto const& fenceTag: definition.fenceTags)
+        if (detectFromFenceTag(fenceTag) != LanguageId::None)
+            return refuse(TokenInUse, fenceTag);
+
+    auto const language = registeredLanguageId(_languages.size());
+    _languages.push_back(std::move(definition));
+    return language;
+}
+
+auto SyntaxHighlighterRegistry::find(std::string_view name) const noexcept -> LanguageId
+{
+    if (auto const builtin = std::ranges::find(BuiltinLanguageTable, name, &LanguageName::name);
+        builtin != BuiltinLanguageTable.end())
+        return builtin->language;
+
+    auto const it = std::ranges::find(_languages, name, &LanguageDefinition::name);
+    if (it == _languages.end())
+        return LanguageId::None;
+
+    return registeredLanguageId(static_cast<std::size_t>(std::ranges::distance(_languages.begin(), it)));
+}
+
+auto SyntaxHighlighterRegistry::name(LanguageId language) const noexcept -> std::string_view
+{
+    if (!isRegisteredLanguage(language))
     {
-        case LanguageId::Cpp: return highlightCpp(line, state);
-        case LanguageId::Python: return highlightPython(line, state);
-        case LanguageId::Bash: return highlightBash(line, state);
-        case LanguageId::CMake: return highlightCMake(line, state);
-        case LanguageId::Markdown: return highlightMarkdown(line, state);
-        case LanguageId::Json: return highlightJson(line, state);
-        case LanguageId::Yaml: return highlightYaml(line, state);
-        case LanguageId::GitDiff: return highlightGitDiff(line, state);
-        case LanguageId::Assembly: return highlightAssembly(line, state);
-        case LanguageId::PowerShell: return highlightPowerShell(line, state);
-        case LanguageId::Cmd: return highlightBatch(line, state);
-        case LanguageId::Xml: return highlightXml(line, state);
-        case LanguageId::Ini: return highlightIni(line, state);
-        case LanguageId::Endo:
-            if (endoHighlighter())
-                return endoHighlighter()(line, state);
-            break;
-        case LanguageId::None: break;
+        auto const index = static_cast<std::size_t>(std::to_underlying(language));
+        return index < BuiltinLanguageTable.size() ? BuiltinLanguageTable[index].name : std::string_view {};
     }
 
-    return { HighlightMap(line.size(), HighlightCategory::Default), state };
+    auto const index = registeredLanguageIndex(language);
+    return index < _languages.size() ? std::string_view { _languages[index].name } : std::string_view {};
+}
+
+auto SyntaxHighlighterRegistry::registeredCount() const noexcept -> std::size_t
+{
+    return _languages.size();
+}
+
+auto SyntaxHighlighterRegistry::detectFromExtension(std::string_view ext) const noexcept -> LanguageId
+{
+    if (auto const builtin = lookupLanguage(ExtensionLanguageTable, ext); builtin != LanguageId::None)
+        return builtin;
+
+    return findByToken(ext, &LanguageDefinition::extensions);
+}
+
+auto SyntaxHighlighterRegistry::detectFromFenceTag(std::string_view tag) const noexcept -> LanguageId
+{
+    if (auto const builtin = lookupLanguage(FenceTagLanguageTable, tag); builtin != LanguageId::None)
+        return builtin;
+
+    return findByToken(tag, &LanguageDefinition::fenceTags);
+}
+
+auto SyntaxHighlighterRegistry::detectFromPath(std::string_view filePath) const -> LanguageId
+{
+    return core::tui::detectLanguageFromPath(filePath, this);
+}
+
+auto SyntaxHighlighterRegistry::highlightLine(std::string_view line,
+                                              LanguageId language,
+                                              HighlightState state) const
+    -> std::pair<HighlightMap, HighlightState>
+{
+    if (!isRegisteredLanguage(language))
+        return highlightBuiltin(line, language, state);
+
+    if (line.empty())
+        return { HighlightMap {}, state };
+
+    auto const index = registeredLanguageIndex(language);
+    if (index >= _languages.size())
+        return { HighlightMap(line.size(), HighlightCategory::Default), state };
+
+    return _languages[index].highlight(line, state);
+}
+
+auto SyntaxHighlighterRegistry::findByToken(
+    std::string_view token, std::vector<std::string> LanguageDefinition::* tokens) const noexcept
+    -> LanguageId
+{
+    for (auto const index: std::views::iota(std::size_t { 0 }, _languages.size()))
+    {
+        auto const& candidates = _languages[index].*tokens;
+        if (std::ranges::find(candidates, token) != candidates.end())
+            return registeredLanguageId(index);
+    }
+
+    return LanguageId::None;
 }
 
 auto categoryColor(HighlightCategory cat, Theme const& theme) -> RgbColor

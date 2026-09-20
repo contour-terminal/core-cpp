@@ -427,6 +427,50 @@ workflow refuses one without a section here.
   `NetError(code=…)` out of a log reads the words instead, and the OS number is still
   `[errno <n>]`.
 
+- `core::tui` no longer ships one consumer's language. `LanguageId::Endo`,
+  `registerEndoHighlighter()`, the `.endo` row of `ExtensionLanguageTable` and the `endo` row of
+  `FenceTagLanguageTable` are gone; an application teaches `core::tui` its own language through
+  `core::tui::SyntaxHighlighterRegistry` instead — a registry it constructs, fills and passes to
+  whatever renders the text, rather than a process-wide callback core-cpp holds on its behalf
+  ([core-cpp#24](https://github.com/contour-terminal/core-cpp/issues/24)). Nothing about the
+  built-in languages changed and a registry answers for them too, so a consumer that uses only
+  those edits nothing: every new parameter is trailing and defaults to "the built-ins alone".
+  `LanguageId` gained a trailing `Last` — not a language, but how many there are, which anchors
+  the new `BuiltinLanguageTable` — and the ids a registry hands out begin at
+  `core::tui::FirstRegisteredLanguageId` (128) and mean nothing to another registry, where they
+  highlight as plain text rather than as some other language. Migration, for the one consumer
+  that registered a language:
+
+  ```cpp
+  // was: a process-wide callback, and a closed enumerator naming one application's language.
+  core::tui::registerEndoHighlighter(highlightEndoLine);
+  auto const language = core::tui::LanguageId::Endo;
+
+  // is: a registry the application owns, filled once at startup and injected.
+  auto highlighters = core::tui::SyntaxHighlighterRegistry {};
+  auto const registered = highlighters.registerLanguage({
+      .name = "endo",
+      .extensions = { ".endo" },
+      .fenceTags = { "endo" },
+      .highlight = highlightEndoLine,
+  });
+  // std::expected<LanguageId, LanguageRegistrationFailure>; *registered replaces LanguageId::Endo.
+
+  // and each entry point takes the registry, as a trailing argument defaulting to nullptr:
+  auto renderer = core::tui::MarkdownRenderer { output, theme, &highlighters };
+  auto const styled = core::tui::StyledText::fromMarkdown(text, width, &theme, &highlighters);
+  auto const detected = core::tui::detectLanguageFromPath(path, &highlighters);
+  auto const [map, next] = core::tui::highlightLine(line, detected, state, &highlighters);
+  ```
+
+  `registerLanguage()` refuses a name, extension or fence tag another language already claims,
+  built-in or registered, instead of shadowing it: replacing would repoint an id already handed
+  out, and its holder would then get a wrong answer that looks right. A refused definition leaves
+  the registry exactly as it was, and `LanguageRegistrationFailure` names the token at fault.
+  There is no row for either removal in `tools/migrate/renames.json`: the call shape changes, so
+  a mechanical rewrite would produce code that compiles into the wrong thing, and a compile error
+  at `LanguageId::Endo` is the better signal.
+
 ### Changed
 
 - `core::async::whenAny()` reports a child that completed even when the awaiting flow's own token
@@ -588,8 +632,8 @@ workflow refuses one without a section here.
   highlighted passes the language to `highlightLine()` itself. The default theme's path-gradient
   colours and the fuzzy matcher's worked example no longer describe themselves in terms of one
   application either. (`LanguageId::Endo`, `registerEndoHighlighter()` and the `.endo` and `endo`
-  token rows are the same finding and are unchanged: renaming them is public API and giving a
-  host a seam for its own tokens is a design decision, both pending a ruling.)
+  token rows were the same finding, left then for a design decision; they are removed under
+  **Breaking** above, together with the registration seam that replaces them.)
 - `core::tui`'s assembly highlighter no longer overruns a stack buffer. Its three scanners
   lowercased an identifier, a `%register` or a `.directive` into a 64-character array through a
   helper that took a bare `char*` and wrote `src.size()` bytes; the four other call sites bounded
