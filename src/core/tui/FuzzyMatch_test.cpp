@@ -354,18 +354,18 @@ TEST_CASE("FuzzyMatchResult.isContiguousSubstring_false_scattered")
 
 TEST_CASE("FuzzyMatchResult.isContiguousSubstring_true_despite_earlier_grapheme")
 {
-    // Regression: pressing Ctrl+R and typing "endo.exe" must match the history
-    // entry "./build/clangcl-debug/src/shell/endo.exe". The leading 'e' of the
-    // pattern also occurs earlier in "...clangcl-debug...", so a greedy matcher
-    // would bind to that 'e' and highlight a stray 'e' plus "ndo.exe". The
-    // substring-first match must instead report the contiguous "endo.exe" block.
-    auto const text = std::string_view { "./build/clangcl-debug/src/shell/endo.exe" };
-    auto result = FuzzyMatch::matchSmartCase(text, "endo.exe");
+    // Regression: pressing Ctrl+R and typing "demo.exe" must match the history
+    // entry "./build/clangcl-debug/src/shell/demo.exe". The leading 'd' of the
+    // pattern also occurs earlier in "./build/clangcl-debug", so a greedy matcher
+    // would bind to that 'd' and highlight a stray 'd' plus "emo.exe". The
+    // substring-first match must instead report the contiguous "demo.exe" block.
+    auto const text = std::string_view { "./build/clangcl-debug/src/shell/demo.exe" };
+    auto result = FuzzyMatch::matchSmartCase(text, "demo.exe");
     CHECK(result.matches);
     CHECK(result.isContiguousSubstring());
 
-    // Positions must cover the trailing "endo.exe" block, not the stray 'e' in
-    // "debug" — this is what gets highlighted in the Ctrl+R popup.
+    // Positions must cover the trailing "demo.exe" block, not the stray 'd' in
+    // "build" — this is what gets highlighted in the Ctrl+R popup.
     auto const start = FuzzyMatch::countGraphemes("./build/clangcl-debug/src/shell/");
     REQUIRE(result.positions.size() == 8);
     for (auto const i: std::views::iota(size_t { 0 }, result.positions.size()))

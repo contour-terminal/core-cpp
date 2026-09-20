@@ -64,7 +64,7 @@ auto gifBytes() -> std::vector<std::uint8_t>
 /// @brief Creates a unique temporary directory for one test case.
 auto makeTempDir(std::string_view name) -> std::filesystem::path
 {
-    auto const dir = std::filesystem::temp_directory_path() / "endo-markdown-image" / name;
+    auto const dir = std::filesystem::temp_directory_path() / "core-tui-markdown-image" / name;
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
     return dir;
@@ -103,7 +103,7 @@ TEST_CASE("FilesystemImageProvider.supportsSixel_reflects_constructor_flag")
 TEST_CASE("FilesystemImageProvider.remote_sources_rejected_without_disk_access")
 {
     // baseDir deliberately does not exist: a remote source must never touch it.
-    auto provider = makeProvider("/nonexistent-endo-dir");
+    auto provider = makeProvider("/nonexistent-image-dir");
 
     CHECK_FALSE(provider.prepare("https://x.com/a.png", std::nullopt).has_value());
     CHECK_FALSE(provider.prepare("http://x.com/a.png", std::nullopt).has_value());
