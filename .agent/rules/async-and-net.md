@@ -84,7 +84,10 @@ frames rather than sockets, and every rule below is enforced by a case in
   moved-from or released `Task` as well as for a completed one, so `if (t.done()) t.result();`
   reaches the empty case; answering it with `T {}` invents a value the coroutine never produced
   and forces every result type to be default-constructible. It is refused by name
-  (`detail::refuseEmptyTask()`), which is also what `syncRun` does for a task still suspended
+  (`detail::refuseEmptyTask()`) — a **precondition violation reported as an exception**, never
+  caught: an `assert` would answer with that wrong value in every Release build, which is the
+  defect being removed, and a `catch` would make the empty state a supported path. It is also what
+  `syncRun` does for a task still suspended
   after its resume: reading such a task's result is undefined, and freeing its frame tears down
   storage whatever parked it still points into. `syncRunWith(task, retrieve)` takes the park back
   first, so the refusal is the whole of the failure rather than a crash naming nothing. Origin:

@@ -69,7 +69,10 @@ Imported from contour's `src/coro` at `6777ff05`, with `coro::` renamed `core::a
   awaited, and a `unownedRoot` (below). `result()` of a root task requires both `done()` and an
   owned frame — `done()` is also true for a default-constructed, moved-from or released task — and
   a task owning no frame is refused with a `std::logic_error` rather than answered with a
-  default-constructed `T`, so `T` need not be default-constructible.
+  default-constructed `T`, so `T` need not be default-constructible. That throw reports a
+  **precondition violation, not a recoverable error**: it is an assertion that survives a Release
+  build, where `assert` would hand back a silently wrong value, and it is not to be caught — a
+  `catch` around `result()` would make the empty state a supported path rather than a call to fix.
 - Symmetric transfer keeps `co_await`s from growing the stack only where the compiler makes the
   transfer a tail call. Clang and MSVC do at every optimisation level. GCC does only when it
   optimises sibling calls, and WebAssembly has no tail calls without `-mtail-call`. Measured at

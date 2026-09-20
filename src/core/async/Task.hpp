@@ -118,11 +118,22 @@ namespace detail
 
     /// Refuses a result asked of a task that owns no coroutine frame.
     ///
+    /// **This reports a PRECONDITION VIOLATION, not a recoverable error.** The caller asked a
+    /// question with no true answer, and the only correct response is to fix the call. Do not
+    /// catch it: a `try`/`catch` around `result()` turns "this task owns no frame" into a
+    /// supported path, and the empty state then becomes something callers rely on rather than
+    /// something they have got wrong. Nothing in `core::async` is declared to throw it, and no
+    /// caller should handle it — it is an assertion that survives a Release build, which is the
+    /// whole of why it is an exception.
+    ///
     /// One function, so `Task<T>` and `Task<void>` and their awaiters refuse in the same words.
-    /// It is a throw rather than an assertion because the empty state is one the type admits by
+    /// It is a throw rather than `assert` because the empty state is one the type admits by
     /// design — default-constructed, moved from, released — and `done()` answers true for it, so
     /// the question is reachable through the documented guard rather than only through undefined
-    /// behaviour. `std::optional::value()` answers the same question the same way.
+    /// behaviour; an `assert` would answer it with a silently wrong value in every Release build,
+    /// which is the defect this removes. `std::optional::value()` answers the same question the
+    /// same way, and for the same reason it is not `core::async::OperationCancelled`: that one is
+    /// cancellation, a condition a flow is written to unwind through.
     /// @throws std::logic_error always, naming the condition.
     [[noreturn]] inline void refuseEmptyTask()
     {
@@ -203,7 +214,8 @@ class [[nodiscard]] Task
         }
 
         /// @return The value produced by the child, or rethrows its exception.
-        /// @throws std::logic_error if the awaited task owned no frame.
+        /// @throws std::logic_error if the awaited task owned no frame — a precondition
+        ///         violation, not a recoverable error; see `detail::refuseEmptyTask()`.
         T await_resume()
         {
             if (!_child)
@@ -248,7 +260,8 @@ class [[nodiscard]] Task
 
     /// @return The result of a completed root task, rethrowing any body exception.
     /// @pre `done()` is true AND a frame is owned.
-    /// @throws std::logic_error if no frame is owned.
+    /// @throws std::logic_error if no frame is owned. It reports the violated precondition and
+    ///         is not to be caught; see `detail::refuseEmptyTask()`.
     ///
     /// The two halves of that precondition are separate on purpose: `done()` also answers true for
     /// a task owning NO frame (default-constructed, moved from, or released), so
@@ -316,7 +329,8 @@ class [[nodiscard]] Task<void>
         }
 
         /// Rethrows any exception escaping the child body.
-        /// @throws std::logic_error if the awaited task owned no frame.
+        /// @throws std::logic_error if the awaited task owned no frame — a precondition
+        ///         violation, not a recoverable error; see `detail::refuseEmptyTask()`.
         void await_resume() const
         {
             if (!_child)
@@ -356,6 +370,7 @@ class [[nodiscard]] Task<void>
     ///      answers true for a task owning no frame (default-constructed, moved from, released).
     /// @throws std::logic_error if no frame is owned, for the reason `Task<T>::result()` gives:
     ///         a task with no frame ran no body, so "it threw nothing" is not an answer about it.
+    ///         It reports the violated precondition and is not to be caught.
     void result()
     {
         if (!_handle)
