@@ -378,7 +378,13 @@ endforeach()
 file(REMOVE_RECURSE "${stagingDir}")
 
 # The manifest, hashed from the files as they now lie in DEST, sorted by path so the same ref
-# always produces the same bytes.
+# always lists the same files in the same order.
+#
+# Its own line endings are the writing host's -- CMake writes a text file in the host's convention,
+# and there is no binary file write in script mode. That decides nothing: MODE=check reads it with
+# file(STRINGS), which ignores CR, so a copy made on Windows verifies on Linux and the other way
+# round. The FILES are unaffected: each is written from git's blob through a process's stdout,
+# which is never translated.
 list(SORT copied)
 list(LENGTH copied fileCount)
 list(JOIN MODULES ";" modulesLine)

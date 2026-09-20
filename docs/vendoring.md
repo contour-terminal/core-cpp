@@ -43,7 +43,10 @@ cmake -DMODE=check -DDEST=<dir> -P <dir>/cmake/CoreCppVendor.cmake
   is refused, because it is not a copy of ours to delete.
 - **`MANIFEST`** starts with header lines naming the repository, the ref, the commit, the modules
   and the file count (`# repository ...`, `# ref ...`, `# commit ...`, `# modules ...`,
-  `# files ...`), followed by one `<sha256>  <path>` line per file, sorted by path.
+  `# files ...`), followed by one `<sha256>  <path>` line per file, sorted by path. Its own line
+  endings are those of the host that ran `sync`; `check` ignores them, so a copy made on Windows
+  verifies on Linux and the other way round. The copied files themselves are the commit's bytes
+  whatever the host.
 - **`check` refuses** a hash mismatch, a file the manifest lists that is missing, and a file the
   manifest does not list. It reports every one of them, not only the first.
 
