@@ -3,7 +3,7 @@
 #include <core/async/WhenAny.hpp>
 #include <core/net/HttpServer.hpp>
 #include <core/net/ISocket.hpp>
-#include <core/net/PollEventSource.hpp>
+#include <core/net/IoBackend.hpp>
 #include <core/net/Sockets.hpp>
 #include <core/net/testing/InMemoryTransport.hpp>
 
@@ -117,8 +117,8 @@ TEST_CASE("HttpRequest::header matches case-insensitively", "[net][http]")
 
 TEST_CASE("readRequest parses a request line and headers", "[net][http]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 
@@ -140,8 +140,8 @@ TEST_CASE("readRequest parses a request line and headers", "[net][http]")
 
 TEST_CASE("readRequest reads a Content-Length body", "[net][http]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 
@@ -162,8 +162,8 @@ TEST_CASE("readRequest reads a body split across the header boundary", "[net][ht
 {
     // The body's first bytes ride in the same segment as the header delimiter —
     // the case a naive "read headers, then read body" loop gets wrong.
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 
@@ -180,8 +180,8 @@ TEST_CASE("readRequest reads a body split across the header boundary", "[net][ht
 
 TEST_CASE("readRequest rejects a head exceeding the bound", "[net][http]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 
@@ -200,8 +200,8 @@ TEST_CASE("readRequest rejects a head exceeding the bound", "[net][http]")
 
 TEST_CASE("readRequest rejects a body exceeding the bound", "[net][http]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 
@@ -220,8 +220,8 @@ TEST_CASE("readRequest rejects a body exceeding the bound", "[net][http]")
 
 TEST_CASE("readRequest rejects a malformed request line", "[net][http]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 
@@ -241,8 +241,8 @@ TEST_CASE("readRequest rejects conflicting duplicate Content-Length headers", "[
     // RFC 9112 6.3: two disagreeing lengths are a request-smuggling vector, since a
     // proxy and an origin may pick different ones and disagree about where this
     // request ends and the next begins.
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 
@@ -261,8 +261,8 @@ TEST_CASE("readRequest rejects conflicting duplicate Content-Length headers", "[
 TEST_CASE("readRequest accepts repeated but identical Content-Length headers", "[net][http]")
 {
     // Repetition alone is not the hazard; disagreement is.
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 
@@ -283,8 +283,8 @@ TEST_CASE("readRequest refuses a chunked request rather than mis-framing it", "[
 {
     // Chunked bodies are out of scope. Parsing one as a zero-length body would leave
     // the chunk data buffered as though it were the start of another request.
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 
@@ -304,8 +304,8 @@ TEST_CASE("readRequest rejects an obs-fold continuation line", "[net][http]")
 {
     // A folded header has no colon. Dropping it silently would lose the folded
     // Content-Length and leave the body unread on a connection we think we parsed.
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 
@@ -325,8 +325,8 @@ TEST_CASE("readRequest parses a bare-LF request head", "[net][http]")
     // Hand-written clients and scripts routinely send LF-only endings. Splitting
     // only on CRLF would make the whole head one "request line" whose interior
     // spaces populate method/path/version with garbage.
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 
@@ -355,8 +355,8 @@ TEST_CASE("readRequest refuses a head whose blank line is a bare LF", "[net][htt
     // Refused rather than parsed: the bytes behind that blank line were already consumed as
     // part of the head block, so a Content-Length read before it would index into the wrong
     // place. Same posture as Transfer-Encoding and a conflicting Content-Length.
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 
@@ -388,8 +388,8 @@ TEST_CASE("readRequest rejects whitespace between a field name and its colon", "
     {
         DYNAMIC_SECTION("field line=" << spelling)
         {
-            auto source = core::net::PollEventSource {};
-            auto loop = EventLoop { source };
+            auto const source = core::net::makeDefaultBackend();
+            auto loop = EventLoop { *source };
             auto pair = core::net::testing::makeSocketPair(loop);
             REQUIRE(pair.has_value());
 
@@ -413,8 +413,8 @@ TEST_CASE("readRequest keeps accepting whitespace AFTER the colon", "[net][http]
     // The valid half of the rule the case above enforces: RFC 9112 §5 pads a field-value with
     // optional whitespace on both sides, which a recipient removes. Rejecting the name's
     // whitespace must not cost the ordinary "Host: example" spelling, nor an aligned one.
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 
@@ -433,8 +433,8 @@ TEST_CASE("readRequest keeps accepting whitespace AFTER the colon", "[net][http]
 
 TEST_CASE("readRequest rejects an unparsable Content-Length", "[net][http]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 
@@ -453,8 +453,8 @@ TEST_CASE("writeResponse never emits duplicate framing headers", "[net][http]")
 {
     // A handler that sets its own Content-Length or Connection is doing something
     // natural; emitting both its value and ours would be malformed.
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 
@@ -492,8 +492,8 @@ TEST_CASE("writeResponse never emits duplicate framing headers", "[net][http]")
 
 TEST_CASE("readRequest reports EOF when the peer closes before a request", "[net][http]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 
@@ -520,8 +520,8 @@ TEST_CASE("readRequest reports EOF when the peer closes before a request", "[net
 
 TEST_CASE("writeResponse serializes status, framing headers and body", "[net][http]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 
@@ -541,8 +541,8 @@ TEST_CASE("writeResponse serializes status, framing headers and body", "[net][ht
 
 TEST_CASE("writeResponse keeps a handler-supplied Content-Type", "[net][http]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 
@@ -567,8 +567,8 @@ TEST_CASE("writeResponse keeps a handler-supplied Content-Type", "[net][http]")
 
 TEST_CASE("serve dispatches a request through a handler and closes", "[net][http]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto listener = core::net::listen(loop, "127.0.0.1", 0);
     REQUIRE(listener.has_value());
     auto const port = (*listener)->localPort();
@@ -613,8 +613,8 @@ TEST_CASE("serve answers 500 when a handler throws rather than dying", "[net][ht
     // The handler is caller-supplied code. An exception escaping it would unwind
     // through the accept loop and end every future connection, so serve() must
     // contain it and still answer this request.
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto listener = core::net::listen(loop, "127.0.0.1", 0);
     REQUIRE(listener.has_value());
     auto const port = (*listener)->localPort();

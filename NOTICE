@@ -78,6 +78,11 @@ fastcached
     inlined into its header), src/core/async/{DetachedTask,SyncRun}.hpp (split out
     of src/FastCache/Async/Task.hpp), and the ownership half of
     src/core/async/Task.hpp, merged into contour's
+  - src/core/net/IoBackend.hpp and src/core/net/IoBackend_test.cpp (the handler
+    and the callback-selection rule of src/FastCache/Async/EpollReactor.hpp and
+    its test, merged with contour's src/net/EventSource.hpp), and
+    src/core/net/detail/ReadyBatch.hpp (the in-flight batch of
+    src/FastCache/Async/EpollReactor.cpp)
 
 Documentation and CI configuration adapted from the following projects, each
 licensed under the Apache License, Version 2.0, and each read as a git blob at the

@@ -6,8 +6,8 @@
 #include <core/net/ISocket.hpp>
 #include <core/net/Sockets.hpp>
 #include <core/net/SplitSocket.hpp>
+#include <core/net/testing/BackendMatrix.hpp>
 #include <core/net/testing/CoroTestSupport.hpp>
-#include <core/net/testing/EventSourceBackends.hpp>
 #include <core/net/testing/InMemoryTransport.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -31,7 +31,7 @@
 using core::async::Task;
 using core::net::EventLoop;
 using core::net::ISocket;
-using core::net::testing::AllBackends;
+using core::net::testing::BackendMatrix;
 
 namespace
 {
@@ -190,9 +190,9 @@ Task<void> readToEof(ISocket* sock, bool* sawEof)
 
 TEST_CASE("InMemoryTransport round-trips bytes between connected endpoints", "[net]")
 {
-    for (auto const& backend: AllBackends)
+    for (auto const& backend: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
+        auto source = core::net::makeBackend(backend.kind);
         if (!source)
             continue; // not available on this platform
 
@@ -216,11 +216,11 @@ TEST_CASE("closing a socket resumes a reader parked on it instead of hanging", "
     // hang. poll(2) reports POLLNVAL for the closed fd and Windows reports the now-invalid WSAEVENT
     // as failed; epoll and kqueue can report neither, so they rely on EventLoop::notifyHandleClosing.
     // Regression guard twice over: this deadlocked on Windows before the reactor routed the invalid
-    // handle, and it deadlocked on epoll/kqueue for as long as this case hardcoded PollEventSource —
+    // handle, and it deadlocked on epoll/kqueue for as long as this case hardcoded the poll backend —
     // which is exactly why it now runs against every backend.
-    for (auto const& backend: AllBackends)
+    for (auto const& backend: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
+        auto source = core::net::makeBackend(backend.kind);
         if (!source)
             continue; // not available on this platform
 
@@ -254,9 +254,9 @@ TEST_CASE("a listener keeps accepting across sequential connections", "[net]")
     // not on a slow machine.
     constexpr auto Connections = 3;
     constexpr auto Budget = std::chrono::milliseconds { 10000 };
-    for (auto const& backend: AllBackends)
+    for (auto const& backend: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
+        auto source = core::net::makeBackend(backend.kind);
         if (!source)
             continue; // not available on this platform
 
@@ -300,9 +300,9 @@ TEST_CASE("a socket reports closed once a read observed the peer's EOF", "[net]"
     // ISocket::isClosed documents two halves — "close() was called" OR "the peer closed and a
     // read observed EOF" — and the production sockets latched only the first. A consumer
     // polling a connection whose peer hung up was therefore told it was still open, for ever.
-    for (auto const& backend: AllBackends)
+    for (auto const& backend: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
+        auto source = core::net::makeBackend(backend.kind);
         if (!source)
             continue; // not available on this platform
 
@@ -329,7 +329,7 @@ TEST_CASE("a split socket is closed once its read half observed EOF", "[net]")
     // SplitSocket::isClosed is "closed once either half is", built straight on the answer
     // above — so a combined transport whose read half saw the peer hang up must report closed
     // too, though nothing on either half was closed from this side.
-    auto source = core::net::makeDefaultEventSource();
+    auto source = core::net::makeDefaultBackend();
     REQUIRE(source != nullptr);
     auto loop = EventLoop { *source };
     auto readPair = core::net::testing::makeSocketPair(loop);
@@ -350,9 +350,9 @@ TEST_CASE("a split socket is closed once its read half observed EOF", "[net]")
 
 TEST_CASE("listen + connect + accept echo a request over loopback", "[net]")
 {
-    for (auto const& backend: AllBackends)
+    for (auto const& backend: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
+        auto source = core::net::makeBackend(backend.kind);
         if (!source)
             continue; // not available on this platform
 
@@ -491,9 +491,9 @@ TEST_CASE("unix-domain listen + connect echo a request", "[net][afunix]")
     // Runtime-gated: on platforms without AF_UNIX support this documents the
     // Unsupported answer instead (never a crash). On Windows this is the
     // afunix.h path's coverage.
-    for (auto const& backend: AllBackends)
+    for (auto const& backend: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
+        auto source = core::net::makeBackend(backend.kind);
         if (!source)
             continue; // not available on this platform
 
@@ -529,9 +529,9 @@ TEST_CASE("closing a unix listener removes its socket file", "[net][afunix]")
     // leaves no path behind, so the next start's liveness probe finds nothing and binds fresh
     // rather than reclaiming a corpse. Windows used to keep the file — WindowsListener held no
     // path at all — which is what this pins.
-    for (auto const& backend: AllBackends)
+    for (auto const& backend: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
+        auto source = core::net::makeBackend(backend.kind);
         if (!source)
             continue; // not available on this platform
 
@@ -566,9 +566,9 @@ TEST_CASE("a live server on the path is not hijacked", "[net][afunix]")
     //
     // Cross-platform on purpose: the POSIX twin in UnixSocket_test.cpp cannot run here, and the
     // Windows probe (WindowsListener::probeUnixSocketOwner) had no coverage at all.
-    for (auto const& backend: AllBackends)
+    for (auto const& backend: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
+        auto source = core::net::makeBackend(backend.kind);
         if (!source)
             continue; // not available on this platform
 
@@ -695,9 +695,9 @@ Task<void> duplexBulk(EventLoop* loop,
 // the nature of a lost wake-up, and matches how the TLS deadlock case is covered.
 TEST_CASE("a concurrent reader and writer on one socket both make progress", "[net]")
 {
-    for (auto const& backend: AllBackends)
+    for (auto const& backend: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
+        auto source = core::net::makeBackend(backend.kind);
         if (!source)
             continue; // not available on this platform
 

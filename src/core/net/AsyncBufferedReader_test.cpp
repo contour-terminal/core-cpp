@@ -3,9 +3,9 @@
 #include <core/net/AsyncBufferedReader.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/ISocket.hpp>
-#include <core/net/PollEventSource.hpp>
+#include <core/net/IoBackend.hpp>
 #include <core/net/testing/InMemoryTransport.hpp>
-#include <core/net/testing/ScriptedEventSource.hpp>
+#include <core/net/testing/ScriptedBackend.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -126,7 +126,7 @@ TEST_CASE("readLine assembles lines across fragmented reads without re-scanning"
     for (auto const chunk: std::views::iota(std::size_t { 0 }, (wire.size() + 1) / 2))
         fake.pushChunk(std::string_view { wire }.substr(chunk * 2, 2));
 
-    auto source = core::net::testing::ScriptedEventSource {};
+    auto source = core::net::testing::ScriptedBackend {};
     auto loop = EventLoop { source };
     auto reader = AsyncBufferedReader { &fake };
 
@@ -144,7 +144,7 @@ TEST_CASE("readLine strips CRLF and LF alike and keeps a lone CR", "[net][reader
     auto fake = FakeSocket {};
     fake.pushChunk("crlf\r\nlf\n\r\na\rb\n");
 
-    auto source = core::net::testing::ScriptedEventSource {};
+    auto source = core::net::testing::ScriptedBackend {};
     auto loop = EventLoop { source };
     auto reader = AsyncBufferedReader { &fake };
 
@@ -171,7 +171,7 @@ TEST_CASE("readLine delivers a buffered burst and tracks unconsumed bytes", "[ne
                    "two\n"
                    "three\n");
 
-    auto source = core::net::testing::ScriptedEventSource {};
+    auto source = core::net::testing::ScriptedBackend {};
     auto loop = EventLoop { source };
     auto reader = AsyncBufferedReader { &fake };
 
@@ -209,7 +209,7 @@ TEST_CASE("readLine rejects a line exceeding its bound", "[net][reader]")
     auto fake = FakeSocket {};
     fake.pushChunk(std::string(32, 'y')); // no terminator, over the 8-byte bound
 
-    auto source = core::net::testing::ScriptedEventSource {};
+    auto source = core::net::testing::ScriptedBackend {};
     auto loop = EventLoop { source };
     auto reader = AsyncBufferedReader { &fake, 8 };
 
@@ -227,7 +227,7 @@ TEST_CASE("readLine accepts a line of exactly the bound", "[net][reader]")
     fake.pushChunk(std::string(8, 'z'));
     fake.pushChunk("\n"); // terminator arrives in a later chunk
 
-    auto source = core::net::testing::ScriptedEventSource {};
+    auto source = core::net::testing::ScriptedBackend {};
     auto loop = EventLoop { source };
     auto reader = AsyncBufferedReader { &fake, 8 };
 
@@ -245,7 +245,7 @@ TEST_CASE("readLine reports EOF and drops an unterminated tail", "[net][reader]"
     fake.pushChunk("complete\n");
     fake.pushChunk("partial"); // the peer dies before sending LF
 
-    auto source = core::net::testing::ScriptedEventSource {};
+    auto source = core::net::testing::ScriptedBackend {};
     auto loop = EventLoop { source };
     auto reader = AsyncBufferedReader { &fake };
 
@@ -263,8 +263,8 @@ TEST_CASE("readLine reports EOF and drops an unterminated tail", "[net][reader]"
 
 TEST_CASE("readLine works over a real transport through the reactor", "[net][reader][poll]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const backend = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *backend };
 
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
@@ -297,7 +297,7 @@ TEST_CASE("readUntil finds a delimiter split across two reads", "[net][reader]")
     fake.pushChunk("GET / HTTP/1.1\r\nHost: x\r\n");
     fake.pushChunk("\r\nbody");
 
-    auto source = core::net::testing::ScriptedEventSource {};
+    auto source = core::net::testing::ScriptedBackend {};
     auto loop = EventLoop { source };
     auto reader = AsyncBufferedReader { &fake };
 
@@ -316,7 +316,7 @@ TEST_CASE("readUntil consumes the delimiter and leaves the remainder buffered", 
     auto fake = FakeSocket {};
     fake.pushChunk("head\r\n\r\ntail");
 
-    auto source = core::net::testing::ScriptedEventSource {};
+    auto source = core::net::testing::ScriptedBackend {};
     auto loop = EventLoop { source };
     auto reader = AsyncBufferedReader { &fake };
 
@@ -340,7 +340,7 @@ TEST_CASE("readUntil reports EOF when the delimiter never arrives", "[net][reade
     auto fake = FakeSocket {};
     fake.pushChunk("no terminator here");
 
-    auto source = core::net::testing::ScriptedEventSource {};
+    auto source = core::net::testing::ScriptedBackend {};
     auto loop = EventLoop { source };
     auto reader = AsyncBufferedReader { &fake };
 
@@ -359,7 +359,7 @@ TEST_CASE("readUntil rejects a message exceeding the bound", "[net][reader]")
     fake.pushChunk(std::string(64, 'x'));
     fake.pushChunk(std::string(64, 'y'));
 
-    auto source = core::net::testing::ScriptedEventSource {};
+    auto source = core::net::testing::ScriptedBackend {};
     auto loop = EventLoop { source };
     auto reader = AsyncBufferedReader { &fake, 32 };
 
@@ -377,7 +377,7 @@ TEST_CASE("readUntil rejects an empty delimiter", "[net][reader]")
     auto fake = FakeSocket {};
     fake.pushChunk("anything");
 
-    auto source = core::net::testing::ScriptedEventSource {};
+    auto source = core::net::testing::ScriptedBackend {};
     auto loop = EventLoop { source };
     auto reader = AsyncBufferedReader { &fake };
 
@@ -397,7 +397,7 @@ TEST_CASE("readExactly assembles a payload across fragmented reads", "[net][read
     for (auto const chunk: std::views::iota(std::size_t { 0 }, (payload.size() + 2) / 3))
         fake.pushChunk(std::string_view { payload }.substr(chunk * 3, 3));
 
-    auto source = core::net::testing::ScriptedEventSource {};
+    auto source = core::net::testing::ScriptedBackend {};
     auto loop = EventLoop { source };
     auto reader = AsyncBufferedReader { &fake };
 
@@ -413,7 +413,7 @@ TEST_CASE("readExactly of zero bytes returns empty without reading", "[net][read
 {
     auto fake = FakeSocket {}; // no chunks: any read would be EOF
 
-    auto source = core::net::testing::ScriptedEventSource {};
+    auto source = core::net::testing::ScriptedBackend {};
     auto loop = EventLoop { source };
     auto reader = AsyncBufferedReader { &fake };
 
@@ -430,7 +430,7 @@ TEST_CASE("readExactly reports EOF rather than delivering a truncated payload", 
     auto fake = FakeSocket {};
     fake.pushChunk("only ten!!"); // 10 bytes, 20 requested
 
-    auto source = core::net::testing::ScriptedEventSource {};
+    auto source = core::net::testing::ScriptedBackend {};
     auto loop = EventLoop { source };
     auto reader = AsyncBufferedReader { &fake };
 
@@ -451,7 +451,7 @@ TEST_CASE("readExactly and readLine interleave over one buffer", "[net][reader]"
     fake.pushChunk("header\nAB");
     fake.pushChunk("CDtrailer\n");
 
-    auto source = core::net::testing::ScriptedEventSource {};
+    auto source = core::net::testing::ScriptedBackend {};
     auto loop = EventLoop { source };
     auto reader = AsyncBufferedReader { &fake };
 
@@ -481,7 +481,7 @@ TEST_CASE("readUntil finds a delimiter buffered before readLine hit its bound", 
     auto fake = FakeSocket {};
     fake.pushChunk("xxENDyyyyyy"); // holds "END", but no LF at all
 
-    auto source = core::net::testing::ScriptedEventSource {};
+    auto source = core::net::testing::ScriptedBackend {};
     auto loop = EventLoop { source };
     auto reader = AsyncBufferedReader { &fake, 4 }; // bound smaller than the chunk
 
@@ -511,7 +511,7 @@ TEST_CASE("readUntil does not skip a delimiter left behind by readLine", "[net][
     auto fake = FakeSocket {};
     fake.pushChunk("first\nxxENDyy"); // one line, then a delimiter with no LF after it
 
-    auto source = core::net::testing::ScriptedEventSource {};
+    auto source = core::net::testing::ScriptedBackend {};
     auto loop = EventLoop { source };
     auto reader = AsyncBufferedReader { &fake };
 
@@ -538,7 +538,7 @@ TEST_CASE("readUntil rescans the buffer when the delimiter changes", "[net][read
     auto fake = FakeSocket {};
     fake.pushChunk("abcXdef"); // holds "X" at index 3, and no CRLFCRLF anywhere
 
-    auto source = core::net::testing::ScriptedEventSource {};
+    auto source = core::net::testing::ScriptedBackend {};
     auto loop = EventLoop { source };
     auto reader = AsyncBufferedReader { &fake };
 
@@ -571,7 +571,7 @@ TEST_CASE("a transport failure is reported as itself, not as EOF", "[net][reader
         fake.pushChunk("no terminator");
         fake.failAfterChunks(NetErrorCode::ConnReset);
 
-        auto source = core::net::testing::ScriptedEventSource {};
+        auto source = core::net::testing::ScriptedBackend {};
         auto loop = EventLoop { source };
         auto reader = AsyncBufferedReader { &fake };
 
@@ -589,7 +589,7 @@ TEST_CASE("a transport failure is reported as itself, not as EOF", "[net][reader
         fake.pushChunk("head");
         fake.failAfterChunks(NetErrorCode::ConnReset);
 
-        auto source = core::net::testing::ScriptedEventSource {};
+        auto source = core::net::testing::ScriptedBackend {};
         auto loop = EventLoop { source };
         auto reader = AsyncBufferedReader { &fake };
 
@@ -608,7 +608,7 @@ TEST_CASE("a transport failure is reported as itself, not as EOF", "[net][reader
         fake.pushChunk("abc");
         fake.failAfterChunks(NetErrorCode::ConnReset);
 
-        auto source = core::net::testing::ScriptedEventSource {};
+        auto source = core::net::testing::ScriptedBackend {};
         auto loop = EventLoop { source };
         auto reader = AsyncBufferedReader { &fake };
 

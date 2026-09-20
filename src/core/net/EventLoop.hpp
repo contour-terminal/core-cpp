@@ -4,26 +4,31 @@
 /// @file
 /// `EventLoop` — the single-threaded coroutine driver for the async socket layer.
 ///
-/// The loop owns the one blocking primitive (an injected @c EventSource) and
-/// multiplexes fd readiness and timers over it. Flows (`async::Task`s) suspend on
+/// The loop owns the one blocking primitive (an injected @c IoBackend) and
+/// multiplexes handle readiness and timers over it. Flows (`async::Task`s) suspend on
 /// the awaitables the loop hands out — `waitReadable()`, `waitWritable()`,
-/// `delay()` — and the pump resumes them when their source is ready.
+/// `delay()` — and the pump resumes them when what they wait on is ready.
+///
+/// **Backends dispatch, the loop resumes.** A backend's wait invokes the callbacks on
+/// the @c ReadinessHandler each park registers, and those callbacks only ENQUEUE;
+/// every resumption happens in @c drainReadyQueue, on the loop thread, after the wait
+/// has returned. @c drainReadyQueue asserts that, so a backend that ever resumed from
+/// inside its own ready-list walk fails with a stack rather than corrupting the walk.
 ///
 /// Ported from Endo's TuiRuntime (see contour's src/coro/README.md for provenance) with the
 /// terminal-input and agent machinery removed, plus two additions the daemon
 /// needs: finished spawned flows are reaped every pump (upstream accumulated
-/// them until destruction), and a thread-safe @c post() backed by a @c platform::SystemPipe
-/// self-pipe lets other threads marshal work onto the loop thread AND break an
-/// in-flight blocking wait — one mechanism for both.
+/// them until destruction), and a thread-safe @c post() that marshals work onto the
+/// loop thread AND breaks an in-flight blocking wait — one mechanism for both, now
+/// that the wakeup channel belongs to the backend (@c IoBackend::wake).
 ///
 /// Threading: all scheduler state is touched only on the loop thread. The sole
 /// cross-thread surface is @c post().
 
 #include <core/async/Cancellation.hpp>
 #include <core/async/Task.hpp>
-#include <core/net/EventSource.hpp>
+#include <core/net/IoBackend.hpp>
 #include <core/platform/Clock.hpp>
-#include <core/platform/SystemPipe.hpp>
 #include <core/platform/Types.hpp>
 
 #include <cassert>
@@ -44,12 +49,63 @@ namespace core::net
 {
 
 /// Thrown by WaitFdAwaiter::await_resume when the fd could not be registered
-/// with the event source (e.g. fd table exhausted). Distinct from
-/// OperationCancelled so the caller can tell a plumbing failure from a
+/// with the backend (fd table exhausted, or a kernel that refused the interest).
+/// Distinct from OperationCancelled so the caller can tell a plumbing failure from a
 /// deliberate cancellation.
 struct FdRegistrationFailed
 {
 };
+
+/// Identifies one parked readiness wait for the loop's own bookkeeping.
+///
+/// An id rather than a pointer to the park, because a park is announced as closing
+/// (@c notifyHandleClosing) before the pump consumes that announcement, and the park
+/// may be resumed and destroyed in between: a recorded pointer would dangle, and a
+/// recorded id resolves to "no such park" instead. Task B4 widens this into the
+/// spec's `ParkId` over every kind of parked work; here it names an fd wait alone.
+///
+/// A strong struct rather than an `enum class` because it is an opaque,
+/// monotonically-allocated handle id — a wide value space that never wraps in a
+/// session — and not an enumeration of named cases. 32 bits would wrap after four
+/// billion parks, which a server doing ten thousand a second reaches in five days.
+struct ParkId
+{
+    std::uint64_t value = 0; ///< The park's id; 0 means none.
+
+    /// @return True if two ids name the same park.
+    [[nodiscard]] friend constexpr bool operator==(ParkId, ParkId) noexcept = default;
+
+    /// @return True if this id names a live park (non-zero).
+    [[nodiscard]] constexpr explicit operator bool() const noexcept { return value != 0; }
+
+    /// @return The sentinel for no park, which is what a failed registration reports.
+    [[nodiscard]] static constexpr ParkId invalid() noexcept { return ParkId { 0 }; }
+};
+
+} // namespace core::net
+
+namespace std
+{
+
+/// Hash specialization so @c ParkId can key an unordered container: the loop maps a
+/// park's id to the park itself, and a descriptor to the parks on it. Declared HERE,
+/// between the type and its first use, because a specialization that arrives after
+/// the container is instantiated is not the one the container picked up.
+template <>
+struct hash<core::net::ParkId>
+{
+    /// @param park The id to hash.
+    /// @return The hash of its underlying value.
+    [[nodiscard]] std::size_t operator()(core::net::ParkId park) const noexcept
+    {
+        return std::hash<std::uint64_t> {}(park.value);
+    }
+};
+
+} // namespace std
+
+namespace core::net
+{
 
 /// How a flow parked on a descriptor is resumed when that descriptor closes.
 ///
@@ -84,22 +140,24 @@ enum class FdWakeReason : std::uint8_t
 class DelayAwaiter;
 class WaitFdAwaiter;
 
-/// Single-threaded cooperative scheduler driving coroutine flows over fd
+/// Single-threaded cooperative scheduler driving coroutine flows over handle
 /// readiness and timers.
 ///
-/// Construct with an @c EventSource, `spawn` background flows and/or `blockOn`
+/// Construct with an @c IoBackend, `spawn` background flows and/or `blockOn`
 /// a root flow; the pump runs on the calling thread until the root flow
 /// completes.
 class EventLoop
 {
   public:
-    /// @param source The multiplexed wait the pump drives (not owned; outlives the loop).
+    /// @param backend The multiplexed wait the pump drives (not owned; outlives the
+    ///        loop, because every registration this loop made is detached in
+    ///        ~EventLoop and not a moment later).
     /// @param clock The monotonic time source for timers and delays (not owned;
     ///        outlives the loop). Defaults to the process steady clock; tests
     ///        inject a @c platform::ManualClock for deterministic timing. The loop
     ///        calls its @c refresh() before it computes a wait's timeout and after
     ///        the wait returns, so a @c platform::CachedClock serves the current turn.
-    explicit EventLoop(EventSource& source, platform::IClock& clock = platform::defaultSteadyClock());
+    explicit EventLoop(IoBackend& backend, platform::IClock& clock = platform::defaultSteadyClock());
 
     EventLoop(EventLoop const&) = delete;
     EventLoop& operator=(EventLoop const&) = delete;
@@ -142,10 +200,19 @@ class EventLoop
     ///         must preserve.
     [[nodiscard]] std::size_t pendingTimerCount() const noexcept { return _timers.size(); }
 
+    /// @return The number of readiness parks the loop still holds — one per
+    ///         registration it has with the backend. The same invariant as
+    ///         @c pendingTimerCount, for the other kind of park: a flow that resumed
+    ///         or unwound without unregistering leaves its handler attached to the
+    ///         backend, and a count that never returns to zero is how that shows
+    ///         before it becomes a wait on a handle nobody is waiting for.
+    [[nodiscard]] std::size_t parkedWaiterCount() const noexcept { return _parks.size(); }
+
     /// Enqueues @p callback to run on the loop thread and wakes the loop if it is
     /// blocked inside a wait. The ONLY EventLoop entry point that is safe to call
     /// from other threads; everything else must run on the loop thread (use post
-    /// to get there).
+    /// to get there). The wake goes through @c IoBackend::wake, which is the one
+    /// thread-safe member of that interface and the one channel every backend owns.
     /// @param callback The work to run on the loop thread.
     void post(std::function<void()> callback);
 
@@ -188,7 +255,7 @@ class EventLoop
     /// resumed instead of waiting forever for readiness that can no longer arrive.
     ///
     /// Call this BEFORE the `close()` syscall, on the loop thread: the descriptor
-    /// must still be valid so the event source can drop its kernel registration
+    /// must still be valid so the backend can drop its kernel registration
     /// cleanly. Deferring that to the awaiter's own detach would issue the removal
     /// against a descriptor number the kernel may already have handed to a new
     /// socket, silently unregistering that one instead.
@@ -214,26 +281,28 @@ class EventLoop
 
     void scheduleTimer(platform::SteadyTimePoint deadline, std::coroutine_handle<> waiter);
 
-    /// Attaches @p fd to the event source for @p interest and parks @p waiter until
-    /// it becomes ready. Several fd waiters may be parked concurrently (one per
-    /// distinct fd), so they live in a map keyed by registration token.
+    /// Registers @p fd with the backend for @p interest and parks @p waiter until it
+    /// becomes ready. Several waiters may be parked concurrently — including two on
+    /// one descriptor, a reader beside a writer — so each park owns its own
+    /// @c ReadinessHandler and is named by its own @c ParkId.
     /// @param fd The native handle to wait on.
     /// @param interest The readiness to wait for (Read or Write).
     /// @param waiter The coroutine to resume on readiness or cancellation.
-    /// @return The registration token (to detach on resume/cancel), or
-    ///         @c FdToken::invalid() if the attach failed.
-    [[nodiscard]] FdToken registerFdWaiter(platform::NativeHandle fd,
-                                           FdInterest interest,
-                                           std::coroutine_handle<> waiter);
+    /// @return The park's id (to unregister on resume/cancel), or @c ParkId::invalid()
+    ///         if the backend refused the registration — which it does for an invalid
+    ///         handle, and for a kernel that would not arm the interest.
+    [[nodiscard]] ParkId registerFdWaiter(platform::NativeHandle fd,
+                                          Interest interest,
+                                          std::coroutine_handle<> waiter);
 
-    /// Detaches @p token from the event source and drops its parked waiter, if any.
+    /// Detaches @p park from the backend and drops it, if it is still there.
     /// Idempotent. Called by the awaiter on resume (ready or cancelled).
-    /// @param token The registration to remove.
+    /// @param park The park to remove.
     /// @return @c FdWakeReason::Abandoned if the descriptor was closed under
     ///         @c FdWakePolicy::Cancel while this waiter was parked on it — the
     ///         awaiter then unwinds instead of resuming into an owner that is gone.
     ///         @c FdWakeReason::Ready otherwise.
-    [[nodiscard]] FdWakeReason unregisterFdWaiter(FdToken token) noexcept;
+    [[nodiscard]] FdWakeReason unregisterFdWaiter(ParkId park) noexcept;
 
     /// Re-queues @p waiter for resumption because its cancellation token fired while
     /// it was parked on a timer or fd. Used by the timed/fd awaiters' stop-callbacks
@@ -276,74 +345,101 @@ class EventLoop
     /// Runs every callback handed to post() since the last drain, outside the lock.
     void runPostedCallbacks();
 
-    /// Drains bytes from the post self-pipe after the source reported it readable.
-    /// One bounded read per pump: if more wakeup bytes remain, the next wait
-    /// reports the pipe readable again (level-triggered), so nothing is lost.
-    void drainPostPipe();
-
     /// Resumes every coroutine currently in the ready queue.
+    ///
+    /// The one place a coroutine is resumed, which is what makes Rule 1 assertable:
+    /// it requires that no backend dispatch is in flight on this thread, so a backend
+    /// that resumed from inside its own ready-list walk is caught here rather than
+    /// when the walk reads the entry a resumed frame has freed.
     void drainReadyQueue();
 
-    /// @return The timeout (ms) for the next wait: the soonest timer, or -1 if none.
-    [[nodiscard]] int computeTimeoutMs() const;
+    /// @return How long the next wait may block: until the soonest timer, or nullopt
+    ///         if no timer is pending. The rounding — a sub-millisecond remainder must
+    ///         not become a zero-timeout spin — belongs to the backend's own
+    ///         conversion (@c detail::toTimeoutMillis), which is where the unit is.
+    [[nodiscard]] std::optional<platform::SteadyDuration> computeTimeout() const;
 
     /// Moves expired timers' coroutines into the ready queue.
     void fireExpiredTimers();
 
-    /// Resumes the coroutines parked on the fds reported ready by a wait, detaching
-    /// each from the event source. Idempotent per token.
-    /// @param tokens The ready fd tokens (readyRead or readyWrite from the outcome).
-    void wakeFdWaiters(std::vector<FdToken> const& tokens);
+    /// Queues the coroutine parked at @p park for resumption, and takes the park out
+    /// of the scheduling indices. This is what a backend's readiness callback reaches,
+    /// and it ENQUEUES — it never resumes. Idempotent per park within one pump: the
+    /// second call finds the waiter already taken and does nothing.
+    ///
+    /// The park itself survives (its @c ReadinessHandler is still registered with the
+    /// backend); @c unregisterFdWaiter is what detaches and destroys it, from the
+    /// awaiter that owns it.
+    /// @param park The park whose waiter to queue.
+    void queueParkedWaiter(ParkId park);
 
-    /// Wakes every parked flow so cancelled awaitables can unwind.
+    /// The readiness callback every park registers, for both directions.
+    ///
+    /// Static and `noexcept`, because that is what a @c ReadinessCallback is. It only
+    /// enqueues. Allocation failure inside the queue terminates rather than being
+    /// swallowed, which is the same trade @c notifyHandleClosing makes and for the
+    /// same reason: a lost wake is a flow that hangs.
+    /// @param handler The ready park's handler, whose `owner` is its @c FdPark.
+    static void onParkReady(ReadinessHandler& handler) noexcept;
+
+    /// Wakes every parked flow so cancelled awaitables can unwind. Detaches each park
+    /// from the backend first, so nothing stays registered past this call.
     void wakeAllWaiters();
 
-    /// Forgets the parked waiter behind @p token, across all three indices that
-    /// describe it. The single place that does so: four call sites would otherwise
-    /// each have to remember every container a park is recorded in, and one that
-    /// forgot would leave a stale entry pointing at a frame about to be destroyed.
-    /// @param token The registration whose park is being dropped.
-    /// @return The coroutine that was parked, or a null handle if @p token had none.
-    [[nodiscard]] std::coroutine_handle<> dropParkedWaiter(FdToken token) noexcept;
+    /// Forgets the waiter parked at @p park, across both indices that name it, and
+    /// hands it back. The single place that does so: several call sites would
+    /// otherwise each have to remember every container a park is recorded in, and one
+    /// that forgot would leave a stale entry pointing at a frame about to be
+    /// destroyed. The park itself is left in place for @c unregisterFdWaiter.
+    /// @param park The park whose waiter is being taken.
+    /// @return The coroutine that was parked, or a null handle if there was none.
+    [[nodiscard]] std::coroutine_handle<> takeParkedWaiter(ParkId park) noexcept;
 
-    /// One parked fd waiter: the coroutine to resume, and the descriptor it parked
-    /// on. The descriptor is kept so a park can be found by fd (see @c _fdToTokens)
-    /// and so dropping it can also clear that reverse index.
-    struct ParkedWaiter
+    /// One parked readiness wait: the registration the backend holds, the coroutine to
+    /// resume, and the descriptor it parked on.
+    ///
+    /// Held by unique_ptr, because @c ReadinessHandler::owner points back at this and
+    /// the backend holds the handler's address: a park may not move once registered.
+    struct FdPark
     {
-        std::coroutine_handle<> handle;                      ///< The suspended coroutine.
+        ReadinessHandler handler {};                         ///< What the backend has registered.
+        EventLoop* loop = nullptr;                           ///< The loop to enqueue onto.
+        ParkId id {};                                        ///< This park's identity.
+        std::coroutine_handle<> waiter;                      ///< The suspended coroutine; null once queued.
         platform::NativeHandle fd = platform::InvalidHandle; ///< The descriptor it is parked on.
     };
 
-    EventSource& _source;                                 ///< The injected multiplexed wait.
-    platform::IClock& _clock;                             ///< The injected monotonic time source.
-    std::deque<std::coroutine_handle<>> _ready;           ///< Coroutines ready to resume now.
-    std::vector<TimerEntry> _timers;                      ///< Min-heap by deadline (soonest at front).
-    std::unordered_map<FdToken, ParkedWaiter> _fdWaiters; ///< Flows parked on a generic fd, by token.
-    std::unordered_map<std::coroutine_handle<>, FdToken>
-        _waiterToToken; ///< Reverse map for O(1) cancellation.
-    /// Reverse index from descriptor to the registrations parked on it, so a closing
-    /// descriptor finds its waiters in O(1) rather than scanning every park. A
-    /// multimap because one descriptor can carry two parks at once — a reader and a
-    /// writer — and closing it must resume both.
-    std::unordered_multimap<platform::NativeHandle, FdToken> _fdToTokens;
-    /// Registrations whose descriptor closed since the last pump, merged into the
-    /// next pump's wait outcome as one more source of readiness. Consumed ONLY in
-    /// pumpOnce: ~EventLoop must resume parked flows through its own
-    /// request_stop()-first path, not on their normal path, because by then their
-    /// owners are already destroyed.
-    std::vector<FdToken> _closedTokens;
-    /// The subset of @c _closedTokens whose descriptor closed under
+    /// Detaches @p park from the backend and destroys it, dropping every index that
+    /// names it. A no-op for a park that is already gone.
+    /// @param park The park to remove.
+    void destroyPark(ParkId park) noexcept;
+
+    IoBackend& _backend;                        ///< The injected multiplexed wait and dispatcher.
+    platform::IClock& _clock;                   ///< The injected monotonic time source.
+    std::deque<std::coroutine_handle<>> _ready; ///< Coroutines ready to resume now.
+    std::vector<TimerEntry> _timers;            ///< Min-heap by deadline (soonest at front).
+    std::unordered_map<ParkId, std::unique_ptr<FdPark>> _parks;        ///< Live readiness parks, by id.
+    std::unordered_map<std::coroutine_handle<>, ParkId> _waiterToPark; ///< Reverse map for O(1) cancellation.
+    /// Reverse index from descriptor to the parks on it, so a closing descriptor finds
+    /// its waiters in O(1) rather than scanning every park. A multimap because one
+    /// descriptor can carry two parks at once — a reader and a writer — and closing it
+    /// must resume both.
+    std::unordered_multimap<platform::NativeHandle, ParkId> _fdToParks;
+    /// Parks whose descriptor closed since the last pump, merged into the next pump as
+    /// one more source of readiness. Consumed ONLY in pumpOnce: ~EventLoop must resume
+    /// parked flows through its own request_stop()-first path, not on their normal
+    /// path, because by then their owners are already destroyed.
+    std::vector<ParkId> _closedParks;
+    /// The subset of @c _closedParks whose descriptor closed under
     /// @c FdWakePolicy::Cancel, so @c unregisterFdWaiter can tell the awaiter to
     /// unwind rather than resume.
-    std::unordered_set<FdToken> _abandoned;
+    std::unordered_set<ParkId> _abandoned;
     std::vector<async::Task<void>> _roots; ///< Keeps live spawned background flows alive.
     async::StopSource _rootStop;           ///< Root cancellation source.
+    std::uint64_t _nextParkId = 0;         ///< Source of never-zero park ids.
 
-    std::unique_ptr<platform::SystemPipe> _postPipe; ///< Self-pipe waking the source for post(); may be null.
-    FdToken _postToken {};                           ///< The self-pipe's registration with the source.
-    std::mutex _postMutex;                           ///< Guards _posted (the only cross-thread state).
-    std::vector<std::function<void()>> _posted;      ///< Callbacks awaiting the loop thread.
+    std::mutex _postMutex;                      ///< Guards _posted (the only cross-thread state).
+    std::vector<std::function<void()>> _posted; ///< Callbacks awaiting the loop thread.
 };
 
 /// Awaitable that resumes after a delay (or throws on cancellation).
@@ -395,16 +491,16 @@ class DelayAwaiter
 /// parked. Returned by @c EventLoop::waitReadable / @c waitWritable.
 ///
 /// Readiness is observed via the OS wait, so the awaiter is never ready before it
-/// suspends: it always parks (after attaching the fd to the event source), and the
-/// loop resumes it when the wait reports the fd ready. On resume — whether ready
-/// or cancelled — it detaches the fd so the registration never outlives the await.
+/// suspends: it always parks (after registering the fd with the backend), and the
+/// loop resumes it when the backend dispatches readiness for it. On resume — whether
+/// ready or cancelled — it unregisters, so the registration never outlives the await.
 class WaitFdAwaiter
 {
   public:
-    /// @param loop The loop whose event source the fd is registered with.
+    /// @param loop The loop whose backend the fd is registered with.
     /// @param fd The native handle to wait on.
     /// @param interest The readiness to wait for (Read or Write).
-    WaitFdAwaiter(EventLoop& loop, platform::NativeHandle fd, FdInterest interest) noexcept:
+    WaitFdAwaiter(EventLoop& loop, platform::NativeHandle fd, Interest interest) noexcept:
         _loop(loop), _fd(fd), _interest(interest)
     {
     }
@@ -429,7 +525,7 @@ class WaitFdAwaiter
             return false;
         _registration = _loop.registerFdWaiter(_fd, _interest, awaiting);
         if (!_registration)
-            return false; // attach failed: resume and surface the failure in await_resume
+            return false; // registration failed: resume and surface it in await_resume
         // If the token is stopped while parked (a whenAny/withTimeout sibling won),
         // re-queue this coroutine promptly so it unwinds instead of waiting for the
         // fd to become ready (which may never happen).
@@ -437,10 +533,12 @@ class WaitFdAwaiter
         return true;
     }
 
-    /// Detaches the fd and, if the flow was cancelled while parked, the descriptor
-    /// was abandoned under it, or the attach failed, reports the failure.
+    /// Unregisters the park and, if the flow was cancelled while parked, the
+    /// descriptor was abandoned under it, or the registration failed, reports the
+    /// failure.
     /// @throws FdRegistrationFailed if the fd could not be registered with the
-    ///         event source (resource exhaustion — distinct from cancellation).
+    ///         backend (resource exhaustion, or a kernel that refused the interest —
+    ///         distinct from cancellation).
     /// @throws OperationCancelled if cancelled while parked, the fd was invalid, or
     ///         the fd was closed under @c FdWakePolicy::Cancel while parked. That
     ///         last case is what keeps a destructor from resuming this flow into an
@@ -462,8 +560,8 @@ class WaitFdAwaiter
     std::optional<async::StopCallback<std::function<void()>>> _cancelReg;
     EventLoop& _loop;
     platform::NativeHandle _fd;
-    FdInterest _interest;
-    FdToken _registration {};
+    Interest _interest;
+    ParkId _registration {};
     async::StopToken _token;
 };
 

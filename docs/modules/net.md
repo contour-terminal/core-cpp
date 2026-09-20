@@ -11,15 +11,15 @@ directory `src/core/net/`. Three targets:
 
 !!! note "Status"
     Imported from contour's `src/net` at `6777ff05`, as contour has it but for the namespaces and
-    [platform](platform.md) in place of contour's `net/platform/`. The API below is contour's
-    `EventSource` design. Phase B of the
-    [implementation plan](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/plans/2026-09-18-core-cpp.md)
-    replaces it: `IoBackend`, `makeDefaultBackend()` and `Interest` take the place of
-    `EventSource`, `makeDefaultEventSource()` and `FdInterest`, IOCP becomes the Windows default,
-    fastcached's sockets and dialler are merged in, and the event loop, its timers and a
-    host-driven backend join the WebAssembly subset (Tasks B3 to B11). Until then nothing of
-    `core::net` but `core::net_types` builds under Emscripten. Task B2 is done: the error
-    vocabulary below is already the merged one.
+    [platform](platform.md) in place of contour's `net/platform/`, and being merged with
+    fastcached's async and networking layer by Phase B of the
+    [implementation plan](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/plans/2026-09-18-core-cpp.md).
+    Done so far: Task B2's merged error vocabulary, and Task B3's `IoBackend`, which replaces
+    `EventSource` — a backend dispatches readiness to the callbacks a caller registers, instead of
+    reporting tokens for the caller to route. Still to come: IOCP as the Windows default,
+    fastcached's sockets and dialler, and the event loop and its timers joining the WebAssembly
+    subset (Tasks B4 to B11). Until then nothing of `core::net` but `core::net_types` builds under
+    Emscripten.
 
 ## What it has
 
@@ -28,9 +28,7 @@ directory `src/core/net/`. Three targets:
 | `<core/net/NetError.hpp>` | `NetErrorCode` and its `toString()`, the predicate `isDeadlineExpiry()`, `NetError` (a category, the OS error number and a context string) and `makeNetError()` |
 | `<core/net/IoResult.hpp>` | `IoResult`, `std::expected<std::size_t, NetError>`: what every byte transfer returns |
 | `<core/net/EventLoop.hpp>` | `EventLoop`: the single-threaded driver that resumes coroutines on descriptor readiness and timers; `blockOn()`, `spawn()`, `post()` (the one member other threads may call), `requestStop()`, `delay()`, `sleepUntil()`, `waitReadable()`, `waitWritable()`, `notifyHandleClosing()`; `pollUntil()` |
-| `<core/net/EventSource.hpp>` | `EventSource`, the injected blocking wait the loop drives, and its registry: `FdToken`, `FdInterest`, `FdRegistry`, `WaitOutcome` |
-| `<core/net/PollEventSource.hpp>` | the portable `EventSource`: `poll(2)` on POSIX, `WaitForMultipleObjects` on Windows, in chunks past 64 handles |
-| `<core/net/DefaultEventSource.hpp>` | `makeDefaultEventSource()`, the best backend here with a fallback to poll; `makeEventSource(EventSourceKind)` for tests. The epoll (Linux) and kqueue (macOS, the BSDs) sources behave as poll does, and a wait costs O(ready) rather than O(registered); their headers are private, so these two functions are how a program gets one |
+| `<core/net/IoBackend.hpp>` | `IoBackend`, the injected blocking wait the loop drives and the readiness dispatcher behind it: `ReadinessHandler` (a handle, an owner and the callbacks a backend invokes), `Interest`, `HandleKind`, `Readiness`, `selectReadinessCallback()`, `BackendKind`, `WaitResult`; and the factories `makeDefaultBackend()`, `makeBackend(BackendKind)` and `preferredBackendKind()`. Every backend's own header is private, so the factories are how a program gets one: poll(2) on POSIX, epoll on Linux, kqueue on macOS and the BSDs, `WSAEventSelect` + `WaitForMultipleObjects` on Windows |
 | `<core/net/ISocket.hpp>`, `<core/net/IListener.hpp>` | the transport interfaces: `read`, `readWithFd`, `write`, `close`; `accept`, `localPort` |
 | `<core/net/Sockets.hpp>` | `listen()`, `connect()`, `listenUnix()`, `connectUnix()`, `adoptFd()`, `appendReadChunk()` |
 | `<core/net/AsyncBufferedReader.hpp>` | `readLine()`, `readUntil()`, `readExactly()` over an `ISocket`, each buffered byte scanned once |
@@ -87,35 +85,50 @@ the header says what narrowing it to `Timeout` costs
 or zero, so `makeNetError(NetErrorCode::Eof)` renders as `end of stream`.
 
 The test doubles are public, in `testing/` and namespace `core::net::testing`, and compiled into
-`core::net`: `ScriptedEventSource` (scripted readiness and recorded timeouts, no descriptors),
+`core::net`: `ScriptedBackend` (readiness scripted against a `HandlerId`, and recorded timeouts,
+with no descriptors), `NullBackend` (accepts registrations, reports nothing, never blocks),
 `makeSocketPair()` (a connected pair over a socketpair, or a loopback TCP pair on Windows),
-`AllBackends` (every `EventSourceKind`, for tests that run one scenario on each), and
+`BackendMatrix` (every `BackendKind` `makeBackend` can build, for tests that run one scenario on
+each), and
 `CoroTestSupport.hpp` (`sleepFor`, `allOf`, `anyOf`, `waitUntil`). contour's `testing/TempDir.hpp`
 was not imported: [`core::testing::ScopedTempDir`](testing.md) does the same.
 
 The module's own directory holds only platform-independent code. What one platform needs is
 private, and CMake's per-platform source lists choose it: `posix/` (`poll(2)`, the listeners,
 `PosixSocket`, the accept loop), `linux/` (epoll), `bsd/` (kqueue, for Apple and the BSDs) and
-`windows/` (`WaitForMultipleObjects`, `WindowsSocket` and `WindowsListener` over
-`WSAEventSelect`, the loopback pair). No file there guards itself with an `#ifdef` of its
-platform. contour's `PollEventSource.cpp` is split along its `#ifdef` into `posix/` and
-`windows/`, and `makeSocketPair()` into `testing/posix/` and `testing/windows/`. Two exceptions
-remain: `DefaultEventSource.cpp` keeps its `#ifdef`s until Task B3 replaces it, and
-`EventSourceParity_test.cpp` keeps two POSIX-only cases (a closed descriptor's registration,
-descriptor exhaustion) under `#ifndef _WIN32`. `detail/` has the rest that is private: the
-chunking arithmetic of the Windows wait, `PeerAddress.hpp` (which includes `<winsock2.h>`), and
-two helpers.
+`windows/` (`WfmoBackend`, `WindowsSocket` and `WindowsListener` over `WSAEventSelect`, the
+loopback pair). No file there guards itself with an `#ifdef` of its platform. contour's
+`PollEventSource.cpp` is split along its `#ifdef` into `posix/PollBackend.cpp` and
+`windows/WfmoBackend.cpp`, and `makeSocketPair()` into `testing/posix/` and `testing/windows/`.
+`DefaultBackend.cpp` sits in each of the four, and the `CMakeLists.txt` names exactly one of them,
+because that is what "no `#ifdef` chooses a backend" means: the platform is asked once, where the
+source lists are. One exception remains: `BackendParity_test.cpp` keeps three POSIX-only cases (a
+closed descriptor's registration, descriptor exhaustion, a muted registration whose peer hangs up)
+under `#ifndef _WIN32`. `detail/` has the rest that is private: the ready batch every backend
+dispatches through, the wakeup channel every blocking one is woken by, the timeout conversion, the
+chunking arithmetic of the Windows wait, `PeerAddress.hpp` (which includes `<winsock2.h>`), and two
+helpers.
 
 ## Invariants
 
 From contour's `src/net/README.md` at `6777ff05`, as far as they hold here:
 
-- **`EventSource` is the extension point.** A new backend implements the blocking wait and the
-  registry; the loop keeps the timers and the ready queue. Every backend behaves the same, and
-  `EventSourceParity_test.cpp` runs one scenario on each to keep it so.
+- **Backends dispatch, the loop resumes.** A backend's `wait()` invokes the callbacks on the
+  `ReadinessHandler`s it holds, and those callbacks only ENQUEUE; every coroutine is resumed by
+  the loop, on the loop's thread, after the wait has returned. Resuming from inside a backend's
+  walk over its own ready list lets the resumed frame free the object whose entry the walk has not
+  reached yet, so `EventLoop::drainReadyQueue()` asserts that no dispatch is in flight.
+- **At most one callback per registration per wait,** for the same reason, and a registration
+  detached during a dispatch is withdrawn from the batch rather than called later in it. Level
+  triggering reports whatever was skipped on the next wait.
+- **`IoBackend` is the extension point.** A new backend implements the wait and the dispatch; the
+  loop keeps the timers and the ready queue. Every backend behaves the same, and
+  `BackendParity_test.cpp` runs one scenario on each to keep it so.
 - **A registration that fails fails the awaitable; it never parks.** `waitReadable()` on a
   descriptor the backend refused throws `FdRegistrationFailed` rather than suspending on an
-  interest nothing can resume.
+  interest nothing can resume. `setInterest()` is what reports a kernel's refusal — `attach()`
+  only says that the handler and the backend are usable together, because kqueue has no
+  "register with no filters" operation and so cannot answer more than that.
 - **Readiness is level-triggered.** The sockets and the accept loop assume a descriptor that
   stays ready is reported again.
 - **Time is the injected `core::platform::IClock`,** which the loop refreshes before it computes
@@ -126,8 +139,10 @@ From contour's `src/net/README.md` at `6777ff05`, as far as they hold here:
   its normal path; its destructor resumes it with `OperationCancelled`, so the flow never reads the
   dead socket.
 - **I/O errors are `std::expected`.** Exceptions are `core::async::OperationCancelled`, for a
-  cancelled flow, `FdRegistrationFailed`, and the `std::runtime_error` of an `EventLoop` that
-  cannot create its wakeup pipe (descriptor exhaustion).
+  cancelled flow, `FdRegistrationFailed`, and the `std::runtime_error` of a backend that cannot
+  create its wakeup channel (descriptor exhaustion). That channel belongs to the backend, because
+  `IoBackend::wake()` is the one member of the interface another thread may call, and it is what
+  `EventLoop::post()` uses to break a wait in flight.
 - **No OpenSSL type crosses a header.** `Tls.cpp` keeps it behind `ITlsContext`, and
   `core::net_tls` links OpenSSL PRIVATE.
 
@@ -141,8 +156,10 @@ These are contour's, carried as they are:
   Phase B's dialler takes a `std::string`.
 - `generateSelfSignedCertificate()` defaults its common name to `"contour-daemon"`, and
   `makeSelfSignedServerContext()` uses that default. Phase B's `SelfSignedOptions` names it.
-- The event sources take a timeout in milliseconds, so a timer fires no more precisely than
-  that. Phase B's `IoBackend::wait()` takes a `SteadyDuration`.
+- `IoBackend::wait()` takes a `SteadyDuration`, but every backend's native wait but kqueue's
+  takes milliseconds, so a timer still fires no more precisely than that. A positive duration
+  under a millisecond rounds UP to one rather than truncating to zero, which would turn the wait
+  into a poll and spin the loop.
 
 ## Tests
 

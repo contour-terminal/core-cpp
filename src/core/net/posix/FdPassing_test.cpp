@@ -2,7 +2,7 @@
 
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
-#include <core/net/PollEventSource.hpp>
+#include <core/net/IoBackend.hpp>
 #include <core/net/Sockets.hpp>
 #include <core/net/SplitSocket.hpp>
 #include <core/net/testing/InMemoryTransport.hpp>
@@ -60,8 +60,8 @@ void sendWithFds(int socketFd, std::string_view payload, std::span<int const> fd
 /// One connected AF_UNIX socketpair: ours adopted into the reactor, theirs raw.
 struct Pair
 {
-    core::net::PollEventSource source;
-    core::net::EventLoop loop { source };
+    std::unique_ptr<core::net::IoBackend> backend = core::net::makeDefaultBackend();
+    core::net::EventLoop loop { *backend };
     std::unique_ptr<core::net::ISocket> ours;
     int theirs = -1;
 
@@ -186,8 +186,8 @@ TEST_CASE("readWithFd without ancillary data reports fd -1", "[net][fdpass]")
 
 TEST_CASE("the default readWithFd never yields a descriptor", "[net][fdpass]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = core::net::EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = core::net::EventLoop { *source };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 

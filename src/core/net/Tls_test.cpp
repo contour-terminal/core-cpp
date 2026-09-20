@@ -2,7 +2,7 @@
 #include <core/net/EventLoop.hpp>
 #include <core/net/IListener.hpp>
 #include <core/net/ISocket.hpp>
-#include <core/net/PollEventSource.hpp>
+#include <core/net/IoBackend.hpp>
 #include <core/net/Sockets.hpp>
 #include <core/net/Tls.hpp>
 #include <core/net/testing/CoroTestSupport.hpp>
@@ -68,8 +68,8 @@ void releaseServer(core::net::EventLoop* serverLoop, core::net::IListener* liste
 
 TEST_CASE("TLS handshakes and echoes application data over the reactor", "[net][tls]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = core::net::EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = core::net::EventLoop { *source };
     auto made = core::net::testing::makeSocketPair(loop);
     REQUIRE(made.has_value()); // a loopback failure is a test failure, not UB
     auto pair = std::move(*made);
@@ -98,8 +98,8 @@ TEST_CASE("TLS handshakes and echoes application data over the reactor", "[net][
 
 TEST_CASE("a generated dev certificate drives a verified TLS handshake", "[net][tls]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = core::net::EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = core::net::EventLoop { *source };
     auto made = core::net::testing::makeSocketPair(loop);
     REQUIRE(made.has_value()); // a loopback failure is a test failure, not UB
     auto pair = std::move(*made);
@@ -142,8 +142,8 @@ TEST_CASE("a pinned CA is not enough: the certificate must name the host asked f
 
     SECTION("the name the certificate carries handshakes")
     {
-        auto source = core::net::PollEventSource {};
-        auto loop = core::net::EventLoop { source };
+        auto const source = core::net::makeDefaultBackend();
+        auto loop = core::net::EventLoop { *source };
         auto made = core::net::testing::makeSocketPair(loop);
         REQUIRE(made.has_value()); // a loopback failure is a test failure, not UB
         auto pair = std::move(*made);
@@ -165,8 +165,8 @@ TEST_CASE("a pinned CA is not enough: the certificate must name the host asked f
 
     SECTION("a DIFFERENT name fails the handshake, though the CA is the same")
     {
-        auto source = core::net::PollEventSource {};
-        auto loop = core::net::EventLoop { source };
+        auto const source = core::net::makeDefaultBackend();
+        auto loop = core::net::EventLoop { *source };
         auto made = core::net::testing::makeSocketPair(loop);
         REQUIRE(made.has_value()); // a loopback failure is a test failure, not UB
         auto pair = std::move(*made);
@@ -231,8 +231,8 @@ TEST_CASE("TLS completes a two-reactor handshake under concurrent client I/O", "
     // handshake from CONCURRENT write and read coroutines — the shape NativeClient
     // uses (WriteQueue + read pump) — which deadlocked before handshake() was
     // serialized (two coroutines calling non-reentrant SSL_do_handshake at once).
-    auto serverSource = core::net::PollEventSource {};
-    auto serverLoop = core::net::EventLoop { serverSource };
+    auto const serverSource = core::net::makeDefaultBackend();
+    auto serverLoop = core::net::EventLoop { *serverSource };
     auto listener = core::net::listen(serverLoop, "127.0.0.1", 0);
     REQUIRE(listener.has_value());
     auto serverCtx = core::net::makeSelfSignedServerContext();
@@ -254,8 +254,8 @@ TEST_CASE("TLS completes a two-reactor handshake under concurrent client I/O", "
             }(listener->get(), serverCtx->get(), &received));
     } };
 
-    auto clientSource = core::net::PollEventSource {};
-    auto clientLoop = core::net::EventLoop { clientSource };
+    auto const clientSource = core::net::makeDefaultBackend();
+    auto clientLoop = core::net::EventLoop { *clientSource };
 
     auto matched = false;
     clientLoop.blockOn([](core::net::EventLoop* loop,
@@ -312,8 +312,8 @@ TEST_CASE("a cancelled TLS handshake releases the coroutines parked on it", "[ne
     //
     // Like the two-reactor case above, a regression here does not fail — it HANGS, and the suite's
     // per-test timeout is what reports it.
-    auto serverSource = core::net::PollEventSource {};
-    auto serverLoop = core::net::EventLoop { serverSource };
+    auto const serverSource = core::net::makeDefaultBackend();
+    auto serverLoop = core::net::EventLoop { *serverSource };
     auto listener = core::net::listen(serverLoop, "127.0.0.1", 0);
     REQUIRE(listener.has_value());
     // Before the server thread starts, like every REQUIRE of the case above.
@@ -333,8 +333,8 @@ TEST_CASE("a cancelled TLS handshake releases the coroutines parked on it", "[ne
         }(listener->get(), &serverLoop));
     } };
 
-    auto clientSource = core::net::PollEventSource {};
-    auto clientLoop = core::net::EventLoop { clientSource };
+    auto const clientSource = core::net::makeDefaultBackend();
+    auto clientLoop = core::net::EventLoop { *clientSource };
 
     auto released = false;
     clientLoop.blockOn([](core::net::EventLoop* loop,

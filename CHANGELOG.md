@@ -337,6 +337,31 @@ workflow refuses one without a section here.
   `to`, a `target` or any `apply` but `none`, so no rewrite tool can be handed one. The first two
   rows are `core::tui::LanguageId::Endo` and `core::tui::registerEndoHighlighter()`.
 
+- `core::net::IoBackend` (`<core/net/IoBackend.hpp>`), the readiness seam the event loop drives,
+  with `makeDefaultBackend()`, `makeBackend(BackendKind)` and `preferredBackendKind()`. A backend
+  DISPATCHES: `wait()` invokes the callbacks on the `ReadinessHandler`s registered with it, and
+  those callbacks only enqueue — every coroutine is resumed by the loop, on the loop's thread,
+  after the wait has returned. `selectReadinessCallback(handler, readiness)` is the pure rule that
+  picks one callback per registration per wait and routes a hangup or error to `onError`, or, for
+  a handler that has none, to whichever direction it watches; it is a free function so it is
+  tested without a kernel. `setInterest()` answers `std::expected<void, NetError>`, so a kernel
+  that refuses a registration is reported instead of leaving the caller parked on one it never
+  made ([fastcached#1054](https://github.com/LASTRADA-Software/fastcached/issues/1054),
+  [fastcached#1057](https://github.com/LASTRADA-Software/fastcached/issues/1057)), and `detach()`
+  withdraws the handler from the ready batch a wait in flight is walking, which a kernel's own
+  deregistration cannot do ([fastcached#475](https://github.com/LASTRADA-Software/fastcached/issues/475)).
+  `wake()` is on the interface and is its one thread-safe member, so the wakeup channel belongs to
+  the backend rather than to the loop. The backends are `PollBackend` (POSIX), `EpollBackend`
+  (Linux), `KqueueBackend` (macOS and the BSDs) and `WfmoBackend` (Windows, `WSAEventSelect` +
+  `WaitForMultipleObjects`); each header is private, and a program reaches one through the
+  factories. `BackendParity_test` runs one scenario against every backend this platform builds.
+- `core::net::testing::NullBackend`, which accepts registrations, reports nothing and never
+  blocks — a loop driven entirely by `post`, `spawn` and timers, and what Task B4's `TestLoop`
+  will be built on.
+- `core::net::EventLoop::parkedWaiterCount()`, beside `pendingTimerCount()`: the same leak
+  assertion for a readiness park. A flow that resumed or unwound without unregistering leaves its
+  handler attached to the backend, and a count that never returns to zero is how that shows.
+
 - The repository's Python is `snake_case` and is linted, not only formatted: `ruff.toml` states
   ruff's default rule set (`E4`, `E7`, `E9`, `F` — undefined names, unused imports, import and
   statement errors) rather than inheriting it, so a future ruff cannot widen or narrow the gate by
@@ -589,6 +614,42 @@ workflow refuses one without a section here.
   coroutine never produced. With the `T {}` gone, `T` no longer has to be default-constructible.
   Migration: a driver that asks for a result checks that it still owns a frame (`task.handle()`),
   not only that `done()` is true.
+
+- `core::net::IoBackend` replaces `core::net::EventSource`, and the shape changes with the name:
+  a backend invokes the callbacks on a `ReadinessHandler` the caller registers, where an event
+  source returned two vectors of `FdToken`s for the caller to look up. `EventLoop` takes an
+  `IoBackend&`, and the post self-pipe it used to own is gone — `post()` calls
+  `IoBackend::wake()`, which every backend provides, so the loop's constructor no longer throws
+  and a backend's does when its wakeup channel cannot be created.
+
+  Migration, for contour, endo and tuidu, which all have callers. Every row is in
+  `tools/migrate/renames.json`:
+
+  | Was | Is |
+  |---|---|
+  | `EventSource` | `IoBackend` |
+  | `<core/net/EventSource.hpp>`, `<core/net/DefaultEventSource.hpp>`, `<core/net/PollEventSource.hpp>` | `<core/net/IoBackend.hpp>` |
+  | `FdInterest`, `FdInterest::None` | `Interest`, `Interest::None` (still "mute the handle without detaching it", and now that on every backend) |
+  | `makeDefaultEventSource()`, `makeEventSource(EventSourceKind)`, `preferredEventSourceKind()` | `makeDefaultBackend()`, `makeBackend(BackendKind)`, `preferredBackendKind()` |
+  | `EventSourceKind` | `BackendKind`, which gains `Iocp`, `Wfmo`, `HostDriven`, `Scripted`, `Null` and a `Last` sentinel |
+  | `PollEventSource`, `EpollEventSource`, `KqueueEventSource` | `PollBackend` and `WfmoBackend` (contour's one file, split along its `#ifdef`), `EpollBackend`, `KqueueBackend` — all private; reach one through the factories |
+  | `testing::ScriptedEventSource` | `testing::ScriptedBackend`, scripting readiness against a `HandlerId` handed out in attach order |
+  | `testing::AllBackends`, `testing::Backend` | `testing::BackendMatrix`, `testing::BackendUnderTest` (`<core/net/testing/BackendMatrix.hpp>`) |
+  | `source.attach(fd, interest)` → `FdToken` | `backend.attach(handler)` then `backend.setInterest(handler, interest)`, each `std::expected<void, NetError>` |
+  | `source.detach(token)` | `backend.detach(handler)` |
+  | `source.wait(timeoutMs)` → `WaitOutcome` | `backend.wait(std::optional<SteadyDuration>)` → `WaitResult`, having already dispatched |
+
+  `FdToken`, `WaitOutcome`, `FdRegistry` and `FdRegistration` are gone with no replacement: a
+  handler's ADDRESS is its registration's identity. `EventLoop` keeps an id of its own for its
+  parks, `core::net::ParkId`, which `registerFdWaiter()` and `unregisterFdWaiter()` now take;
+  Task B4 widens it over every kind of parked work.
+
+  Two behavioural differences a caller can see. `attach()` no longer carries an interest, because
+  kqueue has no "register with no filters" operation and so cannot say whether the kernel accepted
+  the descriptor — only `setInterest()` can, and that is where a refusal is reported. And a
+  registration is serviced by at most ONE callback per wait, because a callback may leave the
+  object its handler is embedded in ready to be freed; level triggering reports whatever was
+  skipped on the next wait.
 
 ### Changed
 - `cmake/portable/CompileCache.cmake` is re-synced from fastcached

@@ -27,49 +27,67 @@ endif()
 # is what net's own headers need. Free on glibc, fatal on FreeBSD, where the symbols live in libthr.
 # (contour's src/net/CMakeLists.txt, 6777ff05)
 #
+# Exactly one DefaultBackend.cpp is compiled, and it is the whole of how a platform picks its
+# backend — no `#ifdef` chooses one (Ruling R40). It cannot simply be listed per directory the way
+# the backends themselves are: SOURCES_POSIX and SOURCES_LINUX BOTH apply on Linux, so a
+# posix/DefaultBackend.cpp and a linux/DefaultBackend.cpp would both define makeBackend and collide
+# at link time. The platform is therefore asked once, here.
+if(WIN32)
+    set(_coreCppNetDefaultBackend windows/DefaultBackend.cpp)
+elseif(LINUX)
+    set(_coreCppNetDefaultBackend linux/DefaultBackend.cpp)
+elseif(CORE_CPP_PLATFORM_BSD)
+    set(_coreCppNetDefaultBackend bsd/DefaultBackend.cpp)
+else()
+    set(_coreCppNetDefaultBackend posix/DefaultBackend.cpp)
+endif()
+
 # The module's root holds only platform-independent code. What one platform needs lives in posix/,
 # linux/ (epoll), bsd/ (kqueue, for Apple and the BSDs) and windows/, and the source lists below
 # choose it, so no file there guards itself with an #ifdef of its platform. contour's
-# PollEventSource.cpp is split along its #ifdef into posix/ and windows/, and so is the socket pair
-# of testing/InMemoryTransport.cpp, into testing/posix/ and testing/windows/. Two exceptions remain:
-# DefaultEventSource.cpp keeps its #ifdefs until Task B3 replaces it, and EventSourceParity_test.cpp
-# keeps three POSIX-only cases (a closed descriptor's registration, descriptor exhaustion, a muted
-# registration whose peer hangs up), and the includes they need, under #ifndef _WIN32.
+# PollEventSource.cpp is split along its #ifdef into posix/PollBackend.cpp and
+# windows/WfmoBackend.cpp, and so is the socket pair of testing/InMemoryTransport.cpp, into
+# testing/posix/ and testing/windows/. One exception remains: BackendParity_test.cpp keeps three
+# POSIX-only cases (a closed descriptor's registration, descriptor exhaustion, a muted registration
+# whose peer hangs up), and the includes they need, under #ifndef _WIN32.
 core_cpp_add_module(net KIND STATIC
     HEADERS
         AsyncBufferedReader.hpp
-        DefaultEventSource.hpp
         Diagnostics.hpp
         EventLoop.hpp
-        EventSource.hpp
         HttpServer.hpp
         IListener.hpp
+        IoBackend.hpp
         ISocket.hpp
-        PollEventSource.hpp
         Sockets.hpp
         SplitSocket.hpp
         WithTimeout.hpp
         WriteQueue.hpp
+        testing/BackendMatrix.hpp
         testing/CoroTestSupport.hpp
-        testing/EventSourceBackends.hpp
         testing/InMemoryTransport.hpp
-        testing/ScriptedEventSource.hpp
+        testing/NullBackend.hpp
+        testing/ScriptedBackend.hpp
     SOURCES
         AsyncBufferedReader.cpp
-        DefaultEventSource.cpp
         Diagnostics.cpp
         EventLoop.cpp
         HttpServer.cpp
         WriteQueue.cpp
+        ${_coreCppNetDefaultBackend}
         detail/PeerAddress.hpp
+        detail/ReadyBatch.hpp
         detail/ScopeGuard.hpp
         detail/WaitChunking.hpp
+        detail/WaitTimeout.hpp
+        detail/WakeupChannel.hpp
     SOURCES_POSIX
         detail/WouldBlock.hpp
         posix/AcceptLoop.cpp
         posix/AcceptLoop.hpp
         posix/FdUtils.hpp
-        posix/PollEventSource.cpp
+        posix/PollBackend.cpp
+        posix/PollBackend.hpp
         posix/PosixListener.cpp
         posix/PosixListener.hpp
         posix/PosixSocket.cpp
@@ -79,17 +97,18 @@ core_cpp_add_module(net KIND STATIC
         posix/UnixListener.hpp
         testing/posix/InMemoryTransport.cpp
     SOURCES_LINUX
-        linux/EpollEventSource.cpp
-        linux/EpollEventSource.hpp
+        linux/EpollBackend.cpp
+        linux/EpollBackend.hpp
     SOURCES_BSD
-        bsd/KqueueEventSource.cpp
-        bsd/KqueueEventSource.hpp
+        bsd/KqueueBackend.cpp
+        bsd/KqueueBackend.hpp
     SOURCES_WINDOWS
         testing/windows/InMemoryTransport.cpp
         windows/NetworkEvents.cpp
         windows/NetworkEvents.hpp
-        windows/PollEventSource.cpp
         windows/SocketsWin32.cpp
+        windows/WfmoBackend.cpp
+        windows/WfmoBackend.hpp
         windows/WindowsListener.cpp
         windows/WindowsListener.hpp
         windows/WindowsLoopback.cpp
@@ -116,9 +135,10 @@ core_cpp_add_test(net NAME net_types SOURCES NetError_test.cpp)
 core_cpp_add_test(net
     SOURCES
         AsyncBufferedReader_test.cpp
+        BackendParity_test.cpp
         EventLoop_test.cpp
-        EventSourceParity_test.cpp
         HttpServer_test.cpp
+        IoBackend_test.cpp
         Socket_test.cpp
         WriteQueue_test.cpp
     SOURCES_POSIX

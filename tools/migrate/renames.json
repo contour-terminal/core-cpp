@@ -312,14 +312,15 @@
     {
       "kind": "include",
       "from": "net/DefaultEventSource.hpp",
-      "to": "core/net/DefaultEventSource.hpp",
+      "to": "core/net/IoBackend.hpp",
       "profiles": [
         "contour",
         "endo"
       ],
       "target": {
-        "header": "core/net/DefaultEventSource.hpp"
-      }
+        "header": "core/net/IoBackend.hpp"
+      },
+      "note": "the factories moved into IoBackend.hpp; there is no DefaultBackend.hpp, because each platform's DefaultBackend.cpp defines them and CMake compiles exactly one"
     },
     {
       "kind": "include",
@@ -335,12 +336,12 @@
     {
       "kind": "include",
       "from": "net/EpollEventSource.hpp",
-      "to": "core/net/linux/EpollEventSource.hpp",
+      "to": "core/net/linux/EpollBackend.hpp",
       "profiles": [
         "contour"
       ],
       "target": {
-        "header": "core/net/linux/EpollEventSource.hpp",
+        "header": "core/net/linux/EpollBackend.hpp",
         "public": false
       }
     },
@@ -359,13 +360,14 @@
     {
       "kind": "include",
       "from": "net/EventSource.hpp",
-      "to": "core/net/EventSource.hpp",
+      "to": "core/net/IoBackend.hpp",
       "profiles": [
         "contour"
       ],
       "target": {
-        "header": "core/net/EventSource.hpp"
-      }
+        "header": "core/net/IoBackend.hpp"
+      },
+      "note": "EventSource became IoBackend: a backend dispatches readiness to the ReadinessHandler callbacks a caller registers, instead of returning ready tokens for the caller to route. FdToken, WaitOutcome and FdRegistry are gone with it"
     },
     {
       "kind": "include",
@@ -415,25 +417,26 @@
     {
       "kind": "include",
       "from": "net/KqueueEventSource.hpp",
-      "to": "core/net/bsd/KqueueEventSource.hpp",
+      "to": "core/net/bsd/KqueueBackend.hpp",
       "profiles": [
         "contour"
       ],
       "target": {
-        "header": "core/net/bsd/KqueueEventSource.hpp",
+        "header": "core/net/bsd/KqueueBackend.hpp",
         "public": false
       }
     },
     {
       "kind": "include",
       "from": "net/PollEventSource.hpp",
-      "to": "core/net/PollEventSource.hpp",
+      "to": "core/net/IoBackend.hpp",
       "profiles": [
         "contour"
       ],
       "target": {
-        "header": "core/net/PollEventSource.hpp"
-      }
+        "header": "core/net/IoBackend.hpp"
+      },
+      "note": "the concrete backends are private now (posix/PollBackend.hpp, windows/WfmoBackend.hpp): a program gets one from makeDefaultBackend() or makeBackend(BackendKind), which IoBackend.hpp declares"
     },
     {
       "kind": "include",
@@ -670,12 +673,12 @@
     {
       "kind": "include",
       "from": "net/testing/EventSourceBackends.hpp",
-      "to": "core/net/testing/EventSourceBackends.hpp",
+      "to": "core/net/testing/BackendMatrix.hpp",
       "profiles": [
         "contour"
       ],
       "target": {
-        "header": "core/net/testing/EventSourceBackends.hpp"
+        "header": "core/net/testing/BackendMatrix.hpp"
       }
     },
     {
@@ -692,12 +695,12 @@
     {
       "kind": "include",
       "from": "net/testing/ScriptedEventSource.hpp",
-      "to": "core/net/testing/ScriptedEventSource.hpp",
+      "to": "core/net/testing/ScriptedBackend.hpp",
       "profiles": [
         "contour"
       ],
       "target": {
-        "header": "core/net/testing/ScriptedEventSource.hpp"
+        "header": "core/net/testing/ScriptedBackend.hpp"
       }
     },
     {
@@ -5215,12 +5218,11 @@
         "contour",
         "endo"
       ],
-      "status": "pending",
-      "task": "B3",
       "target": {
         "header": "core/net/IoBackend.hpp",
         "symbol": "core::net::IoBackend"
-      }
+      },
+      "note": "the shape changed with the name: attach() takes a ReadinessHandler whose callbacks the backend invokes, setInterest() is separate and reports the kernel's refusal as std::expected<void, NetError>, and wait() dispatches rather than returning a WaitOutcome"
     },
     {
       "kind": "symbol",
@@ -5230,12 +5232,11 @@
         "contour",
         "endo"
       ],
-      "status": "pending",
-      "task": "B3",
       "target": {
         "header": "core/net/IoBackend.hpp",
         "symbol": "core::net::Interest"
-      }
+      },
+      "note": "Interest::None still means 'mute the handle without detaching it', and now means it on every backend"
     },
     {
       "kind": "symbol",
@@ -5245,12 +5246,91 @@
         "contour",
         "endo"
       ],
-      "status": "pending",
-      "task": "B3",
       "target": {
         "header": "core/net/IoBackend.hpp",
         "symbol": "core::net::makeDefaultBackend"
       }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::EventSourceKind",
+      "to": "core::net::BackendKind",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/net/IoBackend.hpp",
+        "symbol": "core::net::BackendKind"
+      },
+      "note": "the enumerators gained Iocp, Wfmo, HostDriven, Scripted and Null, and a Last sentinel"
+    },
+    {
+      "kind": "symbol",
+      "from": "net::makeEventSource",
+      "to": "core::net::makeBackend",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/net/IoBackend.hpp",
+        "symbol": "core::net::makeBackend"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::preferredEventSourceKind",
+      "to": "core::net::preferredBackendKind",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/net/IoBackend.hpp",
+        "symbol": "core::net::preferredBackendKind"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::testing::ScriptedEventSource",
+      "to": "core::net::testing::ScriptedBackend",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/net/testing/ScriptedBackend.hpp",
+        "symbol": "core::net::testing::ScriptedBackend"
+      },
+      "note": "readiness is scripted against a HandlerId, handed out in attach order, in place of an FdToken; pushFailure() is new and models the hangup a kernel volunteers"
+    },
+    {
+      "kind": "symbol",
+      "from": "net::testing::AllBackends",
+      "to": "core::net::testing::BackendMatrix",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/net/testing/BackendMatrix.hpp",
+        "symbol": "core::net::testing::BackendMatrix"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::testing::Backend",
+      "to": "core::net::testing::BackendUnderTest",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/net/testing/BackendMatrix.hpp",
+        "symbol": "core::net::testing::BackendUnderTest"
+      },
+      "note": "renamed so the row for the table it lives in reads as a table and not as a backend"
     },
     {
       "kind": "member",
@@ -5418,6 +5498,58 @@
         "endo"
       ],
       "note": "the process-wide registration callback is gone (Task B13a, core-cpp#24). The application owns a core::tui::SyntaxHighlighterRegistry, fills it once at startup and passes it to MarkdownRenderer, StyledText::fromMarkdown, detectLanguageFromPath and highlightLine, each of which takes it as a trailing argument defaulting to nullptr."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::FdToken",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "note": "a backend has no registration tokens any more: the ReadinessHandler's ADDRESS is its registration's identity, and detach() takes the handler. EventLoop keeps an id of its own for its parks (core::net::ParkId), which is internal to the loop."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::WaitOutcome",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "note": "a wait dispatches instead of reporting: IoBackend::wait invokes the handler callbacks and answers a WaitResult, which carries only how many of them ran."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::FdRegistry",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "note": "the shared registration list, with FdRegistration, is gone: each backend keeps whatever its kernel needs (poll a vector, epoll and kqueue a map keyed by handler, with the private dup() a duplicate registration requires)."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::PollEventSource",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "note": "split in two and made private: core::net::PollBackend (posix/PollBackend.hpp) and core::net::WfmoBackend (windows/WfmoBackend.hpp). Reach one through makeBackend(BackendKind::Poll) or makeDefaultBackend()."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::EpollEventSource",
+      "profiles": [
+        "contour"
+      ],
+      "note": "core::net::EpollBackend (linux/EpollBackend.hpp), still private; reach it through makeBackend(BackendKind::Epoll)."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::KqueueEventSource",
+      "profiles": [
+        "contour"
+      ],
+      "note": "core::net::KqueueBackend (bsd/KqueueBackend.hpp), still private; reach it through makeBackend(BackendKind::Kqueue)."
     }
   ]
 }

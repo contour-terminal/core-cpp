@@ -4,7 +4,7 @@
 #include <core/async/WhenAll.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/IListener.hpp>
-#include <core/net/PollEventSource.hpp>
+#include <core/net/IoBackend.hpp>
 #include <core/net/Sockets.hpp>
 #include <core/net/posix/FdUtils.hpp>
 #include <core/net/posix/UnixListener.hpp>
@@ -146,8 +146,8 @@ TEST_CASE("listenUnix + connectUnix echo over a socket file", "[net][unix]")
     auto const socketDir = tmp.path / "sockets";
     auto const socketPath = (socketDir / "default").string();
 
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
 
     auto listener = core::net::listenUnix(loop, socketPath);
     REQUIRE(listener.has_value());
@@ -189,8 +189,8 @@ TEST_CASE("a stale socket file is unlinked before rebinding", "[net][unix]")
     REQUIRE(std::filesystem::exists(socketPath)); // the corpse is in the way
 
     // Without the pre-bind unlink, bind() would fail with EADDRINUSE here.
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto listener = core::net::listenUnix(loop, socketPath);
     REQUIRE(listener.has_value());
 }
@@ -205,8 +205,8 @@ TEST_CASE("a live server on the path is not hijacked", "[net][unix]")
     auto const socketDir = tmp.path / "run";
     auto const socketPath = (socketDir / "default").string();
 
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
 
     auto first = core::net::listenUnix(loop, socketPath);
     REQUIRE(first.has_value());
@@ -241,8 +241,8 @@ TEST_CASE("a world-accessible socket directory is refused", "[net][unix]")
     auto const check = core::net::ensureOwnedPrivateDirectory(socketDir);
     REQUIRE_FALSE(check.has_value());
 
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto listener = core::net::listenUnix(loop, (socketDir / "default").string());
     REQUIRE_FALSE(listener.has_value());
 }
@@ -268,8 +268,8 @@ TEST_CASE("a socket path with no directory component binds in the current direct
     auto const tmp = TempDir {};
     auto const cwd = ScopedWorkingDirectory { tmp.path };
 
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
     auto listener = core::net::listenUnix(loop, "relative.sock");
     REQUIRE(listener.has_value());
 
@@ -298,8 +298,8 @@ TEST_CASE("a non-directory socket parent is refused", "[net][unix]")
 TEST_CASE("connectUnix to a missing socket reports connection refused", "[net][unix]")
 {
     auto const tmp = TempDir {};
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
 
     auto failed = false;
     auto tryConnect = [](EventLoop* lp, std::string p, bool* out) -> Task<void> {

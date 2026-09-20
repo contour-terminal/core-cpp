@@ -8,7 +8,8 @@ or resumed on the wrong thread.
 imported as they are (Tasks A5 and A6: `core::async`, and `core::net` with its `EventSource`
 API), then fastcached's async and networking layer is merged into them (Phase B). Task B1 has
 landed the first half of that merge — the ownership rules under "Task ownership" below are live
-code, not a forecast. The rules are
+code, not a forecast — and Task B3 has landed `IoBackend`, so `EventSource` is gone and the
+backend rules below are live code too. The rules are
 written against the merged design's names, from the design spec,
 [Part I §2](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/specs/2026-09-18-core-cpp-design.md),
 so the tasks that implement it inherit them; each Phase B task extends this file with the rules
@@ -40,7 +41,13 @@ The contract is the spec's (Part I §2, rules 1 to 6), and it is short enough to
 
 - **Backends dispatch, the loop resumes.** Backend, completion, stop and thread-pool callbacks
   only enqueue (`EventLoop::resumeSoon`); a coroutine resumes only on the loop's thread, in the
-  second step of `runOnce`, on every backend.
+  second step of `runOnce`, on every backend. A resume from inside a backend's walk over its own
+  ready list lets the resumed frame free the object whose entry the walk has not reached yet, so
+  the rule is *asserted* rather than trusted: `detail::ReadyBatch::dispatch()` publishes that a
+  dispatch is in flight (`detail::readinessDispatchInFlight()`) and `EventLoop::drainReadyQueue()`
+  refuses to run while it is. The positive half is a parity case: a flow resumed by every backend
+  records that flag from its own frame and it is false. Origin:
+  [fastcached#475](https://github.com/LASTRADA-Software/fastcached/issues/475).
 - **One thread dequeues a loop or a completion port**, helper threads only post, and a socket
   is associated with exactly one port.
 - **Cancellation is `core::async::StopToken`**, which is `std::stop_token` where the standard
@@ -192,9 +199,43 @@ frames rather than sockets, and every rule below is enforced by a case in
   `EPOLLHUP` whether or not they were requested, and a failed connect can arrive with neither
   direction set; dropping them is a hang and a loop spinning at 100% CPU with nothing logged.
   They go to `ReadinessHandler::onError`, and the choice of callback is a pure function
-  (`selectReadinessCallback`) so it is tested without a kernel.
-- **Service at most one callback per descriptor per iteration**: a readable callback may free
-  the object the writable callback lives in. Level-triggering re-reports what was skipped.
+  (`selectReadinessCallback`) so it is tested without a kernel. A handler with no `onError` has a
+  failure delivered to whichever direction it *does* watch, which is what a parked read and a
+  parked accept both want.
+- **Service at most one callback per registration per wait**: a readable callback may free
+  the object the writable callback lives in. Level-triggering re-reports what was skipped. The
+  merge is in `detail::ReadyBatch::add`, not in each backend, because only kqueue's kernel
+  duplicates — it answers per (descriptor, filter) — and a rule enforced in the one backend that
+  needs it is a rule the next backend does not have.
+- **`detach()` withdraws the handler from the batch a wait in flight is walking.** Dropping a
+  kernel registration stops FUTURE reports and does nothing about an entry the wait has already
+  written; a callback that detaches another handler and frees its owner leaves a dangling entry
+  the same walk reads. It is done at *detach* rather than validated at dispatch because the
+  handler is still alive at that moment, so the comparison is against a live address and needs no
+  generation counter — a scheme that validated a dequeued pointer after the fact would have to
+  survive address reuse, which a bare pointer cannot. So `detach()` is called BEFORE the owner is
+  freed, on every path. Origin:
+  [fastcached#475](https://github.com/LASTRADA-Software/fastcached/issues/475).
+- **`setInterest` reports the kernel's refusal; `attach` cannot.** kqueue has no "register with no
+  filters" operation — a filter IS the registration — so an `attach` that claimed to have
+  registered the descriptor would be telling the truth on epoll and not here. `attach` answers
+  that the handler and the backend are usable together; whether the kernel accepted it is what
+  `setInterest` answers, which is why it returns `std::expected<void, NetError>` carrying the
+  errno. A registration the caller believes succeeded and the kernel never made parks a flow with
+  nothing left to resume it: no message, no stack, just a hang. Origin:
+  [fastcached#1054](https://github.com/LASTRADA-Software/fastcached/issues/1054),
+  [fastcached#1057](https://github.com/LASTRADA-Software/fastcached/issues/1057).
+- **Muting means silent, on every backend.** `Interest::None` keeps a registration attached and
+  reports nothing for it — not even the hangup and error conditions a kernel volunteers whatever
+  was asked for. poll(2) needs a negative descriptor in the `pollfd` (`events == 0` does not mute
+  it), and epoll needs the descriptor out of the set entirely, because `EPOLLHUP` on a muted
+  registration is level-triggered and spins the pump. Windows and kqueue are silent already.
+- **The wakeup channel belongs to the backend, not to the loop.** `IoBackend::wake()` is the one
+  member of that interface another thread may call, and every backend that blocks needs the same
+  mechanism behind it (`detail::WakeupChannel`). A wakeup raised with no wait in flight is not
+  lost: the channel stays readable and the next wait returns at once. A lost one is a wait that
+  never ends, which shows as a shutdown that hangs and nowhere else, so both halves are parity
+  cases.
 - **A test double whose interface says "callable from any thread" must be.** `TestLoop::submit`
   is thread-safe for the same reason `EventLoop::submit` is, or every cross-thread case is forced
   onto a real loop.

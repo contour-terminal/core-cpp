@@ -2,8 +2,8 @@
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/ISocket.hpp>
+#include <core/net/IoBackend.hpp>
 #include <core/net/IoResult.hpp>
-#include <core/net/PollEventSource.hpp>
 #include <core/net/WriteQueue.hpp>
 #include <core/net/testing/CoroTestSupport.hpp>
 #include <core/net/testing/InMemoryTransport.hpp>
@@ -123,8 +123,8 @@ Task<void> awaitRoomOrDone(WriteQueue* queue, std::size_t watermark, bool const*
 
 TEST_CASE("WriteQueue drains frames in FIFO order, each frame atomically", "[net][writequeue]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
 
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
@@ -147,8 +147,8 @@ TEST_CASE("WriteQueue drains frames in FIFO order, each frame atomically", "[net
 
 TEST_CASE("WriteQueue rejects frames that push the backlog beyond its byte bound", "[net][writequeue]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
 
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
@@ -166,8 +166,8 @@ TEST_CASE("WriteQueue rejects frames that push the backlog beyond its byte bound
 
 TEST_CASE("A frame is never refused for its own size alone", "[net][writequeue]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
 
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
@@ -186,8 +186,8 @@ TEST_CASE("A frame is never refused for its own size alone", "[net][writequeue]"
 
 TEST_CASE("The bound governs the backlog; the in-flight frame is still owed", "[net][writequeue]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
 
     // Declared before the queue so it outlives the drain that writes to it.
     auto socket = ParkingSocket { loop };
@@ -226,8 +226,8 @@ TEST_CASE("The bound governs the backlog; the in-flight frame is still owed", "[
 
 TEST_CASE("dropTagged discards superseded frames only", "[net][writequeue]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
 
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
@@ -255,8 +255,8 @@ TEST_CASE("dropTagged discards superseded frames only", "[net][writequeue]")
 
 TEST_CASE("dropTagged never discards untagged frames", "[net][writequeue]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
 
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
@@ -275,8 +275,8 @@ TEST_CASE("dropTagged never discards untagged frames", "[net][writequeue]")
 
 TEST_CASE("A write failure poisons the queue and drops the backlog", "[net][writequeue]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
 
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
@@ -298,8 +298,8 @@ TEST_CASE("A write failure poisons the queue and drops the backlog", "[net][writ
 
 TEST_CASE("close() drops queued frames and refuses new ones", "[net][writequeue]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
 
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
@@ -317,8 +317,8 @@ TEST_CASE("close() drops queued frames and refuses new ones", "[net][writequeue]
 
 TEST_CASE("waitUntilBacklogBelow returns without parking when there is already room", "[net][writequeue]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
 
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
@@ -334,8 +334,8 @@ TEST_CASE("waitUntilBacklogBelow returns without parking when there is already r
 
 TEST_CASE("waitUntilBacklogBelow parks until the drain makes room", "[net][writequeue]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
 
     // Declared before the queue so it outlives the drain that writes to it.
     auto socket = ParkingSocket { loop };
@@ -359,8 +359,8 @@ TEST_CASE("waitUntilBacklogBelow parks until the drain makes room", "[net][write
 
 TEST_CASE("waitUntilBacklogBelow stops waiting once the queue is closed", "[net][writequeue]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
 
     auto socket = ParkingSocket { loop };
     auto queue = WriteQueue { loop, &socket, 1024 };
@@ -381,8 +381,8 @@ TEST_CASE("waitUntilBacklogBelow stops waiting once the queue is closed", "[net]
 
 TEST_CASE("waitUntilBacklogBelow stops waiting when the caller says it is done", "[net][writequeue]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
 
     auto socket = ParkingSocket { loop };
     auto queue = WriteQueue { loop, &socket, 1024 };
@@ -414,8 +414,8 @@ TEST_CASE("A WriteQueue refuses a null socket at construction", "[net][writequeu
     // used to construct cleanly and crash in `close()` — which is `noexcept`, so the failure
     // surfaced at teardown rather than at the call that caused it. A constructed object is
     // usable, so the refusal belongs at construction, where the caller can still act on it.
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
 
     REQUIRE_THROWS_AS((WriteQueue { loop, nullptr, 1024 }), std::invalid_argument);
 }

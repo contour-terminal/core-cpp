@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
-/// Every @c EventSource backend must be behaviourally interchangeable — the whole
-/// point of the interface is that swapping poll(2) for epoll/kqueue changes only
-/// what a wait costs. These cases therefore run the SAME scenario against every
-/// backend available on this platform, so a divergence fails here rather than
-/// surfacing as a hang in whatever happens to use the native source.
+/// Every @c IoBackend must be behaviourally interchangeable — the whole point of the
+/// interface is that swapping poll(2) for epoll, kqueue or WaitForMultipleObjects
+/// changes only what a wait costs. These cases therefore run the SAME scenario
+/// against every backend built on this platform, so a divergence fails here rather
+/// than surfacing as a hang in whatever happens to use the native one.
 ///
 /// The `[closehang]` tag selects the family that guards one such divergence: a
 /// descriptor CLOSED under a parked flow. poll(2) reports POLLNVAL for it and
@@ -16,27 +16,30 @@
 #include <core/async/Task.hpp>
 #include <core/async/WhenAll.hpp>
 #include <core/async/WhenAny.hpp>
-#include <core/net/DefaultEventSource.hpp>
 #include <core/net/EventLoop.hpp>
-#include <core/net/EventSource.hpp>
 #include <core/net/ISocket.hpp>
+#include <core/net/IoBackend.hpp>
 #include <core/net/Sockets.hpp>
+#include <core/net/detail/ReadyBatch.hpp>
 #include <core/net/detail/ScopeGuard.hpp>
-#include <core/net/testing/EventSourceBackends.hpp>
+#include <core/net/testing/BackendMatrix.hpp>
 #include <core/net/testing/InMemoryTransport.hpp>
 #include <core/platform/SystemPipe.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <expected>
+#include <iterator>
 #include <memory>
 #include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -49,10 +52,10 @@
 #endif
 
 using core::async::Task;
+using core::net::BackendKind;
 using core::net::EventLoop;
-using core::net::EventSourceKind;
-using core::net::FdInterest;
-using core::net::testing::AllBackends;
+using core::net::Interest;
+using core::net::testing::BackendMatrix;
 
 namespace
 {
@@ -415,17 +418,17 @@ Task<void> settle(EventLoop* loop)
 
 } // namespace
 
-TEST_CASE("every available event source reports pipe readability", "[net][eventsource][parity]")
+TEST_CASE("every backend reports pipe readability", "[net][backend][parity]")
 {
-    for (auto const& backend: AllBackends)
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue; // not available on this platform
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
-            auto loop = EventLoop { *source };
+            auto loop = EventLoop { *backend };
             auto pipe = core::platform::createSystemPipe();
             REQUIRE(pipe.has_value());
 
@@ -439,17 +442,17 @@ TEST_CASE("every available event source reports pipe readability", "[net][events
     }
 }
 
-TEST_CASE("every available event source drives a socket round-trip", "[net][eventsource][parity]")
+TEST_CASE("every backend drives a socket round-trip", "[net][backend][parity]")
 {
-    for (auto const& backend: AllBackends)
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
-            auto loop = EventLoop { *source };
+            auto loop = EventLoop { *backend };
             auto pair = core::net::testing::makeSocketPair(loop);
             REQUIRE(pair.has_value());
 
@@ -460,17 +463,17 @@ TEST_CASE("every available event source drives a socket round-trip", "[net][even
     }
 }
 
-TEST_CASE("every available event source serves a loopback listener", "[net][eventsource][parity]")
+TEST_CASE("every backend serves a loopback listener", "[net][backend][parity]")
 {
-    for (auto const& backend: AllBackends)
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
-            auto loop = EventLoop { *source };
+            auto loop = EventLoop { *backend };
             auto listener = core::net::listen(loop, "127.0.0.1", 0);
             REQUIRE(listener.has_value());
             auto const port = (*listener)->localPort();
@@ -494,21 +497,20 @@ TEST_CASE("every available event source serves a loopback listener", "[net][even
 // and Windows reports the handle as failed, which is why only the native backends
 // were broken. EventLoop::notifyHandleClosing supplies the missing readiness, and
 // these cases HUNG until it existed.
-TEST_CASE("closing a socket resumes a parked reader on every event source",
-          "[net][eventsource][parity][closehang]")
+TEST_CASE("closing a socket resumes a parked reader on every backend", "[net][backend][parity][closehang]")
 {
     // Socket_test covers this only for PollEventSource, so it stayed green while the
     // native backends were broken. Driving it through the loop on every backend is
     // what catches a source that holds a descriptor the socket thinks it closed.
-    for (auto const& backend: AllBackends)
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
-            auto loop = EventLoop { *source };
+            auto loop = EventLoop { *backend };
             auto pair = core::net::testing::makeSocketPair(loop);
             REQUIRE(pair.has_value());
 
@@ -519,21 +521,20 @@ TEST_CASE("closing a socket resumes a parked reader on every event source",
     }
 }
 
-TEST_CASE("closing a socket resumes a parked writer on every event source",
-          "[net][eventsource][parity][closehang]")
+TEST_CASE("closing a socket resumes a parked writer on every backend", "[net][backend][parity][closehang]")
 {
     // The write direction of the same hazard. A writer parks on WRITABILITY, so it
     // is registered with a different interest than the reader above — and a backend
     // that only routed the read side of a close would hang here instead.
-    for (auto const& backend: AllBackends)
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
-            auto loop = EventLoop { *source };
+            auto loop = EventLoop { *backend };
             auto pair = core::net::testing::makeSocketPair(loop);
             REQUIRE(pair.has_value());
 
@@ -544,22 +545,22 @@ TEST_CASE("closing a socket resumes a parked writer on every event source",
     }
 }
 
-TEST_CASE("closing a socket resumes BOTH flows parked on it on every event source",
-          "[net][eventsource][parity][closehang]")
+TEST_CASE("closing a socket resumes BOTH flows parked on it on every backend",
+          "[net][backend][parity][closehang]")
 {
     // Two registrations on one descriptor is the shape epoll and kqueue cannot hold
     // natively, so each keeps a private dup() for the second. A close must resume
     // both flows -- and detach both registrations, or that duplicate would keep the
     // peer's connection open past the close it was supposed to end.
-    for (auto const& backend: AllBackends)
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
-            auto loop = EventLoop { *source };
+            auto loop = EventLoop { *backend };
             auto pair = core::net::testing::makeSocketPair(loop);
             REQUIRE(pair.has_value());
 
@@ -572,21 +573,21 @@ TEST_CASE("closing a socket resumes BOTH flows parked on it on every event sourc
     }
 }
 
-TEST_CASE("closing a socket wakes only the flows parked on it", "[net][eventsource][parity][closehang]")
+TEST_CASE("closing a socket wakes only the flows parked on it", "[net][backend][parity][closehang]")
 {
     // The wake is routed by descriptor, not broadcast: a reader on an untouched
     // socket must stay parked. A close that woke every waiter would look like it
     // worked -- until an unrelated flow resumed early and read from a live socket
     // that had nothing to give.
-    for (auto const& backend: AllBackends)
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
-            auto loop = EventLoop { *source };
+            auto loop = EventLoop { *backend };
             auto closing = core::net::testing::makeSocketPair(loop);
             auto idle = core::net::testing::makeSocketPair(loop);
             REQUIRE(closing.has_value());
@@ -602,22 +603,21 @@ TEST_CASE("closing a socket wakes only the flows parked on it", "[net][eventsour
     }
 }
 
-TEST_CASE("closing a socket with nothing parked leaves the loop usable",
-          "[net][eventsource][parity][closehang]")
+TEST_CASE("closing a socket with nothing parked leaves the loop usable", "[net][backend][parity][closehang]")
 {
     // Closing an idle socket records no wake at all, and closing it twice records
     // no second one. Either mistake would leave a token queued for a registration
     // that no longer exists, and the next pump would resume whatever now answers to
     // it -- or spin delivering a wake nobody claims.
-    for (auto const& backend: AllBackends)
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
-            auto loop = EventLoop { *source };
+            auto loop = EventLoop { *backend };
             auto pair = core::net::testing::makeSocketPair(loop);
             REQUIRE(pair.has_value());
 
@@ -628,21 +628,21 @@ TEST_CASE("closing a socket with nothing parked leaves the loop usable",
     }
 }
 
-TEST_CASE("a close-wake does not swallow a pending timer", "[net][eventsource][parity][closehang]")
+TEST_CASE("a close-wake does not swallow a pending timer", "[net][backend][parity][closehang]")
 {
     // The pump merges close-wakes INTO its wait outcome rather than short-circuiting
     // and returning early. Skipping the wait would strand every other thing due in
     // that pump -- a peer's EOF, or this timer -- until some later pump that may
     // never come, because blockOn exits as soon as its root flow is done.
-    for (auto const& backend: AllBackends)
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
-            auto loop = EventLoop { *source };
+            auto loop = EventLoop { *backend };
             auto pair = core::net::testing::makeSocketPair(loop);
             REQUIRE(pair.has_value());
 
@@ -655,22 +655,22 @@ TEST_CASE("a close-wake does not swallow a pending timer", "[net][eventsource][p
     }
 }
 
-TEST_CASE("destroying a socket under a parked reader cancels it", "[net][eventsource][parity][closehang]")
+TEST_CASE("destroying a socket under a parked reader cancels it", "[net][backend][parity][closehang]")
 {
     // A destructor cannot use the same wake an explicit close() does. Resuming the
     // flow on its NORMAL path would send it back into PosixSocket::read, which
     // re-reads _closed and _fd through a `this` that has just stopped existing.
     // FdWakePolicy::Cancel makes await_resume throw instead, so the frame unwinds
     // without ever re-entering its body. Run under ASan, this case is the guard.
-    for (auto const& backend: AllBackends)
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
-            auto loop = EventLoop { *source };
+            auto loop = EventLoop { *backend };
             auto pair = core::net::testing::makeSocketPair(loop);
             REQUIRE(pair.has_value());
 
@@ -681,22 +681,22 @@ TEST_CASE("destroying a socket under a parked reader cancels it", "[net][eventso
     }
 }
 
-TEST_CASE("destroying a listener under a parked accept cancels it", "[net][eventsource][parity][closehang]")
+TEST_CASE("destroying a listener under a parked accept cancels it", "[net][backend][parity][closehang]")
 {
     // The listener form of the same rule, and the sharper one: acceptOne holds
     // `int const* fd` and `bool const* closed` pointing INTO the listener, and
     // re-reads both at the top of every turn. A normal-path resume would dereference
     // them after the listener was destroyed; the cancelling resume returns from the
     // catch without touching either.
-    for (auto const& backend: AllBackends)
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
-            auto loop = EventLoop { *source };
+            auto loop = EventLoop { *backend };
             auto listener = core::net::listen(loop, "127.0.0.1", 0);
             REQUIRE(listener.has_value());
 
@@ -708,7 +708,7 @@ TEST_CASE("destroying a listener under a parked accept cancels it", "[net][event
 }
 
 TEST_CASE("a close recorded before the loop dies resumes its flow exactly once",
-          "[net][eventsource][parity][closehang]")
+          "[net][backend][parity][closehang]")
 {
     // close() records a wake for the next pump — but if the loop is destroyed first
     // that pump never comes. ~EventLoop must then be the ONLY thing that resumes the
@@ -716,17 +716,17 @@ TEST_CASE("a close recorded before the loop dies resumes its flow exactly once",
     // there as well would resume the same coroutine twice: the first resume runs it
     // to completion and its owner destroys the frame, and the second calls .done()
     // on freed memory.
-    for (auto const& backend: AllBackends)
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
             auto resumeCount = 0;
             {
-                auto loop = EventLoop { *source };
+                auto loop = EventLoop { *backend };
                 auto pair = core::net::testing::makeSocketPair(loop);
                 REQUIRE(pair.has_value());
 
@@ -742,24 +742,24 @@ TEST_CASE("a close recorded before the loop dies resumes its flow exactly once",
 }
 
 TEST_CASE("closing every listener and then requesting stop resumes each accept once",
-          "[net][eventsource][parity][closehang]")
+          "[net][backend][parity][closehang]")
 {
     // requestDaemonShutdown's sequence, verbatim: close every listener, THEN
     // requestStop(). This is the shape that segfaulted vthost_test and
     // contour_gui_test on every platform when close() queued the parked flow itself:
     // the queued coroutine still had its cancellation callback armed, so
     // request_stop() queued it a second time.
-    for (auto const& backend: AllBackends)
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
             auto resumeCount = 0;
             {
-                auto loop = EventLoop { *source };
+                auto loop = EventLoop { *backend };
                 auto listeners = std::vector<std::unique_ptr<core::net::IListener>> {};
                 for ([[maybe_unused]] auto const each: std::views::iota(0, 3))
                 {
@@ -782,25 +782,25 @@ TEST_CASE("closing every listener and then requesting stop resumes each accept o
 }
 
 TEST_CASE("a close-woken flow may request stop while a sibling is still queued",
-          "[net][eventsource][parity][closehang]")
+          "[net][backend][parity][closehang]")
 {
     // Both readers are woken by the same pump. The first to resume requests stop
     // while the second is still sitting in the ready queue, un-resumed and with its
     // cancellation callback still armed — the callback only disarms in await_resume.
     // requeueForCancellation must recognise that the sibling is already queued and
     // NOT push it again.
-    for (auto const& backend: AllBackends)
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
             auto resumeCount = 0;
             auto stopRequested = false;
             {
-                auto loop = EventLoop { *source };
+                auto loop = EventLoop { *backend };
                 auto first = core::net::testing::makeSocketPair(loop);
                 auto second = core::net::testing::makeSocketPair(loop);
                 REQUIRE(first.has_value());
@@ -817,21 +817,21 @@ TEST_CASE("a close-woken flow may request stop while a sibling is still queued",
     }
 }
 
-TEST_CASE("a peer's close is delivered as EOF on every event source", "[net][eventsource][parity]")
+TEST_CASE("a peer's close is delivered as EOF on every backend", "[net][backend][parity]")
 {
     // The end-to-end form of the descriptor-ownership rule: the reader goes through
     // EventLoop and ISocket rather than touching the source directly, so a backend
     // that keeps the peer's file description alive shows up as a read that never
     // reports EOF.
-    for (auto const& backend: AllBackends)
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
-            auto loop = EventLoop { *source };
+            auto loop = EventLoop { *backend };
             auto pair = core::net::testing::makeSocketPair(loop);
             REQUIRE(pair.has_value());
 
@@ -844,203 +844,316 @@ TEST_CASE("a peer's close is delivered as EOF on every event source", "[net][eve
     }
 }
 
-TEST_CASE("an attached token is reported and a detached one is not", "[net][eventsource][parity]")
+namespace
 {
-    for (auto const& backend: AllBackends)
+
+/// A registration a case owns outright, counting what the backend dispatched to it.
+///
+/// Every case below that talks to a backend directly goes through one of these,
+/// because that is the whole shape change: a backend no longer hands back a list of
+/// ready tokens for the caller to route, it CALLS what the caller registered. What a
+/// case can therefore assert is which callback ran and how often — which is also what
+/// the two rules worth pinning are about (one callback per registration per wait, and
+/// nothing dispatched after a withdrawal).
+struct Probe
+{
+    core::net::ReadinessHandler handler {};
+    int readable = 0;
+    int writable = 0;
+    int failed = 0;
+
+    /// @param handle The native handle to watch.
+    explicit Probe(core::platform::NativeHandle handle) noexcept
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        handler = core::net::ReadinessHandler { .handle = handle,
+                                                .kind = core::net::DefaultHandleKind,
+                                                .owner = this,
+                                                .onReadable = &Probe::readableCallback,
+                                                .onWritable = &Probe::writableCallback,
+                                                .onError = &Probe::errorCallback };
+    }
+
+    Probe(Probe const&) = delete;
+    Probe& operator=(Probe const&) = delete;
+    Probe(Probe&&) = delete;
+    Probe& operator=(Probe&&) = delete;
+    ~Probe() = default;
+
+    /// @return How many callbacks of any kind this probe has had.
+    [[nodiscard]] int total() const noexcept { return readable + writable + failed; }
+
+    static void readableCallback(core::net::ReadinessHandler& handler) noexcept
+    {
+        ++static_cast<Probe*>(handler.owner)->readable;
+    }
+
+    static void writableCallback(core::net::ReadinessHandler& handler) noexcept
+    {
+        ++static_cast<Probe*>(handler.owner)->writable;
+    }
+
+    static void errorCallback(core::net::ReadinessHandler& handler) noexcept
+    {
+        ++static_cast<Probe*>(handler.owner)->failed;
+    }
+};
+
+/// Registers @p probe with @p backend and arms it, failing the case if either step is
+/// refused. Both steps, because the split is the contract: `attach` says the handler
+/// and the backend are usable together, and only `setInterest` says the kernel
+/// accepted the registration.
+/// @param backend The backend to register with.
+/// @param probe The probe to register.
+/// @param interest What to watch for.
+void armProbe(core::net::IoBackend& backend, Probe& probe, core::net::Interest interest)
+{
+    REQUIRE(backend.attach(probe.handler).has_value());
+    REQUIRE(backend.setInterest(probe.handler, interest).has_value());
+}
+
+/// One of a pair of registrations on their own channels, where whichever the backend
+/// dispatches first detaches the other — the shape of fastcached#475 on a real kernel.
+struct WithdrawingPeer
+{
+    std::unique_ptr<core::platform::SystemPipe> pipe;
+    core::net::ReadinessHandler handler {};
+    core::net::IoBackend* backend = nullptr;
+    WithdrawingPeer* other = nullptr;
+    bool* actedAlready = nullptr;
+    int dispatched = 0;
+
+    static void onReady(core::net::ReadinessHandler& handler) noexcept
+    {
+        auto* const self = static_cast<WithdrawingPeer*>(handler.owner);
+        ++self->dispatched;
+        if (*self->actedAlready)
+            return;
+        *self->actedAlready = true;
+        // Exactly what a resumed coroutine dropping a socket does: detach first, which
+        // is all any owner can do, and then let the object go.
+        self->backend->detach(self->other->handler);
+    }
+};
+
+/// Parks on @p handle and records whether a backend dispatch was in flight at the
+/// instant the flow resumed. It must not be: a backend enqueues, and the loop resumes,
+/// in a later step.
+/// @param loop The loop to park on.
+/// @param handle The handle to wait for.
+/// @param insideDispatch Set to what the flow observed when it woke.
+Task<void> recordDispatchStateOnResume(EventLoop* loop,
+                                       core::platform::NativeHandle handle,
+                                       bool* insideDispatch)
+{
+    co_await loop->waitReadable(handle);
+    *insideDispatch = core::net::detail::readinessDispatchInFlight();
+}
+
+} // namespace
+
+TEST_CASE("an attached handler is dispatched to, and a detached one is not", "[net][backend][parity]")
+{
+    for (auto const& entry: BackendMatrix)
+    {
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
             auto pipe = core::platform::createSystemPipe();
             REQUIRE(pipe.has_value());
 
-            auto const token = source->attach((*pipe)->waitHandle(), FdInterest::Read);
-            REQUIRE(token);
+            auto probe = Probe { (*pipe)->waitHandle() };
+            armProbe(*backend, probe, Interest::Read);
 
             auto const one = std::array<std::byte, 1> { std::byte { 'x' } };
             REQUIRE((*pipe)->write(one.data(), one.size()).has_value());
 
-            auto const ready = source->wait(200);
-            REQUIRE(std::ranges::find(ready.readyRead, token) != ready.readyRead.end());
+            CHECK(backend->wait(std::chrono::milliseconds { 200 }).dispatched == 1);
+            CHECK(probe.readable == 1);
 
-            // After detaching, the same still-readable fd must not be reported.
-            source->detach(token);
-            auto const afterDetach = source->wait(0);
-            REQUIRE(afterDetach.readyRead.empty());
-            REQUIRE(afterDetach.readyWrite.empty());
+            // After detaching, the same still-readable handle must reach nobody. The
+            // bytes are deliberately left unread, so the silence below is the
+            // detachment and not an idle channel.
+            backend->detach(probe.handler);
+            CHECK(backend->wait(core::platform::SteadyDuration::zero()).dispatched == 0);
+            CHECK(probe.total() == 1);
         }
     }
 }
 
-TEST_CASE("a muted registration is reported by no event source", "[net][eventsource][parity]")
+TEST_CASE("a muted registration is dispatched to by no backend", "[net][backend][parity]")
 {
-    // FdInterest::None is public API, documented as "mute the fd without detaching it". A
-    // muted registration must therefore be as silent as a detached one, while still counting
-    // as attached — and it must be silent on EVERY backend, which is what this pins.
-    for (auto const& backend: AllBackends)
+    // Interest::None is public API, documented as "mute the handle without detaching
+    // it". A muted registration must therefore be as silent as a detached one while
+    // still being attached — and it must be silent on EVERY backend, which is what
+    // this pins.
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
             auto pipe = core::platform::createSystemPipe();
             REQUIRE(pipe.has_value());
 
-            // A byte already waiting, so the descriptor really IS ready: the silence below is
-            // the mute and not an idle descriptor.
+            // A byte already waiting, so the handle really IS ready: the silence below
+            // is the mute and not an idle channel.
             auto const one = std::array<std::byte, 1> { std::byte { 'x' } };
             REQUIRE((*pipe)->write(one.data(), one.size()).has_value());
 
-            auto const muted = source->attach((*pipe)->waitHandle(), FdInterest::None);
-            REQUIRE(muted); // muted, not refused: the registration exists and detach() finds it
+            auto muted = Probe { (*pipe)->waitHandle() };
+            armProbe(*backend, muted, Interest::None);
 
-            auto const silent = source->wait(0);
-            CHECK(silent.readyRead.empty());
-            CHECK(silent.readyWrite.empty());
+            CHECK(backend->wait(core::platform::SteadyDuration::zero()).dispatched == 0);
+            CHECK(muted.total() == 0);
 
-            // The control: the same descriptor, watched for Read, is reported at once — so the
-            // silence above is the interest and nothing else about this descriptor.
-            auto const watched = source->attach((*pipe)->waitHandle(), FdInterest::Read);
-            REQUIRE(watched);
-            auto const ready = source->wait(200);
-            CHECK(std::ranges::find(ready.readyRead, watched) != ready.readyRead.end());
-            CHECK(std::ranges::find(ready.readyRead, muted) == ready.readyRead.end());
+            // The control: the same handle, watched for Read, is dispatched to at once
+            // — so the silence above is the interest and nothing else about this handle.
+            auto watched = Probe { (*pipe)->waitHandle() };
+            armProbe(*backend, watched, Interest::Read);
+            CHECK(backend->wait(std::chrono::milliseconds { 200 }).dispatched == 1);
+            CHECK(watched.readable == 1);
+            CHECK(muted.total() == 0);
 
-            source->detach(watched);
-            source->detach(muted);
+            // And muting is not a one-way door: the registration that was silent arms
+            // and is reached without ever having been detached and re-attached.
+            REQUIRE(backend->setInterest(muted.handler, Interest::Read).has_value());
+            std::ignore = backend->wait(std::chrono::milliseconds { 200 });
+            CHECK(muted.readable >= 1);
+
+            backend->detach(watched.handler);
+            backend->detach(muted.handler);
         }
     }
 }
 
 #ifndef _WIN32
-TEST_CASE("a muted registration stays silent when its peer hangs up", "[net][eventsource][parity]")
+TEST_CASE("a muted registration stays silent when its peer hangs up", "[net][backend][parity]")
 {
-    // Where the backends actually diverged. poll(2) and epoll report HUP/ERR for a registered
-    // descriptor whatever interest was asked for, so a muted descriptor whose peer hung up was
-    // routed as READ-ready and woke the flow the caller had muted — and on epoll it did so on
-    // every wait, since EPOLLHUP is level-triggered, spinning the pump. Windows and kqueue
-    // reported nothing. Muting now means the same thing everywhere.
+    // Where the backends actually diverged. poll(2) and epoll report HUP/ERR for a
+    // registered descriptor whatever interest was asked for, so a muted descriptor
+    // whose peer hung up was routed as a failure and woke the flow the caller had
+    // muted — and on epoll it did so on every wait, since EPOLLHUP is level-triggered,
+    // spinning the pump. Windows and kqueue reported nothing. Muting now means the
+    // same thing everywhere.
     //
-    // POSIX-only because there is no portable way to hang up one end of a waitable channel:
-    // platform::SystemPipe owns both ends together. The Windows backend excludes a muted
-    // registration from its wait set outright, which the portable case above covers.
-    for (auto const& backend: AllBackends)
+    // POSIX-only because there is no portable way to hang up one end of a waitable
+    // channel: platform::SystemPipe owns both ends together. The Windows backend
+    // excludes a muted registration from its wait set outright, which the portable
+    // case above covers.
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
             auto sv = std::array<int, 2> {};
             REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM, 0, sv.data()) == 0);
 
-            auto const muted = source->attach(sv[0], FdInterest::None);
-            REQUIRE(muted);
+            auto muted = Probe { sv[0] };
+            armProbe(*backend, muted, Interest::None);
 
             ::close(sv[1]); // the peer hangs up: POLLHUP / EPOLLHUP on sv[0]
 
-            auto const silent = source->wait(0);
-            CHECK(silent.readyRead.empty());
-            CHECK(silent.readyWrite.empty());
+            CHECK(backend->wait(core::platform::SteadyDuration::zero()).dispatched == 0);
+            CHECK(muted.total() == 0);
 
-            source->detach(muted);
+            backend->detach(muted.handler);
             ::close(sv[0]);
         }
     }
 }
 #endif
 
-TEST_CASE("two registrations on one descriptor are accepted by every event source",
-          "[net][eventsource][parity]")
+TEST_CASE("two registrations on one handle are accepted by every backend", "[net][backend][parity]")
 {
-    for (auto const& backend: AllBackends)
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
             auto pipe = core::platform::createSystemPipe();
             REQUIRE(pipe.has_value());
 
-            // FdRegistry permits it and poll(2) takes two entries, so the native
-            // backends must too — an epoll set is keyed by descriptor and would
-            // otherwise refuse the second with EEXIST, and a kqueue filter is keyed
-            // by (descriptor, filter) and would replace rather than add.
-            auto const first = source->attach((*pipe)->waitHandle(), FdInterest::Read);
-            auto const second = source->attach((*pipe)->waitHandle(), FdInterest::Read);
-            REQUIRE(first);
-            REQUIRE(second);
-            REQUIRE(first != second);
+            // The interface permits it — the loop parks a reader beside a writer on one
+            // socket — and poll(2) takes two entries, so the native backends must too:
+            // an epoll set is keyed by descriptor and would otherwise refuse the second
+            // with EEXIST, and a kqueue filter is keyed by (descriptor, filter) and
+            // would replace rather than add.
+            auto first = Probe { (*pipe)->waitHandle() };
+            auto second = Probe { (*pipe)->waitHandle() };
+            armProbe(*backend, first, Interest::Read);
+            armProbe(*backend, second, Interest::Read);
 
             auto const one = std::array<std::byte, 1> { std::byte { 'x' } };
             REQUIRE((*pipe)->write(one.data(), one.size()).has_value());
 
-            // At least one registration is reported. NOT both: whether a duplicated
-            // descriptor yields one ready entry or two is the multiplexer's own
+            // At least one registration is dispatched to. NOT both: whether a
+            // duplicated handle yields one ready entry or two is the multiplexer's own
             // business — Linux's poll(2) fills in every matching pollfd, macOS's
-            // reports the descriptor once — and EventSource deliberately does not
-            // promise either. What it does promise is that a registration is
-            // accepted and that readiness reaches somebody.
-            auto const ready = source->wait(200);
-            auto const sawFirst = std::ranges::find(ready.readyRead, first) != ready.readyRead.end();
-            auto const sawSecond = std::ranges::find(ready.readyRead, second) != ready.readyRead.end();
-            CHECK((sawFirst || sawSecond));
+            // reports the descriptor once — and IoBackend deliberately does not promise
+            // either. What it does promise is that a registration is accepted and that
+            // readiness reaches somebody.
+            std::ignore = backend->wait(std::chrono::milliseconds { 200 });
+            CHECK((first.readable > 0 || second.readable > 0));
 
             // Detaching one must not disturb the other: they are separate kernel
-            // registrations, so dropping one cannot take the survivor's with it.
-            // This is the property the dup() exists to provide, and it holds
+            // registrations, so dropping one cannot take the survivor's with it. This
+            // is the property the private dup() exists to provide, and it holds
             // everywhere regardless of how duplicates are reported above.
-            source->detach(first);
+            backend->detach(first.handler);
+            auto const firstBefore = first.total();
             REQUIRE((*pipe)->write(one.data(), one.size()).has_value());
-            auto const afterOne = source->wait(200);
-            CHECK(std::ranges::find(afterOne.readyRead, second) != afterOne.readyRead.end());
-            CHECK(std::ranges::find(afterOne.readyRead, first) == afterOne.readyRead.end());
+            std::ignore = backend->wait(std::chrono::milliseconds { 200 });
+            CHECK(second.readable > 0);
+            CHECK(first.total() == firstBefore);
 
-            source->detach(second);
+            backend->detach(second.handler);
         }
     }
 }
 
 #ifndef _WIN32
-TEST_CASE("a registration does not keep a closed descriptor's connection alive", "[net][eventsource][parity]")
+TEST_CASE("a registration does not keep a closed descriptor's connection alive", "[net][backend][parity]")
 {
-    for (auto const& backend: AllBackends)
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
             auto sv = std::array<int, 2> {};
             REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM, 0, sv.data()) == 0);
 
-            // Attach one end, then close it WITHOUT detaching first — the ordering
-            // a cancelled flow or an early socket destructor produces. A backend
-            // that registers a dup() of the descriptor keeps the underlying open
-            // file description alive, so no FIN reaches the peer: its read blocks
-            // forever instead of reporting EOF, and the connection leaks.
-            auto const token = source->attach(sv[0], FdInterest::Read);
-            REQUIRE(token);
+            // Attach one end, then close it WITHOUT detaching first — the ordering a
+            // cancelled flow or an early socket destructor produces. A backend that
+            // registers a dup() of the descriptor keeps the underlying open file
+            // description alive, so no FIN reaches the peer: its read blocks forever
+            // instead of reporting EOF, and the connection leaks.
+            auto probe = Probe { sv[0] };
+            armProbe(*backend, probe, Interest::Read);
             ::close(sv[0]);
 
-            // The peer must see EOF now. Read non-blocking so a backend that holds
-            // the description open fails the assertion instead of hanging the suite.
+            // The peer must see EOF now. Read non-blocking so a backend that holds the
+            // description open fails the assertion instead of hanging the suite.
             auto const flags = ::fcntl(sv[1], F_GETFL, 0);
             ::fcntl(sv[1], F_SETFL, flags | O_NONBLOCK);
             auto buffer = std::array<char, 16> {};
             auto const got = ::read(sv[1], buffer.data(), buffer.size());
             CHECK(got == 0); // 0 == EOF; -1/EAGAIN means the FIN never arrived
 
-            source->detach(token);
+            backend->detach(probe.handler);
             ::close(sv[1]);
         }
     }
@@ -1048,46 +1161,51 @@ TEST_CASE("a registration does not keep a closed descriptor's connection alive",
 #endif
 
 #ifndef _WIN32
-TEST_CASE("a duplicate registration refuses cleanly when descriptors run out", "[net][eventsource][parity]")
+TEST_CASE("setInterest reports the kernel's refusal when descriptors run out", "[net][backend][parity]")
 {
-    for (auto const& backend: AllBackends)
+    // fastcached#1054 and #1057, from the side a caller feels. `attach` answers that
+    // the handler and the backend are usable together; whether the KERNEL accepted the
+    // registration is what `setInterest` answers, and only that — which is why it
+    // returns an expected rather than a bare success. A registration the caller
+    // believes succeeded and the kernel never made parks a flow with nothing left to
+    // resume it: no message, no stack, just a hang.
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
             auto pipe = core::platform::createSystemPipe();
             REQUIRE(pipe.has_value());
 
             // The first registration watches the caller's descriptor directly, so it
             // needs no descriptor of its own.
-            auto const first = source->attach((*pipe)->waitHandle(), FdInterest::Read);
-            REQUIRE(first);
+            auto first = Probe { (*pipe)->waitHandle() };
+            armProbe(*backend, first, Interest::Read);
 
-            // A second registration on the same descriptor needs a private dup().
-            // Lower the soft descriptor limit to what is already open so that dup()
-            // must fail, and require a refusal rather than a token for a registration
-            // the kernel never accepted — parking on one of those is unresumable.
+            // A second registration on the same descriptor needs a private dup(). Lower
+            // the soft descriptor limit to what is already open so that dup() must fail.
             auto limit = rlimit {};
             REQUIRE(::getrlimit(RLIMIT_NOFILE, &limit) == 0);
             auto const originalSoft = limit.rlim_cur;
 
-            auto underPressure = core::net::FdToken {};
+            auto underPressure = Probe { (*pipe)->waitHandle() };
+            auto armed = std::expected<void, core::net::NetError> {};
             {
-                auto const probe = ::dup(0); // the lowest descriptor still free
-                REQUIRE(probe >= 0);
+                auto const spare = ::dup(0); // the lowest descriptor still free
+                REQUIRE(spare >= 0);
                 auto squeezed = limit;
-                squeezed.rlim_cur = static_cast<rlim_t>(probe); // no descriptor >= probe may be opened
+                squeezed.rlim_cur = static_cast<rlim_t>(spare); // no descriptor >= spare may be opened
                 REQUIRE(::setrlimit(RLIMIT_NOFILE, &squeezed) == 0);
-                ::close(probe);
+                ::close(spare);
 
-                // The soft limit is PROCESS-wide, so it has to come back on EVERY exit from this
-                // scope, not only the one that falls through: the attach() below allocates, and a
-                // throw (a failed Catch assertion is one) used to skip a plain restore statement
-                // and leave every later case in this binary running squeezed — a cascade of
-                // failures whose cause appears nowhere in their own output.
+                // The soft limit is PROCESS-wide, so it has to come back on EVERY exit
+                // from this scope, not only the one that falls through: a throw (a
+                // failed Catch assertion is one) used to skip a plain restore statement
+                // and leave every later case in this binary running squeezed — a cascade
+                // of failures whose cause appears nowhere in their own output.
                 auto const restoreLimit = core::net::detail::ScopeGuard { [originalSoft]() noexcept {
                     auto restored = rlimit {};
                     if (::getrlimit(RLIMIT_NOFILE, &restored) != 0)
@@ -1096,66 +1214,251 @@ TEST_CASE("a duplicate registration refuses cleanly when descriptors run out", "
                     static_cast<void>(::setrlimit(RLIMIT_NOFILE, &restored));
                 } };
 
-                underPressure = source->attach((*pipe)->waitHandle(), FdInterest::Read);
+                REQUIRE(backend->attach(underPressure.handler).has_value());
+                armed = backend->setInterest(underPressure.handler, Interest::Read);
             }
-            // Descriptors are available again from here: the guard above restored the limit.
+            // Descriptors are available again from here: the guard restored the limit.
 
-            // What must hold on EVERY backend is that the answer is honest: either
-            // the registration was refused, or it was genuinely armed. What must
-            // never happen is a valid token for a registration the kernel does not
-            // have. poll(2) needs no descriptor of its own, so it legitimately
-            // succeeds here; epoll and kqueue must dup() and so must refuse.
-            if (backend.kind == EventSourceKind::Poll)
-                CHECK(underPressure);
+            // What must hold on EVERY backend is that the answer is honest: either the
+            // interest was refused, or it was genuinely armed. What must never happen is
+            // a success for a registration the kernel does not have. poll(2) needs no
+            // descriptor of its own, so it legitimately succeeds here; epoll and kqueue
+            // must dup() and so must refuse — and their refusal carries the kernel's own
+            // errno, which is the whole reason it is an error value and not a bare false.
+            if (entry.kind == BackendKind::Poll)
+                CHECK(armed.has_value());
             else
-                CHECK_FALSE(underPressure);
+            {
+                REQUIRE_FALSE(armed.has_value());
+                CHECK(armed.error().code == core::net::NetErrorCode::SystemError);
+                CHECK(armed.error().systemCode != 0);
+                CHECK_FALSE(armed.error().context.empty());
+            }
 
             // Recovery: with descriptors available again, a duplicate must work.
-            auto const afterRecovery = source->attach((*pipe)->waitHandle(), FdInterest::Read);
-            CHECK(afterRecovery);
+            auto afterRecovery = Probe { (*pipe)->waitHandle() };
+            armProbe(*backend, afterRecovery, Interest::Read);
 
-            source->detach(afterRecovery);
-            if (underPressure)
-                source->detach(underPressure); // poll(2) succeeded above
-            source->detach(first);
+            backend->detach(afterRecovery.handler);
+            backend->detach(underPressure.handler);
+            backend->detach(first.handler);
         }
     }
 }
 #endif
 
-TEST_CASE("an invalid handle is refused by every event source", "[net][eventsource][parity]")
+TEST_CASE("an invalid handle is refused by every backend", "[net][backend][parity]")
 {
-    for (auto const& backend: AllBackends)
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
-            // A refused registration must report invalid rather than succeeding:
-            // the awaiting flow has to fail instead of parking on an interest the
-            // kernel never accepted, which nothing could resume.
-            auto const token = source->attach(core::platform::InvalidHandle, FdInterest::Read);
-            REQUIRE_FALSE(token);
+            // A refused registration must SAY so: the awaiting flow has to fail rather
+            // than park on an interest the kernel never accepted, which nothing could
+            // resume.
+            auto probe = Probe { core::platform::InvalidHandle };
+            auto const attached = backend->attach(probe.handler);
+            REQUIRE_FALSE(attached.has_value());
+            CHECK(attached.error().code == core::net::NetErrorCode::BadHandle);
+
+            // And an interest on a handler that was never attached is refused too,
+            // rather than silently recorded against nothing.
+            auto stray = Probe { core::platform::InvalidHandle };
+            CHECK_FALSE(backend->setInterest(stray.handler, Interest::Read).has_value());
         }
     }
 }
 
-TEST_CASE("the default source drives the scenarios Socket_test pins to poll",
-          "[net][eventsource][parity][closehang]")
+TEST_CASE("a backend dispatches, and the loop resumes", "[net][backend][parity]")
 {
-    // Socket_test hardcodes PollEventSource in all of its cases, which is why two
-    // native-backend defects (a registration holding the peer's connection open, and
-    // a parked reader never resuming after close) passed a green suite. These run the
-    // same shapes against whatever makeDefaultEventSource picks -- epoll on Linux,
-    // kqueue on macOS/BSD -- so the backend production actually uses is exercised.
-    auto source = core::net::makeDefaultEventSource();
-    REQUIRE(source != nullptr);
+    // Rule 1, from the side that proves it end to end. A backend's callbacks only
+    // enqueue; the coroutine is resumed later, on the loop thread, out of the ready
+    // queue. Resuming from inside the backend's walk over its own ready list would let
+    // the resumed frame free the object whose entry the walk has not reached yet — a
+    // use-after-free with no diagnostic. EventLoop::drainReadyQueue asserts the
+    // negative on every path; this asserts it positively, on every backend, from the
+    // flow's own frame.
+    for (auto const& entry: BackendMatrix)
+    {
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
+            continue;
+
+        DYNAMIC_SECTION("backend=" << entry.name)
+        {
+            auto loop = EventLoop { *backend };
+            auto pipe = core::platform::createSystemPipe();
+            REQUIRE(pipe.has_value());
+
+            auto const one = std::array<std::byte, 1> { std::byte { 'x' } };
+            REQUIRE((*pipe)->write(one.data(), one.size()).has_value());
+
+            auto insideDispatch = true;
+            loop.blockOn(recordDispatchStateOnResume(&loop, (*pipe)->waitHandle(), &insideDispatch));
+            CHECK_FALSE(insideDispatch);
+        }
+    }
+}
+
+TEST_CASE("a handler detached from inside a dispatch is not dispatched in the same wait",
+          "[net][backend][parity]")
+{
+    // fastcached#475 on a real kernel. Dropping a registration stops FUTURE reports and
+    // does nothing about an entry the wait has already written into the batch being
+    // walked, so a callback that detaches another handler and frees its owner leaves a
+    // dangling entry the same walk reads. Without the withdrawal this is a
+    // use-after-free rather than a failed assertion — it reports as a crash under a
+    // sanitizer and can pass silently without one, which is the nature of the defect
+    // and is why the case exists.
+    for (auto const& entry: BackendMatrix)
+    {
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
+            continue;
+
+        DYNAMIC_SECTION("backend=" << entry.name)
+        {
+            auto peers = std::array<WithdrawingPeer, 2> {};
+            auto actedAlready = false;
+            for (auto& peer: peers)
+            {
+                auto pipe = core::platform::createSystemPipe();
+                REQUIRE(pipe.has_value());
+                peer.pipe = std::move(*pipe);
+                peer.backend = backend.get();
+                peer.actedAlready = &actedAlready;
+                peer.handler = core::net::ReadinessHandler { .handle = peer.pipe->waitHandle(),
+                                                             .kind = core::net::DefaultHandleKind,
+                                                             .owner = &peer,
+                                                             .onReadable = &WithdrawingPeer::onReady,
+                                                             .onWritable = nullptr,
+                                                             .onError = &WithdrawingPeer::onReady };
+                REQUIRE(backend->attach(peer.handler).has_value());
+                REQUIRE(backend->setInterest(peer.handler, Interest::Read).has_value());
+            }
+            peers[0].other = std::next(peers.data());
+            peers[1].other = peers.data();
+
+            // Both readable BEFORE the wait, so ONE wait dequeues both in a single
+            // batch. Without this the case proves nothing — it would be two batches and
+            // the window would never open.
+            auto const one = std::array<std::byte, 1> { std::byte { 'x' } };
+            for (auto& peer: peers)
+                REQUIRE(peer.pipe->write(one.data(), one.size()).has_value());
+
+            auto const dispatched = backend->wait(std::chrono::milliseconds { 200 });
+
+            // Exactly one of them acted, and the other was withdrawn from inside the
+            // batch rather than dispatched. Whichever the kernel reported first is the
+            // one that acted, so the case does not depend on that order.
+            REQUIRE(actedAlready);
+            CHECK(dispatched.dispatched == 1);
+            CHECK(peers[0].dispatched + peers[1].dispatched == 1);
+
+            backend->detach(peers[0].handler);
+            backend->detach(peers[1].handler);
+        }
+    }
+}
+
+TEST_CASE("a wake ends a wait, and one raised before the wait is not lost", "[net][backend][parity]")
+{
+    // wake() is the one member of IoBackend another thread may call, and a lost wakeup
+    // is a loop that never returns from its wait — a hang at shutdown and nowhere else.
+    // Both halves are asserted: a wake raised while nothing is waiting must make the
+    // NEXT wait return, and a wake raised during a wait must end it.
+    for (auto const& entry: BackendMatrix)
+    {
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
+            continue;
+
+        DYNAMIC_SECTION("backend=" << entry.name)
+        {
+            // Bounded, and it says what it waits for: reaching the timeout means the
+            // wake was lost, not that the machine was slow.
+            constexpr auto NeverInPractice = std::chrono::seconds { 30 };
+            constexpr auto SlowMachine = std::chrono::seconds { 5 };
+
+            auto const beforeFirst = std::chrono::steady_clock::now();
+            backend->wake();
+            std::ignore = backend->wait(NeverInPractice);
+            CHECK(std::chrono::steady_clock::now() - beforeFirst < SlowMachine);
+
+            auto const beforeSecond = std::chrono::steady_clock::now();
+            auto waker = std::thread { [&backend] {
+                std::this_thread::sleep_for(std::chrono::milliseconds { 50 });
+                backend->wake();
+            } };
+            std::ignore = backend->wait(NeverInPractice);
+            waker.join();
+            CHECK(std::chrono::steady_clock::now() - beforeSecond < SlowMachine);
+        }
+    }
+}
+
+TEST_CASE("a dead handle in the wait set does not blind a backend to a live one",
+          "[net][backend][parity][closehang]")
+{
+    // A handle closed while still registered is reported differently by every kernel —
+    // poll(2) answers POLLNVAL, epoll drops it from the set, kqueue drops its filters,
+    // and Windows fails the whole wait on it. What must be the same everywhere is that
+    // the dead one does not take a LIVE registration down with it. On Windows it did:
+    // WaitForMultipleObjects failed on the dead handle every round, so the wait reported
+    // nothing at all and whoever was parked on the live handle hung forever. (Resuming
+    // the flow parked on the dead handle is a different question, and not one a
+    // readiness poller can answer — it is what EventLoop::notifyHandleClosing exists
+    // for.)
+    for (auto const& entry: BackendMatrix)
+    {
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
+            continue;
+
+        DYNAMIC_SECTION("backend=" << entry.name)
+        {
+            auto dying = core::platform::createSystemPipe();
+            auto live = core::platform::createSystemPipe();
+            REQUIRE(dying.has_value());
+            REQUIRE(live.has_value());
+
+            auto dead = Probe { (*dying)->waitHandle() };
+            auto alive = Probe { (*live)->waitHandle() };
+            armProbe(*backend, dead, Interest::Read);
+            armProbe(*backend, alive, Interest::Read);
+
+            dying->reset(); // closed, and deliberately NOT detached
+
+            auto const one = std::array<std::byte, 1> { std::byte { 'x' } };
+            REQUIRE((*live)->write(one.data(), one.size()).has_value());
+
+            std::ignore = backend->wait(std::chrono::milliseconds { 200 });
+            CHECK(alive.readable > 0);
+
+            backend->detach(dead.handler);
+            backend->detach(alive.handler);
+        }
+    }
+}
+
+TEST_CASE("the default backend drives the scenarios Socket_test pins to one backend",
+          "[net][backend][parity][closehang]")
+{
+    // Socket_test hardcoded a single backend in all of its cases, which is why two
+    // native-backend defects (a registration holding the peer's connection open, and a
+    // parked reader never resuming after close) passed a green suite. These run the same
+    // shapes against whatever makeDefaultBackend picks — epoll on Linux, kqueue on
+    // macOS/BSD, Wfmo on Windows — so the backend production actually uses is exercised.
+    auto const backend = core::net::makeDefaultBackend();
+    REQUIRE(backend != nullptr);
 
     SECTION("loopback echo")
     {
-        auto loop = EventLoop { *source };
+        auto loop = EventLoop { *backend };
         auto listener = core::net::listen(loop, "127.0.0.1", 0);
         REQUIRE(listener.has_value());
         auto const port = (*listener)->localPort();
@@ -1168,7 +1471,7 @@ TEST_CASE("the default source drives the scenarios Socket_test pins to poll",
 
     SECTION("close resumes a parked reader")
     {
-        auto loop = EventLoop { *source };
+        auto loop = EventLoop { *backend };
         auto pair = core::net::testing::makeSocketPair(loop);
         REQUIRE(pair.has_value());
 
@@ -1179,7 +1482,7 @@ TEST_CASE("the default source drives the scenarios Socket_test pins to poll",
 
     SECTION("a peer's close reads as EOF")
     {
-        auto loop = EventLoop { *source };
+        auto loop = EventLoop { *backend };
         auto pair = core::net::testing::makeSocketPair(loop);
         REQUIRE(pair.has_value());
 
@@ -1193,21 +1496,20 @@ TEST_CASE("the default source drives the scenarios Socket_test pins to poll",
 
 // Same hazard as the parked reader, one layer up; it HUNG on epoll/kqueue until
 // notifyHandleClosing existed.
-TEST_CASE("closing a listener resumes a parked accept on every event source",
-          "[net][eventsource][parity][closehang]")
+TEST_CASE("closing a listener resumes a parked accept on every backend", "[net][backend][parity][closehang]")
 {
-    // Same hazard as a parked reader, one layer up: accept() parks on waitReadable,
-    // so a listener closed while an accept is pending must resume it rather than
-    // leave it parked on a descriptor the poller can no longer report.
-    for (auto const& backend: AllBackends)
+    // Same hazard as a parked reader, one layer up: accept() parks on waitReadable, so
+    // a listener closed while an accept is pending must resume it rather than leave it
+    // parked on a descriptor the poller can no longer report.
+    for (auto const& entry: BackendMatrix)
     {
-        auto source = core::net::makeEventSource(backend.kind);
-        if (!source)
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
             continue;
 
-        DYNAMIC_SECTION("backend=" << backend.name)
+        DYNAMIC_SECTION("backend=" << entry.name)
         {
-            auto loop = EventLoop { *source };
+            auto loop = EventLoop { *backend };
             auto listener = core::net::listen(loop, "127.0.0.1", 0);
             REQUIRE(listener.has_value());
 
@@ -1218,13 +1520,13 @@ TEST_CASE("closing a listener resumes a parked accept on every event source",
     }
 }
 
-TEST_CASE("makeDefaultEventSource yields a usable source", "[net][eventsource]")
+TEST_CASE("makeDefaultBackend yields a usable backend", "[net][backend]")
 {
-    auto source = core::net::makeDefaultEventSource();
-    REQUIRE(source != nullptr);
+    auto const backend = core::net::makeDefaultBackend();
+    REQUIRE(backend != nullptr);
 
     // Whatever it picked must drive a real round-trip.
-    auto loop = EventLoop { *source };
+    auto loop = EventLoop { *backend };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
 
@@ -1233,11 +1535,46 @@ TEST_CASE("makeDefaultEventSource yields a usable source", "[net][eventsource]")
     REQUIRE(got == "parity");
 }
 
-TEST_CASE("the preferred backend is constructible on this platform", "[net][eventsource]")
+TEST_CASE("the preferred backend is constructible on this platform, and names itself", "[net][backend]")
 {
-    // If the platform names a native backend, it must actually build here — a
-    // silent permanent fallback to poll would mean the port is not exercised at all.
-    auto const preferred = core::net::preferredEventSourceKind();
-    auto source = core::net::makeEventSource(preferred);
-    REQUIRE(source != nullptr);
+    // If the platform names a native backend, it must actually build here — a silent
+    // permanent fallback would mean the port is not exercised at all.
+    auto const preferred = core::net::preferredBackendKind();
+    auto const backend = core::net::makeBackend(preferred);
+    REQUIRE(backend != nullptr);
+    CHECK(backend->kind() == preferred);
+    CHECK_FALSE(backend->isHostDriven());
+
+    // And the default IS the preferred one wherever it can be built, which is what
+    // makes "the parity matrix covers what production runs" true rather than hoped.
+    auto const byDefault = core::net::makeDefaultBackend();
+    REQUIRE(byDefault != nullptr);
+    CHECK(byDefault->kind() == preferred);
+}
+
+TEST_CASE("makeBackend answers null for a kind this platform does not build", "[net][backend]")
+{
+    // A kind that is genuinely absent here, named rather than computed, so this asks a
+    // real question on each platform instead of trivially passing everywhere.
+#ifdef _WIN32
+    CHECK(core::net::makeBackend(BackendKind::Epoll) == nullptr);
+    CHECK(core::net::makeBackend(BackendKind::Kqueue) == nullptr);
+    CHECK(core::net::makeBackend(BackendKind::Poll) == nullptr);
+#elifdef __linux__
+    CHECK(core::net::makeBackend(BackendKind::Kqueue) == nullptr);
+    CHECK(core::net::makeBackend(BackendKind::Wfmo) == nullptr);
+#else
+    CHECK(core::net::makeBackend(BackendKind::Epoll) == nullptr);
+    CHECK(core::net::makeBackend(BackendKind::Wfmo) == nullptr);
+#endif
+
+    // IOCP arrives in Task B7; until then it is named and not built, on every platform.
+    CHECK(core::net::makeBackend(BackendKind::Iocp) == nullptr);
+
+    // The test doubles and the host-driven backend are reachable, and not through here:
+    // a production factory is the wrong way to get a test double, and HostDrivenBackend
+    // needs the IHostScheduler its host provides.
+    CHECK(core::net::makeBackend(BackendKind::Scripted) == nullptr);
+    CHECK(core::net::makeBackend(BackendKind::Null) == nullptr);
+    CHECK(core::net::makeBackend(BackendKind::HostDriven) == nullptr);
 }

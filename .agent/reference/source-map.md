@@ -46,14 +46,16 @@ src/core/
                             UniqueCoroHandle, Cancellation, Awaitable, whenAll/whenAny (contour);
                             executors, AsyncQueue (planned, B1)
   net/                      core::net_types (NetError, IoResult; header-only, everywhere),
-                            core::net (contour: EventLoop over EventSource, poll/epoll/kqueue,
-                            sockets, AsyncBufferedReader, WriteQueue, WithTimeout, HttpServer,
-                            Diagnostics; native only), core::net_tls (Tls, OpenSSL private);
-                            posix/ (poll, sockets) linux/ (epoll) bsd/ (kqueue) windows/
-                            (WaitForMultipleObjects, sockets) detail/ are private; testing/
-                            holds the fakes (ScriptedEventSource, makeSocketPair, AllBackends,
+                            core::net (EventLoop over IoBackend, which DISPATCHES readiness to
+                            the handlers registered with it; sockets, AsyncBufferedReader,
+                            WriteQueue, WithTimeout, HttpServer, Diagnostics; native only),
+                            core::net_tls (Tls, OpenSSL private); posix/ (PollBackend, sockets)
+                            linux/ (EpollBackend) bsd/ (KqueueBackend) windows/ (WfmoBackend,
+                            sockets) detail/ are private, and each platform directory has the
+                            DefaultBackend.cpp CMake picks one of; testing/ holds the fakes
+                            (ScriptedBackend, NullBackend, makeSocketPair, BackendMatrix,
                             CoroTestSupport), makeSocketPair's halves in testing/posix/ and
-                            testing/windows/; IoBackend, dialling (planned, B2-B11)
+                            testing/windows/; IOCP, dialling (planned, B4-B11)
   tui/                      core::tui_output (endo: TerminalOutput, SyncGuard, SgrBuilder,
                             TerminalProtocols, CursorShape, Error; links base alone), and
                             core::tui (TerminalInput, VtParser, Terminal, Buffer, Canvas,

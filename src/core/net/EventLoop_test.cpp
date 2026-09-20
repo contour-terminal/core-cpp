@@ -2,10 +2,10 @@
 #include <core/async/Cancellation.hpp>
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
-#include <core/net/PollEventSource.hpp>
+#include <core/net/IoBackend.hpp>
 #include <core/net/WithTimeout.hpp>
 #include <core/net/detail/WaitChunking.hpp>
-#include <core/net/testing/ScriptedEventSource.hpp>
+#include <core/net/testing/ScriptedBackend.hpp>
 #include <core/platform/Clock.hpp>
 #include <core/platform/SystemPipe.hpp>
 
@@ -15,19 +15,31 @@
 #include <optional>
 #include <ranges>
 #include <thread>
+#include <tuple>
 
 using core::async::OperationCancelled;
 using core::async::Task;
 using core::net::EventLoop;
-using core::net::testing::ScriptedEventSource;
+using core::net::testing::HandlerId;
+using core::net::testing::ScriptedBackend;
 using core::platform::ManualClock;
 
-// Note on scripted fd tokens: the EventLoop constructor attaches its post()
-// self-pipe to the source first, so it owns FdToken{1} and one attachedCount
-// slot; the first coroutine fd waiter therefore receives FdToken{2}.
+// Note on scripted registration ids: the loop no longer attaches a wakeup channel of
+// its own — that belongs to the backend now, and ScriptedBackend has none — so the
+// first coroutine fd waiter receives HandlerId{1}.
 
 namespace
 {
+
+/// @param timeout A timeout a backend recorded.
+/// @return The milliseconds it names, or -1 for an indefinite wait. Cases assert on
+///         milliseconds because that is the unit the deadlines in them are written in;
+///         the backend takes a duration so that the rounding to whatever its native
+///         wait accepts happens once, in the backend, and not in every caller.
+[[nodiscard]] long long timeoutMs(std::optional<core::platform::SteadyDuration> const& timeout)
+{
+    return timeout.has_value() ? std::chrono::duration_cast<std::chrono::milliseconds>(*timeout).count() : -1;
+}
 
 /// Resumes immediately when the delay has already elapsed (the ready path).
 Task<int> awaitZeroDelay(EventLoop* loop)
@@ -143,23 +155,22 @@ Task<void> waitReadableWithGuard(EventLoop* loop, core::platform::NativeHandle f
     }
 }
 
-/// A ScriptedEventSource that advances an injected ManualClock by a fixed step on
-/// every wait(). This models the passage of time deterministically: the loop
-/// schedules a delay against the clock, and each blocking wait "elapses" exactly
-/// `step` of clock time, so a delay fires after a known number of waits — with no
-/// real sleeping.
-class ClockAdvancingSource: public ScriptedEventSource
+/// A ScriptedBackend that advances an injected ManualClock by a fixed step on every
+/// wait(). This models the passage of time deterministically: the loop schedules a
+/// delay against the clock, and each blocking wait "elapses" exactly `step` of clock
+/// time, so a delay fires after a known number of waits — with no real sleeping.
+class ClockAdvancingBackend: public ScriptedBackend
 {
   public:
-    ClockAdvancingSource(ManualClock& clock, std::chrono::milliseconds step) noexcept:
+    ClockAdvancingBackend(ManualClock& clock, std::chrono::milliseconds step) noexcept:
         _clock(clock), _step(step)
     {
     }
 
-    core::net::WaitOutcome wait(int timeoutMs) override
+    core::net::WaitResult wait(std::optional<core::platform::SteadyDuration> timeout) override
     {
         _clock.advance(_step);
-        return ScriptedEventSource::wait(timeoutMs);
+        return ScriptedBackend::wait(timeout);
     }
 
   private:
@@ -171,7 +182,7 @@ class ClockAdvancingSource: public ScriptedEventSource
 
 TEST_CASE("delay(0) resumes without waiting", "[EventLoop]")
 {
-    auto source = ScriptedEventSource {};
+    auto source = ScriptedBackend {};
     auto loop = EventLoop { source };
 
     auto const result = loop.blockOn(awaitZeroDelay(&loop));
@@ -186,7 +197,7 @@ TEST_CASE("A pending delay bounds the wait timeout and fires deterministically",
     // must bound the FIRST wait to exactly 500ms (not block indefinitely at -1)
     // and fire on the second wait, once the clock has crossed the deadline.
     auto clock = ManualClock {};
-    auto source = ClockAdvancingSource { clock, std::chrono::milliseconds { 250 } };
+    auto source = ClockAdvancingBackend { clock, std::chrono::milliseconds { 250 } };
     source.pushTimeout(); // 250ms elapsed: still pending
     source.pushTimeout(); // 500ms elapsed: timer is now due -> flow resumes
     auto loop = EventLoop { source, clock };
@@ -197,8 +208,8 @@ TEST_CASE("A pending delay bounds the wait timeout and fires deterministically",
     REQUIRE(fired);
     REQUIRE(result == 500);
     REQUIRE(source.waitCount() == 2);
-    REQUIRE(source.recordedTimeouts().front() == 500); // exact: no real-clock jitter
-    REQUIRE(source.recordedTimeouts().back() == 250);  // the remaining half
+    REQUIRE(timeoutMs(source.recordedTimeouts().front()) == 500); // exact: no real-clock jitter
+    REQUIRE(timeoutMs(source.recordedTimeouts().back()) == 250);  // the remaining half
 }
 
 TEST_CASE("The loop refreshes a caching clock before each timeout and after each wait", "[EventLoop][clock]")
@@ -209,7 +220,7 @@ TEST_CASE("The loop refreshes a caching clock before each timeout and after each
     // Each blockOn(justReturn()) below is one pump, and so one wait.
     auto manual = ManualClock {};
     auto cached = core::platform::CachedClock { manual };
-    auto source = ClockAdvancingSource { manual, std::chrono::milliseconds { 250 } };
+    auto source = ClockAdvancingBackend { manual, std::chrono::milliseconds { 250 } };
     source.pushTimeout();
     source.pushTimeout();
     auto fired = false; // declared before the loop, which may still hold the flow when it goes
@@ -219,21 +230,21 @@ TEST_CASE("The loop refreshes a caching clock before each timeout and after each
     // spends 100 of that before the first wait, which only a refresh before the timeout counts.
     loop.spawn(spendThenDelay(&loop, &manual, std::chrono::milliseconds { 100 }, 500, &fired));
     loop.blockOn(justReturn());
-    CHECK(source.recordedTimeouts().back() == 400);
+    CHECK(timeoutMs(source.recordedTimeouts().back()) == 400);
     CHECK_FALSE(fired);
 
     // The first wait ended at 350 and the second ends at 600: only a refresh after each wait lets
     // the loop see either, and so time the second wait by 150 and fire the delay after it.
     loop.blockOn(justReturn());
-    CHECK(source.recordedTimeouts().back() == 150);
+    CHECK(timeoutMs(source.recordedTimeouts().back()) == 150);
     CHECK(fired);
     CHECK(source.waitCount() == 2);
 }
 
 TEST_CASE("pollUntil returns as soon as its predicate holds", "[EventLoop][poll]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const backend = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *backend };
 
     auto flag = false;
     auto polls = 0;
@@ -246,8 +257,8 @@ TEST_CASE("pollUntil returns as soon as its predicate holds", "[EventLoop][poll]
 
 TEST_CASE("pollUntil returns immediately when the predicate already holds", "[EventLoop][poll]")
 {
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const backend = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *backend };
 
     auto flag = true; // already satisfied: no delay should be awaited
     auto polls = 0;
@@ -257,71 +268,96 @@ TEST_CASE("pollUntil returns immediately when the predicate already holds", "[Ev
     CHECK(polls == 1); // one check, then a prompt return
 }
 
-TEST_CASE("EventSource fd registry hands out distinct tokens and reports readiness", "[EventSource]")
+namespace
 {
-    // The scripted source ignores the handle value (it returns synthetic tokens);
-    // a real SystemPipe supplies portable valid handles (NativeHandle is void* on
-    // Windows, so integer literals would not compile).
+
+/// Counts a dispatch into the `int` its handler's owner points at.
+void countDispatch(core::net::ReadinessHandler& handler) noexcept
+{
+    ++*static_cast<int*>(handler.owner);
+}
+
+} // namespace
+
+TEST_CASE("the scripted backend dispatches to the registration its script names", "[net][backend]")
+{
+    // The scripted backend ignores the handle value (it names registrations by attach
+    // order); a real SystemPipe supplies portable valid handles, because NativeHandle
+    // is void* on Windows and integer literals would not compile.
     auto pipe = core::platform::createSystemPipe();
     REQUIRE(pipe.has_value());
 
-    auto source = ScriptedEventSource {};
-    auto const a = source.attach((*pipe)->readFd(), core::net::FdInterest::Read);
-    auto const b = source.attach((*pipe)->writeFd(), core::net::FdInterest::Write);
+    auto reader = 0;
+    auto writer = 0;
+    auto readHandler = core::net::ReadinessHandler { .handle = (*pipe)->readFd(),
+                                                     .owner = &reader,
+                                                     .onReadable = &countDispatch };
+    auto writeHandler = core::net::ReadinessHandler { .handle = (*pipe)->writeFd(),
+                                                      .owner = &writer,
+                                                      .onWritable = &countDispatch };
+
+    auto source = ScriptedBackend {};
+    REQUIRE(source.attach(readHandler).has_value());
+    auto const a = source.lastHandlerId();
+    REQUIRE(source.attach(writeHandler).has_value());
+    auto const b = source.lastHandlerId();
 
     REQUIRE(static_cast<bool>(a));
     REQUIRE(static_cast<bool>(b));
-    REQUIRE_FALSE(a == b);
+    REQUIRE(a != b);
     REQUIRE(source.attachedCount() == 2);
+
+    REQUIRE(source.setInterest(readHandler, core::net::Interest::Read).has_value());
+    REQUIRE(source.setInterest(writeHandler, core::net::Interest::Write).has_value());
+    CHECK(source.interestOf(a) == core::net::Interest::Read);
+    CHECK(source.interestOf(b) == core::net::Interest::Write);
 
     source.pushReadable(a);
     source.pushWritable(b);
 
-    auto const first = source.wait(0);
-    REQUIRE(first.readyRead.size() == 1);
-    REQUIRE(first.readyRead.front() == a);
+    CHECK(source.wait(core::platform::SteadyDuration::zero()).dispatched == 1);
+    CHECK(reader == 1);
+    CHECK(writer == 0);
 
-    auto const second = source.wait(0);
-    REQUIRE(second.readyWrite.size() == 1);
-    REQUIRE(second.readyWrite.front() == b);
+    CHECK(source.wait(core::platform::SteadyDuration::zero()).dispatched == 1);
+    CHECK(writer == 1);
+    CHECK(reader == 1);
 
-    source.detach(a);
-    source.detach(b);
+    source.detach(readHandler);
+    source.detach(writeHandler);
     REQUIRE(source.attachedCount() == 0);
 }
 
-TEST_CASE("The scripted source detaches idempotently, like every real backend", "[EventSource]")
+TEST_CASE("the scripted backend detaches idempotently, like every real one", "[net][backend]")
 {
-    // EventSource::detach is documented idempotent, and the loop really does detach twice on
-    // normal paths — notifyHandleClosing then unregisterFdWaiter; requeueForCancellation and
-    // wakeAllWaiters before await_resume. The scripted source counted DETACH CALLS instead of
-    // live registrations, so a second detach of one token cancelled out a different token's
-    // registration: attachedCount() then under-reported, and a leak assertion against this
-    // source would pass on a registration that never went away.
+    // IoBackend::detach is documented idempotent, and the loop really does detach twice
+    // on normal paths — notifyHandleClosing then unregisterFdWaiter;
+    // requeueForCancellation and wakeAllWaiters before await_resume. The scripted
+    // double once counted DETACH CALLS instead of live registrations, so a second
+    // detach of one registration cancelled out a different one: attachedCount() then
+    // under-reported, and a leak assertion against it would pass on a registration that
+    // never went away.
     auto pipe = core::platform::createSystemPipe();
     REQUIRE(pipe.has_value());
 
-    auto source = ScriptedEventSource {};
-    auto const a = source.attach((*pipe)->readFd(), core::net::FdInterest::Read);
-    auto const b = source.attach((*pipe)->writeFd(), core::net::FdInterest::Write);
+    auto a = core::net::ReadinessHandler { .handle = (*pipe)->readFd() };
+    auto b = core::net::ReadinessHandler { .handle = (*pipe)->writeFd() };
+    auto stranger = core::net::ReadinessHandler { .handle = (*pipe)->readFd() };
+
+    auto source = ScriptedBackend {};
+    REQUIRE(source.attach(a).has_value());
+    REQUIRE(source.attach(b).has_value());
     REQUIRE(source.attachedCount() == 2);
 
     source.detach(a);
-    source.detach(a); // the second detach of the SAME token must change nothing
+    source.detach(a); // the second detach of the SAME handler must change nothing
     CHECK(source.attachedCount() == 1);
 
-    source.detach(core::net::FdToken::invalid()); // an unknown token is a no-op too
+    source.detach(stranger); // one that was never attached is a no-op too
     CHECK(source.attachedCount() == 1);
 
     source.detach(b);
     CHECK(source.attachedCount() == 0);
-}
-
-TEST_CASE("An invalid FdToken is falsy and equals the invalid sentinel", "[EventSource]")
-{
-    auto const invalid = core::net::FdToken::invalid();
-    REQUIRE_FALSE(static_cast<bool>(invalid));
-    REQUIRE(invalid == core::net::FdToken {});
 }
 
 TEST_CASE("waitReadable resumes when the registered fd becomes readable", "[EventLoop][fd]")
@@ -329,10 +365,11 @@ TEST_CASE("waitReadable resumes when the registered fd becomes readable", "[Even
     auto pipe = core::platform::createSystemPipe();
     REQUIRE(pipe.has_value());
 
-    auto source = ScriptedEventSource {};
-    // The awaiter attaches the fd during await_suspend; the loop's self-pipe holds
-    // token 1, so the waiter receives token 2 — script that one readable.
-    source.pushReadable(core::net::FdToken { 2 });
+    auto source = ScriptedBackend {};
+    // The awaiter attaches the fd during await_suspend, and it is the loop's first
+    // registration — the wakeup channel belongs to the backend now, and this one has
+    // none — so the waiter receives HandlerId{1}. Script that one readable.
+    source.pushReadable(HandlerId { 1 });
     auto loop = EventLoop { source };
 
     constexpr auto Cancelled = -1;
@@ -343,14 +380,14 @@ TEST_CASE("waitReadable resumes when the registered fd becomes readable", "[Even
 
 TEST_CASE("notifyHandleClosing on an unwatched fd records nothing", "[EventLoop][fd][closehang]")
 {
-    // Closing a descriptor nobody is parked on must not schedule any wake. If it
-    // did, the next pump would deliver a token naming a registration that no longer
-    // exists — harmless today only because wakeFdWaiters skips unknown tokens, but a
-    // token can be reused, and then the wake would land on an unrelated flow.
+    // Closing a descriptor nobody is parked on must not schedule any wake. If it did,
+    // the next pump would deliver a ParkId naming a park that no longer exists —
+    // harmless today only because queueParkedWaiter skips an unknown one, but an id
+    // can be reused, and then the wake would land on an unrelated flow.
     auto pipe = core::platform::createSystemPipe();
     REQUIRE(pipe.has_value());
 
-    auto source = ScriptedEventSource {};
+    auto source = ScriptedBackend {};
     auto loop = EventLoop { source };
 
     loop.notifyHandleClosing((*pipe)->readFd(), core::net::FdWakePolicy::Resume);
@@ -382,18 +419,21 @@ TEST_CASE("notifyHandleClosing detaches the registration while the fd is still v
     // parked flow, whose RAII guard writes here as it unwinds.
     auto destroyed = false;
 
-    auto source = ScriptedEventSource {};
+    auto source = ScriptedBackend {};
     source.pushTimeout(); // the park's first wait reports nothing
     auto loop = EventLoop { source };
 
     loop.spawn(waitReadableWithGuard(&loop, (*pipe)->readFd(), &destroyed));
     loop.blockOn(justReturn()); // let the spawned flow reach its park
 
-    // The loop's self-pipe plus the parked waiter.
-    REQUIRE(source.attachedCount() == 2);
+    REQUIRE(source.attachedCount() == 1); // the parked waiter's registration
+    REQUIRE(loop.parkedWaiterCount() == 1);
 
     loop.notifyHandleClosing((*pipe)->readFd(), core::net::FdWakePolicy::Resume);
-    REQUIRE(source.attachedCount() == 1); // detached immediately, not at resume
+    REQUIRE(source.attachedCount() == 0); // detached immediately, not at resume
+    // ... and the park itself stays, because requestStop() and ~EventLoop must still
+    // find this waiter if either runs before the next pump.
+    REQUIRE(loop.parkedWaiterCount() == 1);
 }
 
 TEST_CASE("a recorded close is delivered without blocking the pump", "[EventLoop][fd][closehang]")
@@ -407,7 +447,7 @@ TEST_CASE("a recorded close is delivered without blocking the pump", "[EventLoop
     // Declared BEFORE the loop, so it outlives it (see the case above).
     auto destroyed = false;
 
-    auto source = ScriptedEventSource {};
+    auto source = ScriptedBackend {};
     source.pushTimeout(); // the park's wait
     source.pushTimeout(); // the close-wake pump's wait, which must be a poll
     auto loop = EventLoop { source };
@@ -421,13 +461,13 @@ TEST_CASE("a recorded close is delivered without blocking the pump", "[EventLoop
 
     REQUIRE(source.waitCount() == waitsBeforeClose + 1);
     // Zero, not -1: an indefinite wait would never return on the closed fd's account.
-    REQUIRE(source.recordedTimeouts().back() == 0);
+    REQUIRE(timeoutMs(source.recordedTimeouts().back()) == 0);
     REQUIRE(destroyed); // the parked flow resumed and unwound
 }
 
 TEST_CASE("waitReadable on an invalid fd resolves immediately as cancelled", "[EventLoop][fd]")
 {
-    auto source = ScriptedEventSource {};
+    auto source = ScriptedBackend {};
     auto loop = EventLoop { source };
 
     constexpr auto Cancelled = -3;
@@ -437,10 +477,11 @@ TEST_CASE("waitReadable on an invalid fd resolves immediately as cancelled", "[E
     REQUIRE(source.waitCount() == 0); // never blocked: an unwaitable fd resolves inline
 }
 
-TEST_CASE("waitReadable resolves over a real SystemPipe via PollEventSource", "[EventLoop][fd][poll]")
+TEST_CASE("waitReadable resolves over a real SystemPipe via the default backend", "[EventLoop][fd][poll]")
 {
-    // End-to-end through the real OS readiness path (poll(2) / WaitForMultipleObjects),
-    // not the scripted source: a SystemPipe whose write end already holds a byte is
+    // End-to-end through the real OS readiness path (epoll, kqueue, poll(2) or
+    // WaitForMultipleObjects), not the scripted one: a SystemPipe whose write end
+    // already holds a byte is
     // readable, so a flow parked on waitReadable resolves on the first real wait and
     // reads the byte back.
     auto pipe = core::platform::createSystemPipe();
@@ -449,8 +490,8 @@ TEST_CASE("waitReadable resolves over a real SystemPipe via PollEventSource", "[
     char const payload = 'Z';
     REQUIRE((*pipe)->write(&payload, 1).has_value());
 
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const backend = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *backend };
 
     auto readByte = [](EventLoop* l, core::platform::SystemPipe* p) -> Task<char> {
         co_await l->waitReadable(p->waitHandle());
@@ -461,21 +502,21 @@ TEST_CASE("waitReadable resolves over a real SystemPipe via PollEventSource", "[
 
     auto const result = loop.blockOn(readByte(&loop, pipe->get()));
     REQUIRE(result == 'Z');
-    REQUIRE(source.attachedCount() == 1); // only the loop's self-pipe remains attached
+    REQUIRE(loop.parkedWaiterCount() == 0); // the resumed waiter unregistered its park
 }
 
 TEST_CASE("post() wakes a blocked wait and runs its callback on the loop thread", "[EventLoop][post]")
 {
-    // The root flow parks on a pipe that never receives data, so poll(2) blocks
-    // indefinitely (-1): ONLY the post self-pipe can wake it. A second thread posts
-    // a callback that feeds the pipe; the flow completing at all proves the
-    // cross-thread wakeup, and the recorded thread id proves the callback ran on
-    // the loop thread, not the poster's.
+    // The root flow parks on a pipe that never receives data, so the backend blocks
+    // indefinitely: ONLY IoBackend::wake, which post() calls, can end that wait. A
+    // second thread posts a callback that feeds the pipe; the flow completing at all
+    // proves the cross-thread wakeup, and the recorded thread id proves the callback
+    // ran on the loop thread, not the poster's.
     auto pipe = core::platform::createSystemPipe();
     REQUIRE(pipe.has_value());
 
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const backend = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *backend };
 
     auto const loopThread = std::this_thread::get_id();
     auto callbackThread = std::thread::id {};
@@ -504,8 +545,8 @@ TEST_CASE("requestStop() posted from another thread cancels a parked flow", "[Ev
     auto pipe = core::platform::createSystemPipe();
     REQUIRE(pipe.has_value());
 
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const backend = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *backend };
 
     auto poster = std::thread { [&] { loop.post([&] { loop.requestStop(); }); } };
 
@@ -514,7 +555,7 @@ TEST_CASE("requestStop() posted from another thread cancels a parked flow", "[Ev
     poster.join();
 
     REQUIRE(result == Cancelled);
-    REQUIRE(source.attachedCount() == 1); // the cancelled waiter detached; self-pipe remains
+    REQUIRE(loop.parkedWaiterCount() == 0); // the cancelled waiter unregistered its park
 }
 
 TEST_CASE("Finished spawned flows are reaped on the next pump", "[EventLoop][spawn]")
@@ -523,7 +564,7 @@ TEST_CASE("Finished spawned flows are reaped on the next pump", "[EventLoop][spa
     // for a long-lived loop spawning per-connection flows. The reap runs at the top
     // of every pump, so frames finished during one blockOn are reclaimed by the
     // first pump of the next.
-    auto source = ScriptedEventSource {};
+    auto source = ScriptedBackend {};
     auto loop = EventLoop { source };
 
     auto counter = 0;
@@ -542,7 +583,7 @@ TEST_CASE("Finished spawned flows are reaped on the next pump", "[EventLoop][spa
 
 TEST_CASE("withTimeout returns the work's value when it finishes first", "[EventLoop][timeout]")
 {
-    auto source = ScriptedEventSource {};
+    auto source = ScriptedBackend {};
     auto loop = EventLoop { source };
 
     // The work completes synchronously, so the timeout arm never matters.
@@ -563,14 +604,14 @@ TEST_CASE("withTimeout returns nullopt and cancels the work when the deadline fi
     auto pipe = core::platform::createSystemPipe();
     REQUIRE(pipe.has_value());
 
-    auto source = core::net::PollEventSource {};
-    auto loop = EventLoop { source };
+    auto const backend = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *backend };
 
     auto result = loop.blockOn(core::net::withTimeout(
         &loop, parkOnFdForever(&loop, (*pipe)->waitHandle()), std::chrono::milliseconds { 20 }));
 
-    REQUIRE_FALSE(result.has_value());    // the timeout won
-    REQUIRE(source.attachedCount() == 1); // the cancelled work detached its fd; self-pipe remains
+    REQUIRE_FALSE(result.has_value());      // the timeout won
+    REQUIRE(loop.parkedWaiterCount() == 0); // the cancelled work unregistered its park
 }
 
 TEST_CASE("withTimeout drops the loser's timer entry when the work wins after parking",
@@ -585,7 +626,7 @@ TEST_CASE("withTimeout drops the loser's timer entry when the work wins after pa
     // (fireExpiredTimers() at the deadline, or ~EventLoop's wakeAllWaiters at teardown
     // below) — a use-after-free.
     auto clock = ManualClock {};
-    auto source = ClockAdvancingSource { clock, std::chrono::milliseconds { 20 } };
+    auto source = ClockAdvancingBackend { clock, std::chrono::milliseconds { 20 } };
     source.pushTimeout(); // one wait: advances the clock past the work's 10ms delay
     source.pushTimeout(); // spare, should the drain need another pump
     auto loop = EventLoop { source, clock };
@@ -607,7 +648,7 @@ TEST_CASE("Destroying the loop unwinds a flow parked on waitReadable", "[EventLo
     auto pipe = core::platform::createSystemPipe();
     REQUIRE(pipe.has_value());
 
-    auto source = ScriptedEventSource {};
+    auto source = ScriptedBackend {};
     source.pushTimeout(); // benign wait for the root's post-completion pump
     auto destroyed = false;
     {
@@ -620,7 +661,7 @@ TEST_CASE("Destroying the loop unwinds a flow parked on waitReadable", "[EventLo
     REQUIRE(destroyed);
 }
 
-// The pure chunking / rotation math that PollEventSource's Windows path uses to
+// The pure chunking / rotation math that the Windows backend uses to
 // wait on more than MAXIMUM_WAIT_OBJECTS handles. Platform-neutral (no windows.h)
 // so it is exercised here on every platform, including this Linux CI.
 TEST_CASE("WaitChunking splits a handle set into wait-sized chunks", "[WaitChunking]")
