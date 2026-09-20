@@ -180,6 +180,12 @@ workflow refuses one without a section here.
   `dialogWidth = min(config.width, termCols - 4)` and `inputWidth = dialogWidth - 4` had no floor,
   and the negative width reached `substr()` as a huge `std::size_t`, throwing `std::out_of_range`
   out of a `render()` no caller expects to throw. All three dialogs clamp both to zero.
+- `core::tui`'s POSIX SIGWINCH handler saves and restores `errno`, reaches its `TerminalInput`
+  through a lock-free `std::atomic` rather than a plain pointer, and cannot block. The write end
+  of the resize self-pipe was left blocking (only the read end was made non-blocking), so a pipe
+  nobody had drained stalled `::write()` inside a signal context; and a resize arriving between a
+  failed syscall and the mainline's `errno` check overwrote the value that check was about to
+  read.
 - `core::tui::SyncGuard` flushes before it ends the synchronized region, as it already did before
   beginning one. Anything composed inside the region and still buffered was emitted after
   `CSI ?2026l` and so applied outside it -- `Screen::flush()`'s `applyCursorShape()` is the live

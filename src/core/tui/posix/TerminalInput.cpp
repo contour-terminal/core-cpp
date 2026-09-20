@@ -49,9 +49,16 @@ auto TerminalInput::initialize() -> VoidResult
     if (pipe(_native->resizePipe.data()) == -1)
         return makeError(ErrorCode::IoError, "Failed to create resize notification pipe");
 
-    // Make read end non-blocking
-    auto const flags = fcntl(_native->resizePipe[0], F_GETFL, 0);
-    fcntl(_native->resizePipe[0], F_SETFL, flags | O_NONBLOCK);
+    // Both ends are non-blocking: the read end so draining it in poll() cannot stall, and the
+    // write end because notifyResize() runs from the SIGWINCH handler. A pipe filled with resize
+    // bytes nobody has drained yet would otherwise block ::write() inside a signal context, with
+    // the interrupted mainline unable to drain it. Losing a byte there costs nothing -- one byte
+    // in the pipe already says "the size changed", and poll() re-queries the size anyway.
+    for (auto const end: _native->resizePipe)
+    {
+        if (auto const flags = fcntl(end, F_GETFL, 0); flags != -1)
+            fcntl(end, F_SETFL, flags | O_NONBLOCK);
+    }
 
     enableRawMode();
     enableProtocols();
