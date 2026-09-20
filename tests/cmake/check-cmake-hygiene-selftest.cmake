@@ -24,10 +24,15 @@ set(clean
     "src/core/foo/CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\nadd_library(core-cpp-foo STATIC Foo.cpp)\ntarget_compile_options(core-cpp-foo PRIVATE -Wall)\n"
     "src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foo {}\n"
     "src/core/foo/detail/Bar.hpp|// SPDX-License-Identifier: Apache-2.0\nnamespace fs = std::filesystem<semicolon>\nnamespace core::foo::detail\n{\n}\n"
+    # A private directory is layout, not a namespace: this declares the namespace of the directory
+    # above it, and that is what the rule expects of it.
+    "src/core/foo/posix/Impl.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foo\n{\n}\n"
+    # A public one is a namespace: every segment of the path is.
+    "src/core/foo/testing/Fake.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core::foo::testing\n{\n}\n"
     "src/core/foo/Main.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace\n{\n}\nint main() { return 0<semicolon> }\n"
     "src/core/Top.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core\n{\nnamespace views\n{\n}\n} // namespace core\n"
     "src/core/Base64.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core::base64\n{\n}\n"
-    ".agent/reference/provenance.md|# Provenance\n\n| core-cpp path | upstream repo | upstream path | synced SHA | notes |\n|---|---|---|---|---|\n| `src/core/foo/CMakeLists.txt` | origin: core-cpp | - | - | - |\n| `src/core/foo/Foo.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/detail/Bar.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/Main.cpp` | origin: core-cpp | - | - | - |\n| `src/core/Top.hpp` | origin: core-cpp | - | - | - |\n| `src/core/Base64.hpp` | origin: core-cpp | - | - | - |\n"
+    ".agent/reference/provenance.md|# Provenance\n\n| core-cpp path | upstream repo | upstream path | synced SHA | notes |\n|---|---|---|---|---|\n| `src/core/foo/CMakeLists.txt` | origin: core-cpp | - | - | - |\n| `src/core/foo/Foo.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/detail/Bar.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/posix/Impl.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/testing/Fake.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/Main.cpp` | origin: core-cpp | - | - | - |\n| `src/core/Top.hpp` | origin: core-cpp | - | - | - |\n| `src/core/Base64.hpp` | origin: core-cpp | - | - | - |\n"
 )
 
 # At least one violating file per rule: "<rule>|<file>|<content>". The file replaces its clean
@@ -56,8 +61,9 @@ set(cases
     "namespace-directory|src/core/Top.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace crispy\n{\n}\n"
     "namespace-directory|src/core/Base64.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core::Async\n{\n}\n"
     "namespace-directory|src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foo\n{\nnamespace Detail\n{\n}\n}\n"
+    "namespace-directory|src/core/foo/testing/Fake.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core::foo\n{\n}\n"
     "provenance|src/core/foo/Extra.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foo {}\n"
-    "provenance|.agent/reference/provenance.md|# Provenance\n\n| core-cpp path | upstream repo | upstream path | synced SHA | notes |\n|---|---|---|---|---|\n| `src/core/foo/CMakeLists.txt` | origin: core-cpp | - | - | - |\n| `src/core/foo/Foo.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/detail/Bar.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/Main.cpp` | origin: core-cpp | - | - | - |\n| `src/core/Top.hpp` | origin: core-cpp | - | - | - |\n| `src/core/Base64.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/DoesNotExist.cpp` | origin: core-cpp | - | - | - |\n"
+    "provenance|.agent/reference/provenance.md|# Provenance\n\n| core-cpp path | upstream repo | upstream path | synced SHA | notes |\n|---|---|---|---|---|\n| `src/core/foo/CMakeLists.txt` | origin: core-cpp | - | - | - |\n| `src/core/foo/Foo.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/detail/Bar.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/posix/Impl.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/testing/Fake.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/Main.cpp` | origin: core-cpp | - | - | - |\n| `src/core/Top.hpp` | origin: core-cpp | - | - | - |\n| `src/core/Base64.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/DoesNotExist.cpp` | origin: core-cpp | - | - | - |\n"
 )
 
 ## @brief Writes the "<file>|<content>" rows of the list named @p rowsVar under @p dir.

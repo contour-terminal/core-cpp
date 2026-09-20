@@ -94,9 +94,20 @@ core_cpp_hygiene_rule(c-style-for KIND cpp
     REASON "no C-style for(;;) loops: use a range-for over a range, e.g. std::views::iota")
 
 # A rule over a file rather than a line: under src/core/, the first named namespace a C++ source
-# declares is the one its directory names. src/core/<dir>/... declares core::<dir>, or a namespace
-# nested in it (core::<dir>::detail), and spells it that way, not as `namespace core { namespace
-# <dir>`. A file directly in src/core/ declares core, or a namespace nested in it (core::base64).
+# declares is the one its directory PATH names, every segment of it. src/core/<dir>/... declares
+# core::<dir>, src/core/<dir>/testing/... declares core::<dir>::testing, and each declares it that
+# way -- or a namespace nested in it (core::<dir>::detail) -- spelled in one piece, not as
+# `namespace core { namespace <dir>`. A file directly in src/core/ declares core, or a namespace
+# nested in it (core::base64).
+#
+# The platform and private-detail directories are layout rather than namespace, and are skipped
+# when the expected namespace is assembled: they are the directories core_cpp_add_module() holds
+# private headers in (cmake/CoreCppTargets.cmake), plus `backend`. src/core/net/posix/ is therefore
+# core::net, src/core/tui/runtime/posix/ is core::tui::runtime, and src/core/net/detail/ is
+# core::net or core::net::detail. Every other segment is a namespace of its own: testing/ is
+# ::testing, runtime/ is ::runtime. Taking only the FIRST segment, as this rule did, is how a file
+# in src/core/platform/testing/ declaring core::platform passed clean.
+#
 # Helper namespaces inside the first are free in their name, but not in their case: EVERY named
 # namespace the file declares, not only the first, has every segment lowercase
 # (readability-identifier-naming.NamespaceCase in .clang-tidy says the same). A file that declares
@@ -110,9 +121,10 @@ core_cpp_hygiene_rule(c-style-for KIND cpp
 # no namespace, so the rule should skip such a block.
 set(CORE_CPP_HYGIENE_RULES ${CORE_CPP_HYGIENE_RULES} namespace-directory)
 set(CORE_CPP_HYGIENE_namespace-directory_REASON
-    "a source's first namespace is the one its directory names, in lowercase: src/core/<dir>/ is core::<dir>, src/core/ is core (Part I §1)")
+    "a source's first namespace is the one its whole directory path names, in lowercase: src/core/<dir>/ is core::<dir> and src/core/<dir>/<sub>/ is core::<dir>::<sub>, bar the platform and detail directories, which are layout; src/core/ is core (Part I §1)")
 set(CORE_CPP_HYGIENE_NAMESPACE_REGEX "^[ \t]*(inline[ \t]+)?namespace[ \t]+([A-Za-z_][A-Za-z0-9_:]*)([ \t{/].*)?$")
 set(CORE_CPP_HYGIENE_NAMESPACE_ALIAS_REGEX "^[ \t]*namespace[ \t]+[A-Za-z0-9_:]+[ \t]*=")
+set(CORE_CPP_HYGIENE_PRIVATE_DIRECTORIES backend bsd darwin detail emscripten linux posix windows)
 
 # The rule the allowlist itself answers to.
 set(CORE_CPP_HYGIENE_RULES ${CORE_CPP_HYGIENE_RULES} stale-allowlist)
@@ -162,6 +174,30 @@ core_cpp_hygiene_allow(unprefixed-function tests/consumer-cpm/CMakeLists.txt "${
 core_cpp_hygiene_allow(unprefixed-function tests/consumer-wasm/CMakeLists.txt "${_consumerProjectReason}")
 core_cpp_hygiene_allow(diagnostic-pragma src/core/testing/SuppressWindowsDialogsAtStartup.cpp
     "#pragma init_seg(lib) raises C4073 by design, to say that it was used; the file exists to run before ordinary static initializers")
+
+# src/core/tui/completer/ declares core::tui, not core::tui::completer, and that disagreement is
+# older than this rule's ability to see it: the rule took only the first directory segment under
+# src/core/, so it read the whole directory as core::tui. It is recorded rather than fixed here
+# because either way out is a change to core::tui's public API, which is the tui owner's call, not
+# this checker's:
+#
+#   - rename the namespace to core::tui::completer, which is what docs/modules/tui.md already says
+#     the module offers, and what the sibling directories runtime/ and testing/ do; every consumer
+#     naming core::tui::Completer, CompletionItem, CompletionProvider, fuzzyMatch or
+#     smartCaseMatch then changes, and so do ~370 lines inside core::tui itself; or
+#   - flatten the directory into src/core/tui/, which changes the include paths the five public
+#     headers are reached by (<core/tui/completer/Completer.hpp>).
+#
+# The files came from endo (`src/tui/completer/`, f774a210), which declares a flat `namespace tui`
+# for all of its TUI, so the import is faithful and it is core-cpp's namespace-equals-directory
+# rule that they do not meet. Task A11's report carries this to the tui owner.
+set(_completerNamespaceReason
+    "core::tui's completer declares core::tui, while the directory (and docs/modules/tui.md) say core::tui::completer; both ways out change core::tui's public API, so the tui owner decides")
+foreach(_completerFile IN ITEMS Completer.cpp Completer.hpp CompletionItem.hpp CompletionProvider.hpp
+                                FuzzyMatch.cpp FuzzyMatch.hpp SmartCaseMatch.cpp SmartCaseMatch.hpp)
+    core_cpp_hygiene_allow(namespace-directory "src/core/tui/completer/${_completerFile}"
+        "${_completerNamespaceReason}")
+endforeach()
 
 if(LIST_RULES)
     foreach(rule IN LISTS CORE_CPP_HYGIENE_RULES)
@@ -255,8 +291,14 @@ foreach(path IN LISTS scanned)
     # below from running; `firstNamespaceSeen` is what limits the DIRECTORY half to the first
     # declaration, while every later one is still held to lowercase.
     set(expectedNamespace "")
-    if(kind STREQUAL "cpp" AND path MATCHES "^src/core/([^/]+)/")
-        set(expectedNamespace "core::${CMAKE_MATCH_1}")
+    if(kind STREQUAL "cpp" AND path MATCHES "^src/core/(.+)/[^/]+$")
+        set(expectedNamespace "core")
+        string(REPLACE "/" ";" namespaceSegments "${CMAKE_MATCH_1}")
+        foreach(namespaceSegment IN LISTS namespaceSegments)
+            if(NOT namespaceSegment IN_LIST CORE_CPP_HYGIENE_PRIVATE_DIRECTORIES)
+                string(APPEND expectedNamespace "::${namespaceSegment}")
+            endif()
+        endforeach()
     elseif(kind STREQUAL "cpp" AND path MATCHES "^src/core/[^/]+$")
         set(expectedNamespace "core")
     endif()

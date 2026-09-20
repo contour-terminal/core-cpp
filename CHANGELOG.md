@@ -373,10 +373,16 @@ workflow refuses one without a section here.
   This was a use-after-free wherever `StopToken` is `std::stop_token`, whose state a raw pointer
   reaches; core-cpp's fallback survived it only because its `request_stop()` happens to hold a
   `shared_ptr` copy of the state.
-- `tests/cmake/check-cmake-hygiene.cmake`'s namespace gate checks every namespace a file declares,
-  not only the first. Its rule is that every segment of every namespace is lowercase, but it
-  stopped after the first declaration, so `namespace core::async { namespace Detail { ... } }`
-  passed clean.
+- `tests/cmake/check-cmake-hygiene.cmake`'s namespace gate had two holes. It checked only the
+  *first* namespace a file declares, although its rule is that every segment of every namespace is
+  lowercase, so `namespace core::async { namespace Detail { ... } }` passed clean. And it derived
+  the expected namespace from the first directory segment under `src/core/` alone, so a file in
+  `src/core/platform/testing/` declaring `core::platform` passed although the rule is namespace =
+  directory. The expected namespace now follows the whole path, with the platform and
+  private-detail directories (`posix/`, `windows/`, `linux/`, `bsd/`, `darwin/`, `emscripten/`,
+  `detail/`, `backend/`) skipped as layout. The one thing in the tree the deeper rule finds,
+  `src/core/tui/completer/` declaring `core::tui`, is an allowlist row with its reason: both ways
+  out of it change `core::tui`'s public API.
 - `Task_test.cpp`'s deep-chain case skips on GCC unless the build's optimisation level is known to
   make symmetric transfer a tail call. It keyed on `__OPTIMIZE__`, which GCC defines at `-Og` and
   `-O1` as well, where the 100000-frame chain overflows the stack and kills the process, taking
