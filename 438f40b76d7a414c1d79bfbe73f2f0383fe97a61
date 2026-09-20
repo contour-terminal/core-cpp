@@ -1,0 +1,46 @@
+This commit's message was overwritten by a concurrent `git commit --amend` from another
+session working the same checkout: HEAD had moved between that session's `read-tree HEAD`
+and its amend, so it rewrote this commit instead of its own. No content was affected --
+the tree and parent are unchanged, and `git diff 8514854 438f40b` is empty.
+
+The original message, preserved verbatim (the pre-amend commit is pinned at
+refs/recovered/upstream-drift-checker-message):
+
+---
+build: the upstream catch-up checker, and its self-test
+
+.agent/reference/provenance.md says which upstream file and commit each of ~390
+files came from, and Task B12b's job before v0.1.0 is to catch up every row whose
+upstream has moved. Described as a manual sweep, that is a sweep nobody does
+twice. This does the reading and the `git log`, and leaves the judgement.
+
+What it refuses to do is as load-bearing as what it does. It REPORTS drift and
+never fails on it: a nightly that reddens because upstream moved is a nightly
+somebody mutes, and then the next drift goes unseen. It fails only when a row is
+wrong about its own upstream -- an unparseable line, a synced SHA the checkout
+does not have or that is not an ancestor, an upstream path that was not there at
+the very commit the row claims to have synced from. And where an upstream checkout
+is missing it exits 77 rather than 0, so "I could not look" never reads the same
+as "I looked and found nothing".
+
+Two boundaries it keeps deliberately. A file DELETED upstream is drift, not a
+malformed row: the row was true when written, and "it is gone now" is exactly the
+news this carries. And a row whose CORE-CPP file is gone is reported as stale
+without reddening, because check-cmake-hygiene's `provenance` rule already refuses
+that in almost the same words -- two gates for one defect gets both ignored, and it
+would put this one in the red for any module mid-rewrite, the state it is least
+useful in.
+
+The self-test builds throwaway git repositories with real history rather than
+stubbing git: the checker is a wrapper around `git log`, `git cat-file` and
+`git merge-base`, so a stub would prove only that the stub agrees with itself. Its
+fourteen cases were each shown to fail against a checker mutated to get that one
+thing wrong -- including the two that assert an exit status of 0, which no
+assertion about output would have caught.
+
+Python, and tested in Python: check-cmake-hygiene-selftest.cmake is the shape for
+the checkers written IN CMake, and tools/migrate/*_test.py is the precedent for
+testing Python here. Building git history from CMake script would be dozens of
+execute_process calls doing what subprocess does in one line.
+
+Signed-off-by: Christian Parpart <christian@parpart.family>
