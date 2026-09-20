@@ -183,6 +183,17 @@ workflow refuses one without a section here.
   proves each refusal by name against repositories it builds for the purpose. The file set is the
   spec's, plus everything else directly in `src/core/` -- that module's `CMakeLists.txt` and
   `Config.hpp.in`, without which the copy does not configure. `docs/vendoring.md` is the contract.
+- Consumer smoke tests, one project per way core-cpp is consumed, and the `consumer-smoke` CI job
+  that runs all three (`ci-ok` requires it): `tests/consumer-cpm` adds core-cpp with CPM and
+  asserts that doing so changed none of its own flags, launcher or include directories, that
+  `CORE_CPP_TARGETS` names every compiled library and no test binary, that no core-cpp target
+  carries a PUBLIC or INTERFACE flag, and that no test of core-cpp's was built;
+  `tests/consumer-vendored` builds a vendored copy of the commit under test with
+  `CORE_CPP_FETCH_DEPS=OFF`, `CORE_CPP_WITH_TUI=OFF` and `CORE_CPP_WITH_TLS=ON` inside a container
+  with no network and no git, and registers the verbatim check as one of its own tests;
+  `tests/consumer-wasm` builds the WebAssembly subset behind one INTERFACE library, as morph does,
+  and runs it under node with emsdk 3.1.56.
+
 ### Fixed
 
 - `core::tui` carries no consumer's name in the code it runs. Beyond the OSC 8 hyperlink id

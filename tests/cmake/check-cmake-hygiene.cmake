@@ -145,6 +145,19 @@ core_cpp_hygiene_allow(source-glob tests/cmake/check-cmake-hygiene.cmake
     "enumerates the tree it scans; it is not a source list")
 core_cpp_hygiene_allow(source-glob cmake/CoreCppVendor.cmake
     "enumerates a vendored copy to find the files its manifest does not list; it is not a source list")
+
+# The consumer smoke projects under tests/ are not core-cpp's build: each is a project of its own,
+# written the way the consumer it stands for writes one. These rules say what core-cpp may do
+# INSIDE such a build, and a consumer setting its own warning flags, its own CMAKE_CXX_* variables
+# and its own functions is exactly what they must be able to do -- it is what the smoke tests then
+# prove core-cpp leaves alone. Their C++ is core-cpp's own and is held to every rule.
+set(_consumerProjectReason
+    "a consumer's own project, not core-cpp's build: these are the flags and variables core-cpp must leave untouched, which is what the project asserts")
+foreach(_consumerProject IN ITEMS consumer-cpm consumer-vendored consumer-wasm)
+    core_cpp_hygiene_allow(global-compile-options "tests/${_consumerProject}/CMakeLists.txt" "${_consumerProjectReason}")
+    core_cpp_hygiene_allow(global-cmake-variable "tests/${_consumerProject}/CMakeLists.txt" "${_consumerProjectReason}")
+endforeach()
+core_cpp_hygiene_allow(unprefixed-function tests/consumer-cpm/CMakeLists.txt "${_consumerProjectReason}")
 core_cpp_hygiene_allow(diagnostic-pragma src/core/testing/SuppressWindowsDialogsAtStartup.cpp
     "#pragma init_seg(lib) raises C4073 by design, to say that it was used; the file exists to run before ordinary static initializers")
 

@@ -643,6 +643,125 @@ jobs:
         run: ctest --preset "$PRESET"
 
   # ---------------------------------------------------------------------------------------------
+  # core-cpp inside someone else's build, which is the only place it ever runs. Each leg is a
+  # project of its own under tests/, configured against this checkout:
+  #
+  #   cpm       endo, fastcached, tuidu, Lightweight's dbtool and morph add core-cpp with CPM. The
+  #             project asserts that doing so changed none of its own flags, launcher or include
+  #             directories, that core-cpp published its compiled targets in CORE_CPP_TARGETS and
+  #             no PUBLIC flag with them, and that it built no test of its own.
+  #   vendored  contour carries a verbatim copy. The copy is exported from this very commit and
+  #             built inside a container with no network and no git, because that is what a
+  #             packager's build has; the copy's own verbatim check runs there as a test.
+  #   wasm      morph builds core-cpp for WebAssembly. The subset configures with CORE_CPP_WITH_TUI
+  #             and CORE_CPP_FETCH_DEPS off, links no pthread, and the program runs under node.
+  consumer-smoke:
+    name: consumer-smoke (${{ matrix.leg }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [cpm, vendored, wasm]
+    steps:
+      - uses: actions/checkout@v4
+
+      # The vendored leg fetches nothing at all, by design.
+      - name: Cache CPM sources
+        if: matrix.leg != 'vendored'
+        uses: actions/cache@v4
+        with:
+          path: .cache/cpm
+          key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
+          restore-keys: cpm-${{ runner.os }}-
+
+      - name: Install Ninja
+        if: matrix.leg != 'vendored'
+        run: sudo apt-get update -q && sudo apt-get install -y -q ninja-build
+
+      # --- cpm ---------------------------------------------------------------------------------
+      - name: Install clang ${{ env.LLVM_VERSION }}
+        if: matrix.leg == 'cpm'
+        run: |
+          wget -q https://apt.llvm.org/llvm.sh
+          sudo bash llvm.sh "$LLVM_VERSION"
+
+      - name: A CPM consumer builds and runs against this checkout
+        if: matrix.leg == 'cpm'
+        run: |
+          cmake -S tests/consumer-cpm -B "$RUNNER_TEMP/consumer-cpm" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER="clang++-$LLVM_VERSION" \
+            -DCORE_CPP_SOURCE_DIR="$GITHUB_WORKSPACE"
+          cmake --build "$RUNNER_TEMP/consumer-cpm"
+          ctest --test-dir "$RUNNER_TEMP/consumer-cpm" --output-on-failure
+
+      # --- vendored ----------------------------------------------------------------------------
+      - name: Export a verbatim copy of this commit
+        if: matrix.leg == 'vendored'
+        run: |
+          cmake -DMODE=sync -DREF="$GITHUB_SHA" -DREPO="$GITHUB_WORKSPACE" \
+            -DDEST="$RUNNER_TEMP/vendor/core-cpp" \
+            "-DMODULES=base;log;cli;platform;async;net;testing" \
+            -P cmake/CoreCppVendor.cmake
+          sed -n '1,7p' "$RUNNER_TEMP/vendor/core-cpp/MANIFEST"
+
+      # The image carries the toolchain and OpenSSL, and deliberately no git: a consumer verifies
+      # its copy in a checkout that may have none, so MODE=check must not reach for it. Installing
+      # it is the one step that uses the network; the build below has none.
+      - name: An image with the toolchain, OpenSSL and no git
+        if: matrix.leg == 'vendored'
+        run: |
+          docker build -t core-cpp-vendored-smoke - <<'DOCKERFILE'
+          FROM ubuntu:24.04
+          RUN apt-get update -q \
+           && apt-get install -y -q --no-install-recommends g++-14 cmake ninja-build libssl-dev \
+           && rm -rf /var/lib/apt/lists/*
+          DOCKERFILE
+
+      - name: The vendored copy configures, builds and verifies with no network
+        if: matrix.leg == 'vendored'
+        run: |
+          docker run --rm --network none \
+            -v "$GITHUB_WORKSPACE/tests/consumer-vendored:/consumer:ro" \
+            -v "$RUNNER_TEMP/vendor:/vendor:ro" \
+            -e CXX=g++-14 \
+            core-cpp-vendored-smoke bash -eu -c '
+              interfaces=$(ls /sys/class/net | tr "\n" " ")
+              echo "network interfaces: $interfaces"
+              if [ "$interfaces" != "lo " ]; then
+                echo "::error::the container has an interface besides lo, so this leg is not offline"
+                exit 1
+              fi
+              if command -v git > /dev/null; then
+                echo "::error::git is installed in the image; MODE=check must not need it"
+                exit 1
+              fi
+              cmake -S /consumer -B /build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+                -DCORE_CPP_VENDOR_DIR=/vendor/core-cpp
+              cmake --build /build
+              ctest --test-dir /build --output-on-failure
+            '
+
+      # --- wasm --------------------------------------------------------------------------------
+      - name: emsdk 3.1.56
+        if: matrix.leg == 'wasm'
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: "3.1.56"
+          actions-cache-folder: emsdk-cache-3.1.56
+
+      - name: A WebAssembly consumer builds and runs under node
+        if: matrix.leg == 'wasm'
+        run: |
+          emcmake cmake -S tests/consumer-wasm -B "$RUNNER_TEMP/consumer-wasm" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCORE_CPP_SOURCE_DIR="$GITHUB_WORKSPACE"
+          n=$(ninja -C "$RUNNER_TEMP/consumer-wasm" -t commands | grep -c pthread || true)
+          echo "$n command(s) mention pthread"
+          [ "$n" -eq 0 ] || { echo "::error::the consumer's WebAssembly build uses pthreads"; exit 1; }
+          cmake --build "$RUNNER_TEMP/consumer-wasm"
+          ctest --test-dir "$RUNNER_TEMP/consumer-wasm" --output-on-failure
+
+  # ---------------------------------------------------------------------------------------------
   # Not required: coverage informs, it does not gate. The compiler cache is off in this preset,
   # because a replayed object's coverage mapping names the checkout that produced it.
   coverage:
@@ -706,7 +825,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [style, linux, macos, windows, sanitizers, clang-tidy, emscripten, compile-cache]
+    needs: [style, linux, macos, windows, sanitizers, clang-tidy, emscripten, consumer-smoke, compile-cache]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
