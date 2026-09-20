@@ -67,12 +67,15 @@ bool NativeFileSystem::isExecutableFile(fs::path const& path) const
     auto const attrs = GetFileAttributesW(path.wstring().c_str());
     return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
 #else
+    // status() follows symlinks, which is what a PATH lookup needs: a symlink to an executable
+    // file is executable, a symlink to a directory is a directory, and a dangling one is nothing.
+    // Testing is_symlink() first and then reading the followed status let a symlink to a
+    // directory through on the directory's own execute bit -- the one that makes it searchable --
+    // against this function's documented "Directories always return false". A caller that
+    // trusted it ran the directory, got EACCES and never tried the next PATH entry.
     std::error_code ec;
-    if (!fs::is_regular_file(path, ec) && !fs::is_symlink(path, ec))
-        return false;
-
     auto const status = fs::status(path, ec);
-    if (ec)
+    if (ec || !fs::is_regular_file(status))
         return false;
 
     auto const perms = status.permissions();

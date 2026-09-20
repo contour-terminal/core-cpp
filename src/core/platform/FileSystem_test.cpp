@@ -371,3 +371,44 @@ TEST_CASE("the model's read-write stream survives a write that reallocates the f
     stream->reset();
     CHECK(fs.readFile("/root/data.bin") == payload);
 }
+
+#ifndef _WIN32
+TEST_CASE("isExecutableFile classifies a symlink by what it points at", "[FileSystem]")
+{
+    // "Directories always return false", the declaration says, and a plain directory is rejected
+    // -- but a symlink to one slipped through: the guard accepted any symlink and then read the
+    // permissions of the followed target, which for a directory carry the execute bit that makes
+    // it searchable. A PATH lookup that trusts that runs the directory, fails with EACCES and
+    // never tries the next entry.
+    //
+    // Windows classifies through GetFileAttributesW, which does not follow reparse points and
+    // already answers false for a directory symlink.
+    namespace fs = std::filesystem;
+    auto const& backend = core::platform::NativeFileSystem::instance();
+    auto const dir = core::testing::ScopedTempDir { "core_execsymlink" };
+
+    auto const subdirectory = dir / "subdir";
+    REQUIRE(backend.createDirectory(subdirectory).has_value());
+
+    auto ec = std::error_code {};
+    fs::create_directory_symlink(subdirectory, dir / "to-dir", ec);
+    if (ec)
+        SKIP("this filesystem refuses symlinks: " + ec.message());
+
+    CHECK_FALSE(backend.isExecutableFile(subdirectory));
+    CHECK_FALSE(backend.isExecutableFile(dir / "to-dir"));
+
+    // A symlink to an executable file stays executable: that is the case PATH lookups need.
+    auto const tool = dir / "tool";
+    REQUIRE(backend.writeFile(tool, "#!/bin/sh\n").has_value());
+    REQUIRE(backend.setPermissions(tool, fs::perms::owner_read | fs::perms::owner_exec).has_value());
+    fs::create_symlink(tool, dir / "to-tool", ec);
+    REQUIRE_FALSE(ec);
+    CHECK(backend.isExecutableFile(dir / "to-tool"));
+
+    // A dangling symlink names nothing a process can execute.
+    fs::create_symlink(dir / "absent", dir / "dangling", ec);
+    REQUIRE_FALSE(ec);
+    CHECK_FALSE(backend.isExecutableFile(dir / "dangling"));
+}
+#endif
