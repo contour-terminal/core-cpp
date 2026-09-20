@@ -136,7 +136,7 @@ set(CORE_CPP_HYGIENE_RULES ${CORE_CPP_HYGIENE_RULES} stale-allowlist)
 # does not exist is refused too, so a rename or deletion cannot leave a stale row behind.
 set(CORE_CPP_HYGIENE_RULES ${CORE_CPP_HYGIENE_RULES} provenance)
 set(CORE_CPP_HYGIENE_provenance_REASON
-    "every file under src/core/, cmake/portable/ and cmake/FetchTransferBound.cmake has one row in .agent/reference/provenance.md naming its upstream file and SHA, or 'origin: core-cpp' for new code (Global Constraints, \"Upstream sync discipline\")")
+    "every file under src/core/, cmake/portable/ and cmake/FetchTransferBound.cmake has one row in .agent/reference/provenance.md naming its upstream file and SHA, or 'origin: core-cpp' for new code (Global Constraints, \"Upstream sync discipline\"); a row that names an upstream names ONE file, not a pattern, and a full 40-character SHA")
 set(CORE_CPP_HYGIENE_PROVENANCE_TABLE ".agent/reference/provenance.md")
 
 # --- the allowlist -----------------------------------------------------------------------------------
@@ -352,6 +352,49 @@ if(EXISTS "${ROOT}/${CORE_CPP_HYGIENE_PROVENANCE_TABLE}")
             continue()
         endif()
         list(APPEND provenanceNamed "${provenanceCell}")
+
+        # The upstream half of the row: which file it came from, and the commit it was taken at.
+        # scripts/check-upstream-drift.py refuses both of the defects below as well, but it can say
+        # nothing at all without the upstream checkouts and exits 77 -- a skip -- when they are
+        # absent, which is every CI runner. Neither defect needs a checkout or a network to see, so
+        # they are refused here instead, where the gate runs everywhere. The checker keeps the half
+        # that genuinely needs the checkouts (has upstream MOVED since this SHA), and this keeps the
+        # half that is a defect in the table itself. One defect, one gate.
+        if(NOT provenanceLine MATCHES "^\\|[^|]*\\|([^|]*)\\|([^|]*)\\|([^|]*)\\|")
+            core_cpp_hygiene_refuse(provenance "${CORE_CPP_HYGIENE_PROVENANCE_TABLE}" "-"
+                "the row for '${provenanceCell}' has fewer than the five columns the table's header names")
+            continue()
+        endif()
+        set(provenanceRepo "${CMAKE_MATCH_1}")
+        set(provenanceUpstream "${CMAKE_MATCH_2}")
+        set(provenanceSha "${CMAKE_MATCH_3}")
+        foreach(cellVar provenanceRepo provenanceUpstream provenanceSha)
+            string(REPLACE "`" "" ${cellVar} "${${cellVar}}")
+            string(STRIP "${${cellVar}}" ${cellVar})
+        endforeach()
+
+        # A row written here rather than imported has no upstream to name, and says so in both cells.
+        if(provenanceRepo STREQUAL "origin: core-cpp")
+            continue()
+        endif()
+
+        # One cell, one upstream file. The preamble settles it: a file adapted from more than one
+        # upstream file names its primary upstream here and the others in notes. A brace or a glob
+        # makes the row unreadable by `git log -- <path>`, so the row silently stops being checkable
+        # instead of reporting anything -- which is how it passed unnoticed until the checker ran.
+        if(provenanceUpstream MATCHES "[{}*?]")
+            core_cpp_hygiene_refuse(provenance "${CORE_CPP_HYGIENE_PROVENANCE_TABLE}" "-"
+                "'${provenanceCell}': upstream path '${provenanceUpstream}' is a pattern, not a file; a merged file names its primary upstream here and the others in notes")
+        endif()
+
+        # An abbreviated SHA resolves only in a checkout that has the object, so a row carrying one
+        # is a pin that cannot be verified from the table alone. CMake's regex has no {n} repetition,
+        # hence the explicit length.
+        string(LENGTH "${provenanceSha}" provenanceShaLength)
+        if(NOT provenanceSha MATCHES "^[0-9a-f]+$" OR NOT provenanceShaLength EQUAL 40)
+            core_cpp_hygiene_refuse(provenance "${CORE_CPP_HYGIENE_PROVENANCE_TABLE}" "-"
+                "'${provenanceCell}': synced SHA '${provenanceSha}' is not a full 40-character hash")
+        endif()
     endforeach()
 endif()
 
