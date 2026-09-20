@@ -146,7 +146,10 @@ TEST_CASE("Flags: fromValue and value round-trip", "[base][flags]")
 TEST_CASE("Flags: reduce visits each set flag once", "[base][flags]")
 {
     auto const names = AllFruits.reduce(std::string {}, [](std::string acc, Fruit fruit) {
-        return acc.empty() ? std::format("{}", fruit) : acc + "," + std::format("{}", fruit);
+        if (!acc.empty())
+            acc += ',';
+        acc += std::format("{}", fruit);
+        return acc;
     });
     CHECK(names == "Apple,Banana,Cherry");
 

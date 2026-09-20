@@ -652,11 +652,11 @@ constexpr auto eachElement() noexcept
             }
             constexpr bool operator!=(iterator other) const noexcept { return !(*this == other); }
         };
-        constexpr iterator begin() const noexcept
+        [[nodiscard]] constexpr iterator begin() const noexcept
         {
             return iterator { .value = std::numeric_limits<T>::min(), .exhausted = false };
         }
-        constexpr iterator end() const noexcept
+        [[nodiscard]] constexpr iterator end() const noexcept
         {
             return iterator { .value = std::numeric_limits<T>::max(), .exhausted = true };
         }

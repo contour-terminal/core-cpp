@@ -442,8 +442,8 @@ TEST_CASE("utils.eachElement")
     SECTION("a signed type is walked from its minimum to its maximum, inclusive")
     {
         auto count = 0;
-        auto first = 0;
-        auto last = 0;
+        auto first = int8_t {};
+        auto last = int8_t {};
         for (auto const value: core::eachElement<int8_t>())
         {
             if (count == 0)
@@ -452,22 +452,22 @@ TEST_CASE("utils.eachElement")
             last = value;
         }
         CHECK(count == 256);
-        CHECK(first == -128);
-        CHECK(last == 127);
+        CHECK(first == std::numeric_limits<int8_t>::min());
+        CHECK(last == std::numeric_limits<int8_t>::max());
     }
 
     SECTION("a type as wide as int is not walked into an overflow")
     {
         // Not iterated to exhaustion -- four billion steps -- but end() must not have wrapped
         // onto begin(), which would make the range empty and the loop body unreachable.
-        auto count = 0;
+        auto count = uint32_t { 0 };
         for (auto const value: core::eachElement<uint32_t>())
         {
-            CHECK(value == static_cast<uint32_t>(count));
-            if (++count == 4)
+            CHECK(value == count);
+            if (++count == 4U)
                 break;
         }
-        CHECK(count == 4);
+        CHECK(count == 4U);
     }
 }
 
