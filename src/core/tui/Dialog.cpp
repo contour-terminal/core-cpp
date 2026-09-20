@@ -39,17 +39,18 @@ void SelectDialog::render(Canvas& canvas)
     auto const itemCount = static_cast<int>(_list.visibleItems().size());
     auto const contentHeight = std::min(itemCount, _config.maxHeight - 2);
     auto const dialogHeight = contentHeight + 2; // +2 for borders
-    auto const dialogWidth = std::min(_config.width, termCols - 4);
+    auto const dialogWidth = std::max(0, std::min(_config.width, termCols - 4));
     auto const startRow = (termRows - dialogHeight) / 2;
     auto const startCol = (termCols - dialogWidth) / 2;
 
-    // Draw box
-    auto boxRect = Rect { .x = startRow, .y = startCol, .width = dialogWidth, .height = dialogHeight };
+    // Draw box. Rect::x is the left column and Rect::y the top row, which is the opposite order
+    // from the (row, col) every putString() below takes.
+    auto boxRect = Rect { .x = startCol, .y = startRow, .width = dialogWidth, .height = dialogHeight };
     canvas.drawBox(boxRect, _config.border, _config.borderStyle, _config.title, TitleAlign::Center);
 
     // Render list inside box (inner area)
     auto listRect =
-        Rect { .x = startRow + 1, .y = startCol + 2, .width = dialogWidth - 4, .height = contentHeight };
+        Rect { .x = startCol + 2, .y = startRow + 1, .width = dialogWidth - 4, .height = contentHeight };
     auto listCanvas = canvas.subcanvas(listRect);
     _list.render(listCanvas);
 
@@ -144,7 +145,7 @@ void ConfirmDialog::render(Canvas& canvas)
     auto const termCols = canvas.width();
     auto const termRows = canvas.height();
 
-    auto const dialogWidth = std::min(_config.width, termCols - 4);
+    auto const dialogWidth = std::max(0, std::min(_config.width, termCols - 4));
     auto const dialogHeight = 6; // title + padding + message + padding + buttons + border
 
     auto const startRow = (termRows - dialogHeight) / 2;
@@ -158,13 +159,14 @@ void ConfirmDialog::render(Canvas& canvas)
         canvas.fill(canvas.area(), ' ', dimStyle);
     }
 
-    // Draw box with title
-    auto boxRect = Rect { .x = startRow, .y = startCol, .width = dialogWidth, .height = dialogHeight };
+    // Draw box with title. Rect::x is the left column and Rect::y the top row, which is the
+    // opposite order from the (row, col) every putString() below takes.
+    auto boxRect = Rect { .x = startCol, .y = startRow, .width = dialogWidth, .height = dialogHeight };
     canvas.drawBox(boxRect, _config.border, _config.borderStyle, _config.title, TitleAlign::Center);
 
     // Fill box interior
     auto innerRect =
-        Rect { .x = startRow + 1, .y = startCol + 1, .width = dialogWidth - 2, .height = dialogHeight - 2 };
+        Rect { .x = startCol + 1, .y = startRow + 1, .width = dialogWidth - 2, .height = dialogHeight - 2 };
     canvas.fill(innerRect, ' ', Style {});
 
     // Message (with padding)
@@ -277,7 +279,7 @@ void InputDialog::render(Canvas& canvas)
     auto const termCols = canvas.width();
     auto const termRows = canvas.height();
 
-    auto const dialogWidth = std::min(_config.width, termCols - 4);
+    auto const dialogWidth = std::max(0, std::min(_config.width, termCols - 4));
     auto const dialogHeight = 5; // border + prompt + input + border
 
     auto const startRow = (termRows - dialogHeight) / 2;
@@ -291,18 +293,21 @@ void InputDialog::render(Canvas& canvas)
         canvas.fill(canvas.area(), ' ', dimStyle);
     }
 
-    // Draw box with title
-    auto boxRect = Rect { .x = startRow, .y = startCol, .width = dialogWidth, .height = dialogHeight };
+    // Draw box with title. Rect::x is the left column and Rect::y the top row, which is the
+    // opposite order from the (row, col) every putString() below takes.
+    auto boxRect = Rect { .x = startCol, .y = startRow, .width = dialogWidth, .height = dialogHeight };
     canvas.drawBox(boxRect, _config.border, _config.borderStyle, _config.title, TitleAlign::Center);
 
     // Fill box interior
     auto innerRect =
-        Rect { .x = startRow + 1, .y = startCol + 1, .width = dialogWidth - 2, .height = dialogHeight - 2 };
+        Rect { .x = startCol + 1, .y = startRow + 1, .width = dialogWidth - 2, .height = dialogHeight - 2 };
     canvas.fill(innerRect, ' ', Style {});
 
-    // Inner content area
+    // Inner content area. The canvas clips a box or a string that does not fit, but the input
+    // field's own arithmetic does not: a negative width reached substr() as a huge size_t and
+    // threw out of a render() no caller expects to throw.
+    auto const inputWidth = std::max(0, dialogWidth - 4);
     auto const contentCol = startCol + 2;
-    auto const inputWidth = dialogWidth - 4;
 
     // Prompt
     auto const promptRow = startRow + 1;

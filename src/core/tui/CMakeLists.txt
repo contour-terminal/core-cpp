@@ -214,6 +214,7 @@ core_cpp_add_test(tui
         CommandRegistry_test.cpp
         Completer_test.cpp
         CompletionPopup_test.cpp
+        Dialog_test.cpp
         FuzzyMatch_test.cpp
         FuzzyPickerPopup_test.cpp
         GenericSyntaxHighlighter_test.cpp
