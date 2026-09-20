@@ -169,6 +169,28 @@ class TestDriftedRow(CheckerCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("1 up to date, 0 drifted", result.stdout)
 
+    def test_a_row_whose_notes_quote_the_header_is_still_checked(self) -> None:
+        """A data row is not the header just because its notes name the column.
+
+        The header test was a substring test for "core-cpp path", and
+        `src/core/async/ThreadPoolExecutor.hpp`'s notes say "a row keys on its core-cpp path" --
+        so that row was skipped as though it WERE the header: neither checked nor reported, which
+        is the one outcome this checker must never produce. The row drifts here, so a regression
+        shows up as a missing DRIFT rather than only as a smaller count.
+        """
+        synced = self.upstream.commit("add", Widget_hpp="one\n")
+        self.upstream.commit("change the widget", Widget_hpp="two\n")
+        self.upstream.publish()
+        table = self.write_table(
+            self.row("README.md", "Widget_hpp", synced, notes="a row keys on its core-cpp path")
+        )
+
+        result = self.run_checker(table)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("DRIFT", result.stdout)
+        self.assertIn("0 up to date, 1 drifted", result.stdout)
+
 
 class TestDeletedUpstream(CheckerCase):
     def test_a_file_deleted_upstream_is_drift_marked_deleted(self) -> None:

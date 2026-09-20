@@ -125,9 +125,16 @@ def parse_provenance(text: str) -> tuple[list[Row], list[str]]:
         stripped = line.strip()
         if not stripped.startswith("|"):
             continue
-        if re.match(r"^\|[\s:-]+\|", stripped) or "core-cpp path" in stripped:
-            continue  # the header and its underline
+        if re.match(r"^\|[\s:-]+\|", stripped):
+            continue  # the header's underline
         cells = [strip_cell(c) for c in stripped.strip("|").split("|")]
+        # The header is the row whose FIRST CELL is the column's name -- not any row that happens
+        # to mention it. This was a substring test over the whole line, and
+        # `src/core/async/ThreadPoolExecutor.hpp`'s notes say "a row keys on its core-cpp path",
+        # so that row was dropped as though it were the header: not checked, and not reported
+        # either, which is the one answer this checker must never give.
+        if cells and cells[0] == "core-cpp path":
+            continue
         if len(cells) < 5:
             complaints.append(f"{PROVENANCE.name}:{number}: expected 5 columns, found {len(cells)}")
             continue
