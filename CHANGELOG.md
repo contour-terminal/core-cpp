@@ -331,6 +331,31 @@ workflow refuses one without a section here.
   inconsistency — `escape(text)` is the spelling most likely to be called for its return value
   alone.
 
+- `core::net::ISocket::isClosed()` answers what its documentation has always said: true once
+  `close()` was called **or** a read observed the peer's EOF. Neither `PosixSocket` nor
+  `WindowsSocket` latched the second half, so a consumer polling a connection whose peer had hung
+  up was told for ever that it was still open, and `SplitSocket::isClosed()` ("closed once either
+  half is") inherited that. The contract is latched rather than narrowed, because the latched
+  version is the one callers need. `TlsSocket` latches its own EOF too -- a `close_notify` ends the
+  session whether or not the inner transport is still open. The latch is a flag of its own, so a
+  peer that shut only its write side leaves `read()` and `write()` working exactly as before.
+  Migration: a caller that used `isClosed()` as "did I close this myself" asks its own bookkeeping
+  instead; one that polled it to drop dead connections now gets the answer it wanted.
+- `core::net::FdInterest::None` mutes a registration on every `EventSource` backend, as its
+  documentation says ("mute the fd without detaching it"). The Windows wait and kqueue already
+  reported nothing for such a registration; poll(2) and epoll reported `POLLHUP`/`POLLERR`
+  (`EPOLLHUP`/`EPOLLERR`) for it whatever interest was asked for, so a muted descriptor still woke
+  its flow -- and on epoll it did so on every wait, since those bits are level-triggered, spinning
+  the pump. A muted registration still counts as attached and is still found by `detach()`.
+  Migration: a caller that attached with `None` and relied on being woken when the descriptor died
+  attaches with `Read`, which reports HUP/ERR as read-readiness by design.
+- `core::net::WriteQueue`'s constructor throws `std::invalid_argument` for a null socket rather
+  than accepting it. `ITlsContext::wrap()` is documented to return null when it cannot allocate,
+  and a queue built on that null constructed cleanly and crashed later in `close()` -- which is
+  `noexcept`, so the failure landed at teardown, far from the call that caused it, and could not be
+  reported at all. A constructed object is usable (`.agent/rules/design-principles.md`). Migration:
+  check `wrap()`'s result and drop the connection instead of queueing onto nothing.
+
 ### Changed
 
 - `core::async::whenAny()` reports a child that completed even when the awaiting flow's own token
@@ -622,6 +647,64 @@ workflow refuses one without a section here.
   reporting "No such file or directory", the diagnosis for the other way it fails; and `rename()`
   reports the two-hop recase's own error instead of the first attempt's, and says where a failed
   rollback left the entry.
+
+- `core::net`'s HTTP head parser ends the head at the first blank line, whichever terminator
+  produced it. An empty line inside the header block was skipped with a `continue`, so
+  `"GET / HTTP/1.1\n\nHost: evil\r\nContent-Length: 0"` parsed as ONE request carrying those
+  headers while a front-end that honours a bare LF as a line terminator -- which RFC 9112 2.2
+  permits, and which this parser itself does for every other line -- read it as two. That is the
+  request-smuggling desync of RFC 9112 11.2, in the parser that already refuses `Transfer-Encoding`
+  and a conflicting `Content-Length` for the same reason. The message is refused rather than
+  re-framed: the bytes behind the blank line were already consumed as part of the head block, so a
+  `Content-Length` read before it would index into the wrong place.
+- `core::net`'s Windows listener no longer stops accepting for good. `accept()` called
+  `WSAResetEvent` on the shared readiness event before parking; a client connecting between the
+  `::accept()` that returned `WSAEWOULDBLOCK` and that reset leaves `FD_ACCEPT` recorded and the
+  event signalled, and the reset then cleared the event while the record stood -- Winsock raises a
+  recorded indication only once, so the coroutine parked for ever and the listener went silent, for
+  that connection and every one after it. The indication is consumed with `WSAEnumNetworkEvents`
+  instead, which clears both in one step and says what it took, so a connection from that window is
+  accepted rather than lost. `WindowsSocket::latchNetworkEvents` already did this for the two
+  directions that share a connected socket's event; both now go through one
+  `core::net::consumeNetworkEvents`.
+- `core::net`'s TLS wrapper checks both `BIO_new` results before handing them to `SSL_set_bio`.
+  A failed allocation produced a non-null socket whose first read or write dereferenced null --
+  breaking `ITlsContext::wrap()`'s own documented "null on allocation failure", one line below the
+  checked `SSL_new`. The failure path also releases the `SSL` it had already created.
+- `core::net`'s TLS `flushOut()` reports a failed flush instead of success. Its `BIO_read <= 0`
+  branch is reachable only after `BIO_ctrl_pending` said bytes WERE queued, so it meant a failed
+  write BIO, and calling that "nothing to flush" dropped ciphertext silently: the handshake then
+  waited for a peer response to a flight that was never written, and both ends hung until an outer
+  timeout.
+- `core::net::PosixSocket::write()` handles a zero-length return instead of reading a stale
+  `errno`. Only a positive return was consumed, so a zero fell through to an `errno` no call in the
+  loop had set -- and depending on that leftover value the loop spun on an already-writable socket,
+  retried for ever, or reported a failure that never happened. `errno` is now captured immediately
+  after the syscall, as `read()` already handled its own zero (a clean EOF) first.
+- `core::net::AsyncBufferedReader::readUntil()` rescans the buffer when the delimiter changes. The
+  scan offset was reset only when the scanner KIND changed, but "no match can begin before here" is
+  a statement about the bytes that scan was looking for: after a `readUntil("\r\n\r\n")` returned
+  early, a following `readUntil("X")` resumed near the buffer's end and reported EOF for an `X` the
+  reader was already holding.
+- `core::net`'s POSIX listeners create their socket close-on-exec atomically, through the
+  `makeStreamSocket()` helper `connect()` and `connectUnix()` already use, instead of a bare
+  `::socket()` with the flags applied after `listen()`. A fork and exec from another thread in that
+  window inherited the listening descriptor and kept the port -- or the AF_UNIX socket file --
+  claimed after the daemon exited.
+- `core::net::testing::ScriptedEventSource::detach()` is idempotent, as `EventSource` documents and
+  every real backend behaves. It counted detach CALLS rather than live registrations, and the loop
+  genuinely detaches twice on normal paths (`notifyHandleClosing` then `unregisterFdWaiter`;
+  `requeueForCancellation` and `wakeAllWaiters` before `await_resume`), so a second detach of one
+  token cancelled out another token's registration and `attachedCount()` under-reported -- a future
+  leak assertion against this source would have passed on a registration that never went away.
+- `src/core/net/EventLoop.cpp` includes `<stdexcept>` for the `std::runtime_error` it throws, which
+  compiled only through a transitive include.
+- `core::net`'s own tests: a failing `REQUIRE` in a `whenAll` arm fails the case instead of hanging
+  it (`whenAll` cancels no sibling, and the sibling was parked in `accept()` with nobody left to
+  close the listener -- `.agent/rules/testing.md`); the descriptor-exhaustion case restores the
+  process-wide `RLIMIT_NOFILE` through a scope guard, so a throw in between can no longer leave
+  every later case in the binary running squeezed; and the TLS cases check `makeSocketPair()`
+  before dereferencing it, so a loopback failure is a test failure rather than undefined behaviour.
 
 ### Imported
 
