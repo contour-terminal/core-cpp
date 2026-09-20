@@ -8,6 +8,7 @@
 #include <string_view>
 
 using namespace core;
+using namespace std::string_view_literals;
 
 // Helper: encode a string using the streaming (byte-at-a-time) API.
 static std::string streamingEncode(std::string_view input)
@@ -87,4 +88,38 @@ TEST_CASE("base64.streaming_encode_binary_roundtrip", "[base64]")
     // Verify roundtrip
     auto const decoded = base64::decode(encoded);
     CHECK(decoded == binary);
+}
+
+// decodeLength() sizes the buffer decode() then fills. Its scan for the end of the base64 prefix
+// compared the index-table entry against the table's own size (256) instead of against the 64 the
+// table stores for a byte that is not a base64 digit, so every byte passed and the length was
+// taken from the whole input -- padding, terminator and trailing junk included.
+TEST_CASE("base64.decodeLength", "[base64]")
+{
+    SECTION("a bare payload")
+    {
+        CHECK(base64::decodeLength("YQ=="sv) >= base64::decode("YQ==").size());
+        CHECK(base64::decodeLength("YWJj"sv) == 3);
+        CHECK(base64::decodeLength("YWJjZA=="sv) == 6);
+    }
+
+    SECTION("the scan stops at the first byte that is not a base64 digit")
+    {
+        // "YWJj" decodes to "abc"; what follows is not part of it.
+        CHECK(base64::decodeLength("YWJj"sv) == base64::decodeLength("YWJj!!!!!!!!"sv));
+        CHECK(base64::decodeLength("YWJj"sv) == base64::decodeLength("YWJj\n\n\n\n"sv));
+        CHECK(base64::decodeLength("YWJj"sv) == base64::decodeLength("YWJj and then some prose"sv));
+    }
+
+    SECTION("the size is enough for what decode() writes, and not wildly more")
+    {
+        for (auto const* input: { "", "YQ==", "YWI=", "YWJj", "YWJjZA==", "Zm9vOmJhcg==" })
+        {
+            auto const reserved = base64::decodeLength(std::string_view { input });
+            auto const decoded = base64::decode(input);
+            INFO(input);
+            CHECK(reserved >= decoded.size());
+            CHECK(reserved <= decoded.size() + 2);
+        }
+    }
 }

@@ -42,6 +42,10 @@ namespace detail
     };
     // clang-format on
 
+    /// What IndexMap holds for a byte that is not a base64 digit: one past the last index a
+    /// digit maps to, so `entry <= LastDigitIndex` tests membership of the alphabet.
+    auto constexpr inline LastDigitIndex = std::size_t { 63 };
+
     template <typename T, size_t N>
     std::string& operator+=(std::string& s, std::array<T, N> v)
     {
@@ -153,10 +157,11 @@ size_t decodeLength(Iterator begin, Iterator end, IndexTable const& index)
 {
     auto pos = begin;
 
-    auto const indexSize = std::size(index);
-
-    while (pos != end
-           && static_cast<size_t>(index[static_cast<uint8_t>(*pos)]) < static_cast<size_t>(indexSize))
+    // The sentinel the table stores for a byte outside the alphabet, not the table's own size:
+    // compared against the size, every entry passed, so the length was taken from the whole
+    // input -- padding, terminator and trailing junk included -- instead of from the base64
+    // prefix decode() actually reads.
+    while (pos != end && static_cast<size_t>(index[static_cast<uint8_t>(*pos)]) <= detail::LastDigitIndex)
         pos++;
 
     auto const nprbytes = std::distance(begin, pos) - 1;
@@ -179,7 +184,8 @@ inline size_t decodeLength(std::string_view const& value)
 template <typename Iterator, typename IndexTable, typename Output>
 size_t decode(Iterator begin, Iterator end, IndexTable const& indexmap, Output output)
 {
-    auto const index = [indexmap](Iterator i) {
+    // By reference: captured by value, each call copied the 256-byte table.
+    auto const index = [&indexmap](Iterator i) {
         return indexmap[static_cast<uint8_t>(*i)];
     };
 
@@ -188,7 +194,7 @@ size_t decode(Iterator begin, Iterator end, IndexTable const& indexmap, Output o
 
     // count input bytes (excluding any trailing pad bytes)
     Iterator input = begin;
-    while (input != end && index(input) <= 63)
+    while (input != end && index(input) <= detail::LastDigitIndex)
         input++;
     size_t nprbytes = static_cast<unsigned>(std::distance(begin, input));
     size_t decodedCount = ((nprbytes + 3) / 4) * 3;
