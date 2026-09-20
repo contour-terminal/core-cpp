@@ -219,13 +219,23 @@ async::Task<IoResult> PosixSocket::write(std::span<std::byte const> buffer)
         // raising SIGPIPE and killing the process.
         auto const n = _plainFd ? ::write(_fd, remaining.data(), remaining.size())
                                 : ::send(_fd, remaining.data(), remaining.size(), MSG_NOSIGNAL);
+        // Captured here, before any branch: everything below reads THIS call's errno.
+        auto const err = errno;
         if (n > 0)
         {
             total += static_cast<std::size_t>(n);
             continue;
         }
+        // A zero return on a non-empty buffer is neither progress nor a named failure, and
+        // `errno` does not describe it — it still holds whatever the previous syscall left.
+        // Falling through to the ladder below therefore spun on an already-writable socket,
+        // retried for ever, or reported a failure that never happened, depending on that
+        // stale value. Report the one thing that is true: the transport took nothing.
+        // (`read` handles its own zero — a clean EOF — before reaching its ladder.)
+        if (n == 0)
+            co_return std::unexpected(makeNetError(
+                NetErrorCode::Other, 0, _plainFd ? "write accepted no bytes" : "send accepted no bytes"));
 
-        auto const err = errno;
         if (err == ENOTSOCK && !_plainFd)
         {
             _plainFd = true;
