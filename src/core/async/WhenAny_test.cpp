@@ -19,6 +19,21 @@ using core::async::StopToken;
 using core::async::Task;
 using core::async::whenAny;
 
+/// Satisfied where `whenAny(task)` is a call, @p T being the value category of the argument. A
+/// template, so that a call that does not resolve is a substitution failure rather than an error.
+template <typename T>
+concept WhenAnyTakes = requires(T&& task) { whenAny(std::forward<T>(task)); };
+
+// The variadic overload takes its tasks by rvalue. With the constraint written over
+// std::remove_cvref_t an lvalue satisfied it too, and the diagnostic then came out of
+// std::vector::push_back on Task's deleted copy constructor: a wall of errors from <vector> where
+// "no matching overload" is what happened.
+static_assert(WhenAnyTakes<Task<void>>, "whenAny takes its tasks by rvalue");
+static_assert(!WhenAnyTakes<Task<void>&>,
+              "an lvalue Task is not a whenAny argument: whenAny moves its tasks in");
+static_assert(!WhenAnyTakes<Task<void> const>,
+              "a const Task is not a whenAny argument: it cannot be moved from");
+
 namespace
 {
 

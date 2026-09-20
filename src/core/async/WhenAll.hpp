@@ -23,6 +23,7 @@
 #include <coroutine>
 #include <cstddef>
 #include <exception>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -197,7 +198,7 @@ namespace detail
 /// @param tasks The tasks to run together (moved in).
 /// @return An awaitable that completes when all tasks finish.
 template <typename... Tasks>
-    requires(sizeof...(Tasks) > 0 && (std::is_same_v<std::remove_cvref_t<Tasks>, Task<void>> && ...))
+    requires(sizeof...(Tasks) > 0 && (std::is_same_v<Tasks, Task<void>> && ...))
 [[nodiscard]] auto whenAll(Tasks&&... tasks) -> detail::WhenAllAwaiter
 {
     auto vec = std::vector<Task<void>> {};

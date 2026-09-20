@@ -306,7 +306,7 @@ namespace detail
 /// @return An awaitable resolving to the index of the first task to complete, or to
 ///         @c std::nullopt where none did.
 template <typename... Tasks>
-    requires(sizeof...(Tasks) > 0 && (std::is_same_v<std::remove_cvref_t<Tasks>, Task<void>> && ...))
+    requires(sizeof...(Tasks) > 0 && (std::is_same_v<Tasks, Task<void>> && ...))
 [[nodiscard]] auto whenAny(Tasks&&... tasks) -> detail::WhenAnyAwaiter
 {
     auto vec = std::vector<Task<void>> {};
