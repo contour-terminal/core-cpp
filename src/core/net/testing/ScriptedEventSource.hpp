@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <deque>
 #include <stdexcept>
+#include <unordered_set>
 #include <vector>
 
 namespace core::net::testing
@@ -54,7 +55,7 @@ class ScriptedEventSource: public EventSource
     [[nodiscard]] std::size_t waitCount() const noexcept { return _timeouts.size(); }
 
     /// @return The number of fds currently attached (after attach/detach).
-    [[nodiscard]] std::size_t attachedCount() const noexcept { return _attached; }
+    [[nodiscard]] std::size_t attachedCount() const noexcept { return _live.size(); }
 
     /// @return The token most recently handed out by @c attach (invalid if none).
     [[nodiscard]] FdToken lastToken() const noexcept { return FdToken { _nextToken }; }
@@ -71,21 +72,27 @@ class ScriptedEventSource: public EventSource
 
     FdToken attach(platform::NativeHandle /*fd*/, FdInterest /*interest*/) override
     {
-        ++_attached;
-        return FdToken { ++_nextToken };
+        auto const token = FdToken { ++_nextToken };
+        _live.insert(token.value);
+        return token;
     }
 
-    void detach(FdToken token) override
-    {
-        if (token && _attached > 0)
-            --_attached;
-    }
+    /// Drops @p token's registration. IDEMPOTENT, as @c EventSource documents and every real
+    /// backend behaves.
+    ///
+    /// Tracked as a SET of live tokens rather than a count, because the loop genuinely
+    /// detaches twice on normal paths — `notifyHandleClosing` then `unregisterFdWaiter`;
+    /// `requeueForCancellation` and `wakeAllWaiters` before `await_resume`. A counter
+    /// decremented per CALL therefore reported fewer registrations than were live, so a leak
+    /// assertion against this source would have passed on one that never went away.
+    /// @param token The registration to drop; unknown and repeated tokens are no-ops.
+    void detach(FdToken token) override { _live.erase(token.value); }
 
   private:
     std::deque<WaitOutcome> _scripted;
     std::vector<int> _timeouts;
-    std::uint64_t _nextToken = 0; ///< Source of synthetic, never-zero tokens.
-    std::size_t _attached = 0;    ///< Live attach()-minus-detach() count.
+    std::uint64_t _nextToken = 0;            ///< Source of synthetic, never-zero tokens.
+    std::unordered_set<std::uint64_t> _live; ///< Tokens attached and not yet detached.
 };
 
 } // namespace core::net::testing

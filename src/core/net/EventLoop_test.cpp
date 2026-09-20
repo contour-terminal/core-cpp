@@ -290,6 +290,33 @@ TEST_CASE("EventSource fd registry hands out distinct tokens and reports readine
     REQUIRE(source.attachedCount() == 0);
 }
 
+TEST_CASE("The scripted source detaches idempotently, like every real backend", "[EventSource]")
+{
+    // EventSource::detach is documented idempotent, and the loop really does detach twice on
+    // normal paths — notifyHandleClosing then unregisterFdWaiter; requeueForCancellation and
+    // wakeAllWaiters before await_resume. The scripted source counted DETACH CALLS instead of
+    // live registrations, so a second detach of one token cancelled out a different token's
+    // registration: attachedCount() then under-reported, and a leak assertion against this
+    // source would pass on a registration that never went away.
+    auto pipe = core::platform::createSystemPipe();
+    REQUIRE(pipe.has_value());
+
+    auto source = ScriptedEventSource {};
+    auto const a = source.attach((*pipe)->readFd(), core::net::FdInterest::Read);
+    auto const b = source.attach((*pipe)->writeFd(), core::net::FdInterest::Write);
+    REQUIRE(source.attachedCount() == 2);
+
+    source.detach(a);
+    source.detach(a); // the second detach of the SAME token must change nothing
+    CHECK(source.attachedCount() == 1);
+
+    source.detach(core::net::FdToken::invalid()); // an unknown token is a no-op too
+    CHECK(source.attachedCount() == 1);
+
+    source.detach(b);
+    CHECK(source.attachedCount() == 0);
+}
+
 TEST_CASE("An invalid FdToken is falsy and equals the invalid sentinel", "[EventSource]")
 {
     auto const invalid = core::net::FdToken::invalid();
