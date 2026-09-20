@@ -2,6 +2,7 @@
 #include <core/log/LogSink.hpp>
 
 #include <core/Utils.hpp>
+#include <core/log/detail/ProcessId.hpp>
 
 #include <algorithm>
 #include <array>
@@ -15,27 +16,11 @@
 #include <system_error>
 #include <utility>
 
-#ifndef _WIN32
-    #include <unistd.h>
-#else
-    #include <process.h>
-#endif
-
 namespace core::log
 {
 
 namespace
 {
-    /// @return The current process id, as a plain number for the `[PID]` field.
-    [[nodiscard]] int processId() noexcept
-    {
-#ifndef _WIN32
-        return static_cast<int>(::getpid());
-#else
-        return ::_getpid();
-#endif
-    }
-
     /// A curated palette, so two categories are unlikely to collide in one terminal.
     constexpr auto CategoryColors = std::array<int, 23> {
         2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 150, 155, 159, 165, 170, 175, 180, 185, 190, 195, 200,
@@ -99,7 +84,7 @@ namespace
                 result += "] ";
             }
             if (options.showProcessId)
-                std::format_to(std::back_inserter(result), "[{}] ", processId());
+                std::format_to(std::back_inserter(result), "[{}] ", detail::processId());
             result += '[';
             result += tag;
             result += ']';
