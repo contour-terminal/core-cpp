@@ -204,7 +204,15 @@ core_cpp_dependency(OpenSSL
 # copy is built here, and a warning of a compiler libunicode 0.9.3 predates would land in this
 # build. PEDANTIC_COMPILER_WERROR is already OFF upstream and is pinned so a default change cannot
 # make someone else's warning fatal here. The four LIBUNICODE_* options drop the parts of it nothing
-# links: its tests, benchmarks, CLI tools and examples.
+# links: its tests, benchmarks, CLI tools and examples. BUILD_SHARED_LIBS OFF is endo's pin and is
+# kept: libunicode's target is linked PUBLIC from `core::tui`, so in a consumer configured with
+# BUILD_SHARED_LIBS=ON a fetched libunicode would come out shared behind a static core-cpp, and
+# every consumer of `core::tui` would need that shared object at run time to use a library it never
+# asked to be shared. A libunicode found rather than fetched is whatever that installation is.
+#
+# A first configure with CORE_CPP_WITH_TUI on and no installed libunicode fetches it from GitHub,
+# and libunicode's own configure then downloads UCD.zip from www.unicode.org -- the one fetch this
+# build makes outside GitHub (docs/getting-started/building.md).
 core_cpp_dependency(libunicode
     WHEN CORE_CPP_WITH_TUI
     TARGETS unicode::unicode
@@ -212,7 +220,8 @@ core_cpp_dependency(libunicode
     CPM NAME libunicode VERSION 0.9.3 GITHUB_REPOSITORY contour-terminal/libunicode GIT_TAG v0.9.3
         EXCLUDE_FROM_ALL YES SYSTEM YES
         OPTIONS "LIBUNICODE_TESTING OFF" "LIBUNICODE_BENCHMARK OFF" "LIBUNICODE_TOOLS OFF"
-                "LIBUNICODE_EXAMPLES OFF" "PEDANTIC_COMPILER OFF" "PEDANTIC_COMPILER_WERROR OFF")
+                "LIBUNICODE_EXAMPLES OFF" "PEDANTIC_COMPILER OFF" "PEDANTIC_COMPILER_WERROR OFF"
+                "BUILD_SHARED_LIBS OFF")
 
 ## @brief WRAP of the stb row: the INTERFACE target over the DOWNLOAD_ONLY source tree.
 ##
@@ -232,6 +241,13 @@ endfunction()
 # commit: stb publishes no releases, and endo's `GIT_TAG master` (f774a210) is not a build anyone
 # can reproduce. The pin is the commit endo's own CPM cache holds, so this is the code endo's tui
 # was written against. Never fetched under Emscripten, where CORE_CPP_WITH_IMAGES is off.
+#
+# Fetch-only, with no FIND_PACKAGE: stb ships no build system, no config package and no version, so
+# there is nothing for find_package() to find and nothing a system copy could be checked against.
+# A parent project that already has stb satisfies the row the way any row is satisfied from
+# outside: by defining the `stb_image` target before core-cpp is added, which resolution step 1
+# finds. NO_FETCH is therefore not set -- without a fetch and without a parent's target there is no
+# stb at all, and CORE_CPP_WITH_IMAGES is the switch that says whether it is needed.
 core_cpp_dependency(stb
     WHEN CORE_CPP_WITH_IMAGES
     TARGETS stb_image

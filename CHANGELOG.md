@@ -142,7 +142,12 @@ workflow refuses one without a section here.
   is what refuses any other link.
 - The libunicode dependency (0.9.3, `unicode::unicode`) when `CORE_CPP_WITH_TUI` is on, and stb
   (`stb_image`, `DOWNLOAD_ONLY`, pinned to a commit because stb publishes no releases) when
-  `CORE_CPP_WITH_IMAGES` is on. Both are off under Emscripten.
+  `CORE_CPP_WITH_IMAGES` is on. Both are off under Emscripten. A fetched libunicode is built with
+  `BUILD_SHARED_LIBS OFF`, as endo pins it: its target is linked PUBLIC from `core::tui`, so a
+  consumer configured for shared libraries would otherwise get a shared libunicode behind a static
+  core-cpp. A first configure with `CORE_CPP_WITH_TUI` on fetches libunicode from GitHub and
+  libunicode's configure then downloads `UCD.zip` from `www.unicode.org` — core-cpp's only fetch
+  outside GitHub.
 - `core::tui`, endo's terminal UI (`f774a210`), native only: `TerminalInput` and `VtParser` over
   the Kitty keyboard protocol, SGR mouse reporting, bracketed paste and focus tracking;
   `Terminal`, which pairs input with output and owns the bounded query round-trips on an injected

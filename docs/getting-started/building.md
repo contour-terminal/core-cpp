@@ -23,7 +23,13 @@ cmake --workflow --preset ci-clang-debug     # the same three steps in one comma
   Homebrew's `openssl@3` on macOS with `OPENSSL_ROOT_DIR` set to `$(brew --prefix openssl@3)`. On
   Windows only `cl-release-tls` needs it (CI takes it from vcpkg). core-cpp never fetches
   OpenSSL; `-DCORE_CPP_WITH_TLS=OFF` builds without it.
-- Network access for the first configure, to fetch Catch2 with CPM, unless it is installed.
+- Network access for the first configure. With the defaults it fetches Catch2, libunicode (for
+  `CORE_CPP_WITH_TUI`) and stb (for `CORE_CPP_WITH_IMAGES`) from `github.com` and
+  `codeload.github.com` with CPM, unless each is already installed or supplied by the parent
+  project. libunicode's own configure then downloads `UCD.zip` from `www.unicode.org`, which is
+  the one fetch core-cpp's build makes outside GitHub. An installed Catch2 or libunicode is
+  found and used instead, and `-DCORE_CPP_WITH_TUI=OFF` drops libunicode and the Unicode
+  download with it.
 
 ## Presets
 
