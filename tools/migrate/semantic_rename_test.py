@@ -18,15 +18,15 @@ from tempfile import TemporaryDirectory
 
 import semantic_rename
 
-if not semantic_rename.bindingsAvailable():
+if not semantic_rename.bindings_available():
     print(
         "semantic_rename_test: SKIPPING every case -- python -m pip install libclang "
         f"(no clang.cindex for {sys.executable})",
         file=sys.stderr,
     )
 
-needsLibclang = unittest.skipUnless(
-    semantic_rename.bindingsAvailable(), "libclang's Python bindings (clang.cindex) are not installed"
+needs_libclang = unittest.skipUnless(
+    semantic_rename.bindings_available(), "libclang's Python bindings (clang.cindex) are not installed"
 )
 
 ISOCKET_HPP = """\
@@ -65,15 +65,15 @@ int use(FastCache::ISocket& sock, Other::Reader& other)
 """
 
 
-def writeFixture(root: Path, translationUnits: dict[str, str]) -> Path:
+def write_fixture(root: Path, translation_units: dict[str, str]) -> Path:
     """Writes the two headers, the given translation units, and a compile database over them."""
     (root / "isocket.hpp").write_text(ISOCKET_HPP, encoding="utf-8")
     (root / "other.hpp").write_text(OTHER_HPP, encoding="utf-8")
     entries = []
-    for name, text in translationUnits.items():
+    for name, text in translation_units.items():
         (root / name).write_text(text, encoding="utf-8")
         entries.append({"directory": str(root), "file": name, "command": f"clang++ -std=c++20 -c {name}"})
-    database = root / f"compile_commands.{len(translationUnits)}.json"
+    database = root / f"compile_commands.{len(translation_units)}.json"
     database.write_text(json.dumps(entries), encoding="utf-8")
     return database
 
@@ -88,15 +88,15 @@ READ_ROW = semantic_rename.Row(
 )
 
 
-@needsLibclang
+@needs_libclang
 class ItRenamesByDeclarationNotBySpelling(unittest.TestCase):
     def test_only_the_call_on_the_declaring_class_is_renamed(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            database = writeFixture(root, {"main.cpp": MAIN_CPP})
-            edits = semantic_rename.collectEdits([database], [root / "isocket.hpp"], [READ_ROW])
+            database = write_fixture(root, {"main.cpp": MAIN_CPP})
+            edits = semantic_rename.collect_edits([database], [root / "isocket.hpp"], [READ_ROW])
             with redirect_stdout(io.StringIO()):
-                semantic_rename.applyEdits(edits)
+                semantic_rename.apply_edits(edits)
             result = (root / "main.cpp").read_text(encoding="utf-8")
             self.assertIn("sock.read(buffer, 8)", result)
             self.assertIn("other.Read(buffer, 8)", result)
@@ -104,10 +104,10 @@ class ItRenamesByDeclarationNotBySpelling(unittest.TestCase):
     def test_the_declaration_itself_is_renamed_when_it_is_under_the_decl_paths(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            database = writeFixture(root, {"main.cpp": MAIN_CPP})
-            edits = semantic_rename.collectEdits([database], [root / "isocket.hpp"], [READ_ROW])
+            database = write_fixture(root, {"main.cpp": MAIN_CPP})
+            edits = semantic_rename.collect_edits([database], [root / "isocket.hpp"], [READ_ROW])
             with redirect_stdout(io.StringIO()):
-                semantic_rename.applyEdits(edits)
+                semantic_rename.apply_edits(edits)
             renamed = (root / "isocket.hpp").read_text(encoding="utf-8")
             self.assertIn("int read(char* data, int size);", renamed)
             self.assertIn("int Read(char* data, int size);", (root / "other.hpp").read_text(encoding="utf-8"))
@@ -115,7 +115,7 @@ class ItRenamesByDeclarationNotBySpelling(unittest.TestCase):
     def test_a_row_whose_scope_matches_nothing_edits_nothing(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            database = writeFixture(root, {"main.cpp": MAIN_CPP})
+            database = write_fixture(root, {"main.cpp": MAIN_CPP})
             row = semantic_rename.Row(
                 kind="member",
                 source="Read",
@@ -124,10 +124,10 @@ class ItRenamesByDeclarationNotBySpelling(unittest.TestCase):
                 apply="semantic",
                 scope="FastCache::IListener",
             )
-            self.assertEqual(semantic_rename.collectEdits([database], [root / "isocket.hpp"], [row]), {})
+            self.assertEqual(semantic_rename.collect_edits([database], [root / "isocket.hpp"], [row]), {})
 
 
-@needsLibclang
+@needs_libclang
 class ItUnionsSeveralCompileDatabases(unittest.TestCase):
     """fastcached's Windows and Linux builds see different files; one database alone misses half."""
 
@@ -138,14 +138,14 @@ class ItUnionsSeveralCompileDatabases(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             header = '#include "isocket.hpp"\n'
-            windows = writeFixture(root, {"windows.cpp": header + self.WINDOWS_CPP})
-            linux = writeFixture(
+            windows = write_fixture(root, {"windows.cpp": header + self.WINDOWS_CPP})
+            linux = write_fixture(
                 root,
                 {"linux.cpp": header + self.LINUX_CPP, "extra.cpp": header + "int unused() {}\n"},
             )
-            edits = semantic_rename.collectEdits([windows, linux], [root / "isocket.hpp"], [READ_ROW])
+            edits = semantic_rename.collect_edits([windows, linux], [root / "isocket.hpp"], [READ_ROW])
             with redirect_stdout(io.StringIO()):
-                semantic_rename.applyEdits(edits)
+                semantic_rename.apply_edits(edits)
             self.assertIn("sock.read(b, 4)", (root / "windows.cpp").read_text(encoding="utf-8"))
             self.assertIn("sock.read(b, 4)", (root / "linux.cpp").read_text(encoding="utf-8"))
 
@@ -153,17 +153,17 @@ class ItUnionsSeveralCompileDatabases(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             shared = '#include "isocket.hpp"\n' + self.WINDOWS_CPP
-            first = writeFixture(root, {"windows.cpp": shared})
-            second = writeFixture(root, {"windows.cpp": shared, "extra.cpp": '#include "isocket.hpp"\n'})
-            edits = semantic_rename.collectEdits([first, second], [root / "isocket.hpp"], [READ_ROW])
+            first = write_fixture(root, {"windows.cpp": shared})
+            second = write_fixture(root, {"windows.cpp": shared, "extra.cpp": '#include "isocket.hpp"\n'})
+            edits = semantic_rename.collect_edits([first, second], [root / "isocket.hpp"], [READ_ROW])
             offsets = [edit.offset for edit in edits[root / "windows.cpp"]]
             self.assertEqual(len(offsets), len(set(offsets)), f"duplicated edits at {offsets}")
             with redirect_stdout(io.StringIO()):
-                semantic_rename.applyEdits(edits)
+                semantic_rename.apply_edits(edits)
             self.assertIn("sock.read(b, 4)", (root / "windows.cpp").read_text(encoding="utf-8"))
 
 
-@needsLibclang
+@needs_libclang
 class EditsAreAppliedBackToFront(unittest.TestCase):
     """A replacement that is longer than what it replaces invalidates every offset after it."""
 
@@ -178,7 +178,7 @@ class EditsAreAppliedBackToFront(unittest.TestCase):
                 "    return a.Write(d, 2) + b.Write(d, 2);\n"
                 "}\n"
             )
-            database = writeFixture(root, {"main.cpp": source})
+            database = write_fixture(root, {"main.cpp": source})
             row = semantic_rename.Row(
                 kind="member",
                 source="Write",
@@ -187,9 +187,9 @@ class EditsAreAppliedBackToFront(unittest.TestCase):
                 apply="semantic",
                 scope="FastCache::ISocket",
             )
-            edits = semantic_rename.collectEdits([database], [root / "isocket.hpp"], [row])
+            edits = semantic_rename.collect_edits([database], [root / "isocket.hpp"], [row])
             with redirect_stdout(io.StringIO()):
-                semantic_rename.applyEdits(edits)
+                semantic_rename.apply_edits(edits)
             renamed = (root / "main.cpp").read_text("utf-8")
             self.assertIn("return a.writeSome(d, 2) + b.writeSome(d, 2);", renamed)
 
@@ -198,7 +198,7 @@ class ItRefusesToRunWithoutTheBindings(unittest.TestCase):
     """The one case that must not skip: a missing dependency is reported, never worked around."""
 
     def test_the_availability_probe_answers(self) -> None:
-        self.assertIsInstance(semantic_rename.bindingsAvailable(), bool)
+        self.assertIsInstance(semantic_rename.bindings_available(), bool)
 
     def test_the_table_carries_the_semantic_rows_this_pass_owns(self) -> None:
         import renames

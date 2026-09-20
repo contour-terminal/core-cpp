@@ -22,7 +22,7 @@ task lands `core::net::IoBackend`, this gate fails and says to mark the row deli
 A **removed** row is that inversion made permanent: its `from` names a symbol core-cpp no longer
 has, and the gate asserts it stays gone, so a re-introduction is refused (Ruling R75).
 
-Every arm reads a qualified symbol through `declaresQualified()`, which walks the namespace prefixes
+Every arm reads a qualified symbol through `declares_qualified()`, which walks the namespace prefixes
 instead of testing the whole path as a namespace. That is what lets it see a symbol scoped to an
 **enum or a class** -- `core::net::NetErrorCode::SystemError` -- which a whole-path test would call
 absent forever, and a pending row that can never resolve is worse than no row at all (Ruling R74).
@@ -40,9 +40,11 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-import renames  # noqa: E402  (the loader lives beside this script, which a ctest invokes by path)
+# `renames` is the loader beside this script. Python puts a script's own directory first on
+# sys.path, so this resolves however the script is reached -- by relative path, by the absolute
+# path a ctest gives it, or exec'd by the self-test -- with no sys.path surgery, and therefore no
+# import that has to sit below other statements and be excused from the linter.
+import renames
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_ROOT = HERE.parent.parent
@@ -71,7 +73,7 @@ def _stripped(text: str) -> str:
     return STRING.sub('""', COMMENT.sub(" ", text))
 
 
-def openNamespaces(text: str) -> set[str]:
+def open_namespaces(text: str) -> set[str]:
     """Every namespace path the header opens, `namespace core::net` and the nested form alike."""
     body = _stripped(text)
     opens = {match.end() - 1: match.group(1) for match in NAMESPACE_OPEN.finditer(body)}
@@ -111,7 +113,7 @@ def declares(text: str, name: str) -> bool:
     return any(re.search(pattern, body, re.MULTILINE) for pattern in patterns)
 
 
-def declaresQualified(text: str, components: list[str]) -> bool:
+def declares_qualified(text: str, components: list[str]) -> bool:
     """Whether the header declares the qualified symbol @p components, e.g. `core::net::EventLoop`.
 
     The prefix walk is what makes a symbol scoped to an **enum or a class** findable:
@@ -121,45 +123,45 @@ def declaresQualified(text: str, components: list[str]) -> bool:
     drift into that hole on its own (controller ruling R74).
     """
     if len(components) == 1:
-        return definesMacro(text, components[0])
-    namespaces = openNamespaces(text)
+        return defines_macro(text, components[0])
+    namespaces = open_namespaces(text)
     return any(
         "::".join(components[:cut]) in namespaces and all(declares(text, name) for name in components[cut:])
         for cut in range(len(components) - 1, 0, -1)
     )
 
 
-def findSymbol(root: Path, symbol: str) -> Path | None:
+def find_symbol(root: Path, symbol: str) -> Path | None:
     """The header under `src/core/` that declares @p symbol, or None if nothing does."""
     components = symbol.split("::")
     for header in sorted((root / "src" / "core").rglob("*.hpp")):
-        if declaresQualified(header.read_text(encoding="utf-8"), components):
+        if declares_qualified(header.read_text(encoding="utf-8"), components):
             return header
     return None
 
 
-def definesMacro(text: str, name: str) -> bool:
+def defines_macro(text: str, name: str) -> bool:
     """Whether the header defines @p name -- `#cmakedefine` included, for a configured header."""
     pattern = rf"^[ \t]*#[ \t]*(?:define|cmakedefine01|cmakedefine)[ \t]+{re.escape(name)}\b"
     return re.search(pattern, _stripped(text), re.MULTILINE) is not None
 
 
-def publicHeaders(root: Path) -> set[str]:
+def public_headers(root: Path) -> set[str]:
     """Every include path a module's `FILE_SET HEADERS` publishes, as `core/<module>/<Header>.hpp`."""
-    sourceRoot = root / "src"
+    source_root = root / "src"
     found: set[str] = set()
-    for listing in sorted((sourceRoot / "core").rglob("CMakeLists.txt")):
+    for listing in sorted((source_root / "core").rglob("CMakeLists.txt")):
         text = listing.read_text(encoding="utf-8")
-        directory = listing.parent.relative_to(sourceRoot).as_posix()
-        variables = _setVariables(text)
+        directory = listing.parent.relative_to(source_root).as_posix()
+        variables = _set_variables(text)
         for call in MODULE_CALL.finditer(text):
             body = _balanced(text, call.end() - 1)
-            for header in _headerTokens(body, variables):
+            for header in _header_tokens(body, variables):
                 found.add(header if header.startswith("core/") else f"{directory}/{header}")
     return found
 
 
-def _setVariables(text: str) -> dict[str, list[str]]:
+def _set_variables(text: str) -> dict[str, list[str]]:
     """Every `set(<var> ...)` of a CMakeLists, so a HEADERS list held in a variable is still read.
 
     A header a module publishes only under an option (`CORE_CPP_WITH_IMAGES`) is public, so every
@@ -173,20 +175,20 @@ def _setVariables(text: str) -> dict[str, list[str]]:
     return variables
 
 
-def _balanced(text: str, openIndex: int) -> str:
-    """The text between the parenthesis at @p openIndex and the one that closes it."""
+def _balanced(text: str, open_index: int) -> str:
+    """The text between the parenthesis at @p open_index and the one that closes it."""
     depth = 0
-    for index in range(openIndex, len(text)):
+    for index in range(open_index, len(text)):
         if text[index] == "(":
             depth += 1
         elif text[index] == ")":
             depth -= 1
             if depth == 0:
-                return text[openIndex + 1 : index]
-    return text[openIndex + 1 :]
+                return text[open_index + 1 : index]
+    return text[open_index + 1 :]
 
 
-def _headerTokens(body: str, variables: dict[str, list[str]]) -> list[str]:
+def _header_tokens(body: str, variables: dict[str, list[str]]) -> list[str]:
     """The tokens of the call's HEADERS section, up to the next all-caps keyword."""
     headers: list[str] = []
     collecting = False
@@ -208,7 +210,7 @@ def _headerTokens(body: str, variables: dict[str, list[str]]) -> list[str]:
     return headers
 
 
-def _headerText(root: Path, header: str) -> str | None:
+def _header_text(root: Path, header: str) -> str | None:
     """The header's text. A configured header (`core/Config.hpp`) is read from its `.in` template,
     which is where it is delivered from: CMake writes the header itself into the build tree."""
     for path in (root / "src" / header, root / "src" / f"{header}.in"):
@@ -217,10 +219,10 @@ def _headerText(root: Path, header: str) -> str | None:
     return None
 
 
-def _checkDelivered(root: Path, row: renames.Row, public: set[str], where: str) -> list[str]:
+def _check_delivered(root: Path, row: renames.Row, public: set[str], where: str) -> list[str]:
     target = row.delivers
     failures: list[str] = []
-    text = _headerText(root, target.header)
+    text = _header_text(root, target.header)
     if text is None:
         return [f"{where}: no such header src/{target.header} for {row.label}"]
     if target.public and target.header not in public:
@@ -237,11 +239,11 @@ def _checkDelivered(root: Path, row: renames.Row, public: set[str], where: str) 
 
     components = target.symbol.split("::")
     if len(components) == 1:
-        if not definesMacro(text, target.symbol):
+        if not defines_macro(text, target.symbol):
             failures.append(f"{where}: src/{target.header} declares no macro {target.symbol}")
         return failures
 
-    namespaces = openNamespaces(text)
+    namespaces = open_namespaces(text)
     for cut in range(len(components) - 1, 0, -1):
         if "::".join(components[:cut]) in namespaces:
             break
@@ -257,11 +259,11 @@ def _checkDelivered(root: Path, row: renames.Row, public: set[str], where: str) 
     return failures
 
 
-def _checkPending(root: Path, row: renames.Row, where: str) -> list[str]:
+def _check_pending(root: Path, row: renames.Row, where: str) -> list[str]:
     target = row.delivers
     if not target or not target.symbol:
         return []
-    header = findSymbol(root, target.symbol)
+    header = find_symbol(root, target.symbol)
     if header is None:
         return []
     return [
@@ -270,9 +272,9 @@ def _checkPending(root: Path, row: renames.Row, where: str) -> list[str]:
     ]
 
 
-def _checkRemoved(root: Path, row: renames.Row, where: str) -> list[str]:
+def _check_removed(root: Path, row: renames.Row, where: str) -> list[str]:
     """The gate run backwards: a symbol core-cpp removed must stay removed (controller ruling R75)."""
-    header = findSymbol(root, row.source)
+    header = find_symbol(root, row.source)
     if header is None:
         return []
     return [
@@ -287,16 +289,16 @@ def validate(root: Path, table: Path) -> list[str]:
         loaded = renames.load(table)
     except renames.TableError as error:
         return [str(error)]
-    public = publicHeaders(root)
+    public = public_headers(root)
     failures: list[str] = []
     for index, row in enumerate(loaded.rows):
         where = f"rows[{index}]"
         if row.kind == "removed":
-            failures += _checkRemoved(root, row, where)
+            failures += _check_removed(root, row, where)
         elif row.status == "pending":
-            failures += _checkPending(root, row, where)
+            failures += _check_pending(root, row, where)
         elif row.delivers is not None:
-            failures += _checkDelivered(root, row, public, where)
+            failures += _check_delivered(root, row, public, where)
     return failures
 
 
@@ -307,7 +309,7 @@ def summarise(root: Path, table: Path) -> Summary:
         validated=len([row for row in loaded.rows if row.status == "delivered" and row.delivers]),
         pending=len([row for row in loaded.rows if row.status == "pending"]),
         removed=len([row for row in loaded.rows if row.kind == "removed"]),
-        headers=len(publicHeaders(root)),
+        headers=len(public_headers(root)),
     )
 
 

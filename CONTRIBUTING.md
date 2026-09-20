@@ -50,17 +50,19 @@ output changes between its releases too:
 python scripts/tool-versions.py --install             # the three pins, from .<tool>-version
 python scripts/clang-format.py                        # format every C++ source
 python scripts/clang-format.py --check                # what CI runs
-python scripts/ruff-format.py                         # format every Python source
-python scripts/ruff-format.py --check                 # what CI runs
+python scripts/python-style.py                        # format every Python source, then lint
+python scripts/python-style.py --check                # what CI runs
 cmake --preset clang-tidy && cmake --build --preset clang-tidy
 ```
 
-`scripts/clang-format.py` and `scripts/ruff-format.py` each refuse any build that is not the pinned
+`scripts/clang-format.py` and `scripts/python-style.py` each refuse any build that is not the pinned
 one. Never format with another version, and never silence a finding with `NOLINT`: fix it.
 
 The Python wraps at the same column as the C++: `ruff.toml`'s `line-length` is `.clang-format`'s
-`ColumnLimit`, so one number governs the repository. Only ruff's formatter is run; its linter is a
-decision nobody has made.
+`ColumnLimit`, so one number governs the repository. `ruff.toml` also states ruff's default lint
+set (`E4`, `E7`, `E9`, `F`) rather than inheriting it, so a future ruff cannot widen or narrow
+the gate by changing its mind about the default. Nothing stylistic is linted: layout is the
+formatter's job. The linter never rewrites -- a finding is for a human to fix.
 
 ## What a change carries
 

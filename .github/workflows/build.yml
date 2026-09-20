@@ -59,13 +59,14 @@ jobs:
         run: python scripts/clang-format.py --check
 
       # The same, for the repository's Python. ruff's formatter output changes between releases, so
-      # scripts/ruff-format.py refuses any build but the pin, and ruff.toml's line length is
-      # .clang-format's ColumnLimit: one number governs both languages.
+      # scripts/python-style.py refuses any build but the pin, runs the formatter and ruff's
+      # default lint set, and takes its line length from .clang-format's ColumnLimit, so one
+      # number governs both languages.
       - name: Install the pinned ruff
         run: python -m pip install "$(python scripts/tool-versions.py | grep '^ruff==')"
 
-      - name: ruff format
-        run: python scripts/ruff-format.py --check
+      - name: Python format and lint
+        run: python scripts/python-style.py --check
 
       # Also namespace = directory: the first named namespace of every source under src/core/.
       - name: CMake and C++ hygiene

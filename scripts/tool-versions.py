@@ -7,7 +7,7 @@ format: `#` comments and `key: value` lines, whose `version:` line names the PyP
 tool (`clang-format`, `clang-tidy`, `ruff`). `.clang-format-version` spells it as the full banner
 (`clang-format version 22.1.8`) because the contour-workflows format-on-edit hook compares that line
 exactly; `.clang-tidy-version` and `.ruff-version` spell the bare number. This script is the one
-reader of all three: scripts/clang-format.py and scripts/ruff-format.py load it for their pin, and CI
+reader of all three: scripts/clang-format.py and scripts/python-style.py load it for their pin, and CI
 installs the tools through it.
 
 A tool belongs here when the *tree* is held to its version -- when two releases of it disagree about

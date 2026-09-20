@@ -75,7 +75,7 @@ class Row:
             else f"{self.kind} {self.source} -> {self.target}"
         )
 
-    def appliesTo(self, profile: str) -> bool:
+    def applies_to(self, profile: str) -> bool:
         return profile in self.profiles
 
 
@@ -84,18 +84,18 @@ class Table:
     profiles: dict[str, str]
     rows: list[Row] = field(default_factory=list)
 
-    def textRows(self, profile: str) -> list[Row]:
+    def text_rows(self, profile: str) -> list[Row]:
         """The rows rewrite.py applies for @p profile, most specific source first."""
         if profile not in self.profiles:
             raise TableError(f"unknown profile '{profile}'; the table has {', '.join(sorted(self.profiles))}")
-        rows = [row for row in self.rows if row.apply == "text" and row.appliesTo(profile)]
+        rows = [row for row in self.rows if row.apply == "text" and row.applies_to(profile)]
         return sorted(rows, key=lambda row: (KINDS.index(row.kind), -len(row.source), row.source))
 
-    def semanticRows(self, profile: str) -> list[Row]:
+    def semantic_rows(self, profile: str) -> list[Row]:
         """The rows semantic_rename.py owns for @p profile."""
         if profile not in self.profiles:
             raise TableError(f"unknown profile '{profile}'; the table has {', '.join(sorted(self.profiles))}")
-        return [row for row in self.rows if row.apply == "semantic" and row.appliesTo(profile)]
+        return [row for row in self.rows if row.apply == "semantic" and row.applies_to(profile)]
 
 
 def _target(raw: object, where: str) -> Target | None:
@@ -140,10 +140,10 @@ def _row(raw: object, index: int, profiles: dict[str, str]) -> Row:
         raise TableError(f"{where}: a removed row has no 'to': core-cpp has no such symbol to rename to")
     target = target or ""
 
-    rowProfiles = raw.get("profiles")
-    if not isinstance(rowProfiles, list) or not rowProfiles:
+    row_profiles = raw.get("profiles")
+    if not isinstance(row_profiles, list) or not row_profiles:
         raise TableError(f"{where}: 'profiles' must be a non-empty list")
-    for name in rowProfiles:
+    for name in row_profiles:
         if name not in profiles:
             declared = ", ".join(sorted(profiles))
             raise TableError(f"{where}: unknown profile '{name}'; the table declares {declared}")
@@ -193,7 +193,7 @@ def _row(raw: object, index: int, profiles: dict[str, str]) -> Row:
         kind=kind,
         source=source,
         target=target,
-        profiles=tuple(rowProfiles),
+        profiles=tuple(row_profiles),
         apply=apply,
         status=status,
         task=task,
@@ -219,11 +219,11 @@ def load(path: Path) -> Table:
     profiles = raw.get("profiles")
     if not isinstance(profiles, dict) or not profiles:
         raise TableError(f"{path}: 'profiles' maps every consumer profile to what it covers")
-    rawRows = raw.get("rows")
-    if not isinstance(rawRows, list) or not rawRows:
+    raw_rows = raw.get("rows")
+    if not isinstance(raw_rows, list) or not raw_rows:
         raise TableError(f"{path}: 'rows' is a non-empty list")
 
-    rows = [_row(entry, index, profiles) for index, entry in enumerate(rawRows)]
+    rows = [_row(entry, index, profiles) for index, entry in enumerate(raw_rows)]
 
     seen: dict[tuple[str, str, str], int] = {}
     for index, row in enumerate(rows):

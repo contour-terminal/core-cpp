@@ -32,7 +32,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import renames
-from renames import Row, TableError  # noqa: F401  (Row is this module's public vocabulary too)
+from renames import Row, TableError
 
 TABLE = Path(__file__).resolve().parent / "renames.json"
 
@@ -52,18 +52,20 @@ class Edit:
 
 
 @lru_cache(maxsize=1)
-def bindingsAvailable() -> bool:
+def bindings_available() -> bool:
     """Whether `clang.cindex` imports *and* finds its native library."""
     try:
         from clang import cindex
 
         cindex.Index.create()
         return True
-    except Exception:  # noqa: BLE001 -- any failure here means "not usable", and the caller says so
+    # Any failure here -- a missing module, a missing native library, a broken install -- means
+    # the bindings are not usable, which is the one thing the caller needs to know.
+    except Exception:
         return False
 
 
-def _cursorKinds():
+def _cursor_kinds():
     from clang.cindex import CursorKind
 
     return {
@@ -86,7 +88,7 @@ def _cursorKinds():
     }
 
 
-def qualifiedName(cursor) -> str:
+def qualified_name(cursor) -> str:
     """`FastCache::ISocket::Read` for a method cursor: every named semantic parent, outermost first."""
     from clang.cindex import CursorKind
 
@@ -99,7 +101,7 @@ def qualifiedName(cursor) -> str:
     return "::".join(reversed(parts))
 
 
-def compileCommands(database: Path) -> list[tuple[Path, Path, list[str]]]:
+def compile_commands(database: Path) -> list[tuple[Path, Path, list[str]]]:
     """Reads a compile database into (working directory, source file, parse arguments) triples."""
     entries = json.loads(database.read_text(encoding="utf-8"))
     commands: list[tuple[Path, Path, list[str]]] = []
@@ -109,11 +111,11 @@ def compileCommands(database: Path) -> list[tuple[Path, Path, list[str]]]:
         if not source.is_absolute():
             source = directory / source
         words = entry["arguments"] if "arguments" in entry else shlex.split(entry["command"], posix=False)
-        commands.append((directory, source.resolve(), _parseArguments(words[1:], source)))
+        commands.append((directory, source.resolve(), _parse_arguments(words[1:], source)))
     return commands
 
 
-def _parseArguments(words: list[str], source: Path) -> list[str]:
+def _parse_arguments(words: list[str], source: Path) -> list[str]:
     arguments: list[str] = []
     skip = False
     for word in words:
@@ -132,7 +134,7 @@ def _parseArguments(words: list[str], source: Path) -> list[str]:
     return arguments
 
 
-def _isUnder(path: Path, roots: list[Path]) -> bool:
+def _is_under(path: Path, roots: list[Path]) -> bool:
     try:
         resolved = path.resolve()
     except OSError:
@@ -140,35 +142,35 @@ def _isUnder(path: Path, roots: list[Path]) -> bool:
     return any(resolved == root or resolved.is_relative_to(root) for root in roots)
 
 
-def collectEdits(databases: list[Path], declPaths: list[Path], rows: list[Row]) -> dict[Path, list[Edit]]:
+def collect_edits(databases: list[Path], decl_paths: list[Path], rows: list[Row]) -> dict[Path, list[Edit]]:
     """Unions the edits @p rows imply over every translation unit of every @p databases entry."""
-    if not bindingsAvailable():
+    if not bindings_available():
         raise TableError("libclang's Python bindings are missing: python -m pip install libclang")
     from clang.cindex import Index
 
-    byScope = {(row.scope, row.source): row for row in rows}
-    roots = [path.resolve() for path in declPaths]
-    kinds = _cursorKinds()
+    by_scope = {(row.scope, row.source): row for row in rows}
+    roots = [path.resolve() for path in decl_paths]
+    kinds = _cursor_kinds()
     index = Index.create()
     found: dict[Path, set[Edit]] = {}
     contents: dict[Path, bytes] = {}
 
     for database in databases:
-        for directory, source, arguments in compileCommands(database):
+        for directory, source, arguments in compile_commands(database):
             unit = index.parse(str(source), args=[f"-working-directory={directory}", *arguments])
             for cursor in _walk(unit.cursor):
                 if cursor.kind not in kinds:
                     continue
                 declaration = cursor.referenced or cursor
-                if declaration.spelling not in {row.source for _, row in byScope.items()}:
+                if declaration.spelling not in {row.source for _, row in by_scope.items()}:
                     continue
                 location = declaration.location.file
-                if location is None or not _isUnder(Path(location.name), roots):
+                if location is None or not _is_under(Path(location.name), roots):
                     continue
-                row = byScope.get((qualifiedName(declaration.semantic_parent), declaration.spelling))
+                row = by_scope.get((qualified_name(declaration.semantic_parent), declaration.spelling))
                 if row is None:
                     continue
-                edit = _editAt(cursor, row, contents)
+                edit = _edit_at(cursor, row, contents)
                 if edit is not None:
                     found.setdefault(Path(cursor.location.file.name).resolve(), set()).add(edit)
 
@@ -181,7 +183,7 @@ def _walk(cursor):
         yield from _walk(child)
 
 
-def _editAt(cursor, row: Row, contents: dict[Path, bytes]) -> Edit | None:
+def _edit_at(cursor, row: Row, contents: dict[Path, bytes]) -> Edit | None:
     """The edit at @p cursor, or None where the bytes there are not the token the row renames."""
     path = Path(cursor.location.file.name).resolve()
     if path not in contents:
@@ -193,18 +195,18 @@ def _editAt(cursor, row: Row, contents: dict[Path, bytes]) -> Edit | None:
     return Edit(offset=offset, length=len(expected), replacement=row.target.encode("utf-8"), label=row.label)
 
 
-def applyEdits(edits: dict[Path, list[Edit]], dryRun: bool = False) -> int:
+def apply_edits(edits: dict[Path, list[Edit]], dry_run: bool = False) -> int:
     """Applies every edit, back to front within each file so earlier offsets stay valid."""
     total = 0
-    for path, fileEdits in sorted(edits.items()):
+    for path, file_edits in sorted(edits.items()):
         data = path.read_bytes()
-        for edit in sorted(fileEdits, key=lambda item: item.offset, reverse=True):
+        for edit in sorted(file_edits, key=lambda item: item.offset, reverse=True):
             data = data[: edit.offset] + edit.replacement + data[edit.offset + edit.length :]
-        total += len(fileEdits)
-        print(f"{path}: {len(fileEdits)} edit(s)")
-        for label in sorted({edit.label for edit in fileEdits}):
-            print(f"    {len([e for e in fileEdits if e.label == label]):5d}  {label}")
-        if not dryRun:
+        total += len(file_edits)
+        print(f"{path}: {len(file_edits)} edit(s)")
+        for label in sorted({edit.label for edit in file_edits}):
+            print(f"    {len([e for e in file_edits if e.label == label]):5d}  {label}")
+        if not dry_run:
             path.write_bytes(data)
     return total
 
@@ -224,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="report what would change and write nothing")
     arguments = parser.parse_args(argv)
 
-    if not bindingsAvailable():
+    if not bindings_available():
         print(
             "semantic_rename: libclang's Python bindings are missing, so nothing was checked and "
             f"nothing was rewritten. Install them with: {sys.executable} -m pip install libclang"
@@ -232,7 +234,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        rows = renames.load(arguments.table).semanticRows(arguments.profile)
+        rows = renames.load(arguments.table).semantic_rows(arguments.profile)
     except TableError as error:
         print(f"semantic_rename: {error}")
         return 1
@@ -240,8 +242,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"semantic_rename: profile '{arguments.profile}' has no semantic rows")
         return 0
 
-    edits = collectEdits(arguments.compile_db, arguments.decl_paths, rows)
-    total = applyEdits(edits, arguments.dry_run)
+    edits = collect_edits(arguments.compile_db, arguments.decl_paths, rows)
+    total = apply_edits(edits, arguments.dry_run)
     verb = "would apply" if arguments.dry_run else "applied"
     print(
         f"semantic_rename --profile {arguments.profile}: {verb} {total} edit(s) in {len(edits)} file(s), "

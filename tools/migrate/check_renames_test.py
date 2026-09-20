@@ -21,7 +21,7 @@ REPOSITORY_ROOT = HERE.parent.parent
 TABLE = HERE / "renames.json"
 
 
-def loadChecker():
+def load_checker():
     """Loads check-renames.py, whose name is not an identifier, the way a ctest invokes it: by path."""
     spec = importlib.util.spec_from_file_location("check_renames", HERE / "check-renames.py")
     module = importlib.util.module_from_spec(spec)
@@ -30,7 +30,7 @@ def loadChecker():
     return module
 
 
-check = loadChecker()
+check = load_checker()
 
 
 class TheDeliveredTableValidates(unittest.TestCase):
@@ -86,28 +86,28 @@ class TheGateRefusesDrift(unittest.TestCase):
         "target": {"header": "core/net/EventLoop.hpp", "symbol": "core::net::EventLoop"},
     }
 
-    def refusalFor(self, row: dict) -> str:
+    def refusal_for(self, row: dict) -> str:
         with TemporaryDirectory() as directory:
             sandbox = ASandbox(directory)
             failures = check.validate(sandbox.root, sandbox.write([row]))
             return "\n".join(failures)
 
     def test_it_accepts_a_row_whose_target_is_delivered(self) -> None:
-        self.assertEqual(self.refusalFor(self.GOOD), "")
+        self.assertEqual(self.refusal_for(self.GOOD), "")
 
     def test_it_refuses_a_target_header_that_does_not_exist(self) -> None:
         row = self.GOOD | {"target": {"header": "core/net/Gone.hpp", "symbol": "core::net::EventLoop"}}
-        self.assertIn("core/net/Gone.hpp", self.refusalFor(row))
-        self.assertIn("no such header", self.refusalFor(row))
+        self.assertIn("core/net/Gone.hpp", self.refusal_for(row))
+        self.assertIn("no such header", self.refusal_for(row))
 
     def test_it_refuses_a_symbol_the_header_does_not_declare(self) -> None:
         row = self.GOOD | {"target": {"header": "core/net/EventLoop.hpp", "symbol": "core::net::IoBackend"}}
-        self.assertIn("IoBackend", self.refusalFor(row))
-        self.assertIn("declares no", self.refusalFor(row))
+        self.assertIn("IoBackend", self.refusal_for(row))
+        self.assertIn("declares no", self.refusal_for(row))
 
     def test_it_refuses_a_symbol_in_a_namespace_the_header_does_not_open(self) -> None:
         row = self.GOOD | {"target": {"header": "core/net/EventLoop.hpp", "symbol": "core::tui::EventLoop"}}
-        self.assertIn("core::tui", self.refusalFor(row))
+        self.assertIn("core::tui", self.refusal_for(row))
 
     def test_it_refuses_a_public_target_that_is_in_no_file_set(self) -> None:
         with TemporaryDirectory() as directory:
@@ -305,7 +305,7 @@ class ARemovedRowIsAnInverseGate(unittest.TestCase):
 
 
 class TheSchemaIsChecked(unittest.TestCase):
-    def loadOne(self, row: dict) -> None:
+    def load_one(self, row: dict) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "renames.json"
             path.write_text(
@@ -315,21 +315,21 @@ class TheSchemaIsChecked(unittest.TestCase):
 
     def test_an_unknown_kind_is_refused(self) -> None:
         with self.assertRaisesRegex(renames.TableError, "kind"):
-            self.loadOne({"kind": "sideways", "from": "a", "to": "b", "profiles": ["contour"]})
+            self.load_one({"kind": "sideways", "from": "a", "to": "b", "profiles": ["contour"]})
 
     def test_an_unknown_profile_is_refused(self) -> None:
         with self.assertRaisesRegex(renames.TableError, "profile"):
-            self.loadOne({"kind": "namespace", "from": "a", "to": "b", "profiles": ["nosuch"]})
+            self.load_one({"kind": "namespace", "from": "a", "to": "b", "profiles": ["nosuch"]})
 
     def test_a_pending_row_without_a_task_is_refused(self) -> None:
         with self.assertRaisesRegex(renames.TableError, "task"):
-            self.loadOne(
+            self.load_one(
                 {"kind": "namespace", "from": "a", "to": "b", "profiles": ["contour"], "status": "pending"}
             )
 
     def test_a_semantic_row_without_a_scope_is_refused(self) -> None:
         with self.assertRaisesRegex(renames.TableError, "scope"):
-            self.loadOne(
+            self.load_one(
                 {"kind": "member", "from": "Read", "to": "read", "profiles": ["contour"], "apply": "semantic"}
             )
 
@@ -346,7 +346,7 @@ class TheSchemaIsChecked(unittest.TestCase):
 
     def test_a_removed_row_that_claims_to_be_rewritten_is_refused(self) -> None:
         with self.assertRaisesRegex(renames.TableError, "never rewritten"):
-            self.loadOne(
+            self.load_one(
                 {
                     "kind": "removed",
                     "from": "core::tui::LanguageId::Endo",
@@ -358,7 +358,7 @@ class TheSchemaIsChecked(unittest.TestCase):
 
     def test_a_removed_row_that_names_a_target_is_refused(self) -> None:
         with self.assertRaisesRegex(renames.TableError, "names no 'target'"):
-            self.loadOne(
+            self.load_one(
                 {
                     "kind": "removed",
                     "from": "core::tui::LanguageId::Endo",
@@ -370,7 +370,7 @@ class TheSchemaIsChecked(unittest.TestCase):
 
     def test_a_removed_row_without_a_note_is_refused(self) -> None:
         with self.assertRaisesRegex(renames.TableError, "note"):
-            self.loadOne({"kind": "removed", "from": "core::tui::LanguageId::Endo", "profiles": ["contour"]})
+            self.load_one({"kind": "removed", "from": "core::tui::LanguageId::Endo", "profiles": ["contour"]})
 
     def test_the_real_table_loads(self) -> None:
         table = renames.load(TABLE)

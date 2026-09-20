@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Formats core-cpp's Python with the pinned ruff, or checks that it is formatted.
+"""Holds core-cpp's Python to the pinned ruff: formats it, and lints it.
 
-    python scripts/ruff-format.py                    # rewrites every Python source in place
-    python scripts/ruff-format.py --check            # fails, naming each file, unless all are formatted
-    python scripts/ruff-format.py --binary <path>    # uses this ruff, which must be the pin
+    python scripts/python-style.py                    # formats every Python source in place, then lints
+    python scripts/python-style.py --check            # fails, naming each file, unless all are clean
+    python scripts/python-style.py --binary <path>    # uses this ruff, which must be the pin
 
-The file is `ruff-format.py`, not `ruff.py`, for the same reason its neighbour is
-`clang-format.py`: a module named `ruff.py` on sys.path shadows the `ruff` package this very script
-imports to find the pinned binary, and the failure reads as "no ruff found" on a machine that has it.
+Both halves run and both report before either fails, so one run tells you everything: `ruff format`
+for layout, and `ruff check` for ruff's default rule set, which `ruff.toml` states -- undefined
+names, unused imports, import and statement errors. Nothing stylistic; layout is the formatter's
+job. The linter never rewrites, here or anywhere: a finding is for a human to fix.
+
+It is `python-style.py` rather than `ruff.py` for two reasons. A module named `ruff.py` on sys.path
+shadows the `ruff` package this very script imports to find the pinned binary, and the failure then
+reads as "no ruff found" on a machine that has it -- which is how the name was chosen the first
+time. And the job is wider than any one subcommand, so the file is named for what it holds rather
+than for which of ruff's modes it happens to call.
 
 Which ruff runs: --binary, else $RUFF, else the one the pinned PyPI package installed
 (python scripts/tool-versions.py --install), else the first on PATH. Whichever it is must report
@@ -18,10 +25,7 @@ reason scripts/clang-format.py refuses every clang-format but the pin.
 
 The files are every `*.py` git knows about, tracked or not yet added, minus what .gitignore excludes,
 which today is `scripts/` and `tools/` and tomorrow is wherever the next one lands. How they are
-formatted is ruff.toml, whose line length is .clang-format's ColumnLimit.
-
-This is the formatter alone. ruff's linter (`ruff check`) is not run: enabling a rule set is a
-decision of its own, and one nobody has made.
+formatted and what is linted is ruff.toml, whose line length is .clang-format's ColumnLimit.
 """
 
 from __future__ import annotations
@@ -105,14 +109,14 @@ def main() -> int:
     binary = find_binary(arguments.binary)
     if binary is None:
         print(
-            f"ruff-format.py: no ruff found; install the pinned {pin} with: python scripts/tool-versions.py --install",
+            f"python-style.py: no ruff found; install the pinned {pin} with: python scripts/tool-versions.py --install",
             file=sys.stderr,
         )
         return 2
     version = version_of(binary)
     if version != pin:
         print(
-            f"ruff-format.py: {binary} is ruff {version or '(unknown version)'}, but .ruff-version pins {pin}. "
+            f"python-style.py: {binary} is ruff {version or '(unknown version)'}, but .ruff-version pins {pin}. "
             "Install the pin with: python scripts/tool-versions.py --install",
             file=sys.stderr,
         )
@@ -120,21 +124,27 @@ def main() -> int:
 
     files = arguments.paths or sources()
     if not files:
-        print("ruff-format.py: no Python sources found", file=sys.stderr)
+        print("python-style.py: no Python sources found", file=sys.stderr)
         return 2
 
+    # Both halves run before either decides the exit status, so one invocation reports everything
+    # that is wrong rather than the first thing.
     mode = ["--check"] if arguments.check else []
-    failed = subprocess.call([binary, "format", *mode, "--", *files], cwd=REPOSITORY_ROOT) != 0
+    unformatted = subprocess.call([binary, "format", *mode, "--", *files], cwd=REPOSITORY_ROOT) != 0
+    # Never `--fix`: a lint finding is for a human. The formatter is the only half that writes.
+    linted = subprocess.call([binary, "check", "--", *files], cwd=REPOSITORY_ROOT) != 0
 
-    if failed and arguments.check:
+    if unformatted and arguments.check:
         print(
-            "ruff-format.py: the files above are not formatted; run: python scripts/ruff-format.py",
+            "python-style.py: the files above are not formatted; run: python scripts/python-style.py",
             file=sys.stderr,
         )
-    elif not failed:
-        verb = "are formatted" if arguments.check else "formatted"
-        print(f"ruff-format.py: {len(files)} file(s) {verb} with ruff {version}")
-    return 1 if failed else 0
+    if linted:
+        print("python-style.py: the findings above are lint, not layout; fix them by hand", file=sys.stderr)
+    if not unformatted and not linted:
+        verb = "are formatted and lint clean" if arguments.check else "formatted, and lint clean"
+        print(f"python-style.py: {len(files)} file(s) {verb} with ruff {version}")
+    return 1 if (unformatted or linted) else 0
 
 
 if __name__ == "__main__":

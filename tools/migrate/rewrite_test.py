@@ -20,8 +20,8 @@ import rewrite
 TABLE = Path(__file__).resolve().parent / "renames.json"
 
 
-def rowsFor(profile: str) -> list[renames.Row]:
-    return renames.load(TABLE).textRows(profile)
+def rows_for(profile: str) -> list[renames.Row]:
+    return renames.load(TABLE).text_rows(profile)
 
 
 class RewriteIsIdempotent(unittest.TestCase):
@@ -51,25 +51,25 @@ coro::Task<void> serve(net::EventLoop& loop, net::IListener& listener)
 """
 
     def test_a_second_run_changes_nothing(self) -> None:
-        rows = rowsFor("contour")
-        once, firstReport = rewrite.rewriteText(self.FIXTURE, rows)
-        twice, secondReport = rewrite.rewriteText(once, rows)
+        rows = rows_for("contour")
+        once, first_report = rewrite.rewrite_text(self.FIXTURE, rows)
+        twice, second_report = rewrite.rewrite_text(once, rows)
         self.assertNotEqual(once, self.FIXTURE, "the first run must change the fixture")
         self.assertEqual(twice, once, "the second run must change nothing")
-        self.assertEqual(sum(secondReport.values()), 0, f"second run still applied {secondReport}")
+        self.assertEqual(sum(second_report.values()), 0, f"second run still applied {second_report}")
 
     def test_the_fixture_exercises_every_category(self) -> None:
-        _, report = rewrite.rewriteText(self.FIXTURE, rowsFor("contour"))
+        _, report = rewrite.rewrite_text(self.FIXTURE, rows_for("contour"))
         kinds = {row.kind for row, count in report.items() if count}
         self.assertEqual(kinds, {"include", "namespace", "symbol", "member", "macro"}, f"applied: {report}")
 
     def test_a_half_converted_tree_converges(self) -> None:
         """A tree where somebody already ran the tool over half the files is a tree it must accept."""
-        rows = rowsFor("contour")
-        converted, _ = rewrite.rewriteText(self.FIXTURE, rows)
+        rows = rows_for("contour")
+        converted, _ = rewrite.rewrite_text(self.FIXTURE, rows)
         mixed = converted + "\n" + self.FIXTURE
-        once, _ = rewrite.rewriteText(mixed, rows)
-        twice, report = rewrite.rewriteText(once, rows)
+        once, _ = rewrite.rewrite_text(mixed, rows)
+        twice, report = rewrite.rewrite_text(once, rows)
         self.assertEqual(twice, once)
         self.assertEqual(sum(report.values()), 0)
         self.assertEqual(once, converted + "\n" + converted)
@@ -79,7 +79,7 @@ class TheCliTypesAreRenamed(unittest.TestCase):
     """The map is not a namespace prefix swap: tuidu's snapshot spells the cli types in another case."""
 
     def test_crispy_cli_command_becomes_core_cli_Command(self) -> None:
-        result, _ = rewrite.rewriteText("auto c = crispy::cli::command {};\n", rowsFor("tuidu"))
+        result, _ = rewrite.rewrite_text("auto c = crispy::cli::command {};\n", rows_for("tuidu"))
         self.assertEqual(result, "auto c = core::cli::Command {};\n")
 
     def test_every_drifted_cli_type_has_a_row(self) -> None:
@@ -97,11 +97,11 @@ class TheCliTypesAreRenamed(unittest.TestCase):
             ("cli::helpDisplayStyle", "core::cli::HelpDisplayStyle"),
         ]:
             with self.subTest(source=source):
-                result, _ = rewrite.rewriteText(f"x({source});\n", rowsFor("tuidu"))
+                result, _ = rewrite.rewrite_text(f"x({source});\n", rows_for("tuidu"))
                 self.assertEqual(result, f"x({expected});\n")
 
     def test_a_cli_name_that_did_not_drift_is_left_alone(self) -> None:
-        result, _ = rewrite.rewriteText("cli::parse(x);\ncli::helpText(y);\n", rowsFor("tuidu"))
+        result, _ = rewrite.rewrite_text("cli::parse(x);\ncli::helpText(y);\n", rows_for("tuidu"))
         self.assertEqual(result, "cli::parse(x);\ncli::helpText(y);\n")
 
 
@@ -109,63 +109,63 @@ class TheNamespaceRegexIsAnchored(unittest.TestCase):
     """`net::` is the single most dangerous row in the map; every neighbour of it is a case here."""
 
     def test_std_net_is_untouched(self) -> None:
-        result, _ = rewrite.rewriteText("std::net::Socket s;\n", rowsFor("contour"))
+        result, _ = rewrite.rewrite_text("std::net::Socket s;\n", rows_for("contour"))
         self.assertEqual(result, "std::net::Socket s;\n")
 
     def test_another_projects_net_is_untouched(self) -> None:
-        result, _ = rewrite.rewriteText("endo::net::Thing t;\n", rowsFor("contour"))
+        result, _ = rewrite.rewrite_text("endo::net::Thing t;\n", rows_for("contour"))
         self.assertEqual(result, "endo::net::Thing t;\n")
 
     def test_a_namespace_ending_in_net_is_untouched(self) -> None:
-        result, _ = rewrite.rewriteText("mynet::Thing t;\nSUBNET::x;\n", rowsFor("contour"))
+        result, _ = rewrite.rewrite_text("mynet::Thing t;\nSUBNET::x;\n", rows_for("contour"))
         self.assertEqual(result, "mynet::Thing t;\nSUBNET::x;\n")
 
     def test_a_string_literal_is_data_and_is_left_alone(self) -> None:
         source = 'auto const s = "net::EventLoop";\nauto const r = R"(net::x)";\nchar const c = \'n\';\n'
-        result, _ = rewrite.rewriteText(source, rowsFor("contour"))
+        result, _ = rewrite.rewrite_text(source, rows_for("contour"))
         self.assertEqual(result, source, "a codemod may change what the code says, never what it sends")
 
     def test_a_comment_follows_the_code_it_documents(self) -> None:
         source = "// net::EventLoop drives it.\n/* net::ISocket too. */\nnet::EventLoop loop;\n"
-        result, _ = rewrite.rewriteText(source, rowsFor("contour"))
+        result, _ = rewrite.rewrite_text(source, rows_for("contour"))
         self.assertEqual(
             result,
             "// core::net::EventLoop drives it.\n/* core::net::ISocket too. */\ncore::net::EventLoop loop;\n",
         )
 
     def test_the_bare_namespace_is_rewritten(self) -> None:
-        result, _ = rewrite.rewriteText("net::EventLoop loop;\ncoro::Task<int> t;\n", rowsFor("contour"))
+        result, _ = rewrite.rewrite_text("net::EventLoop loop;\ncoro::Task<int> t;\n", rows_for("contour"))
         self.assertEqual(result, "core::net::EventLoop loop;\ncore::async::Task<int> t;\n")
 
     def test_a_namespace_definition_is_left_to_a_human(self) -> None:
         # `namespace net { ... }` in a consumer may be its own namespace; the plan lists these as
         # hand edits. Only `using namespace` and qualified uses are mechanical.
         source = "namespace net\n{\nstruct Thing {};\n}\n"
-        result, _ = rewrite.rewriteText(source, rowsFor("contour"))
+        result, _ = rewrite.rewrite_text(source, rows_for("contour"))
         self.assertEqual(result, source)
 
     def test_a_using_directive_is_rewritten(self) -> None:
-        result, _ = rewrite.rewriteText("using namespace coro;\n", rowsFor("contour"))
+        result, _ = rewrite.rewrite_text("using namespace coro;\n", rows_for("contour"))
         self.assertEqual(result, "using namespace core::async;\n")
 
 
 class ProfilesSelectRows(unittest.TestCase):
     def test_endo_has_no_crispy_cli_type_rows(self) -> None:
-        result, _ = rewrite.rewriteText("cli::command c;\n", rowsFor("endo"))
+        result, _ = rewrite.rewrite_text("cli::command c;\n", rows_for("endo"))
         self.assertEqual(result, "cli::command c;\n", "the PascalCase drift is tuidu's snapshot alone")
 
     def test_fastcached_rewrites_its_own_includes_only(self) -> None:
         source = "#include <FastCache/Core/Profiling.hpp>\n#include <crispy/CLI.hpp>\n"
-        result, _ = rewrite.rewriteText(source, rowsFor("fastcached"))
+        result, _ = rewrite.rewrite_text(source, rows_for("fastcached"))
         self.assertEqual(result, "#include <core/Profiling.hpp>\n#include <crispy/CLI.hpp>\n")
 
     def test_an_unknown_profile_is_refused(self) -> None:
         with self.assertRaises(renames.TableError):
-            rowsFor("nosuchconsumer")
+            rows_for("nosuchconsumer")
 
     def test_a_semantic_row_is_not_applied_textually(self) -> None:
         # `Read` is far too common a word to rewrite by text; semantic_rename.py owns those rows.
-        result, _ = rewrite.rewriteText("sock.Read(buffer);\n", rowsFor("fastcached"))
+        result, _ = rewrite.rewrite_text("sock.Read(buffer);\n", rows_for("fastcached"))
         self.assertEqual(result, "sock.Read(buffer);\n")
 
 
@@ -182,8 +182,8 @@ class ARemovedRowCanNeverBeARewriteSource(unittest.TestCase):
         self.assertTrue([row for row in table.rows if row.kind == "removed"], "the table has no removed row")
         for profile in table.profiles:
             with self.subTest(profile=profile):
-                kinds = {row.kind for row in table.textRows(profile)} | {
-                    row.kind for row in table.semanticRows(profile)
+                kinds = {row.kind for row in table.text_rows(profile)} | {
+                    row.kind for row in table.semantic_rows(profile)
                 }
                 self.assertNotIn("removed", kinds)
 
@@ -191,13 +191,13 @@ class ARemovedRowCanNeverBeARewriteSource(unittest.TestCase):
         source = "auto id = core::tui::LanguageId::Endo;\ncore::tui::registerEndoHighlighter(f);\n"
         for profile in ("contour", "endo", "tuidu", "fastcached"):
             with self.subTest(profile=profile):
-                result, _ = rewrite.rewriteText(source, rowsFor(profile))
+                result, _ = rewrite.rewrite_text(source, rows_for(profile))
                 self.assertEqual(result, source)
 
     def test_building_a_pattern_for_a_removed_row_raises(self) -> None:
         row = renames.Row(kind="removed", source="core::tui::LanguageId::Endo", target="", profiles=("endo",))
         with self.assertRaises(renames.TableError):
-            rewrite._patternsFor(row)
+            rewrite._patterns_for(row)
 
 
 class TheToolReportsAndStaysInsideItsPath(unittest.TestCase):
@@ -272,18 +272,18 @@ class TheIncludeMapIsExplicit(unittest.TestCase):
     """endo keeps half of `<platform/...>`; a prefix rule would move the half that stays."""
 
     def test_a_header_core_cpp_delivers_moves(self) -> None:
-        result, _ = rewrite.rewriteText("#include <platform/Wakeup.hpp>\n", rowsFor("endo"))
+        result, _ = rewrite.rewrite_text("#include <platform/Wakeup.hpp>\n", rows_for("endo"))
         self.assertEqual(result, "#include <core/platform/Wakeup.hpp>\n")
 
     def test_a_header_that_stays_in_endo_does_not_move(self) -> None:
         for header in ["platform/Process.hpp", "platform/Pipe.hpp", "platform/InstallPaths.hpp"]:
             with self.subTest(header=header):
                 source = f"#include <{header}>\n"
-                result, _ = rewrite.rewriteText(source, rowsFor("endo"))
+                result, _ = rewrite.rewrite_text(source, rows_for("endo"))
                 self.assertEqual(result, source)
 
     def test_the_quoted_form_is_rewritten_too(self) -> None:
-        result, _ = rewrite.rewriteText('#include "coro/Task.hpp"\n', rowsFor("endo"))
+        result, _ = rewrite.rewrite_text('#include "coro/Task.hpp"\n', rows_for("endo"))
         self.assertEqual(result, "#include <core/async/Task.hpp>\n")
 
 

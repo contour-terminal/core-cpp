@@ -10,3 +10,18 @@ line-length = 110
 # The floor every environment that runs this meets: CI's Python is 3.12, and the developer machines
 # are newer. It is not a claim that the code runs on anything older, because nothing tests that.
 target-version = "py312"
+
+[lint]
+# ruff's own default set, stated rather than inherited so that a future ruff cannot widen or narrow
+# this repository's gate by changing its mind about the default (controller ruling R78):
+#
+#   E4  imports          (a second import of the same module, an import not at the top of the file)
+#   E7  statements       (a comparison to True/None with ==, an ambiguous name, a bare `l`)
+#   E9  syntax/IO errors (a file ruff could not parse at all)
+#   F   pyflakes         (an undefined name, an unused import, an f-string with no placeholder)
+#
+# Nothing stylistic: layout is the formatter's job, and a rule set curated by taste is a decision
+# nobody has made. What this buys over the formatter alone is the class that actually breaks a
+# codemod in a consumer's tree -- an undefined name after a rename, an import that no longer
+# resolves -- which a formatter reads straight past.
+select = ["E4", "E7", "E9", "F"]

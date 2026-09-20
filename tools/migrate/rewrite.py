@@ -21,7 +21,7 @@ Two deliberate boundaries:
 What the tool cannot decide is in the table as an `apply` of `semantic` (semantic_rename.py owns it)
 or `manual` (a human does), and neither is touched here. Nor is a row of kind `removed`, which names
 a symbol core-cpp deleted: there is nothing to rename it to, so rewriting it would produce code that
-cannot compile. `renames.py` refuses to hand one to a rewrite tool and `_patternsFor` raises on one,
+cannot compile. `renames.py` refuses to hand one to a rewrite tool and `_patterns_for` raises on one,
 so it is structurally impossible rather than a convention somebody remembers.
 """
 
@@ -55,7 +55,7 @@ LITERAL = re.compile(
 PLACEHOLDER = re.compile("\x00(\\d+)\x00")
 
 
-def _patternsFor(row: Row) -> list[tuple[re.Pattern[str], str]]:
+def _patterns_for(row: Row) -> list[tuple[re.Pattern[str], str]]:
     """The anchored pattern(s) a row is applied with, and their replacements."""
     source = re.escape(row.source)
     if row.kind == "include":
@@ -77,7 +77,7 @@ def _patternsFor(row: Row) -> list[tuple[re.Pattern[str], str]]:
     raise TableError(f"no pattern for kind '{row.kind}'")
 
 
-def _maskLiterals(text: str) -> tuple[str, list[str]]:
+def _mask_literals(text: str) -> tuple[str, list[str]]:
     """Replaces every string and character literal with a placeholder no rename pattern can match."""
     literals: list[str] = []
 
@@ -88,27 +88,27 @@ def _maskLiterals(text: str) -> tuple[str, list[str]]:
     return LITERAL.sub(keep, text), literals
 
 
-def _unmaskLiterals(text: str, literals: list[str]) -> str:
+def _unmask_literals(text: str, literals: list[str]) -> str:
     return PLACEHOLDER.sub(lambda match: literals[int(match.group(1))], text)
 
 
-def rewriteText(text: str, rows: list[Row]) -> tuple[str, Counter[Row]]:
+def rewrite_text(text: str, rows: list[Row]) -> tuple[str, Counter[Row]]:
     """Applies @p rows to @p text, returning the result and how often each row fired."""
     applied: Counter[Row] = Counter()
 
     # Includes first, on the raw text: the quoted form of the directive is not a string literal.
     for row in (row for row in rows if row.kind == "include"):
-        for pattern, replacement in _patternsFor(row):
+        for pattern, replacement in _patterns_for(row):
             text, count = pattern.subn(replacement, text)
             applied[row] += count
 
-    masked, literals = _maskLiterals(text)
+    masked, literals = _mask_literals(text)
     for row in (row for row in rows if row.kind != "include"):
-        for pattern, replacement in _patternsFor(row):
+        for pattern, replacement in _patterns_for(row):
             masked, count = pattern.subn(replacement, masked)
             applied[row] += count
 
-    return _unmaskLiterals(masked, literals), applied
+    return _unmask_literals(masked, literals), applied
 
 
 def _sources(root: Path) -> list[Path]:
@@ -130,14 +130,14 @@ def _sources(root: Path) -> list[Path]:
     return found
 
 
-def rewriteTree(roots: list[Path], rows: list[Row], dryRun: bool) -> tuple[int, Counter[Row]]:
+def rewrite_tree(roots: list[Path], rows: list[Row], dry_run: bool) -> tuple[int, Counter[Row]]:
     """Rewrites every source under @p roots, reporting each changed file. Returns (files, totals)."""
     changed = 0
     totals: Counter[Row] = Counter()
     for root in roots:
         for path in _sources(root):
             text = path.read_text(encoding="utf-8")
-            result, applied = rewriteText(text, rows)
+            result, applied = rewrite_text(text, rows)
             if result == text:
                 continue
             changed += 1
@@ -146,7 +146,7 @@ def rewriteTree(roots: list[Path], rows: list[Row], dryRun: bool) -> tuple[int, 
             for row, count in sorted(applied.items(), key=lambda item: item[1], reverse=True):
                 if count:
                     print(f"    {count:5d}  {row.label}")
-            if not dryRun:
+            if not dry_run:
                 path.write_text(result, encoding="utf-8", newline="\n")
     return changed, totals
 
@@ -164,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
 
     try:
-        rows = renames.load(arguments.table).textRows(arguments.profile)
+        rows = renames.load(arguments.table).text_rows(arguments.profile)
     except TableError as error:
         print(f"rewrite: {error}")
         return 1
@@ -175,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
     if missing:
         return 1
 
-    changed, totals = rewriteTree(arguments.paths, rows, arguments.dry_run)
+    changed, totals = rewrite_tree(arguments.paths, rows, arguments.dry_run)
     verb = "would change" if arguments.dry_run else "changed"
     print(
         f"rewrite --profile {arguments.profile}: {changed} file{'' if changed == 1 else 's'} {verb}, "
