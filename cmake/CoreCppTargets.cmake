@@ -15,7 +15,9 @@
 #                     [LIBS <lib>...] [LABELS <label>...] [DEFINITIONS <definition>...])
 #
 # core_cpp_add_module() creates the real target core-cpp-<name> and its alias
-# core::<name>. HEADERS are the public headers; they form the target's HEADERS file
+# core::<name>, and appends a compiled one to the global property CORE_CPP_TARGETS,
+# which is how a parent project instruments core-cpp's code together with its own.
+# HEADERS are the public headers; they form the target's HEADERS file
 # set, based at src/ or, for a header CMake generates, at the generated include
 # root, so the target is install-ready. Private headers (detail/, posix/, linux/,
 # bsd/, darwin/, windows/, emscripten/) go in a SOURCES list and are in no file
@@ -257,6 +259,13 @@ function(core_cpp_add_module name)
         target_compile_features(${target} INTERFACE cxx_std_23)
     else()
         core_cpp_apply_toolchain(${target})
+        # Every compiled library of core-cpp, by its real name (a property cannot be set on an
+        # alias), in the order the table declares them. A parent that instruments its build --
+        # sanitizers, coverage -- applies the same to these, so its own code and core-cpp's are
+        # instrumented alike; mixing the two is what makes ThreadSanitizer report races that are
+        # not there, and is why CORE_CPP_SANITIZERS refuses to run in a subproject build
+        # (cmake/CoreCppOptions.cmake). Test binaries are not here: a parent does not build them.
+        set_property(GLOBAL APPEND PROPERTY CORE_CPP_TARGETS ${target})
     endif()
 endfunction()
 

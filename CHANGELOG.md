@@ -167,7 +167,11 @@ workflow refuses one without a section here.
 - `core::tui` does not link `core::net`: Task B12 moves the runtime onto `core::net::EventLoop`
   and deletes `runtime/EventSource.hpp`, `runtime/PollEventSource.*` and `runtime/WithTimeout.hpp`,
   and the module table's row gains `net` then.
-
+- The global property `CORE_CPP_TARGETS`: every compiled library core-cpp built, by its real
+  target name, in the order the module table declares them. A parent project that instruments its
+  build reads it and applies the same sanitizers or coverage to core-cpp's code, which is what
+  keeps ThreadSanitizer from reporting races between instrumented and uninstrumented code.
+  Header-only targets and test binaries are not in it.
 ### Fixed
 
 - `core::tui` carries no consumer's name in the code it runs. Beyond the OSC 8 hyperlink id

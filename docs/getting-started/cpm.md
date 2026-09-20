@@ -79,5 +79,18 @@ failed `assert()` in a Debug build ends the test instead of waiting for a click.
 `CORE_CPP_SANITIZERS` is for core-cpp's own top-level build and stops the configure when core-cpp
 is a subproject: instrumenting only core-cpp's targets inside your build would mix instrumented
 and uninstrumented code, which is what makes ThreadSanitizer report races that are not there.
-Instrument core-cpp's targets together with yours instead. The `CORE_CPP_TARGETS` global
-property, which lists them, arrives with the vendoring task (A8).
+Instrument core-cpp's targets together with yours instead. The global property `CORE_CPP_TARGETS`
+lists every compiled library core-cpp built, by its real target name (a property cannot be set on
+an alias), in the order the module table declares them:
+
+```cmake
+get_property(coreCppTargets GLOBAL PROPERTY CORE_CPP_TARGETS)
+foreach(target IN LISTS coreCppTargets)
+    target_compile_options(${target} PRIVATE -fsanitize=thread)
+    target_link_options(${target} PRIVATE -fsanitize=thread)
+endforeach()
+```
+
+Header-only targets (`core::async`, `core::net_types`) are not in the list: they compile nothing
+of their own, so your flags reach their code through your targets. Neither are core-cpp's test
+binaries, which a consumer does not build.
