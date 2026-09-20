@@ -190,9 +190,10 @@ core_cpp_hygiene_allow(diagnostic-pragma src/core/testing/SuppressWindowsDialogs
 #
 # The files came from endo (`src/tui/completer/`, f774a210), which declares a flat `namespace tui`
 # for all of its TUI, so the import is faithful and it is core-cpp's namespace-equals-directory
-# rule that they do not meet. Task A11's report carries this to the tui owner.
+# rule that they do not meet. core-cpp#30 holds the decision and both options; it has to be settled
+# before v0.1.0, after which either one is a break.
 set(_completerNamespaceReason
-    "core::tui's completer declares core::tui, while the directory (and docs/modules/tui.md) say core::tui::completer; both ways out change core::tui's public API, so the tui owner decides")
+    "core-cpp#30: core::tui's completer declares core::tui, while its directory says core::tui::completer; renaming the namespace and moving the files up are both public API changes, so the decision is the tui owner's and is due before v0.1.0")
 foreach(_completerFile IN ITEMS Completer.cpp Completer.hpp CompletionItem.hpp CompletionProvider.hpp
                                 FuzzyMatch.cpp FuzzyMatch.hpp SmartCaseMatch.cpp SmartCaseMatch.hpp)
     core_cpp_hygiene_allow(namespace-directory "src/core/tui/completer/${_completerFile}"

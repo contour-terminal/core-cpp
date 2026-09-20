@@ -62,8 +62,10 @@ and on stb when `CORE_CPP_WITH_IMAGES` is on. Native only: there is no terminal 
   core-cpp's namespace-equals-directory rule should make them `core::tui::completer` as the
   sibling `runtime/` makes its own `core::tui::runtime`. The mismatch came in with the import from
   endo, whose TUI is one flat `namespace tui`; it is recorded as an allowlist row in
-  `tests/cmake/check-cmake-hygiene.cmake`, because resolving it either way — renaming the
-  namespace or flattening the directory — changes `core::tui`'s public API.
+  `tests/cmake/check-cmake-hygiene.cmake` and in
+  [core-cpp#30](https://github.com/contour-terminal/core-cpp/issues/30), because resolving it
+  either way — renaming the namespace or moving the files up — changes `core::tui`'s public API,
+  and is therefore due before v0.1.0.
 - **Markdown and syntax.** `MarkdownRenderer` with `MarkdownTable`, `MarkdownHtml` and the inline
   grammar, and `GenericSyntaxHighlighter`, a lexer per language.
 - **Images.** With `CORE_CPP_WITH_IMAGES`: `loadImage()`, `resizeImage()` and `readClipboardImage()`

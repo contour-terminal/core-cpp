@@ -390,8 +390,9 @@ workflow refuses one without a section here.
   directory. The expected namespace now follows the whole path, with the platform and
   private-detail directories (`posix/`, `windows/`, `linux/`, `bsd/`, `darwin/`, `emscripten/`,
   `detail/`, `backend/`) skipped as layout. The one thing in the tree the deeper rule finds,
-  `src/core/tui/completer/` declaring `core::tui`, is an allowlist row with its reason: both ways
-  out of it change `core::tui`'s public API.
+  `src/core/tui/completer/` declaring `core::tui`, is an allowlist row naming
+  [core-cpp#30](https://github.com/contour-terminal/core-cpp/issues/30), which holds the decision:
+  both ways out of it change `core::tui`'s public API, so it is due before v0.1.0.
 - `Task_test.cpp`'s deep-chain case skips on GCC unless the build's optimisation level is known to
   make symmetric transfer a tail call. It keyed on `__OPTIMIZE__`, which GCC defines at `-Og` and
   `-O1` as well, where the 100000-frame chain overflows the stack and kills the process, taking
