@@ -77,7 +77,7 @@ target_link_libraries(myapp PRIVATE core::async core::net core::tui)
 | `endo::Generator`, `<platform/Generator.hpp>` | `core::Generator`, `<core/Generator.hpp>` |
 | `<platform/X.hpp>` (endo's generic platform layer) | `<core/platform/X.hpp>` |
 | `<testing/ScopedTempDir.hpp>`, `<testing/ScopedWorkingDirectory.hpp>`, `<testing/EnvHelper.hpp>` | `<core/testing/...>` |
-| the compatibility aliases in `namespace endo` (`endo::NativeHandle`, `endo::FileSystem`, `endo::SignalHandler`, `endo::TestEnvironment`, ...) | the `core::platform::` names; `endo::TestEnvironment` is `core::platform::TestEnvironmentProvider` |
+| the compatibility aliases in `namespace endo` (`endo::NativeHandle`, `endo::FileSystem`, `endo::SignalHandler`, `endo::TestEnvironment`, ...) | the `core::platform::` names; `endo::TestEnvironment` is `core::platform::testing::TestEnvironmentProvider` |
 | `endo::containsGlobChars`, `endo::globMatchFilename` | `core::platform::containsGlobChars`, `core::platform::globMatchFilename` |
 | `net::IClock`, `net::SteadyClock`, `net::ManualClock`, `net::defaultSteadyClock`, `net::SteadyTimePoint`, `net::SteadyDuration`, `<net/platform/Clock.hpp>` | the same names in `core::platform`, `<core/platform/Clock.hpp>` |
 | `net::NativeHandle`, `net::InvalidHandle`, `net::platformRead`/`platformWrite`/`platformClose`, `<net/platform/NativeHandle.hpp>` | the same names in `core::platform`, `<core/platform/Types.hpp>` (there is no `NativeHandle.hpp`) |

@@ -8,7 +8,7 @@
 #include <string>
 #include <utility>
 
-namespace core::platform
+namespace core::platform::testing
 {
 
 /// @brief Fully isolated test environment for unit testing.
@@ -78,4 +78,4 @@ class TestEnvironmentProvider final: public EnvironmentProvider
     std::set<std::string> _validPaths;
 };
 
-} // namespace core::platform
+} // namespace core::platform::testing

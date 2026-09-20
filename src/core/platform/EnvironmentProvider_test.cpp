@@ -18,6 +18,11 @@
 
 using namespace core::platform;
 
+// Spelled the way AGENT.md's namespace-equals-directory rule says a header in platform/testing/
+// must be reachable, and the way its two neighbours there already are. A consumer writing the
+// qualified name by analogy gets exactly this line.
+using core::platform::testing::TestEnvironmentProvider;
+
 namespace
 {
 #ifdef _WIN32
