@@ -28,8 +28,9 @@ git -C <fastcached> -c core.autocrlf=false -c core.eol=lf \
 ```
 
 Two gates watch this file, and they answer different questions. The nightly
-`downstream.yml` workflow diffs `CompileCache.cmake` against fastcached `master` and
-**fails** on drift: *is this copy byte-identical to upstream's current one?*
+`downstream.yml` workflow diffs both it and `../FetchTransferBound.cmake` against
+fastcached `master` and **fails** on drift: *is this copy byte-identical to upstream's
+current one?*
 `scripts/check-upstream-drift.py` walks `.agent/reference/provenance.md` and
 **reports** without failing: *has upstream touched this file since the commit the row
 pins?* The first is the one that must stay green; the second is what names the commits
