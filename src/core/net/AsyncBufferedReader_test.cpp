@@ -529,6 +529,37 @@ TEST_CASE("readUntil does not skip a delimiter left behind by readLine", "[net][
     REQUIRE(head == "xx");
 }
 
+TEST_CASE("readUntil rescans the buffer when the delimiter changes", "[net][reader]")
+{
+    // Two readUntil calls with DIFFERENT delimiters are two different scans. The offset the
+    // first left behind ("no \r\n\r\n match can begin before here") says nothing about where
+    // an "X" may begin, so inheriting it made the second scan resume past a delimiter the
+    // reader was already holding and report EOF for data it had.
+    auto fake = FakeSocket {};
+    fake.pushChunk("abcXdef"); // holds "X" at index 3, and no CRLFCRLF anywhere
+
+    auto source = core::net::testing::ScriptedEventSource {};
+    auto loop = EventLoop { source };
+    auto reader = AsyncBufferedReader { &fake };
+
+    // The HTTP head scan: no CRLFCRLF arrives and the peer hangs up, leaving the offset
+    // three bytes short of the buffer's end — past the "X".
+    auto head = std::string {};
+    auto error = std::optional<core::net::NetError> {};
+    auto const crlfcrlf = std::string { "\r\n\r\n" };
+    loop.blockOn(readOneUntil(&reader, &crlfcrlf, &head, &error));
+    REQUIRE(error.has_value());
+    REQUIRE(error->code == NetErrorCode::Eof);
+
+    error.reset();
+    auto payload = std::string {};
+    auto const x = std::string { "X" };
+    loop.blockOn(readOneUntil(&reader, &x, &payload, &error));
+    REQUIRE_FALSE(error.has_value());
+    REQUIRE(payload == "abc");
+    REQUIRE(reader.buffered() == 3); // "def" is still buffered behind the delimiter
+}
+
 TEST_CASE("a transport failure is reported as itself, not as EOF", "[net][reader]")
 {
     // A connection reset must not be delivered as a clean end-of-message: the

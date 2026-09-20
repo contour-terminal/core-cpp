@@ -120,15 +120,23 @@ class AsyncBufferedReader
         Until,    ///< @c readUntil set it: no match can begin before it.
     };
 
-    /// Resets @c _scanOffset when the scanning strategy changes.
+    /// Resets @c _scanOffset when the scan it belongs to changes.
+    ///
+    /// The DELIMITER is part of that identity, not only the scanner kind: "no match can
+    /// begin before here" is a statement about the bytes @c readUntil was looking for, and
+    /// says nothing about any other sequence. Keying the reset on the kind alone let a
+    /// `readUntil("X")` following an early-returning `readUntil("\r\n\r\n")` resume near the
+    /// buffer's end and miss an X the reader was already holding — the same class of bug the
+    /// kind guards against, one level down.
     /// @param scanner The scanner about to run.
-    void beginScan(Scanner scanner) noexcept
+    /// @param delimiter What @c readUntil is about to search for; empty for @c readLine.
+    void beginScan(Scanner scanner, std::string_view delimiter = {})
     {
-        if (_scanner != scanner)
-        {
-            _scanOffset = _consumed;
-            _scanner = scanner;
-        }
+        if (_scanner == scanner && _scanDelimiter == delimiter)
+            return;
+        _scanOffset = _consumed;
+        _scanner = scanner;
+        _scanDelimiter = delimiter;
     }
 
     ISocket* _socket;                 ///< The transport read from (not owned).
@@ -137,6 +145,7 @@ class AsyncBufferedReader
     std::size_t _consumed = 0;        ///< First buffer index not yet delivered (a read cursor).
     std::size_t _scanOffset = 0;      ///< Scan resume point; meaning depends on _scanner.
     Scanner _scanner = Scanner::None; ///< Which scanner _scanOffset belongs to.
+    std::string _scanDelimiter;       ///< Which delimiter _scanOffset belongs to (empty for a line).
     std::size_t _scannedBytes = 0;    ///< Lifetime count of bytes examined (see scannedBytes()).
 };
 

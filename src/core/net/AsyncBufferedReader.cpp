@@ -71,7 +71,7 @@ async::Task<std::expected<std::string, NetError>> AsyncBufferedReader::readUntil
     if (delimiter.empty())
         co_return std::unexpected(makeNetError(NetErrorCode::Other, 0, "empty delimiter"));
 
-    beginScan(Scanner::Until);
+    beginScan(Scanner::Until, delimiter);
     while (true)
     {
         auto const found = _buffer.find(delimiter, _scanOffset);
