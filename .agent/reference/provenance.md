@@ -222,7 +222,7 @@ others in notes.
 | `src/core/tui/.clang-tidy` | origin: core-cpp | - | - | the one directory that departs from the root `.clang-tidy`, and says why |
 | `src/core/tui/Box.cpp` | contour-terminal/endo | `src/tui/Box.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Box.hpp` | contour-terminal/endo | `src/tui/Box.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/Buffer.cpp` | contour-terminal/endo | `src/tui/Buffer.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Buffer.cpp` | contour-terminal/endo | `src/tui/Buffer.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the OSC 8 `id=` is the bare hash; endo prefixed it `endo-`, and no consumer's hyperlinks carry another project's name |
 | `src/core/tui/Buffer.hpp` | contour-terminal/endo | `src/tui/Buffer.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/CMakeLists.txt` | origin: core-cpp | - | - | endo's `src/tui/CMakeLists.txt` is one `add_library`; this is the module-table form, and where the `core::tui_output` split is spelled |
 | `src/core/tui/Canvas.cpp` | contour-terminal/endo | `src/tui/Canvas.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
@@ -348,7 +348,7 @@ others in notes.
 | `src/core/tui/VtParser.cpp` | contour-terminal/endo | `src/tui/VtParser.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/VtParser.hpp` | contour-terminal/endo | `src/tui/VtParser.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/VtParser_test.cpp` | contour-terminal/endo | `src/tui/VtParser_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/completer/Completer.cpp` | contour-terminal/endo | `src/tui/completer/Completer.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/completer/Completer.cpp` | contour-terminal/endo | `src/tui/completer/Completer.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `addProvider()` sorts stably, so equal priorities keep registration order |
 | `src/core/tui/completer/Completer.hpp` | contour-terminal/endo | `src/tui/completer/Completer.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/completer/CompletionItem.hpp` | contour-terminal/endo | `src/tui/completer/CompletionItem.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/completer/CompletionProvider.hpp` | contour-terminal/endo | `src/tui/completer/CompletionProvider.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |

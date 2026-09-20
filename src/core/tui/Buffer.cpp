@@ -259,8 +259,10 @@ void Buffer::addHyperlink(Rect cellArea, std::string uri)
         .cellArea = cellArea,
         .uri = std::move(uri),
         // Rendered here rather than at every link open: a region is registered once per frame but
-        // opened once per row it spans, and a multi-row link would re-format it per row.
-        .linkId = std::format("endo-{:x}", hash),
+        // opened once per row it spans, and a multi-row link would re-format it per row. The hex
+        // digits are the whole id: endo prefixed them with its own name, and core::tui is the
+        // shared library every consumer's hyperlinks go through.
+        .linkId = std::format("{:x}", hash),
     });
 }
 

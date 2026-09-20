@@ -11,8 +11,12 @@ void Completer::addProvider(std::unique_ptr<CompletionProvider> provider)
 {
     _providers.push_back(std::move(provider));
 
-    // Sort by priority (highest first)
-    std::ranges::sort(_providers, [](auto const& a, auto const& b) { return a->priority() > b->priority(); });
+    // Sort by priority (highest first), stably: providers share the default priority, and
+    // gatherCompletions() drops a later duplicate by text, so an unstable sort would decide
+    // which provider's item survives from the standard library's partitioning rather than from
+    // the order the providers were registered in.
+    std::ranges::stable_sort(_providers,
+                             [](auto const& a, auto const& b) { return a->priority() > b->priority(); });
 }
 
 std::vector<CompletionItem> Completer::complete(std::string_view input, size_t cursorPosition) const

@@ -34,7 +34,7 @@ TEST_CASE("TerminalProtocols.hyperlink_round_trip")
 
 TEST_CASE("TerminalProtocols.buildHyperlinkOpen_with_id_byte_exact")
 {
-    CHECK(buildHyperlinkOpen("file:///a", "endo-1f2e") == "\033]8;id=endo-1f2e;file:///a\033\\");
+    CHECK(buildHyperlinkOpen("file:///a", "1f2e") == "\033]8;id=1f2e;file:///a\033\\");
 }
 
 TEST_CASE("TerminalProtocols.buildHyperlinkOpen_empty_id_matches_id_less_form")

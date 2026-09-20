@@ -180,6 +180,14 @@ workflow refuses one without a section here.
   `dialogWidth = min(config.width, termCols - 4)` and `inputWidth = dialogWidth - 4` had no floor,
   and the negative width reached `substr()` as a huge `std::size_t`, throwing `std::out_of_range`
   out of a `render()` no caller expects to throw. All three dialogs clamp both to zero.
+- `core::tui::Buffer::addHyperlink()` mints the OSC 8 `id=` as the bare hash of the URI. endo's
+  copy prefixed it `endo-`, so every consumer's hyperlinks carried another project's name on the
+  wire. A behaviour change for anything that reads the id back: it is now `1f2e` where it was
+  `endo-1f2e`.
+- `core::tui::Completer::addProvider()` sorts stably, so providers of equal priority -- which is
+  every provider that does not set one -- keep the order they were registered in.
+  `gatherCompletions()` drops a later duplicate by text, so an unstable sort let the standard
+  library decide which provider's item a user saw.
 - `core::tui::VtParser`'s three sequence buffers are bounded. A bracketed paste, a CSI parameter
   string and a DCS payload each grew for as long as bytes kept arriving without the terminator
   that ends the sequence, and `timeout()` resolves only a bare Escape, so a `ESC[200~` whose
