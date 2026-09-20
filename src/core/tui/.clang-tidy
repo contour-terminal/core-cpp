@@ -25,8 +25,8 @@
 # failure here and would not have been. Paying the list down and lowering this number back to the
 # root's 50 is core-cpp#22.
 #
-# This is a scope, not a verdict: the root's 50 still holds over base, log, cli, platform, net and
-# testing, where nothing is over it.
+# This is a scope, not a verdict: the root's 50 still holds over base, log, cli, platform, async,
+# net and testing, where nothing is over it.
 #
 # `readability-enum-initial-value` is off, for `core::tui::KeyCode`: an enumeration whose
 # enumerators are grouped into numbered ranges (Unicode codepoints, then 0x10000 for the
