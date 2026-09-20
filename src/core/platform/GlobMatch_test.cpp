@@ -47,6 +47,15 @@ constexpr auto Rows = std::array {
     Row { .filename = "a.txt"sv, .pattern = "[^abc].txt"sv, .matches = false },
     // A bracket that fails under a `*` lets the star take one more character.
     Row { .filename = "x1y2"sv, .pattern = "*[0-9]"sv, .matches = true },
+    // A bracket expression holding a `[` is POSIX's way to match a literal bracket, so the
+    // bracket arm has to be reached before the literal one -- which it was not.
+    Row { .filename = "["sv, .pattern = "[[]"sv, .matches = true },
+    Row { .filename = "a"sv, .pattern = "[[]"sv, .matches = false },
+    Row { .filename = "[x"sv, .pattern = "[[]x"sv, .matches = true },
+    // A `[` that no `]` closes is a literal `[`, as fnmatch(3) reads it.
+    Row { .filename = "["sv, .pattern = "["sv, .matches = true },
+    Row { .filename = "[abc"sv, .pattern = "[abc"sv, .matches = true },
+    Row { .filename = "a[b"sv, .pattern = "a[b"sv, .matches = true },
 };
 } // namespace
 

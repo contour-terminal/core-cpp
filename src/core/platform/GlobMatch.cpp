@@ -44,6 +44,22 @@ namespace
             ++pi;
         return matched != negate;
     }
+
+    /// @brief Finds the ']' that closes a bracket expression.
+    ///
+    /// A '[' that no ']' closes is a literal '[', the way fnmatch(3) reads it, so the caller has
+    /// to know before it commits to the bracket arm. The scan skips a leading negation character
+    /// and takes the first ']' after it, which is where matchBracket() stops too.
+    ///
+    /// @param pattern The whole pattern.
+    /// @param pi The index just past the opening '['.
+    /// @return The index of the closing ']', or npos when there is none.
+    [[nodiscard]] std::size_t findBracketEnd(std::string_view pattern, std::size_t pi) noexcept
+    {
+        if (pi < pattern.size() && (pattern[pi] == '!' || pattern[pi] == '^'))
+            ++pi;
+        return pattern.find(']', pi);
+    }
 } // namespace
 
 bool globMatchFilename(std::string_view filename, std::string_view pattern)
@@ -71,18 +87,22 @@ bool globMatchFilename(std::string_view filename, std::string_view pattern)
             matchIdx = fi;
             ++pi;
         }
-        else if (pi < pattern.size() && (pattern[pi] == '?' || pattern[pi] == filename[fi]))
+        else if (pi < pattern.size() && pattern[pi] == '['
+                 && findBracketEnd(pattern, pi + 1) != std::string_view::npos)
         {
-            ++fi;
-            ++pi;
-        }
-        else if (pi < pattern.size() && pattern[pi] == '[')
-        {
+            // Before the literal arm below, which would otherwise consume the '[' that opens a
+            // bracket expression -- so `[[]`, POSIX's way to match a literal bracket, could never
+            // match one.
             ++pi;
             if (matchBracket(filename[fi], pattern, pi))
                 ++fi;
             else if (!backtrack())
                 return false;
+        }
+        else if (pi < pattern.size() && (pattern[pi] == '?' || pattern[pi] == filename[fi]))
+        {
+            ++fi;
+            ++pi;
         }
         else if (!backtrack())
         {
