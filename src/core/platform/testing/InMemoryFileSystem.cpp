@@ -114,15 +114,20 @@ namespace
 
         pos_type seekoff(off_type off, std::ios_base::seekdir dir, std::ios_base::openmode) override
         {
+            constexpr auto Refused = off_type { -1 };
             auto const size = static_cast<off_type>(_target->size());
-            auto const anchor = dir == std::ios_base::beg   ? off_type { 0 }
-                                : dir == std::ios_base::end ? size
-                                                            : static_cast<off_type>(position());
+
+            auto anchor = off_type { 0 }; // std::ios_base::beg
+            if (dir == std::ios_base::end)
+                anchor = size;
+            else if (dir == std::ios_base::cur)
+                anchor = static_cast<off_type>(position());
+
             auto const target = anchor + off;
             if (target < 0 || target > size)
-                return pos_type(off_type(-1));
+                return { Refused };
             seekTo(static_cast<std::size_t>(target));
-            return pos_type(target);
+            return { target };
         }
 
         pos_type seekpos(pos_type pos, std::ios_base::openmode which) override

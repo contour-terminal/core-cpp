@@ -323,7 +323,8 @@ namespace
             // under the temporary. The reported reason stays this hop's, and when the rollback
             // fails too, so does where the entry actually ended up.
             auto rollbackError = std::error_code {};
-            fs::rename(candidate, from, rollbackError);
+            auto const& originalName = from; // Named, so the argument order does not read as swapped.
+            fs::rename(candidate, originalName, rollbackError);
             return { .error = ec, .stranded = rollbackError ? candidate : fs::path {} };
         }
         return { .error = std::make_error_code(std::errc::file_exists) };

@@ -21,7 +21,7 @@ namespace core::platform
 ///
 /// Named rather than a `bool`, so `openWrite(path, WriteMode::Append)` says at the call site what
 /// `openWrite(path, true)` only said in the header (`.agent/rules/design-principles.md`).
-enum class WriteMode
+enum class WriteMode : std::uint8_t
 {
     Truncate, ///< Discard whatever the file held.
     Append,   ///< Write after whatever the file held.
@@ -30,7 +30,7 @@ enum class WriteMode
 /// @brief What a copy does when the destination already exists.
 ///
 /// Named rather than a `bool`, for the reason @ref WriteMode gives.
-enum class OverwritePolicy
+enum class OverwritePolicy : std::uint8_t
 {
     Refuse,  ///< Fail, leaving the destination as it was.
     Replace, ///< Replace the destination's content.
