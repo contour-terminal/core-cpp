@@ -57,8 +57,13 @@ and on stb when `CORE_CPP_WITH_IMAGES` is on. Native only: there is no terminal 
   ring, ghost text, selection), `List`, `TreeTableView`, `Dialog`, `StatusBar`, `LogPanel`,
   `Spinner`, `ProgressBar`, `Tooltip`, `QuestionComponent`, and the popups `CompletionPopup`,
   `CommandPalettePopup` and `FuzzyPickerPopup` with `PopupKeyDispatch` and `ScrollableSelection`.
-- **Completion.** `core::tui::completer`: `Completer`, `CompletionProvider`, `CompletionItem`,
-  `FuzzyMatch` and `SmartCaseMatch`.
+- **Completion.** `Completer`, `CompletionProvider`, `CompletionItem`, `FuzzyMatch` and
+  `SmartCaseMatch`, in `core::tui` — although they live in `src/core/tui/completer/`, which by
+  core-cpp's namespace-equals-directory rule should make them `core::tui::completer` as the
+  sibling `runtime/` makes its own `core::tui::runtime`. The mismatch came in with the import from
+  endo, whose TUI is one flat `namespace tui`; it is recorded as an allowlist row in
+  `tests/cmake/check-cmake-hygiene.cmake`, because resolving it either way — renaming the
+  namespace or flattening the directory — changes `core::tui`'s public API.
 - **Markdown and syntax.** `MarkdownRenderer` with `MarkdownTable`, `MarkdownHtml` and the inline
   grammar, and `GenericSyntaxHighlighter`, a lexer per language.
 - **Images.** With `CORE_CPP_WITH_IMAGES`: `loadImage()`, `resizeImage()` and `readClipboardImage()`
