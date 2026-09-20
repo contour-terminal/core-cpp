@@ -6,13 +6,13 @@ packaging contour adds no new dependency. This page is the contract between core
 consumer; it is the design spec's
 [Part I §5](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/specs/2026-09-18-core-cpp-design.md).
 
-!!! note "Status"
-    The vendoring tool, `cmake/CoreCppVendor.cmake`, arrives with Task A8 of the
-    implementation plan. This page states the contract it implements.
+The tool is [`cmake/CoreCppVendor.cmake`](https://github.com/contour-terminal/core-cpp/blob/master/cmake/CoreCppVendor.cmake),
+a CMake script run with `cmake -P`. It needs nothing but CMake and, for `sync`, git.
 
 ## The copy is verbatim
 
-- **Byte-identical to a tag, or to a full commit SHA.** Nothing else is a valid source.
+- **Byte-identical to a tag, or to a full commit SHA.** Nothing else is a valid source: a branch
+  changes under your CI without a commit in your repository.
 - **No local changes, ever.** A fix goes to core-cpp, is released as a patch version, and the
   consumer re-vendors that tag. The check below refuses a copy that differs from its manifest,
   so a local edit fails the consumer's own test suite.
@@ -20,30 +20,44 @@ consumer; it is the design spec's
 ## The commands
 
 ```sh
-# Copy a tag's files into <dir> and write <dir>/MANIFEST.
-cmake -DMODE=sync -DREF=<tag> -DDEST=<dir> [-DREPO=<url|path>] \
+# Copy a ref's files into <dir> and write <dir>/MANIFEST.
+cmake -DMODE=sync -DREF=<tag or full SHA> -DDEST=<dir> [-DREPO=<url or path>] \
       [-DMODULES=base;log;cli;platform;async;net;testing] \
-      -P <copy>/cmake/CoreCppVendor.cmake
+      -P <core-cpp>/cmake/CoreCppVendor.cmake
 
 # Verify <dir> against its MANIFEST. Needs no git.
 cmake -DMODE=check -DDEST=<dir> -P <dir>/cmake/CoreCppVendor.cmake
 ```
 
-- **`sync` reads git blobs** with `git -c core.autocrlf=false -c core.eol=lf`, so no working
-  tree's line-ending settings reach the copy, and it refuses a file containing a CR byte, a
-  symbolic link and a submodule.
-- **`MANIFEST`** starts with header lines naming the repository, the ref, the commit and the file
-  count (`# repository ...`, `# ref ...`, `# commit ...`, `# files ...`), followed by one
-  `<sha256>  <path>` line per file, sorted by path.
+- **`REPO`** is a local checkout, a bare repository, or a URL, which is cloned once into a
+  temporary directory under `DEST`. It defaults to the repository the script itself is part of.
+- **`MODULES`** selects which module directories are copied; it defaults to every module the ref
+  has. A module that no option can switch off must be in the list, or the copy will not configure:
+  `CORE_CPP_WITH_TUI=OFF` is what lets contour leave `tui` out.
+- **`sync` reads git blobs** with `git -c core.autocrlf=false -c core.eol=lf cat-file blob`, so no
+  working tree's line-ending settings reach the copy, and it refuses a file containing a CR byte,
+  a symbolic link and a submodule. It writes nothing into `DEST` until the whole copy is legal, so
+  a refusal leaves the previous copy exactly as it was.
+- **`sync` replaces the copy it finds.** A `DEST` holding a manifest is emptied first, so a file
+  the new ref no longer has is gone rather than left behind; a `DEST` with files and no manifest
+  is refused, because it is not a copy of ours to delete.
+- **`MANIFEST`** starts with header lines naming the repository, the ref, the commit, the modules
+  and the file count (`# repository ...`, `# ref ...`, `# commit ...`, `# modules ...`,
+  `# files ...`), followed by one `<sha256>  <path>` line per file, sorted by path.
 - **`check` refuses** a hash mismatch, a file the manifest lists that is missing, and a file the
-  manifest does not list.
+  manifest does not list. It reports every one of them, not only the first.
 
 ## What is copied
 
 - `CMakeLists.txt` and `cmake/**`;
-- `src/core/*.hpp` and `src/core/*.cpp` (the `base` module);
-- `src/core/<module>/**` for each module in `MODULES`, tests included;
+- everything directly in `src/core/` (the `base` module: its headers, its sources, its own
+  `CMakeLists.txt` and `Config.hpp.in`, without which the copy does not configure);
+- `src/core/<module>/**` for each module in `MODULES`, the modules' own `*_test.cpp` files
+  included;
 - `LICENSE`, `NOTICE`, `README.md`, `CHANGELOG.md`, `.clang-format` and `.clang-tidy`.
+
+The top-level `tests/` directory is not part of the set, so a vendored copy cannot build
+core-cpp's own test suite: leave `CORE_CPP_TESTING` off, which is its default for a subproject.
 
 ## What the consumer does
 
@@ -69,6 +83,10 @@ cmake -DMODE=check -DDEST=<dir> -P <dir>/cmake/CoreCppVendor.cmake
    ```
 
 To move to a new release, run `sync` with the new tag and commit the result as one change.
+
+`tests/consumer-vendored/` in core-cpp is exactly this, as a project of its own: core-cpp's own CI
+exports a copy of each commit, then configures, builds and verifies it inside a container with no
+network and no git, which is what a packager's build has.
 
 ## Release archives
 

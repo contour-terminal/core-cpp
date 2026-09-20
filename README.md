@@ -57,11 +57,20 @@ branch. The options are listed in
 
 ## Vendoring
 
-A project that must build without fetching anything can carry a verbatim copy instead:
-`cmake/CoreCppVendor.cmake` copies a tag's files into your tree and writes a manifest of their
-hashes, and a check refuses any local change, missing file or extra file. contour consumes
-core-cpp this way. The contract, the file set and your obligations as a consumer are in
-[`docs/vendoring.md`](docs/vendoring.md).
+A project that must build without fetching anything can carry a verbatim copy instead. contour
+consumes core-cpp this way:
+
+```sh
+# Copy a tag into your tree, then commit the result as one change.
+cmake -DMODE=sync -DREF=v0.1.0 -DDEST=vendor/core-cpp -P cmake/CoreCppVendor.cmake
+
+# Verify it. Needs no git, so register it as a test of your own suite.
+cmake -DMODE=check -DDEST=vendor/core-cpp -P vendor/core-cpp/cmake/CoreCppVendor.cmake
+```
+
+`sync` copies a tag's files out of git's own blobs and writes a manifest of their hashes; `check`
+refuses any local change, missing file or extra file. The contract, the file set and your
+obligations as a consumer are in [`docs/vendoring.md`](docs/vendoring.md).
 
 ## Building
 

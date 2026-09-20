@@ -143,6 +143,8 @@ core_cpp_hygiene_allow(top-level-only-include cmake/CoreCppTopLevel.cmake
     "the one file that may touch global state, included only when core-cpp is the top-level project")
 core_cpp_hygiene_allow(source-glob tests/cmake/check-cmake-hygiene.cmake
     "enumerates the tree it scans; it is not a source list")
+core_cpp_hygiene_allow(source-glob cmake/CoreCppVendor.cmake
+    "enumerates a vendored copy to find the files its manifest does not list; it is not a source list")
 core_cpp_hygiene_allow(diagnostic-pragma src/core/testing/SuppressWindowsDialogsAtStartup.cpp
     "#pragma init_seg(lib) raises C4073 by design, to say that it was used; the file exists to run before ordinary static initializers")
 

@@ -53,6 +53,16 @@ add_test(NAME core-cpp.check-release-selftest
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-release-selftest.cmake")
 set_tests_properties(core-cpp.check-release-selftest PROPERTIES LABELS "core-cpp;hygiene")
 
+# The vendoring tool exports the file set of Part I §5 byte for byte, and refuses each way a copy
+# can stop being verbatim. Every case builds a git repository of its own; the tool's MODE=check
+# needs no git, and one case proves that by running it with an empty PATH.
+add_test(NAME core-cpp.vendor-selftest
+         COMMAND "${CMAKE_COMMAND}"
+                 "-DTOOL=${CORE_CPP_SOURCE_DIR}/cmake/CoreCppVendor.cmake"
+                 "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/vendor-selftest"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-vendor-selftest.cmake")
+set_tests_properties(core-cpp.vendor-selftest PROPERTIES LABELS "core-cpp;hygiene")
+
 # A CRT assert, abort(), invalid parameter or crash must end the process instead of opening a dialog
 # that waits for a click. Each run must fail (WILL_FAIL) within the timeout; a run that hangs has hit a
 # dialog. The canary's main() asks for no suppression: linking core::testing_dialogs installs it.

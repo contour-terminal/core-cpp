@@ -172,6 +172,17 @@ workflow refuses one without a section here.
   build reads it and applies the same sanitizers or coverage to core-cpp's code, which is what
   keeps ThreadSanitizer from reporting races between instrumented and uninstrumented code.
   Header-only targets and test binaries are not in it.
+- `cmake/CoreCppVendor.cmake`, the vendoring tool of the design spec's Part I §5:
+  `cmake -DMODE=sync -DREF=<tag> -DDEST=<dir> [-DREPO=<url or path>] [-DMODULES=<a;b>] -P ...`
+  copies the file set out of git's own blobs (`-c core.autocrlf=false -c core.eol=lf`), refusing a
+  CR byte, a symbolic link and a submodule, and writes a `MANIFEST` of SHA-256 hashes; `MODE=check`
+  re-hashes a copy and refuses a hash mismatch, a missing file and an unlisted file, needing no
+  git, because a consumer runs it in its own CI. A sync writes into `DEST` only once the whole
+  copy is legal, replaces the copy it finds, and refuses a directory that is not one of ours.
+  `tests/cmake/check-vendor-selftest.cmake` (ctest `core-cpp.vendor-selftest`, label `hygiene`)
+  proves each refusal by name against repositories it builds for the purpose. The file set is the
+  spec's, plus everything else directly in `src/core/` -- that module's `CMakeLists.txt` and
+  `Config.hpp.in`, without which the copy does not configure. `docs/vendoring.md` is the contract.
 ### Fixed
 
 - `core::tui` carries no consumer's name in the code it runs. Beyond the OSC 8 hyperlink id

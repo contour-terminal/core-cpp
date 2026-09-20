@@ -74,6 +74,14 @@ jobs:
           -DWORK_DIR="$RUNNER_TEMP/check-release-selftest"
           -P tests/cmake/check-release-selftest.cmake
 
+      # Each case builds a git repository of its own and vendors it; the consumer-smoke job below
+      # is where a vendored copy of this tree is configured, built and verified.
+      - name: Vendoring self-test
+        run: >-
+          cmake -DTOOL="$GITHUB_WORKSPACE/cmake/CoreCppVendor.cmake"
+          -DWORK_DIR="$RUNNER_TEMP/vendor-selftest"
+          -P tests/cmake/check-vendor-selftest.cmake
+
       # Emscripten sets UNIX; it must still compile no SOURCES_POSIX file.
       - name: Platform source selection
         run: >-
