@@ -8,11 +8,13 @@
 #include <cstdint>
 #include <format>
 #include <ios>
+#include <istream>
 #include <map>
 #include <memory>
+#include <optional>
+#include <ostream>
 #include <ranges>
 #include <set>
-#include <sstream>
 #include <streambuf>
 
 namespace core::platform::testing
@@ -104,14 +106,35 @@ namespace
       protected:
         std::streamsize xsgetn(char* s, std::streamsize n) override
         {
-            auto const count = std::min(static_cast<std::size_t>(n), readable());
-            std::copy_n(contents().data() + _position, count, s);
-            _position += count;
-            return static_cast<std::streamsize>(count);
+            if (n <= 0)
+                return 0;
+
+            // A put-back character is delivered before the file's own bytes.
+            auto delivered = std::streamsize { 0 };
+            if (_pushedBack.has_value())
+            {
+                *s = *_pushedBack;
+                _pushedBack.reset();
+                ++_position;
+                ++s;
+                ++delivered;
+            }
+
+            auto const count = std::min(static_cast<std::size_t>(n - delivered), readable());
+            // Guarded rather than relying on data() + size() being formable: nothing may compute
+            // a pointer past the end even when it would not be dereferenced.
+            if (count != 0)
+            {
+                std::copy_n(contents().data() + _position, count, s);
+                _position += count;
+            }
+            return delivered + static_cast<std::streamsize>(count);
         }
 
         int_type underflow() override
         {
+            if (_pushedBack.has_value())
+                return traits_type::to_int_type(*_pushedBack);
             if (readable() == 0)
                 return traits_type::eof();
             return traits_type::to_int_type(contents()[_position]);
@@ -120,8 +143,52 @@ namespace
         int_type uflow() override
         {
             auto const ch = underflow();
-            if (!traits_type::eq_int_type(ch, traits_type::eof()))
-                ++_position;
+            if (traits_type::eq_int_type(ch, traits_type::eof()))
+                return ch;
+            _pushedBack.reset();
+            ++_position;
+            return ch;
+        }
+
+        /// @brief Puts a character back, which is where every unget() and putback() lands here.
+        ///
+        /// The get area is deliberately empty -- see the class comment -- so std::streambuf never
+        /// satisfies a put-back itself and always asks this. The default implementation refuses,
+        /// which set badbit on every unget() and putback() the fake handed out, where
+        /// std::ifstream and std::fstream both succeed.
+        ///
+        /// @param ch The character to put back, or eof() for unget(), which puts back whatever
+        ///           was read.
+        /// @return @p ch on success, eof() if there is nothing to put back.
+        int_type pbackfail(int_type ch) override
+        {
+            if (_position == 0)
+                return traits_type::eof(); // Nothing has been read, so there is nothing to undo.
+
+            if (traits_type::eq_int_type(ch, traits_type::eof()))
+            {
+                // unget(): the character at the restored position is the one that was read.
+                --_position;
+                _pushedBack.reset();
+                return traits_type::not_eof(ch);
+            }
+
+            auto const byte = traits_type::to_char_type(ch);
+            auto const holdsIt = _position - 1 < contents().size() && contents()[_position - 1] == byte;
+            // std::filebuf carries one put-back slot, so a second put-back of a character the
+            // file does not hold is refused. Refused *before* moving, unlike filebuf, which
+            // leaves the position moved back on a failure the standard does not describe.
+            if (!holdsIt && _pushedBack.has_value())
+                return traits_type::eof();
+
+            --_position;
+            // A put-back may name a character the file does not hold. filebuf keeps such a one in
+            // a slot of its own and leaves the file alone; so does this, so the next read returns
+            // it and the file still reads as it did.
+            if (holdsIt)
+                _pushedBack.reset();
+            else
+                _pushedBack = byte;
             return ch;
         }
 
@@ -142,6 +209,7 @@ namespace
             if (target < 0 || target > size)
                 return { Refused };
             _position = static_cast<std::size_t>(target);
+            _pushedBack.reset(); // A seek discards a pending put-back, as it does for a filebuf.
             return { target };
         }
 
@@ -167,9 +235,15 @@ namespace
             return contents().size() > _position ? contents().size() - _position : 0;
         }
 
+        /// Drops a pending put-back, for a write that overwrites where it sat.
+        void discardPutback() noexcept { _pushedBack.reset(); }
+
       private:
         std::shared_ptr<std::string> _target;
         std::size_t _position = 0;
+        /// A character put back that the file does not hold, waiting to be read. std::filebuf
+        /// carries exactly one such slot, and so does this.
+        std::optional<char> _pushedBack;
     };
 
     class MemoryIStream final: public std::istream
@@ -202,6 +276,7 @@ namespace
                 contents().resize(at + count);
             contents().replace(at, count, s, count);
             setPosition(at + count);
+            discardPutback(); // The write landed where a put-back would have been read from.
             return n;
         }
 
@@ -495,7 +570,9 @@ std::expected<void, std::string> InMemoryFileSystem::copyFile(std::filesystem::p
         return std::unexpected(std::format("Destination already exists: {}", dstKey));
 
     ensureParentDirectories(to);
-    _files[dstKey] = std::make_shared<std::string>(*it->second);
+    // Through fileAt(), so a stream open on the destination sees the copy rather than being
+    // detached from it -- which is what overwriting a file in place does.
+    *fileAt(dstKey) = *it->second;
     return {};
 }
 
@@ -668,7 +745,7 @@ Generator<FileSystem::DirectoryEntry> InMemoryFileSystem::walkDirectoryRecursive
                                 .depth = depthOf(symlinkPath) });
 
     std::ranges::sort(
-        entries, std::ranges::less {}, [](DirectoryEntry const& e) { return e.path.generic_string(); });
+        entries, std::ranges::less {}, [](DirectoryEntry const& e) { return normalizePath(e.path); });
 
     for (auto const& entry: entries)
         co_yield entry;
@@ -718,7 +795,7 @@ std::expected<std::filesystem::path, std::string> InMemoryFileSystem::createTemp
     std::string_view prefix) const
 {
     auto const name = std::format("/tmp/{}_{}", prefix, ++_tempCounter);
-    _files[name] = std::make_shared<std::string>();
+    fileAt(name)->clear();
     ensureParentDirectories(pathFromKey(name));
     return pathFromKey(name);
 }
@@ -739,7 +816,7 @@ void InMemoryFileSystem::addFile(std::filesystem::path const& path,
                                  std::filesystem::perms perms)
 {
     auto const key = normalize(path);
-    _files[key] = std::make_shared<std::string>(std::move(content));
+    *fileAt(key) = std::move(content);
     _permissions[key] = perms;
     ensureParentDirectories(path);
 }

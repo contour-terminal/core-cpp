@@ -94,6 +94,60 @@ struct StreamOutcome
 
     return outcome;
 }
+
+/// What one backend's read stream does for unget() and putback().
+struct PutbackOutcome
+{
+    bool ungetGood = false;
+    std::string afterUnget;
+    bool putbackSameGood = false;
+    std::string afterPutbackSame;
+    bool putbackOtherGood = false;
+    std::string afterPutbackOther;
+    std::string fileAfter;
+
+    bool operator==(PutbackOutcome const&) const = default;
+};
+
+/// Runs one unget/putback script over @p fs, so the model and the real filesystem can be held to
+/// the same answers. Which of the two is right is not a matter of opinion here: std::ifstream and
+/// std::fstream decide it, and the model has to follow.
+[[nodiscard]] PutbackOutcome runPutbackScript(FileSystem const& fs, std::filesystem::path const& path)
+{
+    auto outcome = PutbackOutcome {};
+    REQUIRE(fs.writeFile(path, "abcdef").has_value());
+    auto stream = fs.openRead(path);
+    REQUIRE(stream.has_value());
+    auto& in = **stream;
+
+    auto ch = char {};
+    in.read(&ch, 1);
+
+    // unget(): put back whatever was just read.
+    in.unget();
+    outcome.ungetGood = in.good();
+    in.read(&ch, 1);
+    outcome.afterUnget = std::string(1, ch);
+
+    // putback() of the character the file holds there.
+    in.putback(ch);
+    outcome.putbackSameGood = in.good();
+    in.read(&ch, 1);
+    outcome.afterPutbackSame = std::string(1, ch);
+
+    // putback() of a character the file does not hold.
+    in.putback('X');
+    outcome.putbackOtherGood = in.good();
+    if (in.good())
+    {
+        in.read(&ch, 1);
+        outcome.afterPutbackOther = std::string(1, ch);
+    }
+    in.clear();
+
+    outcome.fileAfter = contentsOf(fs, path);
+    return outcome;
+}
 } // namespace
 
 TEST_CASE("walkDirectoryRecursive yields every entry exactly once", "[FileSystem]")
@@ -800,4 +854,39 @@ TEST_CASE("a read stream sees a write that lands after it was opened", "[FileSys
     REQUIRE((*stream)->seekg(0).good());
     (*stream)->read(&byte, 1);
     CHECK(byte == 'b');
+}
+
+TEST_CASE("unget and putback answer alike in the model and on the real filesystem", "[FileSystem]")
+{
+    // Leaving the get area empty is what lets a read stream notice a file that changed under it,
+    // but it also means std::streambuf can never satisfy a put-back itself: every unget() and
+    // putback() reaches pbackfail(), whose default refuses. So the round that set out to make
+    // this fake faithful had given every stream it hands out a badbit where std::ifstream and
+    // std::fstream succeed.
+    auto const model = InMemoryFileSystem {};
+    auto const dir = core::testing::ScopedTempDir { "core_putback" };
+
+    auto const fromModel = runPutbackScript(model, "/root/file.txt");
+    auto const fromNative = runPutbackScript(core::platform::NativeFileSystem::instance(), dir / "file.txt");
+
+    // What the real streams do, stated rather than merely compared -- otherwise two backends
+    // wrong in the same way would agree and pass.
+    CHECK(fromNative.ungetGood);
+    CHECK(fromNative.afterUnget == "a");
+    CHECK(fromNative.putbackSameGood);
+    CHECK(fromNative.afterPutbackSame == "a");
+    CHECK(fromNative.putbackOtherGood);
+    CHECK(fromNative.afterPutbackOther == "X");
+    // A put-back of a character the file does not hold does not write it to the file.
+    CHECK(fromNative.fileAfter == "abcdef");
+
+    // Field by field, so a regression names which answer moved rather than only that one did.
+    CHECK(fromModel.ungetGood == fromNative.ungetGood);
+    CHECK(fromModel.afterUnget == fromNative.afterUnget);
+    CHECK(fromModel.putbackSameGood == fromNative.putbackSameGood);
+    CHECK(fromModel.afterPutbackSame == fromNative.afterPutbackSame);
+    CHECK(fromModel.putbackOtherGood == fromNative.putbackOtherGood);
+    CHECK(fromModel.afterPutbackOther == fromNative.afterPutbackOther);
+    CHECK(fromModel.fileAfter == fromNative.fileAfter);
+    CHECK(fromModel == fromNative);
 }
