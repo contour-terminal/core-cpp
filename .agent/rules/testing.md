@@ -189,3 +189,25 @@ property**: `get_target_property(code core::testing_main CORE_CPP_SKIP_EXIT_CODE
   count scores it as clean. Read completeness first (did the reporter finish?), then the exit
   status, then the count. Origin:
   [fastcached#1212](https://github.com/LASTRADA-Software/fastcached/issues/1212).
+
+## Showing a red by swapping files is safe for behaviour, not for layout
+
+Proving a case fails before the fix usually means putting the old implementation back for one
+run: `git checkout -- <file>`, build, watch it fail, restore. That is sound when the change is
+behavioural. It is a trap when the change alters a type's **layout** — a member added or
+retyped, a base class introduced — because every translation unit that includes the header has
+to be recompiled, and nothing tells you when one was not.
+
+- A build that mixes objects compiled against the two versions links without a word, and then
+  corrupts the heap at run time. Task A10 spent an hour on a `gcc-release` run aborting with
+  glibc's `double free or corruption (out)` while `clang-debug`, `clang-release`,
+  `clang-asan-ubsan`, `clang-tsan`, `cl-debug` and `clangcl-release` were all green on the same
+  sources. The sources were fine; one object was not.
+- A compiler cache makes it easier to miss, because the object is rewritten with a fresh
+  timestamp whether or not its content reflects the header you just changed
+  ([`build-and-toolchain.md`](build-and-toolchain.md) says the same for `clangcl-*` trees).
+- **So: after restoring a file whose change was structural, rebuild that preset's tree from
+  scratch before trusting a green — and before trusting a red.** Deleting the module's
+  directory under `out/build/<preset>/` is enough; `--clean-first` is the blunt version.
+- The tell is a failure that only one toolchain sees, in code the diff did not touch, and that
+  moves or vanishes when tests are run individually. Suspect the build before the code.
