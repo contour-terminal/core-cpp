@@ -150,3 +150,30 @@ TEST_CASE("MessageQueue.size_and_empty", "[platform][messagequeue]")
     queue.tryPop();
     CHECK(queue.size() == 1);
 }
+
+TEST_CASE("MessageQueue.setWakeup_is_guarded_like_every_other_member", "[platform][messagequeue]")
+{
+    // setWakeup() wrote the pointer with no lock, while push() and shutdown() read it -- and
+    // dereferenced it -- from another thread. Every other member of the queue is guarded by
+    // _mutex, so ThreadSanitizer reports this pair; worse than the race is what it lets
+    // through, a teardown clearing the pointer that a push() in flight never sees, leaving it
+    // signalling a Wakeup that is already destroyed.
+    auto wakeup = Wakeup {};
+    auto queue = MessageQueue<int> {};
+
+    constexpr auto Rounds = 2000;
+    auto producer = std::thread([&] {
+        for (auto const i: std::views::iota(0, Rounds))
+            queue.push(i);
+    });
+
+    // The registration a real teardown performs, over and over against the live producer.
+    for ([[maybe_unused]] auto const round: std::views::iota(0, Rounds))
+    {
+        queue.setWakeup(&wakeup);
+        queue.setWakeup(nullptr);
+    }
+
+    producer.join();
+    CHECK(queue.size() == static_cast<size_t>(Rounds));
+}

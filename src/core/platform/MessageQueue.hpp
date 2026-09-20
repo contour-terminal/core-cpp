@@ -45,10 +45,14 @@ class MessageQueue
             if (_shutdown)
                 return false;
             _queue.push(std::move(msg));
+            // Signalled under the lock, not after it: what setWakeup(nullptr) has to guarantee
+            // is that no signal() is still in flight by the time it returns, so that the
+            // Wakeup can then be destroyed. Reading the pointer here and signalling outside
+            // would leave exactly that window open.
+            if (_wakeup != nullptr)
+                _wakeup->signal();
         }
         _cv.notify_one();
-        if (_wakeup)
-            _wakeup->signal();
         return true;
     }
 
@@ -116,10 +120,10 @@ class MessageQueue
         {
             auto lock = std::unique_lock(_mutex);
             _shutdown = true;
+            if (_wakeup != nullptr) // Under the lock, for the reason push() gives.
+                _wakeup->signal();
         }
         _cv.notify_all();
-        if (_wakeup)
-            _wakeup->signal();
     }
 
     /// @brief Resets the queue, clearing the shutdown flag and discarding any remaining messages.
@@ -155,10 +159,21 @@ class MessageQueue
 
     /// @brief Sets an optional wakeup primitive.
     ///
-    /// When set, push() calls wakeup->signal() after enqueuing,
+    /// When set, push() calls wakeup->signal() while enqueuing,
     /// so a blocked poll()/WaitForMultipleObjects() wakes immediately.
-    /// @param wakeup Pointer to the wakeup primitive (must outlive the queue), or nullptr to disable.
-    void setWakeup(Wakeup* wakeup) { _wakeup = wakeup; }
+    ///
+    /// Registration is guarded by the queue's own mutex, like every other member, and the
+    /// signalling happens under it too. So once setWakeup(nullptr) has returned, no push() or
+    /// shutdown() can still be inside signal(), and the Wakeup may be destroyed -- which is
+    /// what a teardown does, and what an unguarded pointer could not promise.
+    ///
+    /// @param wakeup Pointer to the wakeup primitive (it must outlive this registration), or
+    ///               nullptr to disable.
+    void setWakeup(Wakeup* wakeup)
+    {
+        auto lock = std::unique_lock(_mutex);
+        _wakeup = wakeup;
+    }
 
   private:
     mutable std::mutex _mutex;
