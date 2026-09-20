@@ -5,6 +5,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <ctime>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -62,6 +64,27 @@ struct TestCategory
 #else
     return static_cast<int>(::getpid());
 #endif
+}
+
+/// @return The current LOCAL time as `YYYY-MM-DD HH:MM`, the leading part of the timestamp field.
+///
+/// Spelled out here rather than taken from core::log::detail::localTime(), which is what the
+/// formatter uses: checking an implementation against itself asserts nothing.
+[[nodiscard]] std::string nowLocalToTheMinute()
+{
+    auto const now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    auto brokenDown = std::tm {};
+#ifdef _WIN32
+    ::localtime_s(&brokenDown, &now);
+#else
+    ::localtime_r(&now, &brokenDown);
+#endif
+    return std::format("{:04}-{:02}-{:02} {:02}:{:02}",
+                       brokenDown.tm_year + 1900,
+                       brokenDown.tm_mon + 1,
+                       brokenDown.tm_mday,
+                       brokenDown.tm_hour,
+                       brokenDown.tm_min);
 }
 
 /// @return What is left to read of @p stream.
@@ -249,6 +272,20 @@ TEST_CASE("the standard formatter lays a line out as configured", "[log][logsink
             core::log::makeStandardFormatter({ .colorize = false, .showProcessId = true }));
         category.value()("hello");
         CHECK(capture.contains(std::format("[{}]", processId())));
+    }
+
+    SECTION("the timestamp is this moment, in local time")
+    {
+        // The broken-down conversion is a platform implementation (log/posix/, log/windows/), and
+        // a std::tm it failed to fill renders 0000-00-00 00:00:00 -- which every other case here
+        // would accept. Read on both sides of the line and either may match, so a minute ticking
+        // over between the two cannot make this flap.
+        category.value.setFormatter(core::log::makeStandardFormatter({ .colorize = false }));
+        auto const before = nowLocalToTheMinute();
+        category.value()("hello");
+        auto const after = nowLocalToTheMinute();
+        INFO("expected " << before << " or " << after << ", got: " << capture.text());
+        CHECK((capture.contains(before) || capture.contains(after)));
     }
 
     SECTION("the timestamp can be suppressed")
