@@ -84,51 +84,28 @@ namespace
         MemoryOutputBuf _buf;
     };
 
-    // Custom streambuf backed by a string for reading.
-    class MemoryInputBuf final: public std::streambuf
-    {
-      public:
-        explicit MemoryInputBuf(std::string data): _data(std::move(data))
-        {
-            auto* begin = const_cast<char*>(_data.data());
-            setg(begin, begin, begin + _data.size());
-        }
-
-      private:
-        std::string _data;
-    };
-
-    class MemoryIStream final: public std::istream
-    {
-      public:
-        explicit MemoryIStream(std::string const& data): std::istream(&_buf), _buf(data) {}
-
-      private:
-        MemoryInputBuf _buf;
-    };
-
-    /// Combined read-write stream backed by in-memory data.
+    /// The read half of a stream over a file this filesystem holds.
     ///
-    /// One position for reading and for writing, as std::filebuf has: a write overwrites from
-    /// wherever the stream stands and extends the file only past its end.
+    /// Two things keep it honest about a file that changes behind its back, which this one can.
+    /// It shares ownership of the string, so the file outlives a remove() or a rename() that
+    /// takes the map entry away -- as an open descriptor does on POSIX. And it caches no pointer
+    /// into that string at all: the get area is left empty, so every read comes through
+    /// underflow(), uflow() or xsgetn() and re-reads where the data is now. A get area spanning
+    /// the string would be read directly by sgetc()/sbumpc() without entering this class, so a
+    /// reallocation -- which writeFile() causes -- could not be noticed between two reads.
     ///
-    /// Two things keep it safe against a file that changes behind its back, which this one can:
-    /// writeFile() reallocates the string, and remove() and rename() take the map entry away.
-    /// It shares ownership of the string, so the string outlives the entry; and it caches no
-    /// pointer into that string at all -- the get area is left empty, so every read comes
-    /// through underflow(), uflow() or xsgetn() and re-reads where the data is now. A get area
-    /// spanning the string would be read directly by sgetc()/sbumpc() without entering this
-    /// class, so a reallocation between two reads could not be noticed.
-    class MemoryIOBuf final: public std::streambuf
+    /// Reading live rather than from a snapshot is also what the native backend does: a read
+    /// descriptor sees writes that land after it was opened.
+    class MemoryReadBuf: public std::streambuf
     {
       public:
-        explicit MemoryIOBuf(std::shared_ptr<std::string> target): _target(std::move(target)) {}
+        explicit MemoryReadBuf(std::shared_ptr<std::string> target): _target(std::move(target)) {}
 
       protected:
         std::streamsize xsgetn(char* s, std::streamsize n) override
         {
             auto const count = std::min(static_cast<std::size_t>(n), readable());
-            std::copy_n(_target->data() + _position, count, s);
+            std::copy_n(contents().data() + _position, count, s);
             _position += count;
             return static_cast<std::streamsize>(count);
         }
@@ -137,7 +114,7 @@ namespace
         {
             if (readable() == 0)
                 return traits_type::eof();
-            return traits_type::to_int_type((*_target)[_position]);
+            return traits_type::to_int_type(contents()[_position]);
         }
 
         int_type uflow() override
@@ -150,28 +127,10 @@ namespace
 
         std::streamsize showmanyc() override { return static_cast<std::streamsize>(readable()); }
 
-        std::streamsize xsputn(char const* s, std::streamsize n) override
-        {
-            auto const count = static_cast<std::size_t>(n);
-            if (_position + count > _target->size())
-                _target->resize(_position + count);
-            _target->replace(_position, count, s, count);
-            _position += count;
-            return n;
-        }
-
-        int_type overflow(int_type ch) override
-        {
-            if (traits_type::eq_int_type(ch, traits_type::eof()))
-                return traits_type::not_eof(ch);
-            auto const byte = traits_type::to_char_type(ch);
-            return xsputn(&byte, 1) == 1 ? ch : traits_type::eof();
-        }
-
         pos_type seekoff(off_type off, std::ios_base::seekdir dir, std::ios_base::openmode) override
         {
             constexpr auto Refused = off_type { -1 };
-            auto const size = static_cast<off_type>(_target->size());
+            auto const size = static_cast<off_type>(contents().size());
 
             auto anchor = off_type { 0 }; // std::ios_base::beg
             if (dir == std::ios_base::end)
@@ -191,16 +150,68 @@ namespace
             return seekoff(off_type(pos), std::ios_base::beg, which);
         }
 
-      private:
+        /// @return The file's storage, shared with the filesystem and with every other stream
+        ///         open on it. Not const: this buffer's own constness says nothing about the
+        ///         file's, and the write half below assigns through it.
+        [[nodiscard]] std::string& contents() const noexcept { return *_target; }
+
+        /// @return Where the stream stands, for reading as much as for writing.
+        [[nodiscard]] std::size_t position() const noexcept { return _position; }
+
+        void setPosition(std::size_t at) noexcept { _position = at; }
+
         /// @return How many bytes are left from where the stream stands. Recomputed every time,
         ///         because the file can have grown or shrunk since the last call.
-        [[nodiscard]] std::size_t readable() const
+        [[nodiscard]] std::size_t readable() const noexcept
         {
-            return _target->size() > _position ? _target->size() - _position : 0;
+            return contents().size() > _position ? contents().size() - _position : 0;
         }
 
+      private:
         std::shared_ptr<std::string> _target;
         std::size_t _position = 0;
+    };
+
+    class MemoryIStream final: public std::istream
+    {
+      public:
+        explicit MemoryIStream(std::shared_ptr<std::string> target):
+            std::istream(&_buf), _buf(std::move(target))
+        {
+        }
+
+      private:
+        MemoryReadBuf _buf;
+    };
+
+    /// Combined read-write stream backed by in-memory data.
+    ///
+    /// The read half above, plus one position shared with the write half, as std::filebuf has: a
+    /// write overwrites from wherever the stream stands and extends the file only past its end.
+    class MemoryIOBuf final: public MemoryReadBuf
+    {
+      public:
+        using MemoryReadBuf::MemoryReadBuf;
+
+      protected:
+        std::streamsize xsputn(char const* s, std::streamsize n) override
+        {
+            auto const count = static_cast<std::size_t>(n);
+            auto const at = position();
+            if (at + count > contents().size())
+                contents().resize(at + count);
+            contents().replace(at, count, s, count);
+            setPosition(at + count);
+            return n;
+        }
+
+        int_type overflow(int_type ch) override
+        {
+            if (traits_type::eq_int_type(ch, traits_type::eof()))
+                return traits_type::not_eof(ch);
+            auto const byte = traits_type::to_char_type(ch);
+            return xsputn(&byte, 1) == 1 ? ch : traits_type::eof();
+        }
     };
 
     class MemoryIOStream final: public std::iostream
@@ -386,7 +397,7 @@ std::expected<std::unique_ptr<std::istream>, std::string> InMemoryFileSystem::op
     auto const it = _files.find(key);
     if (it == _files.end())
         return std::unexpected("No such file or directory");
-    return std::make_unique<MemoryIStream>(*it->second);
+    return std::make_unique<MemoryIStream>(it->second);
 }
 
 std::expected<std::unique_ptr<std::ostream>, std::string> InMemoryFileSystem::openWrite(

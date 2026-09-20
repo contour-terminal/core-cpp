@@ -257,6 +257,13 @@ workflow refuses one without a section here.
   where it lives rather than from where it was. An open stream consequently survives a remove and
   follows a rename, as an open file descriptor does on POSIX.
 
+- `core::platform::testing::InMemoryFileSystem`'s `openRead()` shares the file's storage instead
+  of handing the stream a snapshot, so a read stream sees writes that land after it was opened --
+  which is what a read descriptor does on the real filesystem, and what this fake's write streams
+  already did. A test written against the fake and run against `NativeFileSystem` no longer
+  disagrees on that point; the divergences that remain are listed in
+  [core-cpp#27](https://github.com/contour-terminal/core-cpp/issues/27).
+
 ### Breaking
 
 - `core::async::whenAny()` resolves to `std::optional<std::size_t>` rather than to a `std::size_t`

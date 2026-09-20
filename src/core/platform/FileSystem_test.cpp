@@ -767,3 +767,37 @@ TEST_CASE("a stream follows the file across a rename", "[FileSystem]")
     CHECK(after->size() == 64); // Overwritten in place, not appended.
     CHECK_FALSE(fs.exists("/root/before"));
 }
+
+TEST_CASE("a read stream sees a write that lands after it was opened", "[FileSystem]")
+{
+    // A read descriptor on a real filesystem sees writes that land after it was opened. The model
+    // handed the stream a snapshot instead, so it answered with content the file no longer had --
+    // a divergence a test author cannot see, which is what makes a fake untrustworthy
+    // (core-cpp#27). It is also the odd one out now that the write streams share the file.
+    auto const fs = InMemoryFileSystem {};
+    REQUIRE(fs.writeFile("/root/log", std::string(64, 'a')).has_value());
+
+    auto stream = fs.openRead("/root/log");
+    REQUIRE(stream.has_value());
+
+    // Past the old capacity, so the string behind the file is reallocated as well.
+    REQUIRE(fs.writeFile("/root/log", std::string(8192, 'b')).has_value());
+
+    auto byte = char {};
+    (*stream)->read(&byte, 1);
+    CHECK(byte == 'b');
+
+    // An append lands in the same file too, and the reader walks into it.
+    REQUIRE(fs.appendFile("/root/log", "tail").has_value());
+    REQUIRE((*stream)->seekg(8192).good());
+    auto tail = std::array<char, 4> {};
+    (*stream)->read(tail.data(), static_cast<std::streamsize>(tail.size()));
+    CHECK(std::string(tail.data(), static_cast<std::size_t>((*stream)->gcount())) == "tail");
+
+    // And the file outlives the name, as an open descriptor does on POSIX.
+    REQUIRE(fs.remove("/root/log") == true);
+    (*stream)->clear();
+    REQUIRE((*stream)->seekg(0).good());
+    (*stream)->read(&byte, 1);
+    CHECK(byte == 'b');
+}
