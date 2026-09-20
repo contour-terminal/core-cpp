@@ -95,7 +95,7 @@ constexpr auto FastcachedLineage = std::array {
 
 } // namespace
 
-TEST_CASE("Every NetErrorCode has a description of its own, in the house style", "[net][types]")
+TEST_CASE("Every NetErrorCode has a description of its own in the house style", "[net][types]")
 {
     auto seen = std::set<std::string_view> {};
     for (auto const code: allCodes())
@@ -148,7 +148,7 @@ TEST_CASE("A value outside the enumeration is described as unknown", "[net][type
     CHECK(core::net::toString(static_cast<NetErrorCode>(0xFF)) == "unknown error");
 }
 
-TEST_CASE("Both spellings of an expired deadline answer yes, and no other code does", "[net][types]")
+TEST_CASE("Both spellings of an expired deadline answer yes and no other code does", "[net][types]")
 {
     CHECK(isDeadlineExpiry(NetErrorCode::Timeout));
     CHECK(isDeadlineExpiry(NetErrorCode::WouldBlock));
@@ -173,7 +173,7 @@ TEST_CASE("Dropping WouldBlock stops an accept loop a quarter-second in (fastcac
     CHECK(isDeadlineExpiry(NetErrorCode::Timeout));    // the Winsock spelling
 }
 
-TEST_CASE("makeNetError carries every argument, and defaults the two it may omit", "[net][types]")
+TEST_CASE("makeNetError carries every argument and defaults the two it may omit", "[net][types]")
 {
     auto const full = makeNetError(NetErrorCode::AddressInUse, 98, "bind");
     CHECK(full.code == NetErrorCode::AddressInUse);
@@ -191,7 +191,7 @@ TEST_CASE("makeNetError carries every argument, and defaults the two it may omit
     CHECK(noContext.context.empty());
 }
 
-TEST_CASE("A default NetError is an unclassified OS error, never a success", "[net][types]")
+TEST_CASE("A default NetError is an unclassified OS error and never a success", "[net][types]")
 {
     auto const unclassified = NetError {};
     CHECK(unclassified.code == NetErrorCode::SystemError);
@@ -200,7 +200,7 @@ TEST_CASE("A default NetError is an unclassified OS error, never a success", "[n
     CHECK(unclassified.context.empty());
 }
 
-TEST_CASE("NetError describes its category, then its context, then the OS code", "[net][types]")
+TEST_CASE("NetError describes its category then its context then the OS code", "[net][types]")
 {
     CHECK(makeNetError(NetErrorCode::ConnReset, 104, "recv").toString()
           == "connection reset (recv) [errno 104]");
@@ -211,7 +211,7 @@ TEST_CASE("NetError describes its category, then its context, then the OS code",
           == "address not available (bind) [errno 99]");
 }
 
-TEST_CASE("NetError renders words, never an enumerator's position", "[net][types]")
+TEST_CASE("NetError renders words rather than an enumerator's position", "[net][types]")
 {
     // The merged rendering is contour's. fastcached's was `NetError(code=9 system=104 context=recv)`,
     // whose `9` is a position in an enumeration this very task renumbered, so an old log line and a
