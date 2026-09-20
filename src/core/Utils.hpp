@@ -300,7 +300,10 @@ inline std::unordered_map<std::string_view, std::string_view> splitKeyValuePairs
         i = text.find(delimiter, iBeg);
     }
 
-    auto const param = std::string_view(text.data() + iBeg);
+    // substr(), not std::string_view(text.data() + iBeg): the length-less constructor calls
+    // strlen(), and a string_view promises nothing past its own end -- neither a NUL there nor
+    // that the bytes beyond it are readable at all.
+    auto const param = text.substr(iBeg);
     if (auto const k = param.find('='); k != std::string_view::npos)
     {
         auto const key = param.substr(0, k);
@@ -541,13 +544,32 @@ std::basic_string<T> toHexString(std::basic_string_view<T> input)
     return output;
 }
 
+namespace detail
+{
+    /// Widens a character to what <cctype> accepts.
+    ///
+    /// tolower() and toupper() are defined for the values of `unsigned char` and for EOF, and
+    /// for nothing else. A plain `char` is signed on most platforms, so every byte with the high
+    /// bit set -- each continuation byte of a UTF-8 sequence among them -- would index the locale
+    /// table from a negative offset, which is undefined behaviour.
+    template <typename T>
+    [[nodiscard]] constexpr int asCTypeArgument(T ch) noexcept
+    {
+        if constexpr (sizeof(T) == 1)
+            return static_cast<int>(static_cast<unsigned char>(ch));
+        else
+            return static_cast<int>(ch);
+    }
+} // namespace detail
+
 template <typename T>
 inline std::basic_string<T> toLower(std::basic_string_view<T> value)
 {
     std::basic_string<T> result;
     result.reserve(value.size());
-    transform(
-        begin(value), end(value), back_inserter(result), [](auto ch) { return static_cast<T>(tolower(ch)); });
+    std::transform(begin(value), end(value), back_inserter(result), [](auto ch) {
+        return static_cast<T>(std::tolower(detail::asCTypeArgument(ch)));
+    });
     return result;
 }
 
@@ -563,7 +585,7 @@ inline std::basic_string<T> toUpper(std::basic_string_view<T> value)
     std::basic_string<T> result;
     result.reserve(value.size());
     std::transform(begin(value), end(value), back_inserter(result), [](auto ch) {
-        return static_cast<T>(std::toupper(ch));
+        return static_cast<T>(std::toupper(detail::asCTypeArgument(ch)));
     });
     return result;
 }
@@ -574,13 +596,23 @@ inline std::basic_string<T> toUpper(std::basic_string<T> const& value)
     return toUpper<T>(std::basic_string_view<T>(value));
 }
 
-inline std::string readFileAsString(std::filesystem::path const& path)
+/// Reads a file whole, as bytes.
+///
+/// @param path The file to read.
+/// @return Exactly the bytes the file holds; empty if it is empty or could not be read.
+[[nodiscard]] inline std::string readFileAsString(std::filesystem::path const& path)
 {
+    // The path goes in as a path: narrowing it through path::string() cannot represent every
+    // name the filesystem accepts, and on Windows throws for the ones it cannot.
+    //
+    // Binary, and truncated to what the read delivered: in text mode Windows translates each
+    // CRLF to one byte, so the stream hands over fewer bytes than file_size() reported and the
+    // shortfall stayed behind in the buffer as trailing NULs.
     auto const fileSize = std::filesystem::file_size(path);
-    auto text = std::string();
-    text.resize(static_cast<std::size_t>(fileSize));
-    std::ifstream in(path.string());
+    auto text = std::string(static_cast<std::size_t>(fileSize), '\0');
+    auto in = std::ifstream(path, std::ios::binary);
     in.read(text.data(), static_cast<std::streamsize>(fileSize));
+    text.resize(static_cast<std::size_t>(in.gcount()));
     return text;
 }
 
@@ -597,20 +629,36 @@ constexpr auto eachElement() noexcept
         struct iterator
         {
             T value;
+            /// The end iterator sits on the maximum and is marked done, because there is no
+            /// value past it to point at.
+            bool exhausted = false;
+
             constexpr T& operator*() noexcept { return value; }
             constexpr T const& operator*() const noexcept { return value; }
             constexpr iterator& operator++() noexcept
             {
-                value = static_cast<T>(static_cast<int>(value) + 1);
+                // Incrementing the maximum was `max + 1` computed in int and cast back: for a
+                // type narrower than int that wraps to the minimum, so end() equalled begin()
+                // and the range was empty; for one as wide as int it overflows.
+                if (value == std::numeric_limits<T>::max())
+                    exhausted = true;
+                else
+                    value = static_cast<T>(static_cast<std::uint64_t>(value) + 1);
                 return *this;
             }
-            constexpr bool operator==(iterator other) noexcept { return value == other.value; }
-            constexpr bool operator!=(iterator other) noexcept { return value != other.value; }
+            constexpr bool operator==(iterator other) const noexcept
+            {
+                return value == other.value && exhausted == other.exhausted;
+            }
+            constexpr bool operator!=(iterator other) const noexcept { return !(*this == other); }
         };
-        constexpr iterator begin() noexcept { return iterator { std::numeric_limits<T>::min() }; }
-        constexpr iterator end() noexcept
+        constexpr iterator begin() const noexcept
         {
-            return iterator { static_cast<T>(static_cast<int>(std::numeric_limits<T>::max()) + 1) };
+            return iterator { .value = std::numeric_limits<T>::min(), .exhausted = false };
+        }
+        constexpr iterator end() const noexcept
+        {
+            return iterator { .value = std::numeric_limits<T>::max(), .exhausted = true };
         }
     };
     return Container {};

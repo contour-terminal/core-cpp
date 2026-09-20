@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/Utils.hpp>
+#include <core/testing/ScopedTempDir.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdint>
+#include <fstream>
 #include <map>
+#include <vector>
 
 using std::string;
 using std::string_view;
+using namespace std::string_literals;
 using namespace std::string_view_literals;
 
 TEST_CASE("utils.split.0")
@@ -333,4 +338,142 @@ TEST_CASE("utils.trim")
     STATIC_CHECK(core::trim(""sv).empty());
     STATIC_CHECK(core::trimLeft(" \t"sv).empty());
     STATIC_CHECK(core::trimRight(" \t"sv).empty());
+}
+
+// A string_view carries its length and promises nothing beyond it. The last segment was rebuilt
+// with the length-less std::string_view(char const*) constructor, which calls strlen(): it read
+// past the view, and returned whatever followed as part of the value.
+TEST_CASE("utils.splitKeyValuePairs.bounded")
+{
+    SECTION("the last segment stops at the end of the view, not at the next NUL")
+    {
+        auto const backing = "foo=bar:trailing=junk"s;
+        auto const view = string_view { backing }.substr(0, 7); // "foo=bar"
+        auto const result = core::splitKeyValuePairs(view, ':');
+        CHECK(result.size() == 1);
+        CHECK(result.at("foo") == "bar"sv);
+    }
+
+    SECTION("a view whose last byte is the last byte of its allocation is not read past")
+    {
+        // No NUL anywhere in the buffer: strlen() would run off the end of the heap block,
+        // which is what AddressSanitizer reports.
+        auto const backing = std::vector<char> { 'f', 'o', 'o', '=', 'b', 'a', 'r' };
+        auto const result = core::splitKeyValuePairs(string_view { backing.data(), backing.size() }, ':');
+        CHECK(result.size() == 1);
+        CHECK(result.at("foo") == "bar"sv);
+    }
+}
+
+// tolower()/toupper() are undefined for a char whose value is negative, which every continuation
+// byte of a UTF-8 sequence is. cli::about::registerProjects() sorts project titles through these.
+TEST_CASE("utils.toLower/toUpper.non-ascii")
+{
+    auto const utf8 = "Grüße, WELT"sv; // 'ü' and 'ß' are two bytes each, both with the high bit set
+
+    SECTION("bytes outside ASCII pass through unchanged")
+    {
+        CHECK(core::toLower(utf8) == "grüße, welt"sv);
+        CHECK(core::toUpper(utf8) == "GRüßE, WELT"sv);
+    }
+
+    SECTION("every byte value is accepted")
+    {
+        auto every = string {};
+        for (auto const i: std::views::iota(0, 256))
+            every.push_back(static_cast<char>(i));
+        CHECK(core::toLower(string_view { every }).size() == every.size());
+        CHECK(core::toUpper(string_view { every }).size() == every.size());
+    }
+}
+
+TEST_CASE("utils.readFileAsString")
+{
+    auto const tmp = core::testing::ScopedTempDir { "core-cpp-utils" };
+
+    auto const write = [](std::filesystem::path const& path, string_view bytes) {
+        auto out = std::ofstream { path, std::ios::binary };
+        out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    };
+
+    SECTION("the bytes on disk come back, and nothing else")
+    {
+        // CRLF on purpose: opened in text mode, Windows delivers fewer bytes than file_size()
+        // reported, and the shortfall stayed behind as trailing NULs.
+        auto const path = tmp / "crlf.txt";
+        auto const content = "line one\r\nline two\r\n"sv;
+        write(path, content);
+        CHECK(core::readFileAsString(path) == content);
+    }
+
+    SECTION("an empty file reads as an empty string")
+    {
+        auto const path = tmp / "empty.txt";
+        write(path, ""sv);
+        CHECK(core::readFileAsString(path).empty());
+    }
+
+    SECTION("a path that is not representable in the native narrow encoding still opens")
+    {
+        auto const path = tmp.path() / std::filesystem::path(u8"grüße-日本語.txt");
+        auto const content = "payload"sv;
+        write(path, content);
+        CHECK(core::readFileAsString(path) == content);
+    }
+}
+
+TEST_CASE("utils.eachElement")
+{
+    SECTION("an unsigned type is walked from its minimum to its maximum, inclusive")
+    {
+        // end() was numeric_limits<T>::max() + 1 computed in int and cast back, which for an
+        // 8-bit type is 0 -- equal to begin(), so the range was empty.
+        auto count = 0;
+        auto last = 0;
+        for (auto const value: core::eachElement<uint8_t>())
+        {
+            ++count;
+            last = value;
+        }
+        CHECK(count == 256);
+        CHECK(last == 255);
+    }
+
+    SECTION("a signed type is walked from its minimum to its maximum, inclusive")
+    {
+        auto count = 0;
+        auto first = 0;
+        auto last = 0;
+        for (auto const value: core::eachElement<int8_t>())
+        {
+            if (count == 0)
+                first = value;
+            ++count;
+            last = value;
+        }
+        CHECK(count == 256);
+        CHECK(first == -128);
+        CHECK(last == 127);
+    }
+
+    SECTION("a type as wide as int is not walked into an overflow")
+    {
+        // Not iterated to exhaustion -- four billion steps -- but end() must not have wrapped
+        // onto begin(), which would make the range empty and the loop body unreachable.
+        auto count = 0;
+        for (auto const value: core::eachElement<uint32_t>())
+        {
+            CHECK(value == static_cast<uint32_t>(count));
+            if (++count == 4)
+                break;
+        }
+        CHECK(count == 4);
+    }
+}
+
+TEST_CASE("utils.threadName")
+{
+    // The Windows path resized by the conversion length minus one, which underflowed when the
+    // conversion failed and threw before the buffer was freed.
+    CHECK_NOTHROW(core::threadName());
 }

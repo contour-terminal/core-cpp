@@ -23,17 +23,22 @@ std::string threadName()
 #ifdef _WIN32
     auto const threadHandle = GetCurrentThread();
     PWSTR pwsz = nullptr;
-    HRESULT hr = GetThreadDescription(threadHandle, &pwsz);
-    if (SUCCEEDED(hr))
+    HRESULT const hr = GetThreadDescription(threadHandle, &pwsz);
+    if (FAILED(hr))
+        return ""s;
+
+    // One exit past this point, so the description is always freed. A conversion that fails
+    // answers 0, and `len - 1` as a std::size_t underflowed: resize() threw length_error, and
+    // the LocalFree() below it never ran.
+    auto result = ""s;
+    if (int const len = WideCharToMultiByte(CP_UTF8, 0, pwsz, -1, nullptr, 0, nullptr, nullptr); len > 0)
     {
-        int const len = WideCharToMultiByte(CP_UTF8, 0, pwsz, -1, nullptr, 0, nullptr, nullptr);
-        std::string utf8Str(static_cast<std::size_t>(len), '\0');
-        WideCharToMultiByte(CP_UTF8, 0, pwsz, -1, utf8Str.data(), len, nullptr, nullptr);
-        utf8Str.resize(static_cast<std::size_t>(len - 1));
-        LocalFree(pwsz);
-        return utf8Str;
+        result.resize(static_cast<std::size_t>(len));
+        WideCharToMultiByte(CP_UTF8, 0, pwsz, -1, result.data(), len, nullptr, nullptr);
+        result.resize(static_cast<std::size_t>(len - 1)); // drop the NUL the conversion wrote
     }
-    return ""s;
+    LocalFree(pwsz);
+    return result;
 #elifdef __EMSCRIPTEN__
     // Emscripten's libc leaves pthread_getname_np() out, and without pthreads there is nothing
     // to name.
