@@ -47,3 +47,34 @@ TEST_CASE("ScopedEnv removes a variable that was not set before it", "[testing][
     }
     CHECK(!live.get(Name).has_value());
 }
+
+TEST_CASE("setTestEnv sets an empty value rather than removing the variable", "[testing][env]")
+{
+    // An empty value is a variable that is set, which is what LiveEnvironment answers and what
+    // Environment_test asserts of the writer. On Windows _putenv_s(name, "") removes the
+    // variable instead, in the CRT's copy and in the Win32 block both.
+    auto const live = core::LiveEnvironment {};
+
+    core::testing::setTestEnv(Name, "");
+    CHECK(live.get(Name) == "");
+
+    core::testing::unsetTestEnv(Name);
+    CHECK(!live.get(Name).has_value());
+}
+
+TEST_CASE("ScopedEnv restores a previous value that was empty", "[testing][env]")
+{
+    // The environment is process-global, so a destructor that removes a variable it was meant to
+    // put back does not just fail this test: it changes what every test after it reads.
+    auto const live = core::LiveEnvironment {};
+    core::testing::setTestEnv(Name, "");
+    REQUIRE(live.get(Name) == "");
+    {
+        auto const scoped = core::testing::ScopedEnv { Name, "inner" };
+        CHECK(live.get(Name) == "inner");
+    }
+    CHECK(live.get(Name) == "");
+
+    core::testing::unsetTestEnv(Name);
+    CHECK(!live.get(Name).has_value());
+}
