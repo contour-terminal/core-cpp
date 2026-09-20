@@ -98,7 +98,7 @@ tests/
                             run under node
 scripts/
   tool-versions.py          prints, installs or checks the pinned clang-format/clang-tidy
-  clang-format.py           formats or checks every C++ source with the pinned clang-format
+  clang-format.py           formats or checks the C++ sources named, or --all, with the pinned build
 docs/                       the documentation site (mkdocs.yml at the root); Doxyfile for /api/
   superpowers/              the design spec and implementation plan (not part of the site)
 .agent/                     the rulebook, guides and this reference (AGENT.md is the index)

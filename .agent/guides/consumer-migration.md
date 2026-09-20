@@ -121,6 +121,14 @@ failure modes a diff read does not:
 
 It covers files for platforms you cannot even compile, which is most of them for most consumers.
 
+It also defends against the failure class that produced most of the near-misses in building these
+tools: **a mechanical check believed from its summary rather than its output.** A rename that
+reported 59 replacements had silently skipped every attribute access; an `awk` that reported no
+over-long lines had been truncated by a `head`; a `git diff` warning about CRLF was read as a
+present fact when it described a past one. Each looked like a clean result and was a clean result
+*of the wrong question*. A codemod's replacement count is a summary in exactly that sense — this
+check reads the output instead.
+
 What it does **not** catch is a *correct* rewrite to the *wrong target* — every byte as the table
 says, and the table wrong. That is what `check-renames.py` is for, and the two are complementary:
 this proves the tool did only what the table says, the gate proves the table says the right thing.

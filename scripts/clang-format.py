@@ -2,9 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Formats core-cpp's C++ sources with the pinned clang-format, or checks that they are formatted.
 
-    python scripts/clang-format.py                    # rewrites every C++ source in place
-    python scripts/clang-format.py --check            # fails, naming each file, unless all are formatted
-    python scripts/clang-format.py --binary <path>    # uses this clang-format, which must be the pin
+    python scripts/clang-format.py src/core/net/EventLoop.cpp   # the files you touched
+    python scripts/clang-format.py --all                        # every C++ source in the tree
+    python scripts/clang-format.py --all --check                # what CI runs; names each unformatted file
+    python scripts/clang-format.py --binary <path> <paths>      # uses this clang-format, which must be the pin
+
+**A bare run is an error**, not "format everything": rewriting the whole tree is what breaks the
+standing rule against formatting a file another session is editing, and a default the tooling
+breaks is a rule that gets broken. Name the files, or say `--all` and mean it.
 
 Which clang-format runs: --binary, else $CLANG_FORMAT, else the one the pinned PyPI package installed
 (python scripts/tool-versions.py --install), else the first on PATH. Whichever it is must report
@@ -94,8 +99,24 @@ def main() -> int:
         "--check", action="store_true", help="report unformatted files instead of rewriting them"
     )
     parser.add_argument("--binary", help="the clang-format to run (must be the pinned version)")
+    parser.add_argument("--all", action="store_true", help="format every C++ source git knows about")
     parser.add_argument("paths", nargs="*", help="files to format instead of every C++ source")
     arguments = parser.parse_args()
+
+    # A bare run would rewrite every file in the tree, including ones another lane is editing, and
+    # "never run a formatter over a file another session is editing" is a standing constraint. A
+    # default the tooling breaks is a rule that gets broken, so name the two ways to mean it
+    # (controller ruling R89).
+    if arguments.all and arguments.paths:
+        print("clang-format.py: --all covers everything, so it takes no paths", file=sys.stderr)
+        return 2
+    if not arguments.all and not arguments.paths:
+        print(
+            "clang-format.py: name the files to format, or pass --all for every C++ source git knows "
+            "about. A bare run rewrites the whole tree, including files another session is editing.",
+            file=sys.stderr,
+        )
+        return 2
 
     pin = load_tool_versions().pinned("clang-format")
     binary = find_binary(arguments.binary)
@@ -115,7 +136,7 @@ def main() -> int:
         )
         return 2
 
-    files = arguments.paths or sources()
+    files = sources() if arguments.all else arguments.paths
     mode = ["--dry-run", "--Werror"] if arguments.check else ["-i"]
     failed = False
     for start in range(0, len(files), BATCH_SIZE):
@@ -125,7 +146,7 @@ def main() -> int:
 
     if failed and arguments.check:
         print(
-            "clang-format.py: the files above are not formatted; run: python scripts/clang-format.py",
+            "clang-format.py: the files above are not formatted; run: python scripts/clang-format.py --all",
             file=sys.stderr,
         )
     elif not failed:

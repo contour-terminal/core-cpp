@@ -66,6 +66,14 @@ exemption short of an allowlist row that states its reason.
   `cmake/CoreCppToolchain.cmake` that says why the finding cannot be fixed in core-cpp's code.
   The one allowlisted pragma is `SuppressWindowsDialogsAtStartup.cpp`'s `init_seg(lib)`, whose
   reason is on its row in the hygiene scan. *(contour's zero-warning policy)*
+- **The ban is on the act, not on the spelling: it covers every language's suppression comment.**
+  A `# noqa` is the Python `NOLINT`, and so is a `# type: ignore`, a `// eslint-disable`, a
+  `# ruff: noqa` or a `#[allow(...)]`. Enabling ruff's linter over `tools/migrate/` retired three
+  of them and none needed to stay: two were inert once a real rule set existed, and the third was
+  an `E402` on an `import` under a `sys.path.insert` -- which went away for a **better reason than
+  suppression**, because Python already puts a script's own directory first on `sys.path`, so the
+  surgery the import needed excusing for was never needed at all. **A suppression comment is
+  usually a fix nobody looked for.** *(Task C0)*
 - **No new third-party dependency** without an option that gates it, a row in
   `cmake/CoreCppDependencies.cmake` saying how it is found or fetched, and a CHANGELOG entry.
   See [`library-hygiene.md`](https://github.com/contour-terminal/core-cpp/blob/master/.agent/rules/library-hygiene.md).
@@ -204,7 +212,8 @@ has the measurement that made this a rule.
   the same file differently, and an older clang-tidy is silent about checks it does not have,
   so a tree clean under whatever binary is on `PATH` can still be rejected by CI.
   Install the pins with `python scripts/tool-versions.py --install`; format with
-  `python scripts/clang-format.py`, which refuses every other build. *(fastcached)*
+  `python scripts/clang-format.py <paths>` (or `--all`), which refuses every other build, and
+  refuses a bare run rather than rewriting a tree somebody else is working in. *(fastcached)*
 - **Never run `clang-format -i` with another version.** As a checker an older binary is worth
   something; as a formatter it rewrites code the pinned one already accepted, and the diff is
   invisible in review because every line of it is "just formatting". Run any other build with
@@ -214,7 +223,7 @@ has the measurement that made this a rule.
 
 ## Checklist before pushing
 
-1. `python scripts/clang-format.py --check` is clean.
+1. `python scripts/clang-format.py --all --check` is clean.
 2. The `clang-tidy` preset builds with no finding, and no `NOLINT` was added.
 3. `clang-debug` and `gcc-release` build without a warning and pass `ctest` (on Windows:
    `cl-debug` and `clangcl-release`).

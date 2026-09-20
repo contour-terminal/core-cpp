@@ -2,9 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Holds core-cpp's Python to the pinned ruff: formats it, and lints it.
 
-    python scripts/python-style.py                    # formats every Python source in place, then lints
-    python scripts/python-style.py --check            # fails, naming each file, unless all are clean
-    python scripts/python-style.py --binary <path>    # uses this ruff, which must be the pin
+    python scripts/python-style.py tools/migrate/rewrite.py   # the files you touched
+    python scripts/python-style.py --all                      # every Python source in the tree
+    python scripts/python-style.py --all --check              # what CI runs; names each unclean file
+    python scripts/python-style.py --binary <path> <paths>    # uses this ruff, which must be the pin
+
+**A bare run is an error**, not "format everything": rewriting the whole tree is what breaks the
+standing rule against formatting a file another session is editing, and a default the tooling
+breaks is a rule that gets broken. Name the files, or say `--all` and mean it.
 
 Both halves run and both report before either fails, so one run tells you everything: `ruff format`
 for layout, and `ruff check` for ruff's default rule set, which `ruff.toml` states -- undefined
@@ -102,8 +107,24 @@ def main() -> int:
         "--check", action="store_true", help="report unformatted files instead of rewriting them"
     )
     parser.add_argument("--binary", help="the ruff to run (must be the pinned version)")
+    parser.add_argument("--all", action="store_true", help="check every Python source git knows about")
     parser.add_argument("paths", nargs="*", help="files to format instead of every Python source")
     arguments = parser.parse_args()
+
+    # A bare run would rewrite every file in the tree, including ones another lane is editing, and
+    # "never run a formatter over a file another session is editing" is a standing constraint. A
+    # default the tooling breaks is a rule that gets broken, so name the two ways to mean it
+    # (controller ruling R89).
+    if arguments.all and arguments.paths:
+        print("python-style.py: --all covers everything, so it takes no paths", file=sys.stderr)
+        return 2
+    if not arguments.all and not arguments.paths:
+        print(
+            "python-style.py: name the files to check, or pass --all for every Python source git knows "
+            "about. A bare run rewrites the whole tree, including files another session is editing.",
+            file=sys.stderr,
+        )
+        return 2
 
     pin = load_tool_versions().pinned("ruff")
     binary = find_binary(arguments.binary)
@@ -122,7 +143,7 @@ def main() -> int:
         )
         return 2
 
-    files = arguments.paths or sources()
+    files = sources() if arguments.all else arguments.paths
     if not files:
         print("python-style.py: no Python sources found", file=sys.stderr)
         return 2
@@ -136,7 +157,7 @@ def main() -> int:
 
     if unformatted and arguments.check:
         print(
-            "python-style.py: the files above are not formatted; run: python scripts/python-style.py",
+            "python-style.py: the files above are not formatted; run: python scripts/python-style.py --all",
             file=sys.stderr,
         )
     if linted:

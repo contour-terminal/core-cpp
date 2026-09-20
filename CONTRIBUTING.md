@@ -48,15 +48,20 @@ output changes between its releases too:
 
 ```sh
 python scripts/tool-versions.py --install             # the three pins, from .<tool>-version
-python scripts/clang-format.py                        # format every C++ source
-python scripts/clang-format.py --check                # what CI runs
-python scripts/python-style.py                        # format every Python source, then lint
-python scripts/python-style.py --check                # what CI runs
+python scripts/clang-format.py <paths>                # format the files you touched
+python scripts/clang-format.py --all --check          # what CI runs
+python scripts/python-style.py <paths>                # format and lint the files you touched
+python scripts/python-style.py --all --check          # what CI runs
 cmake --preset clang-tidy && cmake --build --preset clang-tidy
 ```
 
 `scripts/clang-format.py` and `scripts/python-style.py` each refuse any build that is not the pinned
-one. Never format with another version, and never silence a finding with `NOLINT`: fix it.
+one. Never format with another version, and never silence a finding with `NOLINT` -- or with any
+other language's suppression comment: fix it.
+
+**Both refuse a bare run**, naming the files you touched or `--all` as the two ways to mean it. A
+bare invocation used to rewrite the whole tree, which is exactly what the rule against formatting
+a file somebody else is editing forbids; a default the tooling breaks is a rule that gets broken.
 
 The Python wraps at the same column as the C++: `ruff.toml`'s `line-length` is `.clang-format`'s
 `ColumnLimit`, so one number governs the repository. `ruff.toml` also states ruff's default lint
