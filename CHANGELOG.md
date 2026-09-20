@@ -181,9 +181,16 @@ workflow refuses one without a section here.
   an unparsable line, a missing `# repository` or `# ref` header, a `# commit` that is not 40
   lowercase hex digits, and a `# files` count that is absent, is not a number, is zero or disagrees
   with the lines below it -- needing no git, because a consumer runs it in its own CI. A sync
-  assembles the new copy in `DEST/.core-cpp-vendor-staging/` and replaces the old one only once the
-  whole copy is legal; every refusal deletes that staging directory on its way out, so a copy a
-  refused sync found still passes its own check. It refuses a `DEST` that is not one of ours, and
+  assembles the new copy in `DEST.core-cpp-vendor-new`, a sibling of `DEST`, and touches `DEST`
+  itself only once that copy is legal; every refusal deletes the sibling on its way out, so a copy
+  a refused sync found still passes its own check with nothing new beside it. The replacement is
+  then two directory renames through `DEST.core-cpp-vendor-old`
+  (`cmake/CoreCppVendorReplace.cmake`) rather than a file-by-file move into an emptied `DEST`, so
+  `DEST` ends up holding the old copy or the new one and never half of each: a rename that fails --
+  on Windows an open handle, a lock or a scanner can fail one -- puts the previous copy back and
+  refuses, and if that restore fails too the refusal names both directories and deletes neither. A
+  `DEST.core-cpp-vendor-old` left by a previous run holds the only copy of what was there, so a
+  sync refuses rather than delete it to make room. It refuses a `DEST` that is not one of ours, and
   it refuses what it cannot copy correctly: a `REF` that is not a tag or a full 40-character SHA,
   a local `REPO` that is not the root of its own repository, a ref whose tree is not core-cpp's,
   and a `MODULES` list that omits a module the ref's own table builds unconditionally. The last

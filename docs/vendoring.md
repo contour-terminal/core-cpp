@@ -52,10 +52,18 @@ cmake -DMODE=check -DDEST=<dir> -P <dir>/cmake/CoreCppVendor.cmake
   working tree's line-ending settings reach the copy, and it refuses a file containing a CR byte,
   a symbolic link and a submodule.
 - **A refusal leaves the previous copy exactly as it was.** `sync` assembles the whole new copy in
-  `<dir>/.core-cpp-vendor-staging/` first and touches nothing else until it is complete and legal;
-  only then is the old copy removed and the staged one moved into place. Every refusal deletes that
-  staging directory on its way out, so a `DEST` that a refused `sync` found still passes its own
-  `check` afterwards.
+  `<dir>.core-cpp-vendor-new` — a *sibling* of `<dir>`, not something inside it — and touches
+  `<dir>` itself only once that copy is complete and legal. Every refusal deletes the sibling on
+  its way out, so a `DEST` that a refused `sync` found still passes its own `check` afterwards, with
+  nothing new beside it.
+- **`<dir>` is the old copy or the new one, never half of each.** Putting the new copy in place is
+  two directory renames — `<dir>` to `<dir>.core-cpp-vendor-old`, then `<dir>.core-cpp-vendor-new`
+  to `<dir>` — and the old copy is deleted only after both have succeeded. If the second fails, and
+  on Windows a rename can fail on an open handle, a lock or a scanner, the previous copy is put back
+  and `sync` refuses. If that restore fails too, `sync` refuses and names both directories, deleting
+  neither, so you can finish by hand. A `<dir>.core-cpp-vendor-old` you find on disk is a previous
+  run that got that far: it holds the only copy of what was there, so `sync` refuses to run again
+  until you have moved it back or deleted it.
 - **`sync` replaces the copy it finds.** A `DEST` holding a manifest is emptied first, so a file
   the new ref no longer has is gone rather than left behind; a `DEST` with files and no manifest
   is refused, because it is not a copy of ours to delete.

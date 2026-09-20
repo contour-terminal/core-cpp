@@ -27,6 +27,8 @@ cmake/
     README.md               provenance of the verbatim files, and how to re-sync them
   CoreCppVendor.cmake       the vendoring contract: MODE=sync copies a ref's file set out of git's
                             blobs and writes MANIFEST; MODE=check re-hashes a copy, needing no git
+  CoreCppVendorReplace.cmake  the one part of a sync that can damage a copy, in a function so a
+                            test can call it: two directory renames, and a restore when one fails
 src/core/
   Config.hpp.in             generates <core/Config.hpp>: version, skip exit code, WITH_* flags
   *.hpp, *.cpp              core::base (crispy, fastcached Core): Assert, Defines, Environment,
