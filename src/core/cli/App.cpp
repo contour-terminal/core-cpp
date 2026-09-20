@@ -56,13 +56,14 @@ cli::HelpDisplayStyle helpStyle()
 
     style.optionStyle = cli::OptionStyle::Natural;
 
-#ifndef _WIN32
-    if (isatty(STDOUT_FILENO) == 0)
+    // Asked once, in core::log, rather than branched on the platform here: the Windows half of
+    // the branch that used to stand here answered "a terminal" unconditionally, so a redirected
+    // `--help` carried SGR escapes and OSC 8 hyperlinks into the file reading it.
+    if (!core::log::isStdOutTerminal())
     {
         style.colors.reset();
         style.hyperlink = false;
     }
-#endif
 
     return style;
 }
@@ -73,7 +74,9 @@ unsigned screenWidth()
 
 #ifndef _WIN32
     auto ws = winsize {};
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) != -1)
+    // A pty with no size set reports 0 columns, which is not a width anything can lay text out
+    // against -- it is what made the help text's wrapping index walk off the end of its text.
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) != -1 && ws.ws_col > 0)
         return ws.ws_col;
 #endif
 
@@ -150,7 +153,10 @@ void App::link(std::string command, std::function<int()> handler)
 
 void App::listDebugTags()
 {
-    auto& categories = core::log::get();
+    // A copy: core::log::get() is the process-wide registry, and its order is its construction
+    // order, which core::log documents and a reader of a log file relies on. Sorting it in place
+    // for the sake of one listing rearranged it for everything else in the process.
+    auto categories = core::log::get();
     std::ranges::sort(categories,
                       [](auto const& a, auto const& b) { return a.get().name() < b.get().name(); });
 
@@ -221,11 +227,23 @@ int App::versionAction()
 bool App::reparseParameters(int argc, char const* argv[])
 {
     _syntax = parameterDefinition();
-    optional<cli::FlagStore> flagsOpt = cli::parse(_syntax.value(), argc, argv);
-    if (!flagsOpt.has_value())
+
+    // cli::parse() throws for a value of the wrong type and for a missing required option (see
+    // its declaration). This function's contract is a bool, so a failure is a value here: without
+    // the catch an exception escaped a function whose caller has no reason to expect one.
+    try
+    {
+        optional<cli::FlagStore> flagsOpt = cli::parse(_syntax.value(), argc, argv);
+        if (!flagsOpt.has_value())
+            return false;
+        _flags = std::move(flagsOpt.value());
+        return true;
+    }
+    catch (exception const& e)
+    {
+        std::cerr << std::format("{}: {}\n", _appName, e.what());
         return false;
-    _flags = std::move(flagsOpt.value());
-    return true;
+    }
 }
 
 bool App::parseParametersForTesting(int argc, char const* argv[])
@@ -274,9 +292,21 @@ int App::run(int argc, char const* argv[])
 std::expected<void, std::string> App::installLogging(std::string const& optionPrefix, bool showProcessId)
 {
     auto const filter = parameters().get<std::string>(optionPrefix + ".log");
+    auto const file = core::log::parseLogFileSpec(parameters().get<std::string>(optionPrefix + ".log-file"));
+
+    // Released BEFORE the replacement is created. A ScopedOutput snapshots every category's sink
+    // as it installs itself, and restores that snapshot when it dies: assigning the replacement
+    // over the member destroyed the previous one AFTERWARDS, so every category went back to what
+    // the previous one had found — the console — and held a reference into a destroyed sink.
+    //
+    // The cost of releasing first is that a destination which then fails to open leaves logging
+    // on the console rather than on whatever was installed before; the caller is told, and has
+    // nothing to fall back to either way.
+    _logOutput.reset();
+
     auto output = core::log::ScopedOutput::create({
         .filter = filter,
-        .file = core::log::parseLogFileSpec(parameters().get<std::string>(optionPrefix + ".log-file")),
+        .file = file,
         .showProcessId = showProcessId,
     });
     if (!output)
@@ -300,12 +330,7 @@ void App::customizeLogStoreOutput()
 
     // console() writes to std::cout, so STDOUT is the right stream to ask about here.
     // (A destination that writes elsewhere must gate on ITS stream — see core::log::ScopedOutput.)
-    static bool const colorized =
-#ifndef _WIN32
-        isatty(STDOUT_FILENO) != 0;
-#else
-        true;
-#endif
+    static bool const colorized = core::log::isStdOutTerminal();
 
     // The historical console shape: timestamped standard lines, and a bare `[error]` tag with
     // no timestamp for errors. Destinations that want the process id (or a timestamp on error

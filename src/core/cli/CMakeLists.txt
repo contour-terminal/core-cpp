@@ -6,4 +6,4 @@ core_cpp_add_module(cli KIND STATIC
     SOURCES App.cpp CLI.cpp
     PUBLIC_LIBS core::base core::log)
 
-core_cpp_add_test(cli SOURCES CLI_test.cpp)
+core_cpp_add_test(cli SOURCES App_test.cpp CLI_test.cpp)
