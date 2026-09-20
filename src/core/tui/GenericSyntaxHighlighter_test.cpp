@@ -37,6 +37,17 @@ bool categoryAt(HighlightMap const& map, std::size_t pos, Cat expected)
 // Language detection
 // =============================================================================
 
+// Both table lookups are `constexpr` public API, and the registry parameter must not have cost
+// them that: with no registry the body never reaches SyntaxHighlighterRegistry's non-constexpr
+// members, and these assertions make every toolchain prove it rather than leaving it to whether
+// one of them treats the function as never constant-evaluable.
+static_assert(detectLanguageFromExtension(".cpp") == LanguageId::Cpp);
+static_assert(detectLanguageFromExtension(".nope") == LanguageId::None);
+static_assert(detectLanguageFromFenceTag("python") == LanguageId::Python);
+static_assert(detectLanguageFromFenceTag("nope") == LanguageId::None);
+static_assert(!isRegisteredLanguage(LanguageId::Cpp));
+static_assert(isRegisteredLanguage(static_cast<LanguageId>(FirstRegisteredLanguageId)));
+
 TEST_CASE("GenericSyntaxHighlighter.detectLanguageFromExtension", "[tui][highlight]")
 {
     CHECK(detectLanguageFromExtension(".cpp") == LanguageId::Cpp);
