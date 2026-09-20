@@ -387,7 +387,7 @@ TEST_CASE("readUntil rejects an empty delimiter", "[net][reader]")
     loop.blockOn(readOneUntil(&reader, &delimiter, &head, &error));
 
     REQUIRE(error.has_value());
-    REQUIRE(error->code == NetErrorCode::Other);
+    REQUIRE(error->code == NetErrorCode::SystemError);
 }
 
 TEST_CASE("readExactly assembles a payload across fragmented reads", "[net][reader]")

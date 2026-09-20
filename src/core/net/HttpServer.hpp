@@ -101,7 +101,7 @@ struct HttpLimits
 /// @param limits Parsing limits.
 /// @return The parsed request, or a @c NetError: @c Eof if the peer closed before a
 ///         complete request, @c MessageTooLarge if a limit was exceeded, or
-///         @c Other for a malformed request line.
+///         @c SystemError for a malformed request line.
 [[nodiscard]] async::Task<std::expected<HttpRequest, NetError>> readRequest(ISocket* socket,
                                                                             HttpLimits limits = {});
 

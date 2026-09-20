@@ -106,7 +106,7 @@ namespace
                     }
                     default:
                         co_return std::unexpected(
-                            makeNetError(NetErrorCode::Other, 0, "SSL_read: " + opensslError()));
+                            makeNetError(NetErrorCode::SystemError, 0, "SSL_read: " + opensslError()));
                 }
             }
         }
@@ -147,7 +147,7 @@ namespace
                     }
                     default:
                         co_return std::unexpected(
-                            makeNetError(NetErrorCode::Other, 0, "SSL_write: " + opensslError()));
+                            makeNetError(NetErrorCode::SystemError, 0, "SSL_write: " + opensslError()));
                 }
             }
             co_return total;
@@ -271,7 +271,7 @@ namespace
                 else if (err != SSL_ERROR_WANT_WRITE)
                 {
                     outcome = std::unexpected(
-                        makeNetError(NetErrorCode::Other, 0, "TLS handshake: " + opensslError()));
+                        makeNetError(NetErrorCode::SystemError, 0, "TLS handshake: " + opensslError()));
                     break;
                 }
             }
@@ -305,7 +305,7 @@ namespace
                 // timeout. A pending-but-unreadable write BIO is an error; say so.
                 if (n <= 0)
                     co_return std::unexpected(makeNetError(
-                        NetErrorCode::Other, 0, "TLS flushOut: BIO_read failed: " + opensslError()));
+                        NetErrorCode::SystemError, 0, "TLS flushOut: BIO_read failed: " + opensslError()));
                 auto const written = co_await _inner->write(
                     std::span<std::byte const> { chunk.data(), static_cast<std::size_t>(n) });
                 if (!written)
@@ -326,7 +326,7 @@ namespace
             auto const written = BIO_write(_rbio, chunk.data(), static_cast<int>(*n));
             if (written <= 0)
                 co_return std::unexpected(
-                    makeNetError(NetErrorCode::Other, 0, "TLS feedIn: BIO_write failed"));
+                    makeNetError(NetErrorCode::SystemError, 0, "TLS feedIn: BIO_write failed"));
             co_return *n;
         }
 

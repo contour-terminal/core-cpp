@@ -265,7 +265,7 @@ async::Task<std::expected<HttpRequest, NetError>> readRequest(ISocket* socket, H
     auto request = HttpRequest {};
     auto const contentLength = parseHead(*head, &request);
     if (!contentLength.has_value())
-        co_return std::unexpected(makeNetError(NetErrorCode::Other, 0, "malformed request head"));
+        co_return std::unexpected(makeNetError(NetErrorCode::SystemError, 0, "malformed request head"));
 
     if (*contentLength > limits.maxBodyBytes)
         co_return std::unexpected(

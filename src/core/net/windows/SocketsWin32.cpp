@@ -79,7 +79,7 @@ async::Task<std::expected<std::unique_ptr<ISocket>, NetError>> connect(EventLoop
         auto const sock = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (sock == INVALID_SOCKET)
         {
-            lastError = makeNetError(NetErrorCode::Other, WSAGetLastError(), "socket");
+            lastError = makeNetError(NetErrorCode::SystemError, WSAGetLastError(), "socket");
             continue;
         }
 
@@ -91,7 +91,7 @@ async::Task<std::expected<std::unique_ptr<ISocket>, NetError>> connect(EventLoop
             if (event != WSA_INVALID_EVENT)
                 WSACloseEvent(event);
             closesocket(sock);
-            lastError = makeNetError(NetErrorCode::Other, WSAGetLastError(), "WSAEventSelect");
+            lastError = makeNetError(NetErrorCode::SystemError, WSAGetLastError(), "WSAEventSelect");
             continue;
         }
 
@@ -125,10 +125,10 @@ async::Task<std::expected<std::unique_ptr<ISocket>, NetError>> connect(EventLoop
             freeaddrinfo(resolved);
             co_return std::unique_ptr<ISocket>(new WindowsSocket(*loop, sock));
         }
-        lastError =
-            makeNetError(connectErr == WSAECONNREFUSED ? NetErrorCode::ConnRefused : NetErrorCode::Other,
-                         connectErr,
-                         "connect");
+        lastError = makeNetError(connectErr == WSAECONNREFUSED ? NetErrorCode::ConnRefused
+                                                               : NetErrorCode::SystemError,
+                                 connectErr,
+                                 "connect");
         closesocket(sock);
     }
     freeaddrinfo(resolved);
@@ -170,8 +170,10 @@ async::Task<std::expected<std::unique_ptr<ISocket>, NetError>> connectUnix(Event
     {
         auto const err = WSAGetLastError();
         closesocket(sock);
-        co_return std::unexpected(makeNetError(
-            err == WSAECONNREFUSED ? NetErrorCode::ConnRefused : NetErrorCode::Other, err, "connect unix"));
+        co_return std::unexpected(
+            makeNetError(err == WSAECONNREFUSED ? NetErrorCode::ConnRefused : NetErrorCode::SystemError,
+                         err,
+                         "connect unix"));
     }
     co_return std::unique_ptr<ISocket>(new WindowsSocket(*loop, sock));
 }

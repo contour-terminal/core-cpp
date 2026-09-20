@@ -69,7 +69,7 @@ async::Task<std::expected<std::string, NetError>> AsyncBufferedReader::readUntil
 {
     // An empty delimiter would match at every position and never consume input.
     if (delimiter.empty())
-        co_return std::unexpected(makeNetError(NetErrorCode::Other, 0, "empty delimiter"));
+        co_return std::unexpected(makeNetError(NetErrorCode::SystemError, 0, "empty delimiter"));
 
     beginScan(Scanner::Until, delimiter);
     while (true)

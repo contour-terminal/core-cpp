@@ -51,7 +51,7 @@ namespace
     /// @param path The socket file path, for diagnostics.
     /// @return Nothing when the path is safe to (re)bind — either absent, or a
     ///         stale socket a crashed server left behind. Otherwise a @c NetError:
-    ///         @c AddressInUse when a live server answers, or @c Other when the
+    ///         @c AddressInUse when a live server answers, or @c SystemError when the
     ///         probe fails for a reason that must not lead to unlinking the file.
     [[nodiscard]] std::expected<void, NetError> probeSocketOwner(sockaddr_un const& address,
                                                                  std::string const& path)
@@ -60,7 +60,7 @@ namespace
         // stall startup on the connect; a pending connect still proves it is alive.
         auto const fd = ScopedFd { makeStreamSocket(AF_UNIX, 0) };
         if (fd.get() < 0)
-            return std::unexpected(makeNetError(NetErrorCode::Other, errno, "probe socket"));
+            return std::unexpected(makeNetError(NetErrorCode::SystemError, errno, "probe socket"));
 
         auto const rc = ::connect(fd.get(), reinterpret_cast<sockaddr const*>(&address), sizeof(address));
         auto const err = errno;
@@ -71,7 +71,7 @@ namespace
         if (err == ECONNREFUSED || err == ENOENT)
             return {}; // a crashed server's stale socket, or the path is simply gone
         // e.g. EACCES: do not unlink a file we merely cannot reach.
-        return std::unexpected(makeNetError(NetErrorCode::Other, err, "probe connect " + path));
+        return std::unexpected(makeNetError(NetErrorCode::SystemError, err, "probe connect " + path));
     }
 } // namespace
 
@@ -81,24 +81,24 @@ std::expected<void, NetError> ensureOwnedPrivateDirectory(std::filesystem::path 
 
     // Create with owner-only rwx; an existing directory falls through to the checks.
     if (::mkdir(dir.c_str(), S_IRWXU) != 0 && errno != EEXIST)
-        return std::unexpected(makeNetError(NetErrorCode::Other, errno, "mkdir " + dir));
+        return std::unexpected(makeNetError(NetErrorCode::SystemError, errno, "mkdir " + dir));
 
     // lstat, not stat: a symlink planted at the path must not launder the checks
     // through its (attacker-chosen) target.
     struct stat info {};
     if (::lstat(dir.c_str(), &info) != 0)
-        return std::unexpected(makeNetError(NetErrorCode::Other, errno, "lstat " + dir));
+        return std::unexpected(makeNetError(NetErrorCode::SystemError, errno, "lstat " + dir));
 
     if (!S_ISDIR(info.st_mode))
-        return std::unexpected(makeNetError(NetErrorCode::Other, ENOTDIR, dir + " is not a directory"));
+        return std::unexpected(makeNetError(NetErrorCode::SystemError, ENOTDIR, dir + " is not a directory"));
     if (info.st_uid != ::getuid())
         return std::unexpected(
-            makeNetError(NetErrorCode::Other, EACCES, dir + " is not owned by the current user"));
+            makeNetError(NetErrorCode::SystemError, EACCES, dir + " is not owned by the current user"));
     // Refuse world access (tmux's TMUX_SOCK_PERM mask: o+rwx); group access is
     // permitted, mirroring the reference behaviour.
     if ((info.st_mode & S_IRWXO) != 0)
-        return std::unexpected(
-            makeNetError(NetErrorCode::Other, EACCES, dir + " has unsafe (world-accessible) permissions"));
+        return std::unexpected(makeNetError(
+            NetErrorCode::SystemError, EACCES, dir + " has unsafe (world-accessible) permissions"));
 
     return {};
 }
@@ -178,14 +178,14 @@ std::expected<std::unique_ptr<UnixListener>, NetError> UnixListener::bind(EventL
     // serving". probeSocketOwner right here already creates its socket this way.
     auto const fd = makeStreamSocket(AF_UNIX, 0);
     if (fd < 0)
-        return std::unexpected(makeNetError(NetErrorCode::Other, errno, "socket"));
+        return std::unexpected(makeNetError(NetErrorCode::SystemError, errno, "socket"));
 
     if (::bind(fd, reinterpret_cast<sockaddr const*>(&address), sizeof(address)) != 0)
     {
         auto const err = errno;
         ::close(fd);
-        return std::unexpected(
-            makeNetError(err == EADDRINUSE ? NetErrorCode::AddressInUse : NetErrorCode::Other, err, "bind"));
+        return std::unexpected(makeNetError(
+            err == EADDRINUSE ? NetErrorCode::AddressInUse : NetErrorCode::SystemError, err, "bind"));
     }
 
     // Owner-only access to the socket itself; the hardened directory is the
@@ -197,7 +197,7 @@ std::expected<std::unique_ptr<UnixListener>, NetError> UnixListener::bind(EventL
         auto const err = errno;
         ::close(fd);
         ::unlink(pathString.c_str());
-        return std::unexpected(makeNetError(NetErrorCode::Other, err, "listen"));
+        return std::unexpected(makeNetError(NetErrorCode::SystemError, err, "listen"));
     }
 
     return std::unique_ptr<UnixListener>(new UnixListener(loop, fd, path));

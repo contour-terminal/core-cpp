@@ -22,7 +22,7 @@ std::expected<SocketPair, NetError> makeSocketPair(EventLoop& loop)
     platform::ensureWinsockInitialized();
     auto pair = std::array<SOCKET, 2> {};
     if (!makeLoopbackPair(pair)) // the shared production helper (net/windows/WindowsLoopback)
-        return std::unexpected(makeNetError(NetErrorCode::Other, WSAGetLastError(), "loopback pair"));
+        return std::unexpected(makeNetError(NetErrorCode::SystemError, WSAGetLastError(), "loopback pair"));
 
     return SocketPair {
         .first = std::unique_ptr<ISocket>(new WindowsSocket(loop, pair[0])),

@@ -20,7 +20,7 @@ std::expected<SocketPair, NetError> makeSocketPair(EventLoop& loop)
     platform::ensureWinsockInitialized();
     auto fds = std::array<int, 2> {};
     if (::socketpair(AF_UNIX, SOCK_STREAM, 0, fds.data()) != 0)
-        return std::unexpected(makeNetError(NetErrorCode::Other, errno, "socketpair"));
+        return std::unexpected(makeNetError(NetErrorCode::SystemError, errno, "socketpair"));
 
     for (auto const fd: fds)
     {

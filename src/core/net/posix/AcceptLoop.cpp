@@ -62,7 +62,7 @@ async::Task<AcceptResult> acceptOne(EventLoop* loop, int const* fd, bool const* 
         }
         if (err == EINTR || err == ECONNABORTED)
             continue;
-        co_return std::unexpected(makeNetError(NetErrorCode::Other, err, "accept"));
+        co_return std::unexpected(makeNetError(NetErrorCode::SystemError, err, "accept"));
     }
 }
 

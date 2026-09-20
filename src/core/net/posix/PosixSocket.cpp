@@ -33,7 +33,7 @@ namespace
     /// Maps an errno from a socket call to a NetError category.
     [[nodiscard]] NetError fromErrno(int err, std::string context)
     {
-        auto code = NetErrorCode::Other;
+        auto code = NetErrorCode::SystemError;
         switch (err)
         {
             case ECONNRESET: code = NetErrorCode::ConnReset; break;
@@ -243,8 +243,10 @@ async::Task<IoResult> PosixSocket::write(std::span<std::byte const> buffer)
         // stale value. Report the one thing that is true: the transport took nothing.
         // (`read` handles its own zero — a clean EOF — before reaching its ladder.)
         if (n == 0)
-            co_return std::unexpected(makeNetError(
-                NetErrorCode::Other, 0, _plainFd ? "write accepted no bytes" : "send accepted no bytes"));
+            co_return std::unexpected(
+                makeNetError(NetErrorCode::SystemError,
+                             0,
+                             _plainFd ? "write accepted no bytes" : "send accepted no bytes"));
 
         if (err == ENOTSOCK && !_plainFd)
         {

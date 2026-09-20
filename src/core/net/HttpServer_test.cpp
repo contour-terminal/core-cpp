@@ -233,7 +233,7 @@ TEST_CASE("readRequest rejects a malformed request line", "[net][http]")
     loop.blockOn(exchange(pair->first.get(), pair->second.get(), &wire, &reply, &limits, &seen, &error));
 
     REQUIRE(error.has_value());
-    REQUIRE(error->code == NetErrorCode::Other);
+    REQUIRE(error->code == NetErrorCode::SystemError);
 }
 
 TEST_CASE("readRequest rejects conflicting duplicate Content-Length headers", "[net][http]")
@@ -255,7 +255,7 @@ TEST_CASE("readRequest rejects conflicting duplicate Content-Length headers", "[
     loop.blockOn(exchange(pair->first.get(), pair->second.get(), &wire, &reply, &limits, &seen, &error));
 
     REQUIRE(error.has_value());
-    REQUIRE(error->code == NetErrorCode::Other);
+    REQUIRE(error->code == NetErrorCode::SystemError);
 }
 
 TEST_CASE("readRequest accepts repeated but identical Content-Length headers", "[net][http]")
@@ -297,7 +297,7 @@ TEST_CASE("readRequest refuses a chunked request rather than mis-framing it", "[
     loop.blockOn(exchange(pair->first.get(), pair->second.get(), &wire, &reply, &limits, &seen, &error));
 
     REQUIRE(error.has_value());
-    REQUIRE(error->code == NetErrorCode::Other);
+    REQUIRE(error->code == NetErrorCode::SystemError);
 }
 
 TEST_CASE("readRequest rejects an obs-fold continuation line", "[net][http]")
@@ -317,7 +317,7 @@ TEST_CASE("readRequest rejects an obs-fold continuation line", "[net][http]")
     loop.blockOn(exchange(pair->first.get(), pair->second.get(), &wire, &reply, &limits, &seen, &error));
 
     REQUIRE(error.has_value());
-    REQUIRE(error->code == NetErrorCode::Other);
+    REQUIRE(error->code == NetErrorCode::SystemError);
 }
 
 TEST_CASE("readRequest parses a bare-LF request head", "[net][http]")
@@ -369,7 +369,7 @@ TEST_CASE("readRequest refuses a head whose blank line is a bare LF", "[net][htt
 
     REQUIRE_FALSE(seen.has_value()); // NOT one request carrying the smuggled headers
     REQUIRE(error.has_value());
-    REQUIRE(error->code == NetErrorCode::Other);
+    REQUIRE(error->code == NetErrorCode::SystemError);
 }
 
 TEST_CASE("readRequest rejects whitespace between a field name and its colon", "[net][http]")
@@ -403,7 +403,7 @@ TEST_CASE("readRequest rejects whitespace between a field name and its colon", "
 
             REQUIRE_FALSE(seen.has_value());
             REQUIRE(error.has_value());
-            REQUIRE(error->code == NetErrorCode::Other);
+            REQUIRE(error->code == NetErrorCode::SystemError);
         }
     }
 }
@@ -446,7 +446,7 @@ TEST_CASE("readRequest rejects an unparsable Content-Length", "[net][http]")
     loop.blockOn(exchange(pair->first.get(), pair->second.get(), &wire, &reply, &limits, &seen, &error));
 
     REQUIRE(error.has_value());
-    REQUIRE(error->code == NetErrorCode::Other);
+    REQUIRE(error->code == NetErrorCode::SystemError);
 }
 
 TEST_CASE("writeResponse never emits duplicate framing headers", "[net][http]")

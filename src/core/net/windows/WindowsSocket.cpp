@@ -13,7 +13,7 @@ namespace
     /// Maps a WSA error to a NetError category.
     [[nodiscard]] NetError fromWsa(int err, std::string context)
     {
-        auto code = NetErrorCode::Other;
+        auto code = NetErrorCode::SystemError;
         switch (err)
         {
             case WSAECONNRESET: code = NetErrorCode::ConnReset; break;

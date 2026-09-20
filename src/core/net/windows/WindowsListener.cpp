@@ -57,7 +57,7 @@ namespace
             if (statError == ERROR_FILE_NOT_FOUND || statError == ERROR_PATH_NOT_FOUND)
                 return {}; // nothing at the path: safe to bind
             return std::unexpected(
-                makeNetError(NetErrorCode::Other, static_cast<int>(statError), "probe stat " + path));
+                makeNetError(NetErrorCode::SystemError, static_cast<int>(statError), "probe stat " + path));
         }
         ::FindClose(find);
 
@@ -72,7 +72,8 @@ namespace
         // A socket file is there: reclaim it only when no live server answers.
         auto const probe = ::socket(AF_UNIX, SOCK_STREAM, 0);
         if (probe == INVALID_SOCKET)
-            return std::unexpected(makeNetError(NetErrorCode::Other, WSAGetLastError(), "probe socket"));
+            return std::unexpected(
+                makeNetError(NetErrorCode::SystemError, WSAGetLastError(), "probe socket"));
         auto const rc = ::connect(probe, reinterpret_cast<sockaddr const*>(&address), sizeof(address));
         auto const err = WSAGetLastError();
         ::closesocket(probe);
@@ -81,7 +82,7 @@ namespace
                 NetErrorCode::AddressInUse, WSAEADDRINUSE, "a daemon is already serving " + path));
         if (err == WSAECONNREFUSED)
             return {}; // a crashed server's stale socket
-        return std::unexpected(makeNetError(NetErrorCode::Other, err, "probe connect " + path));
+        return std::unexpected(makeNetError(NetErrorCode::SystemError, err, "probe connect " + path));
     }
 } // namespace
 
@@ -164,7 +165,7 @@ std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bind(
         sock = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (sock == INVALID_SOCKET)
         {
-            lastError = makeNetError(NetErrorCode::Other, WSAGetLastError(), "socket");
+            lastError = makeNetError(NetErrorCode::SystemError, WSAGetLastError(), "socket");
             continue;
         }
 
@@ -175,7 +176,7 @@ std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bind(
             break; // success
 
         lastError = makeNetError(WSAGetLastError() == WSAEADDRINUSE ? NetErrorCode::AddressInUse
-                                                                    : NetErrorCode::Other,
+                                                                    : NetErrorCode::SystemError,
                                  WSAGetLastError(),
                                  "bind/listen");
         closesocket(sock);
@@ -192,7 +193,7 @@ std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bind(
         if (event != WSA_INVALID_EVENT)
             WSACloseEvent(event);
         closesocket(sock);
-        return std::unexpected(makeNetError(NetErrorCode::Other, WSAGetLastError(), "WSAEventSelect"));
+        return std::unexpected(makeNetError(NetErrorCode::SystemError, WSAGetLastError(), "WSAEventSelect"));
     }
 
     auto bound = sockaddr_storage {};
@@ -237,7 +238,7 @@ std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bindU
         auto const err = WSAGetLastError();
         closesocket(sock);
         return std::unexpected(
-            makeNetError(err == WSAEADDRINUSE ? NetErrorCode::AddressInUse : NetErrorCode::Other,
+            makeNetError(err == WSAEADDRINUSE ? NetErrorCode::AddressInUse : NetErrorCode::SystemError,
                          err,
                          "bind/listen unix"));
     }
@@ -248,7 +249,7 @@ std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bindU
         if (event != WSA_INVALID_EVENT)
             WSACloseEvent(event);
         closesocket(sock);
-        return std::unexpected(makeNetError(NetErrorCode::Other, WSAGetLastError(), "WSAEventSelect"));
+        return std::unexpected(makeNetError(NetErrorCode::SystemError, WSAGetLastError(), "WSAEventSelect"));
     }
 
     return std::unique_ptr<WindowsListener>(
@@ -291,7 +292,7 @@ async::Task<AcceptResult> WindowsListener::accept()
             }
             continue;
         }
-        co_return std::unexpected(makeNetError(NetErrorCode::Other, err, "accept"));
+        co_return std::unexpected(makeNetError(NetErrorCode::SystemError, err, "accept"));
     }
 }
 

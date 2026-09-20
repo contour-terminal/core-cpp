@@ -86,7 +86,7 @@ std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::bind(Even
         fd = makeStreamSocket(ai->ai_family, ai->ai_protocol);
         if (fd < 0)
         {
-            lastError = makeNetError(NetErrorCode::Other, errno, "socket");
+            lastError = makeNetError(NetErrorCode::SystemError, errno, "socket");
             continue;
         }
 
@@ -100,8 +100,9 @@ std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::bind(Even
             && makeNonBlockingCloexec(fd))
             break; // success
 
-        lastError = makeNetError(
-            errno == EADDRINUSE ? NetErrorCode::AddressInUse : NetErrorCode::Other, errno, "bind/listen");
+        lastError = makeNetError(errno == EADDRINUSE ? NetErrorCode::AddressInUse : NetErrorCode::SystemError,
+                                 errno,
+                                 "bind/listen");
         ::close(fd);
         fd = -1;
     }

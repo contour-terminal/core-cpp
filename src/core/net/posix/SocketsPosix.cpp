@@ -79,7 +79,7 @@ async::Task<std::expected<std::unique_ptr<ISocket>, NetError>> connect(EventLoop
         auto const fd = makeStreamSocket(ai->ai_family, ai->ai_protocol);
         if (fd < 0)
         {
-            lastError = makeNetError(NetErrorCode::Other, errno, "socket");
+            lastError = makeNetError(NetErrorCode::SystemError, errno, "socket");
             continue;
         }
 
@@ -113,14 +113,16 @@ async::Task<std::expected<std::unique_ptr<ISocket>, NetError>> connect(EventLoop
                 co_return std::unique_ptr<ISocket>(new PosixSocket(*loop, fd));
             }
             lastError =
-                makeNetError(soError == ECONNREFUSED ? NetErrorCode::ConnRefused : NetErrorCode::Other,
+                makeNetError(soError == ECONNREFUSED ? NetErrorCode::ConnRefused : NetErrorCode::SystemError,
                              soError,
                              "connect");
         }
         else
         {
-            lastError = makeNetError(
-                errno == ECONNREFUSED ? NetErrorCode::ConnRefused : NetErrorCode::Other, errno, "connect");
+            lastError =
+                makeNetError(errno == ECONNREFUSED ? NetErrorCode::ConnRefused : NetErrorCode::SystemError,
+                             errno,
+                             "connect");
         }
         discardSocket(loop, fd);
     }
@@ -150,7 +152,7 @@ async::Task<std::expected<std::unique_ptr<ISocket>, NetError>> connectUnix(Event
 
     auto const fd = makeStreamSocket(AF_UNIX, 0);
     if (fd < 0)
-        co_return std::unexpected(makeNetError(NetErrorCode::Other, errno, "socket"));
+        co_return std::unexpected(makeNetError(NetErrorCode::SystemError, errno, "socket"));
 
     auto const rc = ::connect(fd, reinterpret_cast<sockaddr const*>(&address), sizeof(address));
     if (rc == 0)
@@ -175,20 +177,22 @@ async::Task<std::expected<std::unique_ptr<ISocket>, NetError>> connectUnix(Event
         if (soError == 0)
             co_return std::unique_ptr<ISocket>(new PosixSocket(*loop, fd));
         discardSocket(loop, fd);
-        co_return std::unexpected(makeNetError(
-            soError == ECONNREFUSED ? NetErrorCode::ConnRefused : NetErrorCode::Other, soError, "connect"));
+        co_return std::unexpected(
+            makeNetError(soError == ECONNREFUSED ? NetErrorCode::ConnRefused : NetErrorCode::SystemError,
+                         soError,
+                         "connect"));
     }
 
     auto const err = errno;
     discardSocket(loop, fd);
-    co_return std::unexpected(
-        makeNetError(err == ECONNREFUSED ? NetErrorCode::ConnRefused : NetErrorCode::Other, err, "connect"));
+    co_return std::unexpected(makeNetError(
+        err == ECONNREFUSED ? NetErrorCode::ConnRefused : NetErrorCode::SystemError, err, "connect"));
 }
 
 std::expected<std::unique_ptr<ISocket>, NetError> adoptFd(EventLoop& loop, int fd)
 {
     if (fd < 0)
-        return std::unexpected(makeNetError(NetErrorCode::Other, EBADF, "adoptFd"));
+        return std::unexpected(makeNetError(NetErrorCode::SystemError, EBADF, "adoptFd"));
     // The reactor requires non-blocking I/O; the descriptor may be a PTY
     // master or socketpair end created without it.
     if (auto const flags = ::fcntl(fd, F_GETFL, 0); flags >= 0)
