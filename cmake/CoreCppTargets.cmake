@@ -15,6 +15,9 @@
 #                     [LIBS <lib>...] [LABELS <label>...] [DEFINITIONS <definition>...]
 #                     [TIMEOUT <seconds>])
 #
+# Every test core_cpp_add_test() registers is bounded: 300 seconds unless TIMEOUT says otherwise.
+# See the comment at the property for what the number protects against and how it was measured.
+#
 # core_cpp_add_module() creates the real target core-cpp-<name> and its alias
 # core::<name>, and appends a compiled one to the global property CORE_CPP_TARGETS,
 # which is how a parent project instruments core-cpp's code together with its own.
@@ -319,12 +322,24 @@ function(core_cpp_add_test module)
     set_tests_properties(core-cpp.${name} PROPERTIES
         SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
         LABELS "${labels}")
-    # A backstop for a binary whose cases can HANG rather than fail — a lost readiness wake-up
-    # parks a flow with nothing left to resume it. ctest's own default is 1500 seconds, which
-    # reports "Timeout" long after anyone is watching; a binary that says so gives a number of its
-    # own. The bound on the WAIT belongs in the case, which can say what it waited for; this only
-    # stops a missed one from costing 25 minutes.
+    # EVERY test this function registers is bounded, whether or not it asked to be. A case can HANG
+    # rather than fail -- a lost readiness wake-up parks a flow with nothing left to resume it, a
+    # wrapping loop stops making progress -- and both have happened in this tree. ctest's own
+    # default is 1500 seconds, so an unbounded binary reports "Timeout" after 25 minutes of silence,
+    # naming neither the case nor what it waited for. An opt-in bound would leave exactly the
+    # binaries nobody thought about unbounded, which are the ones that need it.
+    #
+    # 300 seconds, measured rather than guessed: the slowest binary here is core-cpp.tui at 9.4s on
+    # clang-debug, 11.1s under asan/ubsan and 9.7s on cl-debug, and every other one is under a
+    # second. That is ~27x the slowest sanitizer run, so a 5x slowdown on a loaded runner still
+    # leaves 5x of headroom, while a hang is named in five minutes. (tests/ registers its own
+    # checks directly -- vendor-selftest takes 87s -- and this default does not reach them.)
+    #
+    # The bound on a WAIT still belongs in the case, which can say what it waited for
+    # (.agent/rules/testing.md). This only stops a missed one from costing 25 minutes.
+    set(timeout 300)
     if(DEFINED arg_TIMEOUT)
-        set_tests_properties(core-cpp.${name} PROPERTIES TIMEOUT ${arg_TIMEOUT})
+        set(timeout ${arg_TIMEOUT}) # a binary that knows its own shape may bound itself tighter
     endif()
+    set_tests_properties(core-cpp.${name} PROPERTIES TIMEOUT ${timeout})
 endfunction()

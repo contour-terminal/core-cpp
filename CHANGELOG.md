@@ -731,8 +731,10 @@ workflow refuses one without a section here.
 - `core::net`'s own tests bound the waits that can hang rather than fail. The sequential-accept
   guard for the Windows listener would itself have parked for ever on the defect it guards -- so
   ctest reported "Timeout" after 1500 seconds and named nothing -- and now fails inside its budget
-  with the count it waited for. `core_cpp_add_test` takes a `TIMEOUT`, which the two net binaries
-  set as a backstop for a wait somebody forgets to bound. And the sibling half of the `whenAll`
+  with the count it waited for. Every test `core_cpp_add_test` registers is now bounded -- 300
+  seconds unless a `TIMEOUT` says otherwise, which the two net binaries tighten to 120 and the cli
+  binary to 60 -- so a wait somebody forgets to bound is named in five minutes instead of ctest's
+  1500-second silence. And the sibling half of the `whenAll`
   sweep is closed: an arm that gave up early without stopping the sibling parked in `accept()`
   turned a red into a hang just as an assertion there would, at five sites (two loopback client
   flows, the AF_UNIX probe, and the two TLS cases whose server runs on another thread, where the
