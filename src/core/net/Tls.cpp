@@ -288,8 +288,14 @@ namespace
                     co_return std::expected<void, NetError> {};
                 auto const take = std::min<std::size_t>(chunk.size(), pending);
                 auto const n = BIO_read(_wbio, chunk.data(), static_cast<int>(take));
+                // Reached only after BIO_ctrl_pending said bytes WERE queued, so a read that
+                // yields none is a failed BIO, not an empty one. Reporting "nothing to flush"
+                // silently dropped that ciphertext: the handshake then waited for a peer
+                // response to a flight never written, and both ends hung until an outer
+                // timeout. A pending-but-unreadable write BIO is an error; say so.
                 if (n <= 0)
-                    co_return std::expected<void, NetError> {};
+                    co_return std::unexpected(makeNetError(
+                        NetErrorCode::Other, 0, "TLS flushOut: BIO_read failed: " + opensslError()));
                 auto const written = co_await _inner->write(
                     std::span<std::byte const> { chunk.data(), static_cast<std::size_t>(n) });
                 if (!written)
@@ -350,7 +356,22 @@ namespace
                 return nullptr;
             // Memory BIOs bridge OpenSSL and the coroutine transport; SSL_set_bio
             // takes ownership of both, so SSL_free later releases them.
-            SSL_set_bio(ssl, BIO_new(BIO_s_mem()), BIO_new(BIO_s_mem()));
+            //
+            // Checked like SSL_new above: handing a null BIO to SSL_set_bio yields a socket
+            // that LOOKS constructed and dereferences null on its first read or write —
+            // breaking this method's own documented "null on allocation failure". Ownership
+            // has not transferred yet on this path, so both BIOs and the SSL are released
+            // here (BIO_free tolerates null, which is what makes the one-sided case work).
+            auto* const rbio = BIO_new(BIO_s_mem());
+            auto* const wbio = BIO_new(BIO_s_mem());
+            if (rbio == nullptr || wbio == nullptr)
+            {
+                BIO_free(rbio);
+                BIO_free(wbio);
+                SSL_free(ssl);
+                return nullptr;
+            }
+            SSL_set_bio(ssl, rbio, wbio);
             if (_server)
                 SSL_set_accept_state(ssl);
             else
