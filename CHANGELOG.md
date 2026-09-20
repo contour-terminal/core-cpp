@@ -323,9 +323,9 @@ workflow refuses one without a section here.
   for a missing path checks for an empty string instead. contour reads a CA certificate and a
   forced-DPI file through it.
 - Every function in `<core/Escape.hpp>` — `escape()` in all three of its spellings,
-  `escapeMarkdown()` in both of its, and `unescape()` — and `core::readFileAsString()` are
-  `[[nodiscard]]`. Discarding any of them is a bug: none has an effect other than its return
-  value. A consumer that does so and builds with `-Werror` stops building. Migration: use the
+  `escapeMarkdown()` in both of its, and `unescape()` — plus `core::readFileAsString()`,
+  `core::detail::Times::operator[]` and `core::detail::Times2D::operator[]` are `[[nodiscard]]`.
+  Discarding any of them is a bug: none has an effect other than its return value. A consumer that does so and builds with `-Werror` stops building. Migration: use the
   result, or cast it to `void` at the one call site that means to throw it away. The whole header
   rather than the one overload that changed behaviour, because the surprise would be the
   inconsistency — `escape(text)` is the spelling most likely to be called for its return value
@@ -356,6 +356,22 @@ workflow refuses one without a section here.
   reported at all. A constructed object is usable (`.agent/rules/design-principles.md`). Migration:
   check `wrap()`'s result and drop the connection instead of queueing onto nothing.
 
+- `core::detail::Times2D::operator[]` answers the same type its `value_type` declares: a
+  `std::tuple` of both coordinates, in the order iteration yields them (the inner range advances
+  fastest). It answered the inner coordinate alone, so subscripting and iterating disagreed on
+  what an element of a `Times2D` even is; `operator[]` changed rather than `value_type`, because
+  the tuple is what `*it` already yielded and what the existing case asserts. Migration: a caller
+  that wanted the inner coordinate alone takes it out of the tuple — `std::get<1>(grid[i])`, or
+  `auto const [outer, inner] = grid[i];`. Nothing in core-cpp or in contour, endo, tuidu or morph
+  subscripts a `Times2D`. While there: `Times::size()` and `Times::operator[]`, which nothing had
+  ever instantiated, spell out the conversions their arithmetic implies instead of letting the
+  compiler narrow silently.
+- `core::joinHumanReadableQuoted()`'s separator is a `std::string_view` rather than a deduced
+  template parameter, so the `= ", "` default it declares can be taken: `joinHumanReadableQuoted(xs)`
+  did not compile before. Migration: a caller that passed something other than a string formats it
+  itself — the old signature rendered the separator with `std::format`, so an `int` or a `char`
+  was accepted and now is not. Nothing calls it yet, in core-cpp or in any consumer.
+
 ### Changed
 
 - `core::async::whenAny()` reports a child that completed even when the awaiting flow's own token
@@ -379,17 +395,6 @@ workflow refuses one without a section here.
   `ClassMethod` style is gone with its duplicate of that ~800-character regex; with no
   `ClassMethod` style configured, a static member function falls through to the `Method` style,
   which says the same thing.
-- `core::detail::Times2D::operator[]` answers the same type its `value_type` declares: a
-  `std::tuple` of both coordinates, in the order iteration yields them (the inner range advances
-  fastest). It answered the inner coordinate alone, so subscripting and iterating disagreed on
-  what an element of a `Times2D` even is. `operator[]` changed rather than `value_type`, because
-  the tuple is what `*it` already yielded and what the one existing test asserts. Nothing in
-  core-cpp or any consumer subscripts a `Times2D`. While there: `Times::size()` and
-  `Times::operator[]`, which nothing had ever instantiated, spell out the conversions their
-  arithmetic implies instead of letting the compiler narrow silently.
-- `core::joinHumanReadableQuoted()`'s separator is a `std::string_view`, not a deduced template
-  parameter. Deduced, it could never be left out, so the `= ", "` default it declared was
-  unusable and `joinHumanReadableQuoted(xs)` did not compile. Nothing calls it yet.
 
 ### Fixed
 
@@ -460,8 +465,13 @@ workflow refuses one without a section here.
   rather than by what it emitted: the two differ whenever a chunk is trimmed, and a space before
   a line feed left the trimmed space in front of the index for a skip loop that skips line feeds
   and not spaces, so the same empty chunk came back for ever and `--help` never returned.
-  One layout change comes with this: a line whose text reaches exactly to the margin is no longer
-  broken onto a second line, so rendered `--help` output differs for lengths that land on it.
+  Two rendering changes come with this, both visible to anyone diffing `--help` output. A line
+  whose text reaches exactly to the margin is no longer broken onto a second line. And trailing
+  spaces before a line feed no longer produce a wrapped line each: the old renderer consumed them
+  one per turn and emitted a line break plus a continuation indent for every one of them, so a
+  help text reading `First line. ` + line feed + `Second line.` rendered as three lines where its
+  author wrote two, and `abc` + three spaces + line feed + `xyz` as five. They are consumed
+  together now.
 - `core::cli::App` keeps the contracts it documents. `installLogging()` assigned the replacement
   over the member holding the previous output, so the previous `ScopedOutput` was destroyed after
   the new one had installed itself: its destructor restores every category to the sink it
@@ -711,6 +721,23 @@ workflow refuses one without a section here.
   process-wide `RLIMIT_NOFILE` through a scope guard, so a throw in between can no longer leave
   every later case in the binary running squeezed; and the TLS cases check `makeSocketPair()`
   before dereferencing it, so a loopback failure is a test failure rather than undefined behaviour.
+
+- `core::net`'s HTTP head parser rejects whitespace between a field name and its colon, which
+  RFC 9112 5.1 makes a MUST for a server, instead of trimming it away. It is the same class as the
+  bare-LF blank line above: a front-end that trims "Host :" back to "Host" and a server that
+  rejects it (or the reverse) do not agree on what the message says, and the lenient half of that
+  disagreement is the one that lets a header through under a name the other end never saw. A field
+  name is a token, so whitespace anywhere in it -- and an empty name -- is refused; whitespace
+  AFTER the colon is still padding a recipient removes, so `Host:  \texample \t` is unchanged.
+- `core::net`'s own tests bound the waits that can hang rather than fail. The sequential-accept
+  guard for the Windows listener would itself have parked for ever on the defect it guards -- so
+  ctest reported "Timeout" after 1500 seconds and named nothing -- and now fails inside its budget
+  with the count it waited for. `core_cpp_add_test` takes a `TIMEOUT`, which the two net binaries
+  set as a backstop for a wait somebody forgets to bound. And the sibling half of the `whenAll`
+  sweep is closed: an arm that gave up early without stopping the sibling parked in `accept()`
+  turned a red into a hang just as an assertion there would, at five sites (two loopback client
+  flows, the AF_UNIX probe, and the two TLS cases whose server runs on another thread, where the
+  hang landed on `std::thread::join`).
 
 ### Imported
 
