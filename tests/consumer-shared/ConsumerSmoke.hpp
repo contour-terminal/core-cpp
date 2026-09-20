@@ -17,10 +17,10 @@
 #include <core/async/Task.hpp>
 #include <core/async/WhenAll.hpp>
 #include <core/log/LogStore.hpp>
-#include <core/net/DefaultEventSource.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/IListener.hpp>
 #include <core/net/ISocket.hpp>
+#include <core/net/IoBackend.hpp>
 #include <core/net/Sockets.hpp>
 
 #include <array>
@@ -135,8 +135,8 @@ inline void checkLoopbackEcho(Checks& checks, std::string_view greeting)
     if (greeting.size() > BufferSize)
         return;
 
-    auto source = core::net::makeDefaultEventSource();
-    auto loop = core::net::EventLoop { *source };
+    auto backend = core::net::makeDefaultBackend();
+    auto loop = core::net::EventLoop { *backend };
     auto listener = core::net::listen(loop, "127.0.0.1", 0);
     checks.expect(listener.has_value(), "core::net::listen() bound an ephemeral loopback port");
     if (!listener.has_value())
