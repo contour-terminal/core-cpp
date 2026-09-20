@@ -324,6 +324,8 @@ workflow refuses one without a section here.
   rather than by what it emitted: the two differ whenever a chunk is trimmed, and a space before
   a line feed left the trimmed space in front of the index for a skip loop that skips line feeds
   and not spaces, so the same empty chunk came back for ever and `--help` never returned.
+  One layout change comes with this: a line whose text reaches exactly to the margin is no longer
+  broken onto a second line, so rendered `--help` output differs for lengths that land on it.
 - `core::cli::App` keeps the contracts it documents. `installLogging()` assigned the replacement
   over the member holding the previous output, so the previous `ScopedOutput` was destroyed after
   the new one had installed itself: its destructor restores every category to the sink it
