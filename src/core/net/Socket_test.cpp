@@ -6,6 +6,7 @@
 #include <core/net/ISocket.hpp>
 #include <core/net/Sockets.hpp>
 #include <core/net/SplitSocket.hpp>
+#include <core/net/testing/CoroTestSupport.hpp>
 #include <core/net/testing/EventSourceBackends.hpp>
 #include <core/net/testing/InMemoryTransport.hpp>
 
@@ -233,12 +234,18 @@ TEST_CASE("closing a socket resumes a reader parked on it instead of hanging", "
 TEST_CASE("a listener keeps accepting across sequential connections", "[net]")
 {
     // One listener, several connections one after another — the shape a daemon actually runs,
-    // and the one every other case here stops short of: they accept once. On Windows the
-    // accept path has to take its readiness indication off the shared event without destroying
-    // it (@see core::net::consumeNetworkEvents and its own cases), and a listener that gets
-    // that wrong does not fail here, it goes SILENT: the second accept parks for ever and the
-    // suite's timeout is what reports it.
+    // and the one every other case here stops short of: they accept once. On Windows the accept
+    // path has to take its readiness indication off the shared event without destroying it
+    // (@see core::net::consumeNetworkEvents and its own cases), and a listener that gets that
+    // wrong does not fail, it goes SILENT: the second accept parks and nothing ever wakes it.
+    //
+    // Which is why the wait is BOUNDED here rather than left to the suite's timeout: a guard for a
+    // hang that itself hangs reports "Timeout" after 1500 seconds and names nothing
+    // (.agent/rules/testing.md: every wait is bounded and says what it waited for). The budget
+    // loses the race to the work by three orders of magnitude — three loopback connections with a
+    // 20ms pause between them — so it can only expire on the defect, never on a slow machine.
     constexpr auto Connections = 3;
+    constexpr auto Budget = std::chrono::milliseconds { 10000 };
     for (auto const& backend: AllBackends)
     {
         auto source = core::net::makeEventSource(backend.kind);
@@ -257,8 +264,23 @@ TEST_CASE("a listener keeps accepting across sequential connections", "[net]")
                 co_await core::async::whenAll(acceptSequentially(l, Connections, a),
                                               connectSequentially(lp, l, Connections, c));
             };
-            loop.blockOn(run(&loop, listener->get(), &accepted, &connected));
+            // The TIMER's own flag is the sentinel, not a "the work finished" one: whenAny
+            // cancels the loser, and a cancelled accept RESOLVES with an error rather than
+            // throwing, so the accept arm returns cleanly on the way out and a "finished" flag
+            // would be set on the failing path too. This flag is reached only when the budget
+            // really did expire first, which is exactly the condition being reported.
+            auto timedOut = false;
+            auto budget = [](EventLoop* lp, std::chrono::milliseconds limit, bool* expired) -> Task<void> {
+                co_await lp->delay(limit);
+                *expired = true;
+            };
+            loop.blockOn(core::net::testing::anyOf(run(&loop, listener->get(), &accepted, &connected),
+                                                   budget(&loop, Budget, &timedOut)));
 
+            INFO("waited " << Budget.count() << "ms for " << Connections
+                           << " sequential accepts on this listener; it accepted " << accepted
+                           << " and the client connected " << connected);
+            REQUIRE_FALSE(timedOut); // true == the listener went silent: it stopped accepting
             CHECK(connected == Connections);
             CHECK(accepted == Connections);
         }

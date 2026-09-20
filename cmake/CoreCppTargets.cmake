@@ -12,7 +12,8 @@
 #   core_cpp_add_test(<module> [NAME <name>]
 #                     [SOURCES ...] [SOURCES_POSIX ...] [SOURCES_LINUX ...]
 #                     [SOURCES_BSD ...] [SOURCES_WINDOWS ...] [SOURCES_EMSCRIPTEN ...]
-#                     [LIBS <lib>...] [LABELS <label>...] [DEFINITIONS <definition>...])
+#                     [LIBS <lib>...] [LABELS <label>...] [DEFINITIONS <definition>...]
+#                     [TIMEOUT <seconds>])
 #
 # core_cpp_add_module() creates the real target core-cpp-<name> and its alias
 # core::<name>, and appends a compiled one to the global property CORE_CPP_TARGETS,
@@ -270,7 +271,7 @@ function(core_cpp_add_module name)
 endfunction()
 
 function(core_cpp_add_test module)
-    cmake_parse_arguments(PARSE_ARGV 1 arg "" "NAME" "${CORE_CPP_SOURCE_KEYWORDS};LIBS;LABELS;DEFINITIONS")
+    cmake_parse_arguments(PARSE_ARGV 1 arg "" "NAME;TIMEOUT" "${CORE_CPP_SOURCE_KEYWORDS};LIBS;LABELS;DEFINITIONS")
     if(arg_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "core_cpp_add_test(${module}): unexpected arguments: ${arg_UNPARSED_ARGUMENTS}")
     endif()
@@ -318,4 +319,12 @@ function(core_cpp_add_test module)
     set_tests_properties(core-cpp.${name} PROPERTIES
         SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
         LABELS "${labels}")
+    # A backstop for a binary whose cases can HANG rather than fail — a lost readiness wake-up
+    # parks a flow with nothing left to resume it. ctest's own default is 1500 seconds, which
+    # reports "Timeout" long after anyone is watching; a binary that says so gives a number of its
+    # own. The bound on the WAIT belongs in the case, which can say what it waited for; this only
+    # stops a missed one from costing 25 minutes.
+    if(DEFINED arg_TIMEOUT)
+        set_tests_properties(core-cpp.${name} PROPERTIES TIMEOUT ${arg_TIMEOUT})
+    endif()
 endfunction()

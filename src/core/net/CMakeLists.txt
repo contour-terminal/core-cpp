@@ -126,6 +126,14 @@ core_cpp_add_test(net
         posix/UnixSocket_test.cpp
     SOURCES_WINDOWS
         windows/NetworkEvents_test.cpp
-    LABELS loopback)
+    LABELS loopback
+    # A reactor defect does not fail a case here, it HANGS it: a lost readiness wake-up parks a
+    # flow with nothing left to resume it. Each such case bounds its own wait and says what it
+    # waited for; this is the backstop for one that forgets, and reports in two minutes rather
+    # than ctest's default 1500 seconds. The binary runs in about 1.5s locally and under 10s on
+    # the slowest CI runner, so the margin is two orders of magnitude.
+    TIMEOUT 120)
 
-core_cpp_add_test(net NAME net_tls SOURCES Tls_test.cpp LABELS loopback)
+# TIMEOUT for the same reason as above, and with more cause: two of these cases say in their own
+# comments that a regression does not fail them, it hangs them.
+core_cpp_add_test(net NAME net_tls SOURCES Tls_test.cpp LABELS loopback TIMEOUT 120)
