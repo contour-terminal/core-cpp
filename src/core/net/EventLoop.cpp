@@ -5,6 +5,7 @@
 #include <array>
 #include <limits>
 #include <ranges>
+#include <stdexcept>
 #include <utility>
 
 namespace core::net
