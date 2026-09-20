@@ -16,15 +16,30 @@ if(CORE_CPP_USE_THREADS)
     list(APPEND _coreCppAsyncLibs Threads::Threads)
 endif()
 
+#
+# ThreadPoolExecutor.hpp is the module's one platform-shaped header: it needs threads, and
+# single-threaded Emscripten has none, so it refuses to compile there (its own #error) and is left
+# out of the file set that build installs. Everything else is in the WebAssembly subset.
+set(_coreCppAsyncHeaders
+    AsyncQueue.hpp
+    Awaitable.hpp
+    Cancellation.hpp
+    DetachedTask.hpp
+    IExecutor.hpp
+    ParkedWork.hpp
+    ResumeOn.hpp
+    StopToken.hpp
+    SyncRun.hpp
+    Task.hpp
+    UniqueCoroHandle.hpp
+    WhenAll.hpp
+    WhenAny.hpp)
+if(CORE_CPP_USE_THREADS)
+    list(APPEND _coreCppAsyncHeaders ThreadPoolExecutor.hpp)
+endif()
+
 core_cpp_add_module(async KIND INTERFACE
-    HEADERS
-        Awaitable.hpp
-        Cancellation.hpp
-        StopToken.hpp
-        Task.hpp
-        UniqueCoroHandle.hpp
-        WhenAll.hpp
-        WhenAny.hpp
+    HEADERS ${_coreCppAsyncHeaders}
     PUBLIC_LIBS ${_coreCppAsyncLibs})
 
 # That the module carries the dependency, asserted here because a host whose pthread is part of
@@ -38,13 +53,22 @@ if(CORE_CPP_USE_THREADS AND NOT "${_coreCppAsyncInterfaceLibs}" MATCHES "Threads
         "links core::async alone would fail to link wherever pthread is a library of its own.")
 endif()
 
-# The tests of everything that names a StopToken.
+# The tests of everything that names a StopToken -- which is everything that includes Task.hpp,
+# whose promise holds one. Both binaries below build this list, so a case added here is run over
+# std::stop_token and over the fallback.
 set(_coreCppAsyncStopTokenTests
+    AsyncQueue_test.cpp
     Awaitable_test.cpp
+    ParkedWork_test.cpp
     StopToken_test.cpp
     Task_test.cpp
     WhenAll_test.cpp
     WhenAny_test.cpp)
+# ThreadPoolExecutor is the one part of the module a single-threaded WebAssembly build does not
+# have, so its test is not compiled there either.
+if(CORE_CPP_USE_THREADS)
+    list(APPEND _coreCppAsyncStopTokenTests ThreadPoolExecutor_test.cpp)
+endif()
 
 # Whether this build's GCC makes the symmetric transfer of a deep co_await chain a tail call. It
 # does so only when it optimises sibling calls, from -O2 up, and it defines no macro for the level:

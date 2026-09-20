@@ -56,6 +56,11 @@ class UniqueCoroHandle
     /// @return The owned handle (empty when none is owned).
     [[nodiscard]] HandleType get() const noexcept { return _handle; }
 
+    /// Gives the owned frame up: this owner holds nothing afterwards, and destroying
+    /// (or resuming to completion) what is returned is the caller's job.
+    /// @return The handle that was owned, or an empty one.
+    [[nodiscard]] HandleType release() noexcept { return std::exchange(_handle, HandleType {}); }
+
     /// @return True when a frame is owned.
     explicit operator bool() const noexcept { return static_cast<bool>(_handle); }
 

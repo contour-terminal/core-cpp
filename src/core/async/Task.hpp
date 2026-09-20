@@ -18,10 +18,16 @@
 ///    coroutine, so deep `co_await` chains (the event loop awaits the next event
 ///    thousands of times) do not grow the stack.
 ///  - **Single resumption**: a task is awaited (or driven by the runtime) once.
-///  - The awaiter does **not** own the child handle; the owning `Task` value
-///    does and destroys it on scope exit, so awaiting a task — whether a named
-///    local or a temporary that lives across the suspend point in the awaiting
-///    frame — never double-frees.
+///  - **The awaiter owns what it awaits.** `operator co_await` is rvalue-qualified
+///    and moves the frame out of the `Task` value into the awaiter, which lives in
+///    the awaiting coroutine's frame for the whole suspension and destroys the frame
+///    at the end of the `co_await` expression. So a named local awaited with
+///    `std::move` is empty afterwards, and a chain can park inside the awaited task
+///    while the name that produced it is somewhere the frame is not reachable from.
+///  - **Ownership runs downward**, which is what lets an executor free an abandoned
+///    chain from its root (`ParkedWork`): each frame's awaiter owns the frame it
+///    awaits, and `unownedRoot` — set at every `await_suspend` — says whether the
+///    chain bottoms out in a `DetachedTask`, which nobody owns.
 ///
 /// Unlike a generator there is no `std::`-provided fallback to prefer: no
 /// shipping standard library provides a usable `std::task`, so `Task` is always
@@ -29,11 +35,13 @@
 
 #include <core/async/Awaitable.hpp>
 #include <core/async/Cancellation.hpp>
+#include <core/async/ParkedWork.hpp>
 #include <core/async/UniqueCoroHandle.hpp>
 
 #include <coroutine>
 #include <exception>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 
 #if !defined(__cpp_impl_coroutine) || __cpp_impl_coroutine < 201902L
@@ -80,6 +88,17 @@ namespace detail
         std::exception_ptr exception;         ///< Captured body exception, rethrown to the awaiter.
         StopToken token;                      ///< Inherited from the awaiting coroutine.
 
+        /// The root of the await chain this coroutine belongs to, when that chain is owned by
+        /// NOBODY — otherwise empty.
+        ///
+        /// Propagated downward at each `co_await`, so every frame in a chain carries the same
+        /// answer and a parked coroutine can state it without walking a continuation chain whose
+        /// links are type-erased. It is non-empty exactly where the chain bottoms out in a
+        /// @c DetachedTask; a chain rooted in a `Task` object somebody holds keeps it empty,
+        /// because that object's destructor is what frees the frame and a second owner would
+        /// double-free. See [`ParkedWork`](ParkedWork.hpp).
+        std::coroutine_handle<> unownedRoot;
+
         /// Start suspended so a continuation can be attached before the body runs.
         [[nodiscard]] std::suspend_always initial_suspend() const noexcept { return {}; }
 
@@ -96,6 +115,24 @@ namespace detail
         /// @param newToken The token to inherit.
         void setStopToken(StopToken newToken) noexcept { token = std::move(newToken); }
     };
+
+    /// Refuses a result asked of a task that owns no coroutine frame.
+    ///
+    /// One function, so `Task<T>` and `Task<void>` and their awaiters refuse in the same words.
+    /// It is a throw rather than an assertion because the empty state is one the type admits by
+    /// design — default-constructed, moved from, released — and `done()` answers true for it, so
+    /// the question is reachable through the documented guard rather than only through undefined
+    /// behaviour. `std::optional::value()` answers the same question the same way.
+    /// @throws std::logic_error always, naming the condition.
+    [[noreturn]] inline void refuseEmptyTask()
+    {
+        throw std::logic_error {
+            "core::async::Task: the result of a task owning no coroutine frame was asked for. A "
+            "default-constructed, moved-from or released task answers true to done() as well as a "
+            "completed one, so done() alone is not the guard; such a task has no result, and a "
+            "default-constructed value would be one the coroutine never produced."
+        };
+    }
 
 } // namespace detail
 
@@ -129,40 +166,56 @@ class [[nodiscard]] Task
     using promise_type = PromiseType;
     using HandleType = std::coroutine_handle<PromiseType>;
 
-    /// Awaiter produced by `co_await`-ing a task; starts the child and yields its result.
+    /// Awaiter produced by `co_await`-ing a task; owns the child, starts it and yields its result.
+    ///
+    /// It takes the frame from the rvalue `Task` that produced it and destroys it when the
+    /// `co_await` expression ends, so nothing else can tear the child down while the awaiting
+    /// coroutine is suspended inside it.
     class Awaiter
     {
       public:
+        /// @param child The frame this awaiter takes over; may be empty.
         explicit Awaiter(HandleType child) noexcept: _child(child) {}
 
-        /// @return True if there is nothing to suspend for (no child, or already done).
-        [[nodiscard]] bool await_ready() const noexcept { return !_child || _child.done(); }
+        Awaiter(Awaiter&&) noexcept = default;
+        Awaiter(Awaiter const&) = delete;
+        Awaiter& operator=(Awaiter const&) = delete;
+        Awaiter& operator=(Awaiter&&) = delete;
+        ~Awaiter() = default;
 
-        /// Records the awaiting coroutine as the child's continuation, propagates
-        /// the cancellation token down, and starts the child via symmetric transfer.
+        /// @return True if there is nothing to suspend for (no child, or already done).
+        [[nodiscard]] bool await_ready() const noexcept { return !_child || _child.get().done(); }
+
+        /// Records the awaiting coroutine as the child's continuation, propagates the
+        /// cancellation token and the chain's ownership down, and starts the child via
+        /// symmetric transfer.
         /// @param awaiting The coroutine performing the `co_await`.
         /// @return The child handle to resume.
         template <typename Promise>
         [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> awaiting) noexcept
         {
-            _child.promise().continuation = awaiting;
+            auto& promise = _child.get().promise();
+            promise.continuation = awaiting;
+            promise.unownedRoot = detail::unownedRootOf(awaiting);
             if constexpr (HasStopToken<Promise>)
-                _child.promise().setStopToken(awaiting.promise().stopToken());
-            return _child;
+                promise.setStopToken(awaiting.promise().stopToken());
+            return _child.get();
         }
 
         /// @return The value produced by the child, or rethrows its exception.
+        /// @throws std::logic_error if the awaited task owned no frame.
         T await_resume()
         {
             if (!_child)
-                return T {};
-            if (_child.promise().exception)
-                std::rethrow_exception(_child.promise().exception);
-            return std::move(*_child.promise().result);
+                detail::refuseEmptyTask();
+            auto& promise = _child.get().promise();
+            if (promise.exception)
+                std::rethrow_exception(promise.exception);
+            return std::move(*promise.result);
         }
 
       private:
-        HandleType _child; ///< Borrowed; owned and destroyed by the awaited Task value.
+        detail::UniqueCoroHandle<PromiseType> _child; ///< Owned: taken from the awaited rvalue Task.
     };
 
     Task() noexcept = default;
@@ -175,28 +228,37 @@ class [[nodiscard]] Task
     Task& operator=(Task const&) = delete;
     ~Task() = default;
 
-    /// Awaiting a task consumes it; the owning value keeps the frame alive across
-    /// the suspension (for a temporary, in the awaiting coroutine's frame).
-    [[nodiscard]] Awaiter operator co_await() && noexcept { return Awaiter { _handle.get() }; }
+    /// Awaiting a task consumes it: the frame moves into the awaiter, which keeps it alive
+    /// across the suspension (in the awaiting coroutine's frame) and destroys it at the end of
+    /// the `co_await` expression. This value is empty afterwards.
+    [[nodiscard]] Awaiter operator co_await() && noexcept { return Awaiter { _handle.release() }; }
 
     /// @return The underlying coroutine handle (for the runtime/driver to start
     /// and inspect a root task). Prefer `co_await` for composition.
     [[nodiscard]] HandleType handle() const noexcept { return _handle.get(); }
+
+    /// Gives the frame up, so the caller owns it: this task is empty afterwards and destroys
+    /// nothing. What is returned must be destroyed, or resumed to completion by something that
+    /// frees it.
+    /// @return The handle that was owned, or an empty one.
+    [[nodiscard]] HandleType release() noexcept { return _handle.release(); }
 
     /// @return True once the coroutine has run to completion.
     [[nodiscard]] bool done() const noexcept { return !_handle || _handle.get().done(); }
 
     /// @return The result of a completed root task, rethrowing any body exception.
     /// @pre `done()` is true AND a frame is owned.
+    /// @throws std::logic_error if no frame is owned.
     ///
     /// The two halves of that precondition are separate on purpose: `done()` also answers true for
-    /// a task owning NO frame (default-constructed, or moved from), so `if (t.done()) t.result();`
-    /// is not by itself a safe guard. A moved-from task yields a default-constructed value rather
-    /// than dereferencing a null handle.
+    /// a task owning NO frame (default-constructed, moved from, or released), so
+    /// `if (t.done()) t.result();` is not by itself a safe guard. Such a task is refused by name
+    /// rather than answered with a default-constructed value, which would be one the coroutine
+    /// never produced — and which required every `T` to be default-constructible.
     [[nodiscard]] T result()
     {
         if (!_handle)
-            return T {};
+            detail::refuseEmptyTask();
         auto& promise = _handle.get().promise();
         if (promise.exception)
             std::rethrow_exception(promise.exception);
@@ -227,34 +289,44 @@ class [[nodiscard]] Task<void>
     using promise_type = PromiseType;
     using HandleType = std::coroutine_handle<PromiseType>;
 
-    /// Awaiter produced by `co_await`-ing a `Task<void>`.
+    /// Awaiter produced by `co_await`-ing a `Task<void>`; owns the child for the suspension.
     class Awaiter
     {
       public:
+        /// @param child The frame this awaiter takes over; may be empty.
         explicit Awaiter(HandleType child) noexcept: _child(child) {}
 
-        [[nodiscard]] bool await_ready() const noexcept { return !_child || _child.done(); }
+        Awaiter(Awaiter&&) noexcept = default;
+        Awaiter(Awaiter const&) = delete;
+        Awaiter& operator=(Awaiter const&) = delete;
+        Awaiter& operator=(Awaiter&&) = delete;
+        ~Awaiter() = default;
+
+        [[nodiscard]] bool await_ready() const noexcept { return !_child || _child.get().done(); }
 
         template <typename Promise>
         [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> awaiting) noexcept
         {
-            _child.promise().continuation = awaiting;
+            auto& promise = _child.get().promise();
+            promise.continuation = awaiting;
+            promise.unownedRoot = detail::unownedRootOf(awaiting);
             if constexpr (HasStopToken<Promise>)
-                _child.promise().setStopToken(awaiting.promise().stopToken());
-            return _child;
+                promise.setStopToken(awaiting.promise().stopToken());
+            return _child.get();
         }
 
         /// Rethrows any exception escaping the child body.
+        /// @throws std::logic_error if the awaited task owned no frame.
         void await_resume() const
         {
             if (!_child)
-                return;
-            if (_child.promise().exception)
-                std::rethrow_exception(_child.promise().exception);
+                detail::refuseEmptyTask();
+            if (_child.get().promise().exception)
+                std::rethrow_exception(_child.get().promise().exception);
         }
 
       private:
-        HandleType _child; ///< Borrowed; owned and destroyed by the awaited Task value.
+        detail::UniqueCoroHandle<PromiseType> _child; ///< Owned: taken from the awaited rvalue Task.
     };
 
     Task() noexcept = default;
@@ -267,19 +339,27 @@ class [[nodiscard]] Task<void>
     Task& operator=(Task const&) = delete;
     ~Task() = default;
 
-    [[nodiscard]] Awaiter operator co_await() && noexcept { return Awaiter { _handle.get() }; }
+    /// Awaiting a task consumes it: the frame moves into the awaiter, which destroys it at the
+    /// end of the `co_await` expression. This value is empty afterwards.
+    [[nodiscard]] Awaiter operator co_await() && noexcept { return Awaiter { _handle.release() }; }
 
     [[nodiscard]] HandleType handle() const noexcept { return _handle.get(); }
+
+    /// Gives the frame up, so the caller owns it: this task is empty afterwards.
+    /// @return The handle that was owned, or an empty one.
+    [[nodiscard]] HandleType release() noexcept { return _handle.release(); }
 
     [[nodiscard]] bool done() const noexcept { return !_handle || _handle.get().done(); }
 
     /// Rethrows any exception escaping a completed root task's body.
     /// @pre `done()` is true AND a frame is owned — `done()` alone is not that guard, since it also
-    ///      answers true for a task owning no frame (default-constructed, or moved from).
+    ///      answers true for a task owning no frame (default-constructed, moved from, released).
+    /// @throws std::logic_error if no frame is owned, for the reason `Task<T>::result()` gives:
+    ///         a task with no frame ran no body, so "it threw nothing" is not an answer about it.
     void result()
     {
         if (!_handle)
-            return;
+            detail::refuseEmptyTask();
         auto& promise = _handle.get().promise();
         if (promise.exception)
             std::rethrow_exception(promise.exception);

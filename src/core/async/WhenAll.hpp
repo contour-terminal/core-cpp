@@ -58,6 +58,15 @@ namespace detail
             WhenAllState* state = nullptr; ///< Borrowed; outlives every runner.
             StopToken token;               ///< Inherited from the awaiting coroutine.
 
+            /// The root of the await chain, where that chain belongs to nobody; otherwise empty.
+            ///
+            /// Inherited from the awaiting coroutine like @c token, and for the same reason: a
+            /// task this runner awaits parks on an executor, and what that executor may free is
+            /// the chain's root, not a frame in the middle. A runner that did not carry the answer
+            /// would make every park under a `whenAll` read as "somebody owns this", and a
+            /// detached chain would leak whole (see [`ParkedWork`](ParkedWork.hpp)).
+            std::coroutine_handle<> unownedRoot;
+
             WhenAllRunner get_return_object() noexcept
             {
                 return WhenAllRunner { std::coroutine_handle<PromiseType>::from_promise(*this) };
@@ -162,6 +171,7 @@ namespace detail
                 // awaiter reads it through the promise, so wire both to the same
                 // join state before starting the runner.
                 runner.handle().promise().state = &_state;
+                runner.handle().promise().unownedRoot = detail::unownedRootOf(awaiting);
                 if constexpr (HasStopToken<Promise>)
                     runner.handle().promise().token = awaiting.promise().stopToken();
                 runner.handle().resume();

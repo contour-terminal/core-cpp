@@ -71,6 +71,12 @@ fastcached
   - src/core/tui/runtime/TuiRuntime.hpp and TuiRuntime_test.cpp (from
     vendor/endo/tui/runtime/, adapted): endo f774a210 plus fastcached 6483abd8,
     which makes DelayAwaiter::await_ready() a constant
+  Imported at 0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21 (origin/master)
+  - src/core/async/{ParkedWork,IExecutor,ResumeOn,ThreadPoolExecutor,AsyncQueue}.hpp
+    and their tests (from src/FastCache/Async/, adapted; ThreadPoolExecutor.cpp
+    inlined into its header), src/core/async/{DetachedTask,SyncRun}.hpp (split out
+    of src/FastCache/Async/Task.hpp), and the ownership half of
+    src/core/async/Task.hpp, merged into contour's
 
 Documentation and CI configuration adapted from the following projects, each
 licensed under the Apache License, Version 2.0, and each read as a git blob at the

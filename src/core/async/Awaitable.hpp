@@ -40,4 +40,17 @@ concept HasStopToken = requires(P& promise) {
     { promise.stopToken() } -> std::convertible_to<StopToken>;
 };
 
+/// Satisfied by a coroutine promise that carries the root of the await chain it belongs to, for
+/// the case where that chain belongs to nobody.
+///
+/// It is the second thing a templated `await_suspend` reads the awaiting promise through
+/// (@c HasStopToken being the first): `core::async::detail::unownedRootOf` answers *may an
+/// executor free what it is holding* from it, and a promise that does not carry the answer says
+/// "not mine", which is what a coroutine type this module does not know should say.
+/// @tparam P The candidate promise type.
+template <typename P>
+concept CarriesUnownedRoot = requires(P& promise) {
+    { promise.unownedRoot } -> std::convertible_to<std::coroutine_handle<>>;
+};
+
 } // namespace core::async

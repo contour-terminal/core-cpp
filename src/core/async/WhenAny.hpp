@@ -83,7 +83,14 @@ namespace detail
             std::size_t index = 0;               ///< This runner's position in the input list.
             StopToken token;                     ///< The shared child token (cancels losers).
             std::exception_ptr failure;          ///< This child's failure, if its task threw.
-            bool cancelled = false;              ///< Its task unwound on OperationCancelled: a loser.
+
+            /// The root of the await chain, where that chain belongs to nobody; otherwise empty.
+            /// Inherited from the awaiting coroutine for the reason @c WhenAll's runner carries
+            /// one: what an executor may free under a park is the chain's root, never a frame in
+            /// the middle (see [`ParkedWork`](ParkedWork.hpp)).
+            std::coroutine_handle<> unownedRoot;
+
+            bool cancelled = false; ///< Its task unwound on OperationCancelled: a loser.
 
             WhenAnyRunner get_return_object() noexcept
             {
@@ -252,6 +259,7 @@ namespace detail
                 promise.state = _state;
                 promise.index = i;
                 promise.token = childToken;
+                promise.unownedRoot = detail::unownedRootOf(awaiting);
                 _runners[i].handle().resume();
             }
 

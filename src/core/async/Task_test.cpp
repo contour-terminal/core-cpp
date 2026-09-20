@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/async/SyncRun.hpp>
 #include <core/async/Task.hpp>
 #include <core/async/WhenAll.hpp>
 
@@ -6,13 +7,39 @@
 
 #include <coroutine>
 #include <stdexcept>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
+using core::async::syncRun;
+using core::async::syncRunWith;
 using core::async::Task;
 using core::async::whenAll;
 
 namespace
 {
+
+/// A value with no default constructor, and no way to make one by accident.
+///
+/// `Task<T>` used to answer a null handle with `T {}`, which required every result type to be
+/// default-constructible — a requirement no `co_return` needs and that a type like this cannot
+/// meet.
+class Measurement
+{
+  public:
+    explicit Measurement(int value) noexcept: _value(value) {}
+
+    Measurement() = delete;
+
+    /// @return The value this was made with.
+    [[nodiscard]] int value() const noexcept { return _value; }
+
+  private:
+    int _value;
+};
+
+static_assert(!std::is_default_constructible_v<Measurement>,
+              "the point of this type is that Task must not need to default-construct its result");
 
 /// A computational task that completes synchronously when first resumed.
 Task<int> answer()
@@ -44,6 +71,114 @@ Task<int> sumDown(int n)
     if (n == 0)
         co_return 0;
     co_return 1 + co_await sumDown(n - 1);
+}
+
+/// A coroutine-frame sentinel: one per frame under test, counted when that frame dies.
+///
+/// Passed BY VALUE into a coroutine, which is both this repository's coroutine rule and what puts
+/// it in the frame — a body local would not exist in a lazy `Task` that has never started. Move
+/// aware, so the caller's temporary being destroyed at the end of the call expression is not
+/// counted as the frame dying.
+class FrameSentinel
+{
+  public:
+    /// @param destroyed Incremented once when the frame holding this dies; never null.
+    explicit FrameSentinel(int* destroyed) noexcept: _destroyed(destroyed) {}
+
+    FrameSentinel(FrameSentinel&& other) noexcept: _destroyed(std::exchange(other._destroyed, nullptr)) {}
+
+    FrameSentinel(FrameSentinel const&) = delete;
+    FrameSentinel& operator=(FrameSentinel const&) = delete;
+    FrameSentinel& operator=(FrameSentinel&&) = delete;
+
+    ~FrameSentinel()
+    {
+        if (_destroyed != nullptr)
+            ++*_destroyed;
+    }
+
+  private:
+    int* _destroyed;
+};
+
+/// A value task whose frame is counted when it dies.
+Task<int> answerWithSentinel(FrameSentinel sentinel)
+{
+    (void) sentinel;
+    co_return 42;
+}
+
+/// Awaits a task the CALLER still names, so a case can ask what became of that name.
+///
+/// `operator co_await` is rvalue-qualified, so awaiting a named local is spelled `std::move` —
+/// and the whole question is whether that move is real.
+Task<void> awaitNamedLocal(Task<int>* named, int* value, bool* stillOwnsAfter)
+{
+    *value = co_await std::move(*named);
+    *stillOwnsAfter = static_cast<bool>(named->handle());
+}
+
+/// Produces a value of a type that cannot be default-constructed.
+Task<Measurement> measure(int value)
+{
+    co_return Measurement { value };
+}
+
+/// Awaits one, so the awaiter is held to the same requirement as the task.
+Task<Measurement> measureThenAdd(int value)
+{
+    auto const measured = co_await measure(value);
+    co_return Measurement { measured.value() + 1 };
+}
+
+/// An awaitable that suspends and is never resumed by anybody — the shape of a socket read with
+/// no data buffered and no closed peer to report EOF.
+struct NeverCompletes
+{
+    [[nodiscard]] bool await_ready() const noexcept { return false; }
+
+    // The handle is deliberately dropped: nothing ever resumes this awaitable, which is the whole
+    // point of the fixture.
+    void await_suspend(std::coroutine_handle<> /*awaiting*/) const noexcept {}
+
+    void await_resume() const noexcept {}
+};
+
+/// An awaitable that parks and remembers who, so a case can play the owner that takes the park
+/// back — `ISocket::cancelRead()` in miniature.
+struct Retrievable
+{
+    std::coroutine_handle<> parked {}; ///< Who parked here, until the owner takes it back.
+
+    [[nodiscard]] bool await_ready() const noexcept { return false; }
+
+    void await_suspend(std::coroutine_handle<> awaiting) noexcept { parked = awaiting; }
+
+    void await_resume() const noexcept {}
+};
+
+/// A value-returning task that parks before ever producing a result.
+Task<int> parksForever()
+{
+    co_await NeverCompletes {};
+    co_return 1;
+}
+
+/// A void task that parks before its side effect, so a case can assert the body past the suspend
+/// point did not run.
+Task<void> parksForeverVoid(int* sideEffect)
+{
+    co_await NeverCompletes {};
+    *sideEffect = 1;
+}
+
+/// Parks on @p on and records reaching its end, so a case can tell a frame that finished from one
+/// that was freed where it parked.
+Task<int> parksOn(Retrievable* on, bool* finished)
+{
+    co_await *on;
+    *finished = true;
+    co_return 1;
 }
 
 /// An awaitable the test can complete by hand, simulating asynchronous I/O so the
@@ -134,6 +269,136 @@ TEST_CASE("Task is move-only and the moved-from frame is not double-freed", "[Ta
 
     REQUIRE(moved.done());
     REQUIRE(moved.result() == 42);
+}
+
+TEST_CASE("Awaiting a task takes its frame, leaving the name that held it empty", "[Task]")
+{
+    // The awaiter OWNS the task it was handed, rather than borrowing it from a `Task` value that
+    // outlives the suspension. It is what lets a coroutine park inside the awaited task while the
+    // caller that named it is somewhere the frame is not reachable from, and it is why
+    // `operator co_await` is rvalue-qualified: the value is moved out, not read through.
+    auto destroyed = 0;
+    auto value = 0;
+    auto stillOwnsAfter = true;
+    {
+        auto named = answerWithSentinel(FrameSentinel { &destroyed });
+        auto root = awaitNamedLocal(&named, &value, &stillOwnsAfter);
+
+        root.handle().resume();
+
+        REQUIRE(root.done());
+        CHECK(value == 42);
+        // Emptied by the await, so the local cannot free it a second time...
+        CHECK_FALSE(stillOwnsAfter);
+        // ... and the awaiter already did, at the end of the `co_await` expression.
+        CHECK(destroyed == 1);
+    }
+    // Freed exactly once: the local going out of scope here added nothing.
+    CHECK(destroyed == 1);
+}
+
+TEST_CASE("A task owning no frame has no result to give", "[Task]")
+{
+    // `done()` is true for a task owning NO frame — default-constructed, moved from, released —
+    // so `if (t.done()) t.result();` reaches this. It used to answer with a default-constructed
+    // `T`, which invents a value the coroutine never produced and forces every `T` to be
+    // default-constructible. There is no value that would be true, so it is refused by name.
+    auto empty = Task<int> {};
+    REQUIRE(empty.done());
+    CHECK_THROWS_AS(empty.result(), std::logic_error);
+
+    auto emptyVoid = Task<void> {};
+    REQUIRE(emptyVoid.done());
+    CHECK_THROWS_AS(emptyVoid.result(), std::logic_error);
+}
+
+TEST_CASE("A task produces a value whose type cannot be default-constructed", "[Task]")
+{
+    auto task = measureThenAdd(41);
+
+    task.handle().resume();
+
+    REQUIRE(task.done());
+    CHECK(task.result().value() == 42);
+}
+
+TEST_CASE("release() hands the frame to the caller, and the task keeps nothing", "[Task]")
+{
+    auto destroyed = 0;
+    auto handle = Task<int>::HandleType {};
+    {
+        auto task = answerWithSentinel(FrameSentinel { &destroyed });
+        handle = task.release();
+        REQUIRE(handle);
+        CHECK_FALSE(task.handle());
+    }
+
+    // The task went out of scope empty, so its destructor freed nothing...
+    CHECK(destroyed == 0);
+
+    // ... and freeing it is now the caller's job, which is the whole of what release() means.
+    handle.destroy();
+    CHECK(destroyed == 1);
+}
+
+TEST_CASE("syncRun drives a task to its end and answers with its result", "[Task][syncRun]")
+{
+    CHECK(syncRun(answer()) == 42);
+    CHECK(syncRun(answerPlusOne()) == 43);
+
+    auto counter = 0;
+    syncRun(increment(&counter));
+    CHECK(counter == 1);
+}
+
+TEST_CASE("syncRun refuses a task that is still suspended", "[Task][syncRun]")
+{
+    // It used to read the promise's result unconditionally. For a task still parked after
+    // resume() that names storage which was never engaged, and ~Task() then tears the frame down
+    // while whatever parked the coroutine still points into it — which surfaced as a SIGSEGV, a
+    // heap corruption or an abort rather than as a named failure.
+    CHECK_THROWS_AS(syncRun(parksForever()), std::logic_error);
+
+    auto sideEffect = 0;
+    CHECK_THROWS_AS(syncRun(parksForeverVoid(&sideEffect)), std::logic_error);
+    CHECK(sideEffect == 0);
+}
+
+TEST_CASE("syncRunWith takes the park back before refusing, so nothing points into a freed frame",
+          "[Task][syncRun]")
+{
+    // The plain refusal frees a frame the parked read still points into, and the resource's next
+    // completion then writes into freed memory. Taking the park back first is what makes the throw
+    // the whole of the failure: the frame runs to its end, THEN is freed.
+    auto park = Retrievable {};
+    auto finished = false;
+    auto retrievals = 0;
+
+    CHECK_THROWS_AS(syncRunWith(parksOn(&park, &finished),
+                                [&park, &retrievals] {
+                                    ++retrievals;
+                                    std::exchange(park.parked, {}).resume();
+                                }),
+                    std::logic_error);
+
+    CHECK(retrievals == 1);
+    CHECK(finished);
+    CHECK_FALSE(park.parked);
+}
+
+TEST_CASE("syncRunWith asks nothing of the retriever when the task never parks", "[Task][syncRun]")
+{
+    auto retrievals = 0;
+    auto const result = syncRunWith(answer(), [&retrievals] { ++retrievals; });
+
+    CHECK(result == 42);
+    CHECK(retrievals == 0);
+}
+
+TEST_CASE("syncRun refuses a task owning no frame rather than resuming a null handle", "[Task][syncRun]")
+{
+    CHECK_THROWS_AS(syncRun(Task<int> {}), std::logic_error);
+    CHECK_THROWS_AS(syncRunWith(Task<int> {}, [] {}), std::logic_error);
 }
 
 TEST_CASE("Deep co_await chains keep the stack bounded (symmetric transfer)", "[Task]")

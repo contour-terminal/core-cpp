@@ -6,7 +6,9 @@ or resumed on the wrong thread.
 
 **Status.** The code these rules govern arrives in two steps: contour's `coro` and `net` were
 imported as they are (Tasks A5 and A6: `core::async`, and `core::net` with its `EventSource`
-API), then fastcached's async and networking layer is merged into them (Phase B). The rules are
+API), then fastcached's async and networking layer is merged into them (Phase B). Task B1 has
+landed the first half of that merge — the ownership rules under "Task ownership" below are live
+code, not a forecast. The rules are
 written against the merged design's names, from the design spec,
 [Part I §2](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/specs/2026-09-18-core-cpp-design.md),
 so the tasks that implement it inherit them; each Phase B task extends this file with the rules
@@ -46,6 +48,73 @@ The contract is the spec's (Part I §2, rules 1 to 6), and it is short enough to
   `core::async::OperationCancelled`; a cancel from the resource (`close()`, `cancelRead()`, a
   closed listener) returns `NetErrorCode::Cancelled` as a value. If a receive already completed
   with bytes, the data wins.
+
+## Task ownership
+
+These landed with Task B1, which merged fastcached's `Task.hpp`, `ParkedWork.hpp`, `IExecutor.hpp`,
+`ResumeOn.hpp`, `ThreadPoolExecutor` and `AsyncQueue` into `core::async`. They are about coroutine
+frames rather than sockets, and every rule below is enforced by a case in
+`src/core/async/{Task,ParkedWork,AsyncQueue}_test.cpp`.
+
+- **The awaiter owns what it awaits, and ownership runs downward.** `Task::operator co_await` is
+  rvalue-qualified and moves the frame into the awaiter, which lives in the awaiting coroutine's
+  frame for the whole suspension and destroys it at the end of the `co_await` expression. The name
+  that produced it is empty afterwards. It is what makes a chain freeable from its root: each
+  frame's awaiter owns the frame it awaits, so destroying the root destroys all of it. A borrowing
+  awaiter leaves the ownership sideways, and then freeing what an executor holds frees one frame
+  out of the middle and leaves the rest unreachable — which is the *indirect only* LeakSanitizer
+  signature. Origin:
+  [fastcached#1025](https://github.com/LASTRADA-Software/fastcached/issues/1025).
+- **`unownedRoot` is set at every `await_suspend`, by every coroutine type in the module.** A
+  parked coroutine has to answer *may this executor free what it is holding* without walking a
+  continuation chain whose links are type-erased, so the answer is copied down one frame at a time
+  and a promise states that it carries one through `core::async::CarriesUnownedRoot`. **A
+  coroutine type that does not carry it silently answers "somebody owns this"**, and every park
+  underneath it then leaks whole: `whenAll`'s and `whenAny`'s runners are a coroutine type of
+  their own between a detached root and the task that parks, and adding them to the concept is
+  what closed that hole.
+- **A task that owns no frame has no result.** `done()` is true for a default-constructed,
+  moved-from or released `Task` as well as for a completed one, so `if (t.done()) t.result();`
+  reaches the empty case; answering it with `T {}` invents a value the coroutine never produced
+  and forces every result type to be default-constructible. It is refused by name
+  (`detail::refuseEmptyTask()`), which is also what `syncRun` does for a task still suspended
+  after its resume: reading such a task's result is undefined, and freeing its frame tears down
+  storage whatever parked it still points into. `syncRunWith(task, retrieve)` takes the park back
+  first, so the refusal is the whole of the failure rather than a crash naming nothing. Origin:
+  [fastcached#178](https://github.com/LASTRADA-Software/fastcached/issues/178).
+- **An executor resumes what it is handed, or frees it — never neither.** `detail::Parked::resume()`
+  disowns and resumes in one expression, and a handle it *declines* to resume (already done, or
+  empty) has its owned chain root destroyed there rather than dropped. Taking the work out and
+  then walking away is a silent leak on the one path the type exists to close.
+- **`using IExecutor::submit;` in every derived class, and GCC already says so.** A derived class
+  that re-declares one overload of a name hides every other overload of it. On top of the
+  compile-time check in `ParkedWork_test.cpp`, GCC's `-Woverloaded-virtual` — part of core-cpp's
+  pedantic set, so a build break — refuses the hiding declaration outright; clang does not. Keep
+  that second line of defence: the negative control in the test is written over a non-virtual base
+  precisely so the real one stays refused. Origin:
+  [fastcached#1041](https://github.com/LASTRADA-Software/fastcached/issues/1041).
+- **A queue or a resource never resumes its consumer inline.** `AsyncQueue::push()` and `close()`
+  hand the parked handle to `IExecutor::submit` and return. A producer commonly pushes while
+  holding a lock of its own, and a queue that resumed inline would run the consumer's next step
+  inside that lock, on the producer's thread, at a point where the consumer may call back into the
+  producer's object. The queue's own mutex is never held across `submit`, so no lock-order
+  inversion is expressible.
+- **A stop callback is registered before the park is published, and never under the lock the
+  callback takes.** A token that is already stopped runs the callback in the `StopCallback`
+  constructor, on the registering thread: under the lock that is a deadlock, and after the park is
+  published it hands the handle to an executor that may resume a coroutine whose `await_suspend`
+  has not returned. Registering first means an inline run finds no waiter and only records the
+  cancellation, which the re-check under the lock then reads.
+- **Where a cancel and an answer arrive together, the answer wins.** `AsyncQueue::pop()` resolves
+  an item first, then a `close()` (as `std::nullopt`), and only then throws `OperationCancelled`:
+  an item taken out of the queue has nowhere to be put back, and `close()` is the resource saying
+  *no more items, ever*, which a consumer answers by returning. Throwing over a close would make
+  an ordinary shutdown unwind, and a `DetachedTask` that does not catch it ends the process.
+- **A pool that is stopping drains rather than drops, and resumes inline rather than refusing.**
+  An unresumed coroutine runs no destructor and frees no frame, so a queue discarded at shutdown
+  leaks every job in it along with whatever it holds — a socket, a temporary directory, a slot in
+  somebody's counter. `ThreadPoolExecutor` therefore has nothing for `ParkedWork::abandon` to
+  answer, and says so where it ignores it.
 
 ## Sockets
 

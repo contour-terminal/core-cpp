@@ -9,8 +9,10 @@ The C++23 coroutine vocabulary. Namespace `core::async`, directory `src/core/asy
     [implementation plan](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/plans/2026-09-18-core-cpp.md))
     exist. `Generator` moved to [base](base.md#generator) in Task A5b: `core::async::Generator`
     would read as an *asynchronous*, `co_await`-able stream, and it is a synchronous one, needing
-    only the standard library. Task B1 merges fastcached's executors and ownership rules into
-    the rest.
+    only the standard library. Task B1 merged fastcached's executors and ownership rules into the
+    rest (`src/FastCache/Async` at `0708dd54`): `ParkedWork`, `DetachedTask`, `syncRun`,
+    `IExecutor`, `ResumeOn`, `ThreadPoolExecutor` and `AsyncQueue`, and an awaiter that owns the
+    task it awaits.
 
 ## StopToken
 
@@ -58,10 +60,16 @@ Imported from contour's `src/coro` at `6777ff05`, with `coro::` renamed `core::a
 - `Task<T>` (`<core/async/Task.hpp>`) is a lazy coroutine producing one value, or none for
   `Task<void>`. It starts suspended, so a `co_await` attaches its continuation before the body
   runs, and its final suspension transfers to the awaiting coroutine (symmetric transfer). A
-  task is awaited, or driven through `handle()`, once. The `Task` value owns the frame and
-  destroys it; the awaiter only borrows it. The promise holds a `StopToken`, inherited from the
-  awaiting coroutine when a task is awaited. `result()` of a root task requires both `done()`
-  and an owned frame: `done()` is also true for a default-constructed or moved-from task.
+  task is awaited, or driven through `handle()`, once. **The awaiter owns the task it awaits**:
+  `operator co_await` is rvalue-qualified and moves the frame out of the `Task` value, so a named
+  local awaited with `std::move` is empty afterwards and the awaiter destroys the frame at the end
+  of the `co_await` expression. Ownership therefore runs downward through a chain, which is what
+  lets an executor free an abandoned one from its root. `release()` hands the frame to the caller
+  instead. The promise holds a `StopToken`, inherited from the awaiting coroutine when a task is
+  awaited, and a `unownedRoot` (below). `result()` of a root task requires both `done()` and an
+  owned frame — `done()` is also true for a default-constructed, moved-from or released task — and
+  a task owning no frame is refused with a `std::logic_error` rather than answered with a
+  default-constructed `T`, so `T` need not be default-constructible.
 - Symmetric transfer keeps `co_await`s from growing the stack only where the compiler makes the
   transfer a tail call. Clang and MSVC do at every optimisation level. GCC does only when it
   optimises sibling calls, and WebAssembly has no tail calls without `-mtail-call`. Measured at
@@ -80,12 +88,17 @@ Imported from contour's `src/coro` at `6777ff05`, with `coro::` renamed `core::a
   flags, defines `CORE_ASYNC_SYMMETRIC_TRANSFER_IS_TAIL_CALL` only at `-O2` or better, and says
   which it decided in the configure log. `gcc-release` keeps the case, `gcc-debug` and any build
   outside the presets skip it. The fix is tracked in
-  [core-cpp#15](https://github.com/contour-terminal/core-cpp/issues/15), to be decided in Task B1.
+  [core-cpp#15](https://github.com/contour-terminal/core-cpp/issues/15). Task B1 does not close or
+  narrow it: whether the transfer is a tail call is a property of the compiler's sibling-call
+  optimisation and of WebAssembly's tail-call support, and the ownership graft changed who owns a
+  frame, not how `final_suspend` transfers control. The depth at which the chain overflows is the
+  same before and after.
 
-  The teardown of such a chain is not a tail call and does not need to be: each level destroys
-  the child it awaited at the end of its own `co_return` expression, by which time that child has
-  already destroyed its own, so a completed chain is released one frame at a time. A chain
-  destroyed *before* it completes is torn down by plain recursion, one `~Task` per level.
+  The teardown of such a chain is not a tail call and does not need to be: each level's awaiter
+  destroys the child it owns at the end of its own `co_await` expression, by which time that
+  child's awaiter has already destroyed its own, so a completed chain is released one frame at a
+  time. A chain destroyed *before* it completes is torn down by plain recursion, one awaiter per
+  level.
 - `detail::UniqueCoroHandle<Promise>` (`<core/async/UniqueCoroHandle.hpp>`) is the move-only owner
   of a coroutine handle that `Task` and the combinators' child runners share.
 - `<core/async/Cancellation.hpp>` has `OperationCancelled`, which a cancelled frame throws to
@@ -93,10 +106,11 @@ Imported from contour's `src/coro` at `6777ff05`, with `coro::` renamed `core::a
   coroutine's token without suspending it (a default token where the promise has none). contour's
   copy also aliased `std::stop_token` and friends, which are now `<core/async/StopToken.hpp>`.
 - `<core/async/Awaitable.hpp>` has the concepts `Awaiter` (`await_ready`, `await_suspend`,
-  `await_resume`) and `HasStopToken` (a promise whose `stopToken()` yields a `StopToken`). Every
-  templated `await_suspend` in the module reads the awaiting promise through `HasStopToken`, so
-  what a promise must offer is stated in one place; `Awaitable_test.cpp` asserts both concepts
-  over the module's own types and over the near misses.
+  `await_resume`), `HasStopToken` (a promise whose `stopToken()` yields a `StopToken`) and
+  `CarriesUnownedRoot` (a promise that carries the root of an await chain nobody owns). Every
+  templated `await_suspend` in the module reads the awaiting promise through them, so what a
+  promise must offer is stated in one place; `Awaitable_test.cpp` asserts all three over the
+  module's own types and over the near misses.
 - `whenAll(tasks...)` (`<core/async/WhenAll.hpp>`) starts every `Task<void>` and resumes the
   awaiting coroutine once all have finished. Each child inherits the awaiting coroutine's token.
   It does not cancel siblings when one throws: the first exception is rethrown once every child
@@ -141,8 +155,12 @@ Changes from contour's copy, besides the namespace:
   `core::testing_main`. Its `src/coro/testing/SuppressWindowsDialogs.hpp` was merged into
   `core::testing` in Task A1.
 
-`Awaitable_test.cpp`, `Task_test.cpp`, `WhenAll_test.cpp` and `WhenAny_test.cpp` run in
-`core-cpp.async` and again, over the `StopToken` fallback, in `core-cpp.async-fallback`.
+`AsyncQueue_test.cpp`, `Awaitable_test.cpp`, `ParkedWork_test.cpp`, `StopToken_test.cpp`,
+`Task_test.cpp`, `WhenAll_test.cpp` and `WhenAny_test.cpp` run in `core-cpp.async` and again, over
+the `StopToken` fallback, in `core-cpp.async-fallback`; `ThreadPoolExecutor_test.cpp` joins them
+wherever the build has threads. Every case that counts a coroutine frame does so with a sentinel
+rather than leaving it to LeakSanitizer, because a leak only a sanitizer reports is a red once in
+N runs and reads as a flake.
 `core-cpp.async-link-smoke` is a third binary, `StopTokenLinkSmoke.cpp`, which links `core::async`
 alone with the fallback forced: the link a consumer makes, which the other two hide by linking
 `core::testing_main`. `Task_test.cpp` and
@@ -150,6 +168,67 @@ alone with the fallback forced: the link a consumer makes, which the other two h
 frame on Windows, where contour found that throwing through a coroutine frame crashes the Catch2
 harness (an MSVC coroutine-unwind interaction that also affects `std::generator`).
 `WhenAll_test.cpp`'s exception cases have no such guard, and pass with `cl` and `clang-cl`.
+
+## Ownership, executors and queues
+
+From fastcached's `src/FastCache/Async` at `0708dd54`, with `FastCache::` renamed `core::async::`
+and `Detail::` `detail::`:
+
+- `DetachedTask` (`<core/async/DetachedTask.hpp>`) is a coroutine started for its effects: its
+  body runs to its first suspension on construction and its frame frees itself at the end, so
+  nobody holds a handle. An exception escaping it terminates the process, because there is no
+  caller to hand it to. Its promise answers `stopToken()` with a never-stopped token, so a `Task`
+  awaited from it takes the ordinary inheritance path. It is the one coroutine shape in the module
+  that nothing owns, which is what makes the next entry answerable.
+- `ParkedWork` (`<core/async/ParkedWork.hpp>`) is what a coroutine hands an executor: the handle
+  to `resume`, and — only where this chain belongs to nobody — the chain root to `abandon` if it
+  is never resumed. The two are different questions, and the second has a safe default:
+  `IExecutor::submit(std::coroutine_handle<>)` borrows, so an executor may not free what it
+  merely holds. `detail::parkedWorkFor` derives the answer from the parking coroutine's own
+  promise (`detail::unownedRootOf`), and `detail::Parked` is the container entry that owns
+  `abandon` for as long as it holds it: `resume()` disowns and resumes in one expression, and a
+  handle it declines to resume is freed rather than dropped. It is the ROOT and never the parked
+  frame, because ownership in a `Task` chain runs downward. Origin:
+  [fastcached#1025](https://github.com/LASTRADA-Software/fastcached/issues/1025).
+- `syncRun(task)` and `syncRunWith(task, retrieve)` (`<core/async/SyncRun.hpp>`) drive a task to
+  completion on the calling thread. The task must be self-driving; one still suspended after its
+  resume has no result to read, and destroying its frame there tears down storage whatever parked
+  it still points into, so `syncRun` throws `std::logic_error` instead. `syncRunWith` takes the
+  park back first, while the frame is alive, and throws afterwards — a task its retriever did not
+  wake has its frame deliberately leaked rather than freed under something that points into it.
+- `IExecutor` (`<core/async/IExecutor.hpp>`) is somewhere a suspended coroutine can be handed to
+  be resumed: `submit(std::coroutine_handle<>)` and `submit(ParkedWork)`, both callable from any
+  thread. Every class deriving from it says `using IExecutor::submit;`, because a derived class
+  that re-declares one overload of a name hides every other overload of it
+  ([fastcached#1041](https://github.com/LASTRADA-Software/fastcached/issues/1041)). Both halves
+  are pure: an executor that queues work has to state what it does about work it never runs.
+- `co_await ResumeOn { executor }` (`<core/async/ResumeOn.hpp>`) continues the awaiting coroutine
+  wherever that executor runs things.
+- `ThreadPoolExecutor` (`<core/async/ThreadPoolExecutor.hpp>`) is an `IExecutor` over a fixed set
+  of threads, for work that blocks — a loop multiplexes coroutines that suspend, and is the wrong
+  answer for a job that occupies its thread for seconds. It does not bound admission. It never
+  abandons work: its queue is drained even while stopping, and a handle submitted after `stop()`
+  is resumed inline on the calling thread rather than dropped, because an unresumed coroutine
+  never frees its frame. fastcached's 92-line `.cpp` is inlined here: `core::async` is an
+  INTERFACE target, and a compiled body would change what every consumer links.
+- `AsyncQueue<T>` (`<core/async/AsyncQueue.hpp>`) is a queue one coroutine parks on and any thread
+  pushes to, replacing a mutex, a condition variable and a deque at the boundary between a
+  producing thread and a consuming coroutine. `push()` and `close()` never resume the consumer
+  inline; they hand its handle to the executor, because a producer commonly pushes while holding a
+  lock of its own. `AsyncQueueOptions` bounds it and says which end overflow sacrifices
+  (`DropOldest`, `DropNewest`); `push()` reports whether the item was admitted and how many it
+  displaced. `co_await queue.pop()` resolves to `std::optional<T>` — a value, or `std::nullopt`
+  meaning the queue closed — and is stop-aware: a cancel from the awaiting flow's own token throws
+  `OperationCancelled`, while an item already queued and a `close()` both answer first. The queue
+  owns no coroutine frame and cannot, so an owner observes its consumer finishing before
+  destroying it; `~AsyncQueue` asserts that no waiter is left, and `hasWaiter()` lets a test assert
+  it in a release build too.
+
+`unownedRoot` is what ties these together. It is a member of every promise in the module, set at
+each `await_suspend` from the awaiting coroutine's own, and non-empty exactly where the chain
+bottoms out in a `DetachedTask`. `whenAll`'s and `whenAny`'s runners carry it too: a runner is a
+coroutine type of its own between a detached root and the task that parks, and one that did not
+carry the answer would make every park underneath a combinator read as *somebody owns this*.
 
 ## Conventions
 
@@ -173,18 +252,13 @@ From contour's `src/coro/README.md` at `6777ff05`, as far as it still holds:
   copy takes that role: a fix is made here, released and re-vendored, never made in a consumer's
   copy.
 
-## Planned contents
-
-- From fastcached: `DetachedTask`, `syncRun`, `ParkedWork`, `IExecutor`, `ResumeOn`,
-  `ThreadPoolExecutor`, `AsyncQueue` with a stop-aware `pop`, and an awaiter that takes ownership
-  of the task it awaits.
-
 Depends on no other core-cpp module, and on Threads: the `StopToken` fallback synchronises its
 stop state with a `std::mutex`, a `std::condition_variable` and `std::this_thread::get_id()`, so
 `target_link_libraries(app PRIVATE core::async)` has to carry pthread wherever that is a library of
 its own. `core-cpp.async-link-smoke` is that link, made with the fallback forced and nothing else
 on the line. Under single-threaded Emscripten the fallback keeps plain state and the module links
 nothing. Under WebAssembly everything builds except
-`ThreadPoolExecutor.hpp` (Task B1), which refuses to compile without threads; where libc++ has no
+`ThreadPoolExecutor.hpp`, which refuses to compile without threads and is in no `FILE_SET` there;
+where libc++ has no
 `<stop_token>` without its experimental library, `StopToken` is the fallback. See
 [Coroutines and lifetimes](../design/coroutines-and-lifetimes.md).

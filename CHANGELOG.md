@@ -283,6 +283,44 @@ workflow refuses one without a section here.
   ruff's linter is a decision of its own. Nothing here enters a consumer's build, so there is no row
   in `cmake/CoreCppDependencies.cmake`.
 
+- `core::async` gains fastcached's executor and ownership vocabulary, merged onto contour's `Task`
+  (the design spec, Part I §2, item 6). New headers, all header-only and all in the WebAssembly
+  subset but the last:
+  - `<core/async/ParkedWork.hpp>`: `ParkedWork`, the pair of *the coroutine to resume* and *the
+    chain root an executor may free if it never resumes it*, with `detail::Parked`, the container
+    entry that owns the second for as long as it holds it, and `detail::unownedRootOf` /
+    `detail::parkedWorkFor`, which derive the answer from the parking coroutine's own promise.
+  - `<core/async/DetachedTask.hpp>`: `DetachedTask`, a coroutine started for its effects whose
+    frame nobody owns -- the one shape an executor may free at teardown.
+  - `<core/async/SyncRun.hpp>`: `syncRun(task)`, which drives a self-driving task to its end and
+    throws `std::logic_error` rather than reading a result a still-suspended task does not have,
+    and `syncRunWith(task, retrieve)`, which takes the park back first so the refusal is the whole
+    of the failure.
+  - `<core/async/IExecutor.hpp>`: `IExecutor`, with `submit(std::coroutine_handle<>)` (borrows) and
+    `submit(ParkedWork)` (carries what may be freed). Every class deriving from it says
+    `using IExecutor::submit;`, and `ParkedWork_test.cpp` asserts at compile time that
+    `submit(ParkedWork {})` reaches the owning overload
+    ([fastcached#1041](https://github.com/LASTRADA-Software/fastcached/issues/1041)).
+  - `<core/async/ResumeOn.hpp>`: `co_await ResumeOn { executor }`, which continues the awaiting
+    coroutine wherever that executor runs things.
+  - `<core/async/AsyncQueue.hpp>`: `AsyncQueue<T>`, a queue one coroutine parks on and any thread
+    pushes to, with `AsyncQueueOptions` (capacity and a `DropOldest`/`DropNewest` overflow policy),
+    `AsyncQueuePush`, and a `pop()` that resolves to `std::optional<T>`. `push()` and `close()`
+    never resume the consumer inline; they hand its handle to the executor. `pop()` is stop-aware:
+    a cancel from the awaiting flow's own token throws `core::async::OperationCancelled`, while an
+    item already queued and a `close()` both answer first.
+  - `<core/async/ThreadPoolExecutor.hpp>`: an `IExecutor` whose "somewhere else" is a fixed set of
+    threads, for work that blocks. It is the one header of the module a single-threaded WebAssembly
+    build does not get -- it refuses to compile there by `#error`, and is in no `FILE_SET` and in
+    no test binary of that build.
+- `core::async::Task<T>::release()` and `detail::UniqueCoroHandle<Promise>::release()` hand the
+  owned coroutine frame to the caller.
+- `core::async::CarriesUnownedRoot` (`<core/async/Awaitable.hpp>`) is the second concept a
+  templated `await_suspend` reads the awaiting promise through, beside `HasStopToken`: a promise
+  that carries the root of an await chain nobody owns. `Task`'s promise carries it, and so do the
+  `whenAll` and `whenAny` runners, so a coroutine parked underneath a combinator still states what
+  an executor may free.
+
 ### Breaking
 
 - `core::platform::testing::InMemoryFileSystem` models a file's lifetime the way POSIX does, where
@@ -480,6 +518,23 @@ workflow refuses one without a section here.
   There is no row for either removal in `tools/migrate/renames.json`: the call shape changes, so
   a mechanical rewrite would produce code that compiles into the wrong thing, and a compile error
   at `LanguageId::Endo` is the better signal.
+- `core::async::Task<T>`'s awaiter OWNS the task it awaits. `operator co_await` is rvalue-qualified
+  and now moves the frame out of the `Task` value into the awaiter, which holds it across the
+  suspension and destroys it at the end of the `co_await` expression; the `Task` that produced it is
+  empty afterwards. Until now the awaiter borrowed, and the `Task` value freed the frame on scope
+  exit. Migration: `co_await someTask()` is unchanged, since a temporary was already freed at the
+  end of that expression. Code that awaited a named local with `co_await std::move(task)` and then
+  read `task.handle()`, `task.done()` or `task.result()` must stop: the frame is gone and the name
+  holds nothing. The change is what lets an executor free an abandoned chain from its root, because
+  ownership in a `Task` chain now runs strictly downward.
+- `core::async::Task<T>::result()` and its awaiter's `await_resume()` throw `std::logic_error` for a
+  task that owns no coroutine frame, where they used to answer with a default-constructed `T`;
+  `Task<void>`'s equivalents throw there too, where they used to return silently. `done()` is true
+  for a default-constructed, moved-from or released task as well as for a completed one, so
+  `if (task.done()) task.result();` reaches this, and a default-constructed value is one the
+  coroutine never produced. With the `T {}` gone, `T` no longer has to be default-constructible.
+  Migration: a driver that asks for a result checks that it still owns a frame (`task.handle()`),
+  not only that `done()` is true.
 
 ### Changed
 
@@ -867,6 +922,7 @@ Each file was read as a git blob at the commit named, and none contains a CR byt
 | [contour](https://github.com/contour-terminal/contour) | `6777ff05014f8ff163b071e8b0e942830119db80` | `src/coro/{Awaitable,Cancellation,Task,UniqueCoroHandle,WhenAll,WhenAny}.hpp` and `{Task,WhenAll,WhenAny}_test.cpp` as `core::async`, `coro::` renamed `core::async::`; the `std::stop_token` aliases of `Cancellation.hpp` moved to `StopToken.hpp`, whose fallback replaces their `#error`; no `NOLINT`; two locals renamed for `-Wshadow`; two `WhenAny_test.cpp` helpers compiled only where the case using them is. `test_main.cpp` was not imported (`core::testing_main` replaces it), and `testing/SuppressWindowsDialogs.hpp` had been merged into `core::testing` already |
 | [contour](https://github.com/contour-terminal/contour) | `6777ff05014f8ff163b071e8b0e942830119db80` | `src/net` as `core::net`, `core::net_types` and `core::net_tls`, `net::` renamed `core::net::` and `coro::` `core::async::`, with its tests but `test_main.cpp`; `net/platform/{Clock,NativeHandle,SystemPipe,WinsockInit}` replaced by `core::platform`, whose `SystemPipe::read()` returns a `ChannelResult`; `platform/PeerAddress.hpp` moved to `detail/` and `platform/WindowsLoopback.*` to `windows/`, so that no `core::net::platform` namespace hides `core::platform`; platform code in platform subdirectories (epoll in `linux/`, kqueue in `bsd/`, `PollEventSource.cpp` split into `posix/` and `windows/`, `WaitChunking.hpp` in `detail/`); `NetError` split out of `IoResult.hpp` into `NetError.hpp`; `testing/TempDir.hpp` not imported (`core::testing::ScopedTempDir`); no `NOLINT`; the C-style `for` loops written as range-`for`s and `while`s; one lambda parameter renamed for GCC's `-Wshadow`, and a `CMSG_FIRSTHDR()` result checked for GCC's `-Wnull-dereference`; the TLS test makes its client context before its server thread starts |
 | [fastcached](https://github.com/LASTRADA-Software/fastcached) | `b461e8b6d367ed22e4bf2935717fa59360a64b7d` | `src/FastCache/Core/Clock.hpp`, merged into `core/platform/Clock.hpp` in camelBack (`Now`/`Refresh` as `now`/`refresh`, `TimePoint`/`Duration` as `SteadyTimePoint`/`SteadyDuration`); `Clock_test.cpp` and `WallClockRef_test.cpp`, merged into `core/platform/Clock_test.cpp` |
+| [fastcached](https://github.com/LASTRADA-Software/fastcached) | `0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21` | `src/FastCache/Async/{ParkedWork,IExecutor,ResumeOn,ThreadPoolExecutor,AsyncQueue}.{hpp,cpp}` and their tests as `core::async`, `FastCache::` renamed `core::async::` and `Detail::` `detail::`; `DetachedTask` and `SyncRun`/`SyncRunWith` out of `Task.hpp` into `DetachedTask.hpp` and `SyncRun.hpp` (Ruling R66), and the rest of that file merged into contour's `Task.hpp`; `ThreadPoolExecutor.cpp` inlined into its header (Ruling R65), over `std::thread` rather than `std::jthread`; `IReactor` replaced by `IExecutor` in `AsyncQueue` and `ParkedWork_test.cpp`, whose reactor-driven cases belong to Task B4 |
 
 The rulebook and CI configuration adapt text from fastcached at
 `b5ded89c5ae6ba5b45337335ce774c5ae6986d65`, contour and endo at the commits above, Lightweight at
