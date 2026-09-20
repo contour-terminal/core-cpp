@@ -200,6 +200,91 @@ class ARemovedRowCanNeverBeARewriteSource(unittest.TestCase):
             rewrite._patterns_for(row)
 
 
+class TheCodemodChangesOnlyWhatItWasAskedTo(unittest.TestCase):
+    """The boundaries the tool declares absolute, under the inputs six consumer trees actually hold.
+
+    Each case here is a review finding that the tool got wrong (I1-I4): a raw string holding C++,
+    a comment that mentions raw-string syntax, a file that is not UTF-8, and a file with CRLF.
+    """
+
+    def test_an_include_inside_a_raw_string_is_not_rewritten(self) -> None:
+        # I1. The include pass used to run on the raw text, before literals were masked, so a
+        # line-initial directive inside embedded C++ test data was rewritten -- the one thing the
+        # tool says it never does. Highlighter and parser suites are full of these.
+        source = 'static char const* Source = R"(\n#include <net/EventLoop.hpp>\n)";\n'
+        result, _ = rewrite.rewrite_text(source, rows_for("contour"))
+        self.assertEqual(result, source, "a codemod may change what the code says, never what it sends")
+
+    def test_a_real_include_beside_a_raw_string_is_still_rewritten(self) -> None:
+        source = '#include <net/EventLoop.hpp>\nstatic char const* S = R"(\n#include <net/ISocket.hpp>\n)";\n'
+        result, _ = rewrite.rewrite_text(source, rows_for("contour"))
+        self.assertEqual(
+            result,
+            '#include <core/net/EventLoop.hpp>\nstatic char const* S = R"(\n#include <net/ISocket.hpp>\n)";\n',
+        )
+
+    def test_a_quoted_include_is_not_read_as_a_string_literal(self) -> None:
+        result, _ = rewrite.rewrite_text('#include "net/EventLoop.hpp"\n', rows_for("contour"))
+        self.assertEqual(result, "#include <core/net/EventLoop.hpp>\n")
+
+    def test_an_unterminated_raw_string_in_a_comment_masks_nothing(self) -> None:
+        # I2. The masker ran over comments, and its raw-string rule is the one that is not
+        # line-confined, so a comment mentioning R"( swallowed every line up to the next )".
+        source = (
+            '// a raw string starts with R"( and ends with the mirror\n'
+            "net::EventLoop loop;\n"
+            "int f() { return 1; }\n"
+            'auto s = R"(hello)";\n'
+            "net::ISocket* p;\n"
+        )
+        result, _ = rewrite.rewrite_text(source, rows_for("contour"))
+        self.assertIn("core::net::EventLoop loop;", result)
+        self.assertIn("core::net::ISocket* p;", result)
+        self.assertIn('auto s = R"(hello)";', result)
+
+    def test_a_crlf_file_keeps_its_line_endings(self) -> None:
+        # I4. Reading with universal newlines and writing "\n" rewrote every line of every changed
+        # file, including untouched ones, which makes the diff unreviewable on a Windows checkout.
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "Crlf.cpp"
+            original = b"#include <net/EventLoop.hpp>\r\nnet::EventLoop loop;\r\nint untouched = 1;\r\n"
+            path.write_bytes(original)
+            with redirect_stdout(io.StringIO()):
+                rewrite.main(["--profile", "contour", str(path)])
+            after = path.read_bytes()
+            self.assertEqual(after.count(b"\r\n"), 3, f"line endings changed: {after!r}")
+            self.assertEqual(after.count(b"\n"), after.count(b"\r\n"), "a bare LF crept in")
+            self.assertIn(b"core::net::EventLoop loop;\r\n", after)
+            self.assertIn(b"int untouched = 1;\r\n", after)
+
+    def test_an_lf_file_keeps_its_line_endings(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "Lf.cpp"
+            path.write_bytes(b"net::EventLoop loop;\nint untouched = 1;\n")
+            with redirect_stdout(io.StringIO()):
+                rewrite.main(["--profile", "contour", str(path)])
+            self.assertNotIn(b"\r", path.read_bytes())
+
+    def test_a_file_that_is_not_utf8_is_skipped_counted_and_fatal(self) -> None:
+        # I3. One latin-1 byte aborted the run mid-tree with a traceback, after partial writes.
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "A_Plain.cpp").write_bytes(b"net::EventLoop a;\n")
+            (root / "B_Latin.cpp").write_bytes(b"// \xe9 copyright\nnet::EventLoop b;\n")
+            (root / "C_Plain.cpp").write_bytes(b"net::EventLoop c;\n")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = rewrite.main(["--profile", "contour", str(root)])
+            printed = output.getvalue()
+            self.assertEqual(status, 1, "a half-converted tree must not report success")
+            self.assertIn("B_Latin.cpp", printed)
+            self.assertIn("not UTF-8", printed)
+            # The files either side of it were still converted: one bad byte is not a stop order.
+            self.assertIn(b"core::net::EventLoop a;", (root / "A_Plain.cpp").read_bytes())
+            self.assertIn(b"core::net::EventLoop c;", (root / "C_Plain.cpp").read_bytes())
+            self.assertEqual((root / "B_Latin.cpp").read_bytes(), b"// \xe9 copyright\nnet::EventLoop b;\n")
+
+
 class TheToolReportsAndStaysInsideItsPath(unittest.TestCase):
     def test_it_reports_what_it_changed_per_file(self) -> None:
         with TemporaryDirectory() as directory:

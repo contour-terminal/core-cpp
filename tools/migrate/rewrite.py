@@ -9,14 +9,22 @@ that a longer qualified name is never a match: `(?<![\\w:])net::` leaves `std::n
 and `mynet::` alone. The tool is idempotent -- a second run over a rewritten tree changes nothing,
 and a half-converted tree converges -- so a reviewer can re-run it after a rebase.
 
-Two deliberate boundaries:
+Three deliberate boundaries:
 
 - **String and character literals are not rewritten.** A codemod may change what the code says; it
-  must never change what the program sends. Comments *are* rewritten, because a comment documents
-  the code beside it.
-- **A namespace *definition* (`namespace net { ... }`) is left to a human.** A consumer's own
-  namespace and the one being moved are the same token, and only a person can tell them apart. Only
-  qualified uses and `using namespace` directives are mechanical.
+  must never change what the program sends. That includes a raw string holding C++ -- test data for
+  a parser or a highlighter -- whose line-initial `#include` stays exactly as written. Comments
+  *are* rewritten, because a comment documents the code beside it. One ordered scan (`SPANS`)
+  decides which is which; the order of its alternatives is the reason it holds.
+- **A namespace *definition* (`namespace net { ... }`) is left to a human**, and so is a namespace
+  **alias** (`namespace cli = crispy::cli;`). A consumer's own namespace and the one being moved are
+  the same token, and only a person can tell them apart. Only qualified uses and `using namespace`
+  directives are mechanical.
+- **Bytes the rename does not reach are returned unchanged**, so a file's line endings and encoding
+  survive it: a codemod that also converted CRLF to LF would rewrite every line of every file it
+  touched, and the diff a reviewer needs would be the one thing it destroyed. A file that is not
+  UTF-8 is reported and skipped, and the run then exits non-zero rather than leaving a tree that is
+  half converted and says it succeeded.
 
 What the tool cannot decide is in the table as an `apply` of `semantic` (semantic_rename.py owns it)
 or `manual` (a human does), and neither is touched here. Nor is a row of kind `removed`, which names
@@ -44,15 +52,31 @@ SOURCE_SUFFIXES = frozenset(
 )
 
 #: Directories that hold somebody else's code or a build's output, never a consumer's sources.
-SKIPPED_DIRECTORIES = frozenset({"build", "node_modules", "out", "third_party", "vendor"})
+#: Compared case-folded, because `Build/` is a build tree too, and CPM puts fetched third-party
+#: sources under `_deps/` -- which a consumer pointing this at a repository root would rewrite.
+SKIPPED_DIRECTORIES = frozenset({"build", "node_modules", "out", "third_party", "vendor", "_deps"})
+SKIPPED_DIRECTORY_PREFIXES = ("cmake-build",)
 
-# A raw string first (its body may contain quotes), then an ordinary string, then a character
-# literal whose body holds no quote -- so that C++'s digit separator (1'000'000) cannot swallow one.
-LITERAL = re.compile(
-    r"""R"([^()\\\s]{0,16})\(.*?\)\1" | "(?:[^"\\\n]|\\.)*" | '(?:[^'"\\\n]|\\.)*'""",
-    re.VERBOSE | re.DOTALL,
+# One scan classifies the whole file, and the ORDER of these alternatives is the substance of it:
+#
+#   directive  first, so that the quoted path of `#include "net/X.hpp"` is never read as a string;
+#   comment    before the raw-string rule, because that rule is the only one not confined to a line
+#              -- a comment mentioning R"( used to open a mask that ran to the next )" anywhere in
+#              the file, silently swallowing the code between (finding I2);
+#   rawstring  before code, so a line-initial #include *inside* embedded C++ test data is part of
+#              the literal and is left alone (finding I1). A highlighter or parser suite is full of
+#              these, and rewriting one changes what the program sends.
+#
+# Whatever the scan does not match is code. Code and comments are rewritten; a directive takes the
+# include rows only; a string, character or raw-string literal is never touched.
+SPANS = re.compile(
+    r"""(?P<directive>^[ \t]*\#[ \t]*include[ \t]*(?:<[^>\n]*>|"[^"\n]*"))
+      | (?P<comment>//[^\n]*|/\*.*?\*/)
+      | (?P<rawstring>R"(?P<delim>[^()\\\s]{0,16})\(.*?\)(?P=delim)")
+      | (?P<string>"(?:[^"\\\n]|\\.)*")
+      | (?P<char>'(?:[^'"\\\n]|\\.)*')""",
+    re.VERBOSE | re.DOTALL | re.MULTILINE,
 )
-PLACEHOLDER = re.compile("\x00(\\d+)\x00")
 
 
 def _patterns_for(row: Row) -> list[tuple[re.Pattern[str], str]]:
@@ -77,38 +101,36 @@ def _patterns_for(row: Row) -> list[tuple[re.Pattern[str], str]]:
     raise TableError(f"no pattern for kind '{row.kind}'")
 
 
-def _mask_literals(text: str) -> tuple[str, list[str]]:
-    """Replaces every string and character literal with a placeholder no rename pattern can match."""
-    literals: list[str] = []
-
-    def keep(match: re.Match[str]) -> str:
-        literals.append(match.group(0))
-        return f"\x00{len(literals) - 1}\x00"
-
-    return LITERAL.sub(keep, text), literals
-
-
-def _unmask_literals(text: str, literals: list[str]) -> str:
-    return PLACEHOLDER.sub(lambda match: literals[int(match.group(1))], text)
+def _apply(chunk: str, rows: list[Row], applied: Counter[Row]) -> str:
+    """Applies @p rows to one span of text, counting each row's hits into @p applied."""
+    for row in rows:
+        for pattern, replacement in _patterns_for(row):
+            chunk, count = pattern.subn(replacement, chunk)
+            applied[row] += count
+    return chunk
 
 
 def rewrite_text(text: str, rows: list[Row]) -> tuple[str, Counter[Row]]:
     """Applies @p rows to @p text, returning the result and how often each row fired."""
     applied: Counter[Row] = Counter()
+    includes = [row for row in rows if row.kind == "include"]
+    others = [row for row in rows if row.kind != "include"]
 
-    # Includes first, on the raw text: the quoted form of the directive is not a string literal.
-    for row in (row for row in rows if row.kind == "include"):
-        for pattern, replacement in _patterns_for(row):
-            text, count = pattern.subn(replacement, text)
-            applied[row] += count
+    pieces: list[str] = []
+    position = 0
+    for match in SPANS.finditer(text):
+        pieces.append(_apply(text[position : match.start()], others, applied))
+        if match.group("directive") is not None:
+            pieces.append(_apply(match.group(0), includes, applied))
+        elif match.group("comment") is not None:
+            # A comment documents the code beside it, so it follows the rename.
+            pieces.append(_apply(match.group(0), others, applied))
+        else:
+            pieces.append(match.group(0))  # a string, character or raw-string literal: data
+        position = match.end()
+    pieces.append(_apply(text[position:], others, applied))
 
-    masked, literals = _mask_literals(text)
-    for row in (row for row in rows if row.kind != "include"):
-        for pattern, replacement in _patterns_for(row):
-            masked, count = pattern.subn(replacement, masked)
-            applied[row] += count
-
-    return _unmask_literals(masked, literals), applied
+    return "".join(pieces), applied
 
 
 def _sources(root: Path) -> list[Path]:
@@ -121,7 +143,11 @@ def _sources(root: Path) -> list[Path]:
         if path.suffix not in SOURCE_SUFFIXES or not path.is_file():
             continue
         parts = path.relative_to(resolved).parts[:-1]
-        if any(part.startswith(".") or part in SKIPPED_DIRECTORIES for part in parts):
+        folded = [part.casefold() for part in parts]
+        if any(
+            part.startswith(".") or part in SKIPPED_DIRECTORIES or part.startswith(SKIPPED_DIRECTORY_PREFIXES)
+            for part in folded
+        ):
             continue
         if not path.resolve().is_relative_to(resolved):
             print(f"  skipped {path}: it resolves outside {resolved}")
@@ -130,13 +156,28 @@ def _sources(root: Path) -> list[Path]:
     return found
 
 
-def rewrite_tree(roots: list[Path], rows: list[Row], dry_run: bool) -> tuple[int, Counter[Row]]:
-    """Rewrites every source under @p roots, reporting each changed file. Returns (files, totals)."""
+def rewrite_tree(roots: list[Path], rows: list[Row], dry_run: bool) -> tuple[int, Counter[Row], list[Path]]:
+    """Rewrites every source under @p roots, reporting each changed file.
+
+    Returns (files changed, totals, files skipped). Bytes are read and written as bytes: decoding
+    with Python's universal newlines and writing back `\\n` rewrote every line of every changed
+    file, including the lines the codemod never touched, which makes the diff unreviewable on a
+    checkout that holds CRLF -- and neither the tests nor the purity proof could see it, because
+    both sides of that comparison go through this same tool (finding I4).
+    """
     changed = 0
     totals: Counter[Row] = Counter()
+    skipped: list[Path] = []
     for root in roots:
         for path in _sources(root):
-            text = path.read_text(encoding="utf-8")
+            try:
+                text = path.read_bytes().decode("utf-8")
+            except UnicodeDecodeError as error:
+                # One odd byte is not a stop order: report it, keep going, and fail at the end.
+                # Aborting here left the tree half-converted behind a traceback (finding I3).
+                print(f"{path}: skipped, not UTF-8 ({error.reason} at byte {error.start})")
+                skipped.append(path)
+                continue
             result, applied = rewrite_text(text, rows)
             if result == text:
                 continue
@@ -147,8 +188,8 @@ def rewrite_tree(roots: list[Path], rows: list[Row], dry_run: bool) -> tuple[int
                 if count:
                     print(f"    {count:5d}  {row.label}")
             if not dry_run:
-                path.write_text(result, encoding="utf-8", newline="\n")
-    return changed, totals
+                path.write_bytes(result.encode("utf-8"))
+    return changed, totals, skipped
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -175,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
     if missing:
         return 1
 
-    changed, totals = rewrite_tree(arguments.paths, rows, arguments.dry_run)
+    changed, totals, skipped = rewrite_tree(arguments.paths, rows, arguments.dry_run)
     verb = "would change" if arguments.dry_run else "changed"
     print(
         f"rewrite --profile {arguments.profile}: {changed} file{'' if changed == 1 else 's'} {verb}, "
@@ -190,6 +231,11 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"rewrite: warning: applied {totals[row]}x {row.label}, whose target task {row.task} still owes"
         )
+    # A file this could not read is a file the migration has not converted, so the run failed even
+    # though most of it succeeded. Exiting 0 here would let a CI-run migration half-succeed quietly.
+    if skipped:
+        print(f"rewrite: {len(skipped)} file(s) skipped, not UTF-8; the tree is not fully converted")
+        return 1
     return 0
 
 
