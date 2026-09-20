@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <ranges>
 #include <tuple>
 #include <type_traits>
@@ -98,4 +99,67 @@ TEST_CASE("times2D.subscript_answers_the_same_element_iteration_does")
     CHECK(grid[2] == std::tuple { 0, 2 });
     CHECK(grid[3] == std::tuple { 1, 0 });
     CHECK(grid[5] == std::tuple { 1, 2 });
+}
+
+// Times::size() and Times::operator[] had never been instantiated by anything in the repository,
+// so the conversions their arithmetic implies had never been compiled -- and they did not, under
+// -Wsign-conversion and -Wshorten-64-to-32. These cases instantiate both directly, for every
+// shape of times() there is, so an untested template cannot rot back into that state.
+TEST_CASE("times.size_and_subscript")
+{
+    SECTION("the count-only form is 0 to count - 1")
+    {
+        auto const range = core::times(5);
+        CHECK(range.size() == 5);
+        CHECK(range[0] == 0);
+        CHECK(range[4] == 4);
+    }
+
+    SECTION("the start/count/step form steps as it is told")
+    {
+        auto const range = core::times(10, 4, 3);
+        CHECK(range.size() == 4);
+        CHECK(range[0] == 10);
+        CHECK(range[1] == 13);
+        CHECK(range[3] == 19);
+    }
+
+    SECTION("a negative step counts down")
+    {
+        auto const range = core::times(10, 3, -2);
+        CHECK(range.size() == 3);
+        CHECK(range[0] == 10);
+        CHECK(range[2] == 6);
+    }
+
+    SECTION("subscripting answers what iterating answers, at every position")
+    {
+        auto const range = core::times(7, 5, 2);
+        auto it = range.begin();
+        for (auto const i: std::views::iota(std::size_t { 0 }, range.size()))
+        {
+            INFO("element " << i);
+            CHECK(range[i] == *it);
+            ++it;
+        }
+    }
+
+    SECTION("an unsigned value type is instantiated too")
+    {
+        // The conversions differ by value type, so the narrow and unsigned instantiations are
+        // compiled here rather than left to a consumer to discover.
+        auto const range = core::times(std::size_t { 3 });
+        CHECK(range.size() == 3);
+        CHECK(range[2] == std::size_t { 2 });
+
+        auto const small = core::times(std::uint8_t { 1 }, std::uint8_t { 3 }, std::uint8_t { 2 });
+        CHECK(small.size() == 3);
+        CHECK(small[2] == std::uint8_t { 5 });
+    }
+
+    SECTION("it is all available at compile time")
+    {
+        STATIC_CHECK(core::times(5).size() == 5);
+        STATIC_CHECK(core::times(10, 4, 3)[3] == 19);
+    }
 }
