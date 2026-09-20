@@ -27,6 +27,17 @@ namespace fs = std::filesystem;
 namespace core::platform
 {
 
+RenameFunction nativeRename()
+{
+    return [](fs::path const& from, fs::path const& to, std::error_code& ec) {
+        fs::rename(from, to, ec);
+    };
+}
+
+NativeFileSystem::NativeFileSystem(RenameFunction rename): _rename { std::move(rename) }
+{
+}
+
 NativeFileSystem& NativeFileSystem::instance()
 {
     static NativeFileSystem instance;
@@ -292,9 +303,13 @@ namespace
     ///
     /// @param from The existing source entry.
     /// @param to The desired destination, in the same directory and differing only in case.
+    /// @param rename The primitive to rename through, injected so this path can be tested; see
+    ///               NativeFileSystem's constructor.
     /// @return What happened, including the reason the operation aborted and, where it applies,
     ///         the temporary name the entry was left under.
-    [[nodiscard]] RecaseResult renameViaTemporary(fs::path const& from, fs::path const& to)
+    [[nodiscard]] RecaseResult renameViaTemporary(fs::path const& from,
+                                                  fs::path const& to,
+                                                  RenameFunction const& rename)
     {
         // The temporary name is built in UTF-8, not through path::string(): that narrows to the
         // ANSI code page on Windows, and a mangled candidate would rename the entry to a name
@@ -311,11 +326,11 @@ namespace
                 continue;
             ec.clear();
 
-            fs::rename(from, candidate, ec);
+            rename(from, candidate, ec);
             if (ec)
                 return { .error = ec };
 
-            fs::rename(candidate, to, ec);
+            rename(candidate, to, ec);
             if (!ec)
                 return { .renamed = true };
 
@@ -324,7 +339,7 @@ namespace
             // fails too, so does where the entry actually ended up.
             auto rollbackError = std::error_code {};
             auto const& originalName = from; // Named, so the argument order does not read as swapped.
-            fs::rename(candidate, originalName, rollbackError);
+            rename(candidate, originalName, rollbackError);
             return { .error = ec, .stranded = rollbackError ? candidate : fs::path {} };
         }
         return { .error = std::make_error_code(std::errc::file_exists) };
@@ -335,7 +350,7 @@ namespace
 std::expected<void, std::string> NativeFileSystem::rename(fs::path const& from, fs::path const& to) const
 {
     std::error_code ec;
-    fs::rename(from, to, ec);
+    _rename(from, to, ec);
     if (!ec)
         return {};
 
@@ -349,7 +364,7 @@ std::expected<void, std::string> NativeFileSystem::rename(fs::path const& from, 
         // The retry's own reason, not the first attempt's: the two fail for different things --
         // a direct case-only rename is refused because the two names resolve to one entry, while
         // the retry fails over the temporary name, the destination, or the rollback.
-        auto const recase = renameViaTemporary(from, to);
+        auto const recase = renameViaTemporary(from, to, _rename);
         if (recase.renamed)
             return {};
         if (!recase.stranded.empty())

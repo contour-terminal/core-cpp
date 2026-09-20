@@ -12,9 +12,12 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 using core::platform::FileSystem;
@@ -514,4 +517,151 @@ TEST_CASE("rename changes the lettercase of a name, whatever the volume", "[File
     REQUIRE(listed->size() == 1); // Renamed, not copied, and no temporary left behind.
     CHECK(listed->front().path.filename() == "Foo");
     CHECK(backend.readFile(dir / "Foo") == "content");
+}
+
+// ============================================================================
+// The two-hop lettercase rename
+// ============================================================================
+
+namespace
+{
+/// A rename primitive that answers from a script.
+///
+/// The two-hop recase below NativeFileSystem::rename() only runs on a volume that refuses a
+/// case-only rename outright, and every volume this project is built and tested on performs one
+/// natively -- so the retry, its rollback, and the entry it can strand under `<name>.recase-N`
+/// are unreachable from outside. This drives them.
+///
+/// The state is shared through a shared_ptr because a RenameFunction is a std::function, which
+/// copies the callable: the calls have to be visible to the test rather than to the copy the
+/// filesystem holds.
+class ScriptedRename
+{
+  public:
+    /// @param outcomes One per call, in order: the error to report, or nullopt to perform the
+    ///                 rename for real. Calls past the end are performed for real.
+    explicit ScriptedRename(std::vector<std::optional<std::error_code>> outcomes):
+        _state { std::make_shared<State>(std::move(outcomes)) }
+    {
+    }
+
+    void operator()(std::filesystem::path const& from,
+                    std::filesystem::path const& to,
+                    std::error_code& ec) const
+    {
+        auto const call = _state->calls.size();
+        _state->calls.emplace_back(from, to);
+        if (call < _state->outcomes.size() && _state->outcomes[call].has_value())
+        {
+            ec = *_state->outcomes[call];
+            return;
+        }
+        std::filesystem::rename(from, to, ec);
+    }
+
+    /// @return How many times the primitive was asked to rename.
+    [[nodiscard]] std::size_t callCount() const { return _state->calls.size(); }
+
+    /// @return The destination of call @p index, so a test can name the temporary that was used.
+    [[nodiscard]] std::filesystem::path destinationOf(std::size_t index) const
+    {
+        REQUIRE(index < _state->calls.size());
+        return _state->calls[index].second;
+    }
+
+  private:
+    struct State
+    {
+        explicit State(std::vector<std::optional<std::error_code>> o): outcomes { std::move(o) } {}
+        std::vector<std::optional<std::error_code>> outcomes;
+        std::vector<std::pair<std::filesystem::path, std::filesystem::path>> calls;
+    };
+
+    std::shared_ptr<State> _state;
+};
+
+/// The error a case-insensitive volume reports when both spellings resolve to one entry.
+std::optional<std::error_code> const refusedAsSameEntry { std::make_error_code(std::errc::file_exists) };
+/// A distinct error, so a test can tell which attempt a message came from.
+std::optional<std::error_code> const secondHopFailed { std::make_error_code(std::errc::permission_denied) };
+std::optional<std::error_code> const rollbackFailed { std::make_error_code(std::errc::io_error) };
+/// Perform this call for real.
+std::optional<std::error_code> const forReal { std::nullopt };
+} // namespace
+
+TEST_CASE("the recase retry renames when the volume refuses a direct case-only rename", "[FileSystem]")
+{
+    // What renameViaTemporary() exists for: the direct rename is refused because both spellings
+    // name one entry, and the two hops through a temporary carry the change through anyway.
+    auto const script = ScriptedRename { { refusedAsSameEntry } }; // then for real
+    auto const backend = core::platform::NativeFileSystem { script };
+    auto const dir = core::testing::ScopedTempDir { "core_recase_hops" };
+
+    REQUIRE(backend.writeFile(dir / "foo", "content").has_value());
+    REQUIRE(backend.rename(dir / "foo", dir / "Foo").has_value());
+
+    // One refused attempt plus the two hops.
+    CHECK(script.callCount() == 3);
+
+    auto const listed = backend.listDirectory(dir.path());
+    REQUIRE(listed.has_value());
+    REQUIRE(listed->size() == 1); // No temporary left behind.
+    CHECK(listed->front().path.filename() == "Foo");
+    CHECK(backend.readFile(dir / "Foo") == "content");
+}
+
+TEST_CASE("the recase retry reports the second hop's reason and rolls back", "[FileSystem]")
+{
+    // Finding 13, driven through the path that produces it rather than around it: the caller
+    // must be told why the *retry* failed, not why the direct attempt did.
+    auto const script = ScriptedRename { { refusedAsSameEntry, forReal, secondHopFailed } };
+    auto const backend = core::platform::NativeFileSystem { script };
+    auto const dir = core::testing::ScopedTempDir { "core_recase_hop2" };
+
+    REQUIRE(backend.writeFile(dir / "foo", "content").has_value());
+    auto const renamed = backend.rename(dir / "foo", dir / "Foo");
+    REQUIRE_FALSE(renamed.has_value());
+
+    CHECK(renamed.error().contains(secondHopFailed->message()));
+    CHECK_FALSE(renamed.error().contains(refusedAsSameEntry->message()));
+    // Nothing was stranded, so the message must not claim otherwise.
+    CHECK_FALSE(renamed.error().contains(".recase-"));
+
+    // The rollback put the entry back under its original name, intact.
+    auto const listed = backend.listDirectory(dir.path());
+    REQUIRE(listed.has_value());
+    REQUIRE(listed->size() == 1);
+    CHECK(listed->front().path.filename() == "foo");
+    CHECK(backend.readFile(dir / "foo") == "content");
+}
+
+TEST_CASE("a recase whose rollback also fails says where the entry is", "[FileSystem]")
+{
+    // The worst case: the second hop failed and the rollback failed too, so the entry really is
+    // under the temporary name. Nothing else can tell the caller where it went -- the name is
+    // this function's own invention -- so the message has to name both spellings and the
+    // temporary, and must not strand it silently.
+    auto const script = ScriptedRename { { refusedAsSameEntry, forReal, secondHopFailed, rollbackFailed } };
+    auto const backend = core::platform::NativeFileSystem { script };
+    auto const dir = core::testing::ScopedTempDir { "core_recase_stranded" };
+
+    REQUIRE(backend.writeFile(dir / "foo", "content").has_value());
+    auto const renamed = backend.rename(dir / "foo", dir / "Foo");
+    REQUIRE_FALSE(renamed.has_value());
+
+    // Call 1 was the first hop's move onto the temporary, which really happened.
+    auto const temporary = script.destinationOf(1);
+    REQUIRE(temporary.filename().string().contains(".recase-"));
+
+    CHECK(renamed.error().contains(secondHopFailed->message()));
+    CHECK(renamed.error().contains("foo"));                         // both spellings...
+    CHECK(renamed.error().contains("Foo"));                         // ...are named
+    CHECK(renamed.error().contains(temporary.filename().string())); // and so is the temporary
+
+    // And that is genuinely where the entry is, so the message is not merely plausible.
+    auto const listed = backend.listDirectory(dir.path());
+    REQUIRE(listed.has_value());
+    REQUIRE(listed->size() == 1);
+    CHECK(listed->front().path.filename() == temporary.filename());
+    CHECK(backend.readFile(temporary) == "content");
 }
