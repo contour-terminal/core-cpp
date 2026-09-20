@@ -873,6 +873,87 @@ TEST_CASE("an attached token is reported and a detached one is not", "[net][even
     }
 }
 
+TEST_CASE("a muted registration is reported by no event source", "[net][eventsource][parity]")
+{
+    // FdInterest::None is public API, documented as "mute the fd without detaching it". A
+    // muted registration must therefore be as silent as a detached one, while still counting
+    // as attached — and it must be silent on EVERY backend, which is what this pins.
+    for (auto const& backend: AllBackends)
+    {
+        auto source = core::net::makeEventSource(backend.kind);
+        if (!source)
+            continue;
+
+        DYNAMIC_SECTION("backend=" << backend.name)
+        {
+            auto pipe = core::platform::createSystemPipe();
+            REQUIRE(pipe.has_value());
+
+            // A byte already waiting, so the descriptor really IS ready: the silence below is
+            // the mute and not an idle descriptor.
+            auto const one = std::array<std::byte, 1> { std::byte { 'x' } };
+            REQUIRE((*pipe)->write(one.data(), one.size()).has_value());
+
+            auto const muted = source->attach((*pipe)->waitHandle(), FdInterest::None);
+            REQUIRE(muted); // muted, not refused: the registration exists and detach() finds it
+
+            auto const silent = source->wait(0);
+            CHECK(silent.readyRead.empty());
+            CHECK(silent.readyWrite.empty());
+
+            // The control: the same descriptor, watched for Read, is reported at once — so the
+            // silence above is the interest and nothing else about this descriptor.
+            auto const watched = source->attach((*pipe)->waitHandle(), FdInterest::Read);
+            REQUIRE(watched);
+            auto const ready = source->wait(200);
+            CHECK(std::ranges::find(ready.readyRead, watched) != ready.readyRead.end());
+            CHECK(std::ranges::find(ready.readyRead, muted) == ready.readyRead.end());
+
+            source->detach(watched);
+            source->detach(muted);
+        }
+    }
+}
+
+#ifndef _WIN32
+TEST_CASE("a muted registration stays silent when its peer hangs up", "[net][eventsource][parity]")
+{
+    // Where the backends actually diverged. poll(2) and epoll report HUP/ERR for a registered
+    // descriptor whatever interest was asked for, so a muted descriptor whose peer hung up was
+    // routed as READ-ready and woke the flow the caller had muted — and on epoll it did so on
+    // every wait, since EPOLLHUP is level-triggered, spinning the pump. Windows and kqueue
+    // reported nothing. Muting now means the same thing everywhere.
+    //
+    // POSIX-only because there is no portable way to hang up one end of a waitable channel:
+    // platform::SystemPipe owns both ends together. The Windows backend excludes a muted
+    // registration from its wait set outright, which the portable case above covers.
+    for (auto const& backend: AllBackends)
+    {
+        auto source = core::net::makeEventSource(backend.kind);
+        if (!source)
+            continue;
+
+        DYNAMIC_SECTION("backend=" << backend.name)
+        {
+            auto sv = std::array<int, 2> {};
+            REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM, 0, sv.data()) == 0);
+
+            auto const muted = source->attach(sv[0], FdInterest::None);
+            REQUIRE(muted);
+
+            ::close(sv[1]); // the peer hangs up: POLLHUP / EPOLLHUP on sv[0]
+
+            auto const silent = source->wait(0);
+            CHECK(silent.readyRead.empty());
+            CHECK(silent.readyWrite.empty());
+
+            source->detach(muted);
+            ::close(sv[0]);
+        }
+    }
+}
+#endif
+
 TEST_CASE("two registrations on one descriptor are accepted by every event source",
           "[net][eventsource][parity]")
 {

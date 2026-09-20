@@ -85,6 +85,16 @@ FdToken EpollEventSource::attach(platform::NativeHandle fd, FdInterest interest)
     if (!token)
         return FdToken::invalid();
 
+    // A muted registration (FdInterest::None) never reaches the epoll set. epoll cannot be
+    // asked to suppress EPOLLHUP/EPOLLERR on a registered descriptor — it reports them
+    // whatever `events` says — so a muted descriptor left in the set would be reported ready
+    // on every single wait, waking a flow the caller asked to be silent and spinning the pump
+    // while it does. Windows and kqueue already report nothing for such a registration; this
+    // is what makes "mute the fd without detaching it" mean the same thing on every backend.
+    // The registry still holds it, so attachedCount() counts it and detach() still finds it.
+    if (interest == FdInterest::None)
+        return token;
+
     // Register the CALLER'S descriptor whenever we can. A dup() would share the
     // underlying open file description, so closing the caller's copy while this
     // registration lives would not release it: no FIN would reach the peer, whose

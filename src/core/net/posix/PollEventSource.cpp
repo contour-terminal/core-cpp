@@ -45,7 +45,17 @@ WaitOutcome PollEventSource::wait(int timeoutMs)
     static thread_local std::vector<pollfd> fds;
     fds.clear();
     for (auto const& reg: registrations)
-        fds.push_back({ .fd = reg.fd, .events = toPollEvents(reg.interest), .revents = 0 });
+        // A muted registration (FdInterest::None) is submitted with a NEGATIVE descriptor,
+        // which poll(2) ignores and reports 0 revents for. Submitting the real descriptor with
+        // events == 0 does not mute it: the kernel reports POLLHUP/POLLERR/POLLNVAL whatever
+        // was asked for, so routePollRevents would wake a flow the caller asked to be silent.
+        // Windows and kqueue already report nothing for such a registration; this is what makes
+        // "mute the fd without detaching it" mean the same thing on every backend. The entry is
+        // KEPT rather than skipped, because the routing below pairs fds[i] with
+        // registrations[i].
+        fds.push_back({ .fd = (reg.interest == FdInterest::None) ? -1 : reg.fd,
+                        .events = toPollEvents(reg.interest),
+                        .revents = 0 });
 
     auto outcome = WaitOutcome {};
 

@@ -33,8 +33,8 @@ endif()
 # PollEventSource.cpp is split along its #ifdef into posix/ and windows/, and so is the socket pair
 # of testing/InMemoryTransport.cpp, into testing/posix/ and testing/windows/. Two exceptions remain:
 # DefaultEventSource.cpp keeps its #ifdefs until Task B3 replaces it, and EventSourceParity_test.cpp
-# keeps two POSIX-only cases (a closed descriptor's registration, descriptor exhaustion), and the
-# includes they need, under #ifndef _WIN32.
+# keeps three POSIX-only cases (a closed descriptor's registration, descriptor exhaustion, a muted
+# registration whose peer hangs up), and the includes they need, under #ifndef _WIN32.
 core_cpp_add_module(net KIND STATIC
     HEADERS
         AsyncBufferedReader.hpp

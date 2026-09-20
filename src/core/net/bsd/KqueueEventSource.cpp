@@ -156,6 +156,15 @@ FdToken KqueueEventSource::attach(platform::NativeHandle fd, FdInterest interest
     if (!token)
         return FdToken::invalid();
 
+    // A muted registration (FdInterest::None) arms no filter — applyInterest would issue two
+    // EV_DELETEs for filters nobody added — so it is not tracked as a watched descriptor
+    // either. That also keeps a LATER real registration on the same descriptor from being
+    // taken for a duplicate and paying a dup() for a filter that was never armed. The registry
+    // still holds it, so attachedCount() counts it and detach() still finds it.
+    // @see the note in EpollEventSource::attach for why every backend mutes alike.
+    if (interest == FdInterest::None)
+        return token;
+
     // Arm the CALLER'S descriptor whenever we can. A dup() would share the
     // underlying open file description, so closing the caller's copy while this
     // registration lives would not release it: no FIN would reach the peer, whose
