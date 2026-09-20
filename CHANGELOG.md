@@ -407,9 +407,14 @@ workflow refuses one without a section here.
   caches no pointer into it, so a file that changes behind a stream is read from where it lives.
 - `core::platform::testing::InMemoryFileSystem`'s streams support `unget()` and `putback()`, which
   set `badbit` while the buffer kept no get area for `std::streambuf` to satisfy a put-back from.
-  `std::ifstream` and `std::fstream` accept all of `unget()`, a `putback()` of the character the
-  file holds, and a `putback()` of one it does not; the fake now answers as they do, keeping a
-  put-back character in a slot of its own and leaving the file unchanged, as `std::filebuf` does.
+  `unget()` and a `putback()` of the character just read now answer as `std::ifstream` and
+  `std::fstream` do. A `putback()` of a character the file does *not* hold is a case the standard
+  leaves open -- only one put-back is guaranteed at all, and a different character is expressly
+  permitted to fail ([streambuf.virt.pback]). libstdc++ and MSVC accept it; libc++ refuses, so
+  macOS and FreeBSD differ from Linux and Windows. The fake accepts it, since a memory buffer with
+  an exact position can always satisfy one, and keeps the character in a slot of its own rather
+  than writing it to the file. Where it is deliberately more permissive than a real stream is
+  listed in [core-cpp#27](https://github.com/contour-terminal/core-cpp/issues/27).
 - `core::async::whenAny()` no longer runs the rest of a `request_stop()` on freed memory. Its
   parent→child cancel bridge requested stop on a `StopSource` that the awaiter held as a member;
   a child awaitable that resumes its coroutine from inside its own stop callback — how every

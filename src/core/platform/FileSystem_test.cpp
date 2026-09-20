@@ -151,6 +151,46 @@ struct PutbackOutcome
     outcome.fileAfter = contentsOf(fs, path);
     return outcome;
 }
+
+/// What one backend's copyFile() does.
+struct CopyOutcome
+{
+    bool copiedToNew = false;
+    std::string newContent;
+    bool refusedExisting = false;
+    std::string afterRefusal;
+    bool replacedExisting = false;
+    std::string afterReplace;
+
+    bool operator==(CopyOutcome const&) const = default;
+};
+
+/// Runs one copyFile() script over @p fs, under @p dir.
+[[nodiscard]] CopyOutcome runCopyScript(FileSystem const& fs, std::filesystem::path const& dir)
+{
+    using core::platform::OverwritePolicy;
+
+    auto outcome = CopyOutcome {};
+    auto const source = dir / "source.txt";
+    auto const fresh = dir / "fresh.txt";
+    auto const existing = dir / "existing.txt";
+    REQUIRE(fs.writeFile(source, "source contents").has_value());
+
+    // Onto a name nothing holds.
+    outcome.copiedToNew = fs.copyFile(source, fresh).has_value();
+    outcome.newContent = contentsOf(fs, fresh);
+
+    // Onto one that exists: refused by default, and the destination is left as it was.
+    REQUIRE(fs.writeFile(existing, "older contents").has_value());
+    outcome.refusedExisting = !fs.copyFile(source, existing, OverwritePolicy::Refuse).has_value();
+    outcome.afterRefusal = contentsOf(fs, existing);
+
+    // ...and replaced when that is what was asked for.
+    outcome.replacedExisting = fs.copyFile(source, existing, OverwritePolicy::Replace).has_value();
+    outcome.afterReplace = contentsOf(fs, existing);
+
+    return outcome;
+}
 } // namespace
 
 TEST_CASE("walkDirectoryRecursive yields every entry exactly once", "[FileSystem]")
@@ -901,4 +941,53 @@ TEST_CASE("unget and putback answer alike in the model and on the real filesyste
     // list rather than pretended away.
     CHECK(fromModel.putbackOtherGood);
     CHECK(fromModel.afterPutbackOther == "X");
+}
+
+TEST_CASE("copyFile answers alike in the model and on the real filesystem", "[FileSystem]")
+{
+    // copyFile() had no case in either backend, though the interface's declaration and the
+    // changelog both assert what it does -- including, since this round, that it overwrites a
+    // destination in place rather than replacing it.
+    auto const model = InMemoryFileSystem {};
+    auto const dir = core::testing::ScopedTempDir { "core_copyfile" };
+
+    auto const fromModel = runCopyScript(model, "/root");
+    auto const fromNative = runCopyScript(core::platform::NativeFileSystem::instance(), dir.path());
+
+    // All three are pinned down by [fs.op.copy.file], so they are stated as well as compared.
+    CHECK(fromNative.copiedToNew);
+    CHECK(fromNative.newContent == "source contents");
+    CHECK(fromNative.refusedExisting);
+    CHECK(fromNative.afterRefusal == "older contents");
+    CHECK(fromNative.replacedExisting);
+    CHECK(fromNative.afterReplace == "source contents");
+
+    CHECK(fromModel.copiedToNew == fromNative.copiedToNew);
+    CHECK(fromModel.newContent == fromNative.newContent);
+    CHECK(fromModel.refusedExisting == fromNative.refusedExisting);
+    CHECK(fromModel.afterRefusal == fromNative.afterRefusal);
+    CHECK(fromModel.replacedExisting == fromNative.replacedExisting);
+    CHECK(fromModel.afterReplace == fromNative.afterReplace);
+    CHECK(fromModel == fromNative);
+}
+
+TEST_CASE("the model copies onto an open destination in place", "[FileSystem]")
+{
+    // fileAt() promises that a key's string is never replaced, and copyFile() used to break that
+    // by swapping in a new one, detaching any stream already open on the destination.
+    //
+    // Asserted of the model alone: [fs.op.copy.file] says the contents are copied, not whether
+    // the destination is truncated in place or unlinked and recreated, so there is no native
+    // answer to compare against -- the same reason the put-back case states rather than compares.
+    auto const fs = InMemoryFileSystem {};
+    REQUIRE(fs.writeFile("/root/source", "new").has_value());
+    REQUIRE(fs.writeFile("/root/dest", "old").has_value());
+
+    auto stream = fs.openRead("/root/dest");
+    REQUIRE(stream.has_value());
+    REQUIRE(fs.copyFile("/root/source", "/root/dest", core::platform::OverwritePolicy::Replace).has_value());
+
+    auto byte = char {};
+    (*stream)->read(&byte, 1);
+    CHECK(byte == 'n');
 }

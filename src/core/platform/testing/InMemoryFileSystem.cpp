@@ -167,7 +167,12 @@ namespace
 
             if (traits_type::eq_int_type(ch, traits_type::eof()))
             {
-                // unget(): the character at the restored position is the one that was read.
+                // unget(): the character at the restored position is the one that was read --
+                // from the file. So an unget() *after* a put-back character has been read steps
+                // back to the file's byte, where std::filebuf hands the put-back one out again
+                // from its own slot. Nothing pins that down: the standard does not describe it,
+                // and libc++ refuses the put-back that creates the situation at all. Left as it
+                // is and listed in core-cpp#27 rather than chased into one library's internals.
                 --_position;
                 _pushedBack.reset();
                 return traits_type::not_eof(ch);
