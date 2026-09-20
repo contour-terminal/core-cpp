@@ -15,7 +15,7 @@ The cases are the four the checker must tell apart, which is the whole of its co
     a row whose upstream did not move      -> reported clean, exit 0
     a row whose upstream moved             -> reported as drift with the commit, exit 0
     a row whose upstream file was deleted  -> drift, marked DELETED, exit 0 (news, not a defect)
-    a malformed row                        -> reported as malformed, exit 1
+    a malformed row (only a checkout sees) -> reported as malformed, exit 1
 
 and the two the exit status turns on: drift alone never reddens, and a missing checkout skips (77)
 rather than passing, so a nightly that cannot reach an upstream does not read as "no drift".
@@ -242,7 +242,7 @@ class TestMalformedRows(CheckerCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("is not a commit in this checkout", result.stdout)
 
-    def test_a_core_cpp_path_that_no_longer_exists_is_stale_not_a_failure(self) -> None:
+    def test_a_core_cpp_path_that_no_longer_exists_defers_rather_than_failing(self) -> None:
         sha = self.upstream.commit("add", Widget_hpp="one\n")
         self.upstream.publish()
         table = self.write_table(self.row("src/core/GoneFromThisTree.hpp", "Widget_hpp", sha))
@@ -253,37 +253,42 @@ class TestMalformedRows(CheckerCase):
         # gates reddening for one defect gets both of them ignored, and it would put this one in
         # the red for any module mid-rewrite -- the state it is least useful in.
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("STALE ROW", result.stdout)
-        self.assertIn("check-cmake-hygiene owns this", result.stdout)
+        self.assertIn("OTHER GATE", result.stdout)
+        self.assertIn("check-cmake-hygiene", result.stdout)
         self.assertIn("0 row(s) checked", result.stdout)
 
-    def test_a_brace_pattern_is_malformed_and_says_what_to_do(self) -> None:
+    def test_a_brace_pattern_defers_and_says_what_to_do(self) -> None:
         sha = self.upstream.commit("add", Widget_hpp="one\n")
         self.upstream.publish()
         table = self.write_table(self.row("README.md", "Widget.{hpp,cpp}", sha))
 
         result = self.run_checker(table)
 
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        # Ruling R86 moved this to check-cmake-hygiene, which needs no checkout and so runs on CI.
+        # Reported here, never fatal here: two gates reddening for one defect gets both ignored.
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("OTHER GATE", result.stdout)
         self.assertIn("is a pattern, not a file", result.stdout)
         self.assertIn("primary upstream", result.stdout)
 
-    def test_an_unparseable_line_is_malformed(self) -> None:
+    def test_an_unparseable_line_defers(self) -> None:
         table = self.write_table("| `README.md` | selftest/upstream |\n")
 
         result = self.run_checker(table)
 
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("OTHER GATE", result.stdout)
         self.assertIn("expected 5 columns", result.stdout)
 
-    def test_a_short_sha_is_malformed(self) -> None:
+    def test_a_short_sha_defers(self) -> None:
         sha = self.upstream.commit("add", Widget_hpp="one\n")
         self.upstream.publish()
         table = self.write_table(self.row("README.md", "Widget_hpp", sha[:12]))
 
         result = self.run_checker(table)
 
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("OTHER GATE", result.stdout)
         self.assertIn("not a full 40-character hash", result.stdout)
 
 

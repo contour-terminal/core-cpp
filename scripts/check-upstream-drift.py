@@ -33,14 +33,17 @@ Exit status, which is the part that decides whether a nightly can run this:
 
     0   every row read, whatever it found. DRIFT IS NOT A FAILURE -- it is the answer to the
         question, and a gate that reddens on it teaches people to mute it.
-    1   at least one row is MALFORMED on its UPSTREAM side, which is a defect in the table
-        rather than news about upstream: an unparseable line, a synced SHA the checkout does not
-        have or that is not an ancestor of the upstream branch, or an upstream path absent at its
-        own synced SHA -- a row naming a file that was never there.
+    1   at least one row is MALFORMED on its UPSTREAM side in a way only a CHECKOUT can see: a
+        synced SHA the checkout does not have or that is not an ancestor of the upstream branch,
+        or an upstream path absent at its own synced SHA -- a row naming a file that was never
+        there. That is this checker's own subject, and nothing else can answer it.
 
-        A row whose CORE-CPP file is gone is reported as stale and does not redden this:
-        check-cmake-hygiene's `provenance` rule already refuses exactly that, and one defect that
-        reddens two gates gets both of them ignored.
+        The defects that need NO checkout -- a row with fewer than five columns, a synced SHA
+        that is not 40 hex characters, an upstream path that is a pattern rather than one file,
+        and a core-cpp path that no longer exists -- are printed under OTHER GATE and do NOT
+        redden this. check-cmake-hygiene's `provenance` rule refuses every one of them, and
+        unlike this checker it needs no upstream checkout, so it runs on CI too (Ruling R86).
+        One defect that reddens two gates gets both of them ignored.
     77  the run could not answer for at least one requested upstream, because its checkout is
         missing. Everything reachable is still reported; the exit code says the answer is partial,
         which ctest shows as a skip rather than as a pass (.agent/rules/testing.md: a gate that
@@ -104,7 +107,7 @@ class Finding:
     commits: list[str] = field(default_factory=list)  # upstream commits since the synced SHA
     deleted_upstream: bool = False
     malformed: str | None = None  # why the row's UPSTREAM side is wrong, if it is
-    stale: str | None = None  # the core-cpp file is gone; another gate owns that
+    deferred: str | None = None  # a defect check-cmake-hygiene owns: reported here, never fatal
 
 
 def strip_cell(cell: str) -> str:
@@ -115,12 +118,13 @@ def strip_cell(cell: str) -> str:
 def parse_provenance(text: str) -> tuple[list[Row], list[str]]:
     """Parses the provenance table.
 
-    @return The rows that name an upstream, and a list of complaints about lines that look like
-            table rows but are not parseable. Rows with no upstream are dropped rather than
-            complained about: they are most of the table and there is nothing to check.
+    @return The rows that name an upstream, and a list of defects that check-cmake-hygiene's
+            `provenance` rule owns (Ruling R86) and this only reports. Rows with no upstream are
+            dropped rather than complained about: they are most of the table and there is nothing
+            to check.
     """
     rows: list[Row] = []
-    complaints: list[str] = []
+    deferred: list[str] = []
     for number, line in enumerate(text.splitlines(), start=1):
         stripped = line.strip()
         if not stripped.startswith("|"):
@@ -136,18 +140,18 @@ def parse_provenance(text: str) -> tuple[list[Row], list[str]]:
         if cells and cells[0] == "core-cpp path":
             continue
         if len(cells) < 5:
-            complaints.append(f"{PROVENANCE.name}:{number}: expected 5 columns, found {len(cells)}")
+            deferred.append(f"{PROVENANCE.name}:{number}: expected 5 columns, found {len(cells)}")
             continue
         core_path, repo, upstream_path, sha, notes = cells[0], cells[1], cells[2], cells[3], cells[4]
         if repo == NO_UPSTREAM:
             continue
         if not re.fullmatch(r"[0-9a-f]{40}", sha):
-            complaints.append(
+            deferred.append(
                 f"{PROVENANCE.name}:{number}: {core_path}: synced SHA '{sha}' is not a full 40-character hash"
             )
             continue
         rows.append(Row(number, core_path, repo, upstream_path, sha, notes))
-    return rows, complaints
+    return rows, deferred
 
 
 def matches_repo(full_name: str, wanted: str) -> bool:
@@ -200,14 +204,15 @@ def check_row(checkout: Path, row: Row, upstream_ref: str, sha_cache: dict[str, 
         # people to read neither, and it would put this one in the red for a module being rewritten
         # -- which is the state it is least useful in. What only THIS checker can see is the
         # upstream side of the row, and that is what its exit status is about.
-        finding.stale = f"names {row.core_path}, which does not exist here (check-cmake-hygiene owns this)"
+        finding.deferred = f"names {row.core_path}, which does not exist here"
         return finding
     if any(character in row.upstream_path for character in "{}*?"):
         # One cell, one upstream file. The preamble already settles this: "A file adapted from more
         # than one upstream file (a merge) names its primary upstream in the table and lists the
         # others in notes." A brace or a glob makes the row unreadable by `git log -- <path>`, so
-        # the row silently stops being checkable rather than reporting anything.
-        finding.malformed = (
+        # the row silently stops being checkable rather than reporting anything. Reported, not
+        # failed: check-cmake-hygiene refuses it, and needs no checkout at all to do so.
+        finding.deferred = (
             f"upstream path '{row.upstream_path}' is a pattern, not a file; a merged file names its"
             " primary upstream here and the others in notes (provenance.md preamble)"
         )
@@ -245,11 +250,11 @@ def resolve_checkouts(overrides: list[str]) -> dict[str, Path]:
     return checkouts
 
 
-def report(findings: list[Finding], unavailable: dict[str, Path], complaints: list[str]) -> int:
+def report(findings: list[Finding], unavailable: dict[str, Path], deferred: list[str]) -> int:
     """Prints the outcome and returns the process exit status."""
     malformed = [f for f in findings if f.malformed]
-    stale = [f for f in findings if f.stale]
-    checked = [f for f in findings if not f.malformed and not f.stale]
+    elsewhere = [f for f in findings if f.deferred]
+    checked = [f for f in findings if not f.malformed and not f.deferred]
     drifted = [f for f in checked if f.commits]
     clean = [f for f in checked if not f.commits]
 
@@ -264,20 +269,23 @@ def report(findings: list[Finding], unavailable: dict[str, Path], complaints: li
     for finding in malformed:
         print(f"\nMALFORMED  {PROVENANCE.name}:{finding.row.line_number}: {finding.row.core_path}")
         print(f"           {finding.malformed}")
-    for complaint in complaints:
-        print(f"\nMALFORMED  {complaint}")
-
-    for finding in stale:
-        print(f"\nSTALE ROW  {PROVENANCE.name}:{finding.row.line_number}: {finding.stale}")
+    for finding in elsewhere:
+        print(f"\nOTHER GATE  {PROVENANCE.name}:{finding.row.line_number}: {finding.deferred}")
+    for message in deferred:
+        print(f"\nOTHER GATE  {message}")
 
     print(f"\n{len(checked)} row(s) checked: {len(clean)} up to date, {len(drifted)} drifted.")
-    if stale:
-        print(f"{len(stale)} stale row(s) left unchecked: their core-cpp file is gone.")
+    if elsewhere or deferred:
+        print(
+            f"{len(elsewhere) + len(deferred)} row(s) left unchecked, and NOT a failure here:"
+            " check-cmake-hygiene's `provenance` rule refuses each of these, and unlike this"
+            " checker it needs no upstream checkout, so it runs on CI too (Ruling R86)."
+        )
     if unavailable:
         for repo, path in sorted(unavailable.items()):
             print(f"NOT CHECKED: {repo} -- no checkout at {path}")
-    if complaints or malformed:
-        print(f"{len(malformed) + len(complaints)} malformed row(s): the table is wrong, not upstream.")
+    if malformed:
+        print(f"{len(malformed)} malformed row(s): the table is wrong, not upstream.")
         return 1
     if unavailable:
         print("The answer is partial: an upstream above was not read at all.")
@@ -299,7 +307,7 @@ def main() -> int:
     parser.add_argument("--no-fetch", action="store_true", help="do not run `git fetch origin` first")
     arguments = parser.parse_args()
 
-    rows, complaints = parse_provenance(arguments.provenance.read_text(encoding="utf-8"))
+    rows, deferred = parse_provenance(arguments.provenance.read_text(encoding="utf-8"))
     if arguments.repo:
         rows = [r for r in rows if any(matches_repo(r.repo, name) for name in arguments.repo)]
     if arguments.path_prefix:
@@ -332,7 +340,7 @@ def main() -> int:
         for row in [r for r in rows if r.repo == repo]:
             findings.append(check_row(checkout, row, arguments.upstream_ref, sha_cache))
 
-    return report(findings, unavailable, complaints)
+    return report(findings, unavailable, deferred)
 
 
 if __name__ == "__main__":
