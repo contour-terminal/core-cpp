@@ -13,11 +13,16 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <expected>
+#include <memory>
 #include <ranges>
 #include <span>
+#include <thread>
+#include <utility>
 
 #ifndef _WIN32
     #include <sys/socket.h>
@@ -207,22 +212,76 @@ TEST_CASE("SystemPipe ends are non-blocking and close-on-exec", "[systempipe]")
         CHECK((::fcntl(fd, F_GETFD) & FD_CLOEXEC) != 0);
     }
 }
+#endif
 
 TEST_CASE("SystemPipe reports a write into a full channel as done", "[systempipe]")
 {
     // Nothing drains the channel here, so the socket buffer fills up. Each further byte would
     // only have signalled a wakeup that is already pending, so the write succeeds instead of
-    // blocking the producer or failing it.
+    // blocking the producer or failing it. On Windows only the read socket used to be made
+    // non-blocking, so this parked forever -- the never-stall guarantee held on POSIX alone.
+    auto created = createSystemPipe();
+    REQUIRE(created.has_value());
+
+    // The writes run on a thread of their own against a bounded wait: a write end that still
+    // blocks parks in send() and never comes back, and a test that hangs says less than one that
+    // fails. Both the channel and the results are shared, so the parked thread keeps what it
+    // touches alive.
+    auto const pipe = std::shared_ptr<SystemPipe> { std::move(*created) };
+    auto const finished = std::make_shared<std::atomic<bool>>(false);
+    auto const everyWriteWasDone = std::make_shared<std::atomic<bool>>(true);
+
+    auto writer = std::thread([pipe, finished, everyWriteWasDone] {
+        auto const chunk = std::array<char, 4096> {};
+        for ([[maybe_unused]] auto const round: std::views::iota(0, 1024)) // 4 MiB, past any buffer
+        {
+            auto const written = pipe->write(chunk.data(), chunk.size());
+            if (!written.has_value() || *written == 0)
+            {
+                everyWriteWasDone->store(false);
+                break;
+            }
+        }
+        finished->store(true);
+    });
+
+    constexpr auto Bound = std::chrono::seconds { 10 };
+    auto const deadline = std::chrono::steady_clock::now() + Bound;
+    while (!finished->load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds { 10 });
+
+    auto const producerReturned = finished->load();
+    if (producerReturned)
+        writer.join();
+    else
+        writer.detach(); // Parked in a blocking send(); what it holds outlives it.
+
+    CHECK(producerReturned); // Within 10s: the producer never stalled on a full channel.
+    CHECK(everyWriteWasDone->load());
+}
+
+#ifdef _WIN32
+TEST_CASE("SystemPipe's two ends are connected to each other", "[systempipe]")
+{
+    // Windows has no socketpair(2), so the pair is a loopback TCP connection: bind, listen,
+    // connect, accept. accept() hands back whoever connected, and between the listen() and the
+    // accept() any local process can take that ephemeral port -- it is discoverable and the
+    // backlog is 1. The two ends would then not be each other's, and every wakeup byte would go
+    // to a stranger while the loop waited for one that never comes. This is the property that
+    // rules it out; provoking the race itself needs an adversary that knows the port.
     auto pipe = createSystemPipe();
     REQUIRE(pipe.has_value());
-    REQUIRE((::fcntl((*pipe)->writeFd(), F_GETFL) & O_NONBLOCK) != 0); // else this would block
 
-    auto const chunk = std::array<char, 4096> {};
-    for ([[maybe_unused]] auto const round: std::views::iota(0, 1024)) // 4 MiB, past any socket buffer
-    {
-        auto const written = (*pipe)->write(chunk.data(), chunk.size());
-        REQUIRE(written.has_value());
-        REQUIRE(*written > 0);
-    }
+    auto const addressOf = [](auto const& query, SOCKET socket) {
+        sockaddr_in address {};
+        auto length = static_cast<int>(sizeof(address));
+        REQUIRE(query(socket, reinterpret_cast<sockaddr*>(&address), &length) != SOCKET_ERROR);
+        return address;
+    };
+    auto const readSock = reinterpret_cast<SOCKET>((*pipe)->readFd());
+    auto const writeSock = reinterpret_cast<SOCKET>((*pipe)->writeFd());
+
+    CHECK(addressOf(::getsockname, readSock).sin_port == addressOf(::getpeername, writeSock).sin_port);
+    CHECK(addressOf(::getsockname, writeSock).sin_port == addressOf(::getpeername, readSock).sin_port);
 }
 #endif

@@ -15,6 +15,9 @@
 #include <algorithm>
 #include <array>
 #include <climits>
+#include <cstddef>
+#include <limits>
+#include <ranges>
 
 #ifndef _WIN32
     #include <sys/socket.h>
@@ -130,6 +133,26 @@ namespace
 
 #else // _WIN32
 
+    /// Bounds a byte count to what the `int` parameter of Winsock's send()/recv() can carry.
+    ///
+    /// A bare cast turns a count past INT_MAX into a negative one and a count past 4 GiB into a
+    /// small positive one that send() then reports as having written everything asked of it.
+    /// Clamping makes it a short transfer instead, which every caller of a socket already has to
+    /// handle, and which the returned count states.
+    ///
+    /// @param size A byte count.
+    /// @return @p size, or INT_MAX when @p size does not fit one.
+    [[nodiscard]] constexpr int clampToTransferSize(std::size_t size) noexcept
+    {
+        return static_cast<int>(std::min<std::size_t>(size, INT_MAX));
+    }
+
+    static_assert(clampToTransferSize(0) == 0);
+    static_assert(clampToTransferSize(1) == 1);
+    static_assert(clampToTransferSize(INT_MAX) == INT_MAX);
+    static_assert(clampToTransferSize(std::size_t { INT_MAX } + 1) == INT_MAX);
+    static_assert(clampToTransferSize(std::numeric_limits<std::size_t>::max()) == INT_MAX);
+
     /// Windows SystemPipe: a loopback TCP socket pair with the read socket mapped to a
     /// waitable WSAEVENT via WSAEventSelect, so waitHandle() (the event) integrates
     /// with WaitForMultipleObjects while readFd()/writeFd() carry the bytes.
@@ -174,9 +197,17 @@ namespace
         [[nodiscard]] std::expected<std::size_t, PlatformError> write(void const* data,
                                                                       std::size_t size) override
         {
-            auto const n = ::send(_writeSock, static_cast<char const*>(data), static_cast<int>(size), 0);
+            auto const n = ::send(_writeSock, static_cast<char const*>(data), clampToTransferSize(size), 0);
             if (n == SOCKET_ERROR)
+            {
+                if (WSAGetLastError() == WSAEWOULDBLOCK)
+                    // The pair is non-blocking on both ends: a full buffer means a wakeup is
+                    // already pending, which is all this byte would have signalled. Report the
+                    // write as done so a busy loop never stalls a producer thread -- the answer
+                    // the POSIX branch gives for EAGAIN.
+                    return size;
                 return std::unexpected(PlatformError::IoError);
+            }
             return static_cast<std::size_t>(n);
         }
 
@@ -188,8 +219,7 @@ namespace
             // edge-triggered per event type, and recv re-arms FD_READ if data remains.
             WSAResetEvent(_event);
             // recv() takes an int; a larger buffer is filled up to INT_MAX bytes.
-            auto const capacity = static_cast<int>(std::min<std::size_t>(size, INT_MAX));
-            auto const n = ::recv(_readSock, static_cast<char*>(data), capacity, 0);
+            auto const n = ::recv(_readSock, static_cast<char*>(data), clampToTransferSize(size), 0);
             if (n > 0)
                 return ChannelResult::bytes(static_cast<std::size_t>(n));
             if (n == 0)
@@ -210,10 +240,41 @@ namespace
         WSAEVENT _event;
     };
 
-    /// Creates a connected loopback TCP socket pair (Windows lacks socketpair(2)).
+    /// @return Whether @p a and @p b are each other's end of one connection.
+    ///
+    /// What accept() hands back is whoever connected, not necessarily the client that was just
+    /// connected: the listener sits on a discoverable ephemeral port with a backlog of 1, and any
+    /// local process can take it between the listen() and the accept(). The "pair" would then be
+    /// two sockets that are not connected to each other at all -- every wakeup byte going to a
+    /// stranger while the loop waits for one that never arrives. The usual socketpair emulation
+    /// compares the two ends' addresses for exactly this reason.
+    [[nodiscard]] bool areConnectedToEachOther(SOCKET a, SOCKET b) noexcept
+    {
+        auto const addressOf = [](auto const& query, SOCKET socket, sockaddr_in& out) {
+            auto length = static_cast<int>(sizeof(out));
+            return query(socket, reinterpret_cast<sockaddr*>(&out), &length) != SOCKET_ERROR
+                   && length == static_cast<int>(sizeof(out));
+        };
+        auto const same = [](sockaddr_in const& x, sockaddr_in const& y) {
+            return x.sin_family == y.sin_family && x.sin_port == y.sin_port
+                   && x.sin_addr.s_addr == y.sin_addr.s_addr;
+        };
+
+        sockaddr_in aName {};
+        sockaddr_in aPeer {};
+        sockaddr_in bName {};
+        sockaddr_in bPeer {};
+        if (!addressOf(::getsockname, a, aName) || !addressOf(::getpeername, a, aPeer)
+            || !addressOf(::getsockname, b, bName) || !addressOf(::getpeername, b, bPeer))
+            return false;
+
+        return same(aName, bPeer) && same(bName, aPeer);
+    }
+
+    /// One attempt at a connected loopback TCP socket pair.
     /// @param out The two connected sockets {accepted-server, client} on success.
     /// @return True on success.
-    [[nodiscard]] bool makeLoopbackPair(std::array<SOCKET, 2>& out) noexcept
+    [[nodiscard]] bool tryMakeLoopbackPair(std::array<SOCKET, 2>& out) noexcept
     {
         auto listener = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (listener == INVALID_SOCKET)
@@ -262,8 +323,35 @@ namespace
             return false;
         }
 
+        // Whoever connected may not be the client connected just above.
+        if (!areConnectedToEachOther(server, client))
+        {
+            closesocket(server);
+            closesocket(client);
+            return false;
+        }
+
         out = { server, client };
         return true;
+    }
+
+    /// Creates a connected loopback TCP socket pair (Windows lacks socketpair(2)).
+    ///
+    /// Each attempt takes a fresh ephemeral port, so a stranger that wins the race sends this
+    /// round the way of a failed socket() call rather than producing a pair that cannot carry a
+    /// wakeup. Bounded, because a host being hammered must end in a reported failure, not a hang.
+    ///
+    /// @param out The two connected sockets {accepted-server, client} on success.
+    /// @return True on success.
+    [[nodiscard]] bool makeLoopbackPair(std::array<SOCKET, 2>& out) noexcept
+    {
+        constexpr auto MaxAttempts = 16;
+        for ([[maybe_unused]] auto const attempt: std::views::iota(0, MaxAttempts))
+        {
+            if (tryMakeLoopbackPair(out))
+                return true;
+        }
+        return false;
     }
 
 #endif // _WIN32
@@ -291,6 +379,18 @@ std::expected<std::unique_ptr<SystemPipe>, PlatformError> createSystemPipe()
     auto pair = std::array<SOCKET, 2> {};
     if (!makeLoopbackPair(pair))
         return std::unexpected(PlatformError::PipeCreationFailed);
+
+    // WSAEventSelect below puts the read socket into non-blocking mode; the write socket has to
+    // be told. Both ends non-blocking is what the POSIX branch spells out below: a producer must
+    // never park on a full wakeup channel, and write() answers WSAEWOULDBLOCK with success
+    // because a wakeup is already pending then.
+    auto nonBlocking = u_long { 1 };
+    if (::ioctlsocket(pair[1], FIONBIO, &nonBlocking) == SOCKET_ERROR)
+    {
+        closesocket(pair[0]);
+        closesocket(pair[1]);
+        return std::unexpected(PlatformError::PipeCreationFailed);
+    }
 
     auto const event = WSACreateEvent();
     if (event == WSA_INVALID_EVENT)
