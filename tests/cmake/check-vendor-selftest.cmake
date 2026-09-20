@@ -5,15 +5,20 @@
 # that refusal and no other. A tool that refused everything would pass the refusing cases alone, so
 # the accepting cases are half of the proof.
 #
-# Every refusal the script implements has a case here, and `refusalPhrases` below is the full list
-# of them, so a case that fires a refusal it did not deserve is a failure too.
+# Every refusal the script implements has a case here, bar the two named at `refusalPhrases` below
+# that no case can reach portably. That list is the script's refusals, not the cases' wishes, so a
+# case that fires a refusal it did not deserve is a failure too.
 #
-# Each case builds a git repository of its own in WORK_DIR: five files of the vendored set and two
-# outside it (the brief's three files plus a dot-file, the module table, a module directory and the
-# two that must NOT be copied), and whatever the case adds -- a blob with a CR byte, a symbolic
+# Most cases build a git repository of their own in WORK_DIR: five files of the vendored set and
+# two outside it (the brief's three files plus a dot-file, the module table, a module directory and
+# the two that must NOT be copied), and whatever the case adds -- a blob with a CR byte, a symbolic
 # link, a submodule. The repository is made through git's index rather than a checkout, so a
 # symbolic link is recorded on a Windows host too, where creating one needs a privilege the test
 # does not have. Its commit is tagged, because the tool takes a tag or a full SHA and nothing else.
+#
+# The sections after the table are the cases that need more than one run of the tool: a re-sync, a
+# refusal over a copy that must survive it, a sync from inside a vendored copy, a check with no git
+# on PATH, a sync from a file:// remote, and the command lines the tool refuses before it acts.
 #
 # Usage: cmake -DTOOL=<path to cmake/CoreCppVendor.cmake> -DWORK_DIR=<scratch directory>
 #              [-DSKIP_EXIT_CODE=<code>] -P tests/cmake/check-vendor-selftest.cmake
