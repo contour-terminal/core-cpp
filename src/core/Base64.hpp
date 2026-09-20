@@ -42,8 +42,8 @@ namespace detail
     };
     // clang-format on
 
-    /// What IndexMap holds for a byte that is not a base64 digit: one past the last index a
-    /// digit maps to, so `entry <= LastDigitIndex` tests membership of the alphabet.
+    /// The largest index IndexMap maps a base64 digit to, so `entry <= LastDigitIndex` tests
+    /// membership of the alphabet. Every other byte is 64, one past this.
     auto constexpr inline LastDigitIndex = std::size_t { 63 };
 
     template <typename T, size_t N>

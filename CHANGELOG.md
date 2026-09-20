@@ -231,6 +231,15 @@ workflow refuses one without a section here.
   published platform per row rather than stopping at whichever host actually runs the check.
   `cmake/FetchTransferBound.cmake` compared identical at the same commit; no change there.
 
+- `core::platform::NativeFileSystem` takes its rename primitive at construction:
+  `RenameFunction`, `nativeRename()` and a constructor defaulting to it, so `instance()` and every
+  existing caller are unchanged. It is the one filesystem call the class takes rather than makes,
+  and it is injected because `rename()`'s two-hop lettercase retry only runs on a volume that
+  refuses a case-only rename outright -- which ext4, APFS, NTFS and UFS all do natively, so the
+  retry was unreachable from any test. It moves a consumer's entry through a temporary name and
+  can leave it there when both the second hop and the rollback fail, which is not behaviour that
+  may ship untested (controller ruling R53).
+
 ### Breaking
 
 - `core::platform::FileSystem::openWrite()` takes a `core::platform::WriteMode` and `copyFile()` a
@@ -248,6 +257,56 @@ workflow refuses one without a section here.
   alongside its neighbours `InMemoryFileSystem` and `MockFileInfoProvider`; it used to open
   `core::platform`. Migration: spell it `core::platform::testing::TestEnvironmentProvider`.
 
+- `core::Flags::operator&=` intersects instead of clearing, which silently reverses what it
+  answers. It called `disable()`, so `f &= X::A` kept everything except `A` while
+  `f = f & Flags { X::A }` kept only `A`: the compound operator computed the complement of its
+  binary form. Nothing in contour, endo, tuidu or morph uses it, so nothing has to change today,
+  but the reversal is invisible at the call site — it compiles either way. Migration: a caller
+  that wanted the old meaning spells it `f.disable(X::A)`. An overload taking a `Flags` was added
+  too, so the pair is symmetric with `operator|` and `operator|=`.
+- `core::FNV`'s byte-wise overload takes only a type with unique object representations, which
+  narrows what compiles. It accepted any trivially copyable type and walked its object
+  representation, padding included, so two objects with equal members hashed differently
+  depending on what their padding held. It now rejects any type with padding bits — a struct with
+  interior padding, and `float` and `double`, whose representations have padding bit patterns.
+  Migration: hash the members one at a time, or pass
+  `std::bit_cast<std::array<unsigned char, sizeof(T)>>(value)`, which is what the overload does
+  for the types it still accepts. No consumer instantiates it with such a type: contour's and
+  endo's `FNV` uses all go through the `char`, `uint8_t` or `string_view` overloads.
+- `core::base64::decodeLength()` answers a different number for the same input: the size of the
+  base64 prefix, where it used to size from the whole input including padding and any trailing
+  junk. Migration: none for a caller that used it to reserve a buffer for `decode()`, which is
+  what it is for — the answer is still an upper bound, just a tight one. A caller that relied on
+  the old over-estimate for something else wants its own arithmetic. endo sizes an image buffer
+  with it (`GeminiProvider.cpp`) and was over-allocating.
+- `core::readFileAsString()` answers a different string for the same file: exactly the bytes on
+  disk. It sized from `file_size()` and read in text mode, so on Windows CRLF translation
+  delivered fewer bytes than it had reserved and the shortfall stayed behind as trailing NULs;
+  and it narrowed the path through `path::string()`, which cannot represent every name a
+  filesystem accepts and throws on Windows for the ones it cannot. A missing file now answers
+  empty rather than throwing, as its documentation said all along. Migration: a caller that
+  trimmed trailing NULs off the result can stop; one that caught `std::filesystem::filesystem_error`
+  for a missing path checks for an empty string instead. contour reads a CA certificate and a
+  forced-DPI file through it.
+- `core::unescape()` and `core::readFileAsString()` are `[[nodiscard]]`. Discarding either is a
+  bug — neither has an effect other than its return value — but a consumer that does so and
+  builds with `-Werror` stops building. Migration: use the result, or cast it to `void` at the
+  one call site that means to throw it away.
+
+### Changed
+
+- `core::detail::Times2D::operator[]` answers the same type its `value_type` declares: a
+  `std::tuple` of both coordinates, in the order iteration yields them (the inner range advances
+  fastest). It answered the inner coordinate alone, so subscripting and iterating disagreed on
+  what an element of a `Times2D` even is. `operator[]` changed rather than `value_type`, because
+  the tuple is what `*it` already yielded and what the one existing test asserts. Nothing in
+  core-cpp or any consumer subscripts a `Times2D`. While there: `Times::size()` and
+  `Times::operator[]`, which nothing had ever instantiated, spell out the conversions their
+  arithmetic implies instead of letting the compiler narrow silently.
+- `core::joinHumanReadableQuoted()`'s separator is a `std::string_view`, not a deduced template
+  parameter. Deduced, it could never be left out, so the `= ", "` default it declared was
+  unusable and `joinHumanReadableQuoted(xs)` did not compile. Nothing calls it yet.
+
 ### Fixed
 
 - `core::cli`'s `--help` no longer reads past the text it is laying out. `wordWrapped()` computed
@@ -261,13 +320,18 @@ workflow refuses one without a section here.
   for the verbatim placeholder as well, so a placeholder longer than the longest option no longer
   underflows its padding into a string of about four billion spaces (the `assert` above it is
   compiled out under NDEBUG), and the hyperlink scan's `isalpha()` widens through `unsigned char`,
-  which is what it is defined for.
+  which is what it is defined for. The wrapper also advances its index by what a chunk consumed
+  rather than by what it emitted: the two differ whenever a chunk is trimmed, and a space before
+  a line feed left the trimmed space in front of the index for a skip loop that skips line feeds
+  and not spaces, so the same empty chunk came back for ever and `--help` never returned.
 - `core::cli::App` keeps the contracts it documents. `installLogging()` assigned the replacement
   over the member holding the previous output, so the previous `ScopedOutput` was destroyed after
   the new one had installed itself: its destructor restores every category to the sink it
   snapshotted, so a second call silently sent every later log line back to the console and left
   each category holding a reference into a destroyed sink. It releases the previous output first
-  now. `reparseParameters()` and `parseParametersForTesting()`, both documented "false on
+  now — which means a destination that then fails to open leaves logging on the console rather
+  than on whatever was installed before; the caller is told, and has nothing to fall back to
+  either way. `reparseParameters()` and `parseParametersForTesting()`, both documented "false on
   failure", catch what `cli::parse()` throws rather than letting it escape a function whose
   contract is a bool (`cli::parse()`'s declaration now states what it throws;
   [core-cpp#13](https://github.com/contour-terminal/core-cpp/issues/13) converts this API to
@@ -279,36 +343,35 @@ workflow refuses one without a section here.
   standard error received SGR escapes — against the header's own contract — and
   `core::cli::App`'s `helpStyle()` and `customizeLogStoreOutput()` each carried a second copy of
   the same branch for standard output. All three now call `core::log::isStdOutTerminal()` or
-  `isStdErrTerminal()`, and the platform branch lives in one place.
-- `core::Flags::operator&=` intersects instead of clearing. It called `disable()`, so `f &= X::A`
-  kept everything except `A` while `f = f & Flags { X::A }` kept only `A`: the compound operator
-  computed the complement of its binary form. A consumer that relied on the old spelling wants
-  `disable()`. An overload taking a `Flags` was added, so the pair is symmetric with `operator|`
-  and `operator|=`.
+  `isStdErrTerminal()`, which `core::log` implements once per platform in
+  `src/core/log/posix/TerminalQuery.cpp` and `src/core/log/windows/TerminalQuery.cpp` — an
+  operating-system difference is an implementation, never an `#ifdef` inside the decision
+  (`.agent/rules/platform.md`).
 - `core::escape()` and `core::unescape()` round-trip again. 0x7E was outside the printable range,
   so `~` came out as a numeric escape; `escape()` writes a quote as `\"` and `unescape()`
   re-emitted it as `\"`; and an octal escape is three digits of which only those below `\100`
   begin with a zero, but the reader keyed the sequence on `'0'`, so `\101` and everything above it
   came back as literal text. The reader now opens an octal sequence on any octal digit and
-  consumes exactly three, which reads the `\0dd` form it used to accept identically.
-- `core::base64::decodeLength()` measures the base64 prefix. Its scan compared the index-table
-  entry against the table's own size (256) rather than against the 64 the table stores for a byte
-  outside the alphabet, so every byte passed and the length came from the whole input: a short
-  payload followed by padding or junk sized the buffer for the junk.
-- `core::FNV`'s byte-wise overload takes only a type with unique object representations. It
-  accepted any trivially copyable type and walked its object representation, padding included, so
-  two objects with equal members hashed differently depending on what their padding held. A type
-  with padding no longer compiles against it, and hashes its members instead. The bytes come from
-  `std::bit_cast`, so the overload's `constexpr` can now be taken up.
+  consumes exactly three, which reads the `\0dd` form it used to accept identically (a
+  leading zero is octal-neutral). One reading did change: `\1` through `\7` used to come back as
+  the two literal characters and now open a three-digit octal run. That is correct for anything
+  `escape()` produced, which is what `unescape()` is for; hand-written or third-party escaped text
+  that meant a literal backslash before a digit has to spell the backslash `\\`.
+- `core::FNV`'s byte-wise overload reads the bytes with `std::bit_cast` rather than a
+  `reinterpret_cast` through the object representation, which no constant evaluation may do — so
+  the `constexpr` on the overload can now be taken up. (What it accepts narrowed too; see
+  **Breaking**.)
+- `core::base64::decode()`'s index lambda captures its 256-byte table by reference; by value it
+  copied the whole table on every call.
 - `core::Utils` stays inside the bounds it is given. `splitKeyValuePairs()` rebuilt its last
   segment with the length-less `std::string_view(char const*)` constructor, which calls `strlen()`:
   it read past the view (AddressSanitizer reports a heap-buffer-overflow) and returned whatever
   followed as part of the value. `toLower()`/`toUpper()` passed a plain `char` to
   `tolower()`/`toupper()`, undefined for any byte with the high bit set — every continuation byte
-  of a UTF-8 sequence, and `cli::about::registerProjects()` sorts project titles through them.
-  `readFileAsString()` sized from `file_size()` and read in text mode, so Windows' CRLF
-  translation left the shortfall behind as trailing NULs, and it narrowed the path through
-  `path::string()`, which cannot represent every name. `eachElement()`'s end iterator was
+  of a UTF-8 sequence, and `cli::about::registerProjects()` sorts project titles through them; a
+  character wider than a byte goes to `towlower()`/`towupper()` rather than being truncated into
+  the narrow functions' domain. (`readFileAsString()` is fixed too; because it answers
+  differently, its entry is under **Breaking**.) `eachElement()`'s end iterator was
   `max + 1` computed in `int` and cast back, which for a type narrower than `int` wraps onto
   `begin()` — so the range was empty — and for one as wide as `int` overflows. Windows'
   `threadName()` resized by `len - 1` with `len == 0` on a failed conversion, which threw

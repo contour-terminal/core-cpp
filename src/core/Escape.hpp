@@ -21,6 +21,16 @@ enum class NumericEscape : uint8_t
     Hex
 };
 
+/// Renders one byte as printable text that unescape() reads back.
+///
+/// A byte that prints as itself -- 0x20 (space) to 0x7E (tilde) -- is passed through, except for
+/// the backslash and the double quote, which would not survive the round trip. Escape, tab,
+/// carriage return and line feed get their named escapes; everything else gets a numeric one,
+/// either `\xHH` or a three-digit `\OOO`.
+///
+/// @param ch The byte to render.
+/// @param numericEscape Which numeric form to use for a byte that has no named escape.
+/// @return The escaped text; never empty.
 inline std::string escape(uint8_t ch, NumericEscape numericEscape = NumericEscape::Hex)
 {
     switch (ch)
