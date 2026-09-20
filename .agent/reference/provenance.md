@@ -13,6 +13,21 @@ moved since it was synced. A consumer migration's delta check (`.agent/guides/`)
 way. `NOTICE` and `CHANGELOG.md` record the same commits at the granularity of a whole import; this
 table is the per-file index into them.
 
+**A `-` in the notes column does not mean "byte-identical to upstream."** Every import applies the
+rewrites this repository's rules require — the namespace, the include paths, the header guard, the
+SPDX line — and a row records what is left over. For the endo `src/tui/*` rows in particular,
+Task A7 also applied its house-style conversions across the module: 110 C-style `for` loops became
+`std::views::iota` and 21 became `while`, 87 `find(...) != npos` became `contains(...)`, 138
+declarations gained `const`, 9 diagnostic-pragma blocks and 1 `NOLINT` were deleted, 12 private
+constants were renamed out of the `k` prefix, 2 conditions were rewritten by De Morgan, a dead test
+helper was deleted and one was added. 84 of the 141 files with an upstream counterpart differ for
+one of those reasons, and 79 of them carry a bare `-` because that is all they carry.
+
+**So a row is not a licence to re-sync by overwriting.** B12b and every consumer's delta check read
+this table mechanically; taking a `-` for "replaceable with upstream" would revert all of the above
+silently, including the `NOLINT` and the pragma blocks the rules forbid. Re-syncing a file means
+merging the upstream delta into what is here, never replacing it.
+
 Repos: [`contour-terminal/contour`](https://github.com/contour-terminal/contour),
 [`contour-terminal/endo`](https://github.com/contour-terminal/endo),
 [`LASTRADA-Software/fastcached`](https://github.com/LASTRADA-Software/fastcached). A file adapted
@@ -242,8 +257,9 @@ others in notes.
 | `src/core/tui/Component.cpp` | contour-terminal/endo | `src/tui/Component.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Component.hpp` | contour-terminal/endo | `src/tui/Component.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/CursorShape.hpp` | contour-terminal/endo | `src/tui/CursorShape.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/Dialog.cpp` | contour-terminal/endo | `src/tui/Dialog.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Dialog.cpp` | contour-terminal/endo | `src/tui/Dialog.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | A7 fix round 1: every `Rect` is built as `{ .x = column, .y = row }`, which endo had transposed, and all three dialogs clamp their width on a terminal narrower than the border |
 | `src/core/tui/Dialog.hpp` | contour-terminal/endo | `src/tui/Dialog.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Dialog_test.cpp` | origin: core-cpp | - | - | endo's `src/tui/Dialog.cpp` has no test; added by A7 fix round 1 for the frame's position and the narrow-terminal case |
 | `src/core/tui/EditAction.hpp` | contour-terminal/endo | `src/tui/EditAction.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Element.hpp` | contour-terminal/endo | `src/tui/Element.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Error.hpp` | contour-terminal/endo | `src/tui/Error.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
@@ -253,9 +269,9 @@ others in notes.
 | `src/core/tui/FuzzyPickerPopup.cpp` | contour-terminal/endo | `src/tui/FuzzyPickerPopup.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/FuzzyPickerPopup.hpp` | contour-terminal/endo | `src/tui/FuzzyPickerPopup.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/FuzzyPickerPopup_test.cpp` | contour-terminal/endo | `src/tui/FuzzyPickerPopup_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/GenericSyntaxHighlighter.cpp` | contour-terminal/endo | `src/tui/GenericSyntaxHighlighter.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/GenericSyntaxHighlighter.cpp` | contour-terminal/endo | `src/tui/GenericSyntaxHighlighter.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | A7 fix round 1: `toLowerInto()` takes a `std::span<char>` and bounds the copy itself; endo's took a bare `char*` and three of its seven call sites overran a 64-byte stack buffer |
 | `src/core/tui/GenericSyntaxHighlighter.hpp` | contour-terminal/endo | `src/tui/GenericSyntaxHighlighter.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/GenericSyntaxHighlighter_test.cpp` | contour-terminal/endo | `src/tui/GenericSyntaxHighlighter_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/GenericSyntaxHighlighter_test.cpp` | contour-terminal/endo | `src/tui/GenericSyntaxHighlighter_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | A7 fix round 1 adds the oversized-assembly-token case |
 | `src/core/tui/GhostTextHelper.hpp` | contour-terminal/endo | `src/tui/GhostTextHelper.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/HoverState.cpp` | contour-terminal/endo | `src/tui/HoverState.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/HoverState.hpp` | contour-terminal/endo | `src/tui/HoverState.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
@@ -263,20 +279,20 @@ others in notes.
 | `src/core/tui/HyperlinkEmitter.hpp` | contour-terminal/endo | `src/tui/HyperlinkEmitter.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/ImageLoader.cpp` | contour-terminal/endo | `src/tui/ImageLoader.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `readClipboardImage()`, which was an `#ifdef` with a platform in each arm, is in `posix/` and `windows/` (Ruling R41); the `#pragma clang diagnostic` around stb's headers is gone, because core-cpp includes stb as a SYSTEM directory |
 | `src/core/tui/ImageLoader.hpp` | contour-terminal/endo | `src/tui/ImageLoader.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/ImageLoader_test.cpp` | contour-terminal/endo | `src/tui/ImageLoader_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/ImageLoader_test.cpp` | contour-terminal/endo | `src/tui/ImageLoader_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `generateMinimalPng()`, a 39-line helper no case called, is deleted |
 | `src/core/tui/ImageProvider.hpp` | contour-terminal/endo | `src/tui/ImageProvider.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the interface and its configuration only; `FilesystemImageProvider` moved to a header of its own |
 | `src/core/tui/InputEvent.hpp` | contour-terminal/endo | `src/tui/InputEvent.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/InputField.cpp` | contour-terminal/endo | `src/tui/InputField.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/InputField.hpp` | contour-terminal/endo | `src/tui/InputField.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/InputField.cpp` | contour-terminal/endo | `src/tui/InputField.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | spells the constants `InputField.hpp` renames |
+| `src/core/tui/InputField.hpp` | contour-terminal/endo | `src/tui/InputField.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | four private `constexpr` constants renamed to CamelCase: `DoubleClickTimeout`, `DoubleClickTolerance`, `MaxUndoHistory`, `MaxKillRing` |
 | `src/core/tui/InputField_test.cpp` | contour-terminal/endo | `src/tui/InputField_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/KeyBindings.cpp` | contour-terminal/endo | `src/tui/KeyBindings.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/KeyBindings.hpp` | contour-terminal/endo | `src/tui/KeyBindings.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/KeyBindings_test.cpp` | contour-terminal/endo | `src/tui/KeyBindings_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/KeyCode.hpp` | contour-terminal/endo | `src/tui/KeyCode.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/KeyCode.hpp` | contour-terminal/endo | `src/tui/KeyCode.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the upstream `NOLINT(readability-enum-initial-value)` on `enum class KeyCode` is gone -- `src/core/tui/.clang-tidy` disables the check for this directory instead; `isPrintable()`'s private-use test is rewritten by De Morgan |
 | `src/core/tui/List.cpp` | contour-terminal/endo | `src/tui/List.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/List.hpp` | contour-terminal/endo | `src/tui/List.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/LogPanel.cpp` | contour-terminal/endo | `src/tui/LogPanel.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/LogPanel.hpp` | contour-terminal/endo | `src/tui/LogPanel.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/LogPanel.cpp` | contour-terminal/endo | `src/tui/LogPanel.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | spells the constants `LogPanel.hpp` renames |
+| `src/core/tui/LogPanel.hpp` | contour-terminal/endo | `src/tui/LogPanel.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | private `constexpr` constants renamed to CamelCase: `MaxEntries`, `MaxVisibleExpanded` |
 | `src/core/tui/MarkdownHtml.cpp` | contour-terminal/endo | `src/tui/MarkdownHtml.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/MarkdownHtml.hpp` | contour-terminal/endo | `src/tui/MarkdownHtml.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/MarkdownHtml_test.cpp` | contour-terminal/endo | `src/tui/MarkdownHtml_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
@@ -284,21 +300,21 @@ others in notes.
 | `src/core/tui/MarkdownInline.hpp` | contour-terminal/endo | `src/tui/MarkdownInline.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/MarkdownRenderer.cpp` | contour-terminal/endo | `src/tui/MarkdownRenderer.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/MarkdownRenderer.hpp` | contour-terminal/endo | `src/tui/MarkdownRenderer.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/MarkdownRenderer_test.cpp` | contour-terminal/endo | `src/tui/MarkdownRenderer_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/MarkdownRenderer_test.cpp` | contour-terminal/endo | `src/tui/MarkdownRenderer_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | a `firstOf()` helper replaces four `output.find(...)->n` dereferences, which would have been undefined had the op not been found |
 | `src/core/tui/MarkdownTable.cpp` | contour-terminal/endo | `src/tui/MarkdownTable.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/MarkdownTable.hpp` | contour-terminal/endo | `src/tui/MarkdownTable.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/MarkdownTable_test.cpp` | contour-terminal/endo | `src/tui/MarkdownTable_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/MockTerminalOutput.cpp` | contour-terminal/endo | `src/tui/MockTerminalOutput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/MockTerminalOutput.cpp` | contour-terminal/endo | `src/tui/MockTerminalOutput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `syncGuard()` returns `{}` where endo returns `SyncGuard()`; otherwise left exactly as endo has it, so no renderer test changes meaning |
 | `src/core/tui/MockTerminalOutput.hpp` | contour-terminal/endo | `src/tui/MockTerminalOutput.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Modifier.hpp` | contour-terminal/endo | `src/tui/Modifier.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/PopupKeyDispatch.hpp` | contour-terminal/endo | `src/tui/PopupKeyDispatch.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/PopupKeyDispatch_test.cpp` | contour-terminal/endo | `src/tui/PopupKeyDispatch_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/QuestionComponent.cpp` | contour-terminal/endo | `src/tui/QuestionComponent.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/QuestionComponent.hpp` | contour-terminal/endo | `src/tui/QuestionComponent.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/QuestionComponent.cpp` | contour-terminal/endo | `src/tui/QuestionComponent.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | spells the constants `QuestionComponent.hpp` renames |
+| `src/core/tui/QuestionComponent.hpp` | contour-terminal/endo | `src/tui/QuestionComponent.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | private `constexpr` constants renamed to CamelCase (`LeftBarWidth`, `BarPadding`, `HeaderHeight`), and `QuestionConfig`'s members are `{}`-initialized |
 | `src/core/tui/QuestionComponent_test.cpp` | contour-terminal/endo | `src/tui/QuestionComponent_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Rect.hpp` | contour-terminal/endo | `src/tui/Rect.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Renderer_test.cpp` | contour-terminal/endo | `src/tui/Renderer_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/Screen.cpp` | contour-terminal/endo | `src/tui/Screen.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Screen.cpp` | contour-terminal/endo | `src/tui/Screen.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `flushInline`'s C-style loop is a `while`, with the `++row` written out on each of its three exit paths |
 | `src/core/tui/Screen.hpp` | contour-terminal/endo | `src/tui/Screen.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Screen_test.cpp` | contour-terminal/endo | `src/tui/Screen_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/ScrollableSelection.hpp` | contour-terminal/endo | `src/tui/ScrollableSelection.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
@@ -312,8 +328,8 @@ others in notes.
 | `src/core/tui/Sixel.hpp` | contour-terminal/endo | `src/tui/Sixel.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Sixel_test.cpp` | contour-terminal/endo | `src/tui/Sixel_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/SmartCaseMatch_test.cpp` | contour-terminal/endo | `src/tui/SmartCaseMatch_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/Spinner.cpp` | contour-terminal/endo | `src/tui/Spinner.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/Spinner.hpp` | contour-terminal/endo | `src/tui/Spinner.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Spinner.cpp` | contour-terminal/endo | `src/tui/Spinner.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | spells the constants `Spinner.hpp` renames |
+| `src/core/tui/Spinner.hpp` | contour-terminal/endo | `src/tui/Spinner.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | private `constexpr` constants renamed to CamelCase: `FilledChar`, `EmptyChar`, `PartialChars` |
 | `src/core/tui/StatusBar.cpp` | contour-terminal/endo | `src/tui/StatusBar.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/StatusBar.hpp` | contour-terminal/endo | `src/tui/StatusBar.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/StbImageImpl.cpp` | contour-terminal/endo | `src/tui/StbImageImpl.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the warning pragmas are gone: the module's CMakeLists.txt compiles this file with warnings off and `-fno-sanitize=undefined`, as per-source PRIVATE options |
@@ -324,11 +340,11 @@ others in notes.
 | `src/core/tui/Terminal.hpp` | contour-terminal/endo | `src/tui/Terminal.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/TerminalInput.cpp` | contour-terminal/endo | `src/tui/platform/TerminalInput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the members that touch no OS state, which endo had in both platform files |
 | `src/core/tui/TerminalInput.hpp` | contour-terminal/endo | `src/tui/TerminalInput.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the OS state is the opaque `NativeState` the platform sources define, so this header includes neither `<windows.h>` nor `<termios.h>` (Ruling R41) |
-| `src/core/tui/TerminalOutput.cpp` | contour-terminal/endo | `src/tui/platform/TerminalOutput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `SyncGuard` and `syncGuard()` are here rather than per platform, because the sequences now go through `writeToDestination()`; the members that only compose bytes, which endo duplicated in `src/tui/platform/TerminalOutputWin32.cpp` (same commit); `copyToClipboard()` encodes through `core::base64::encode()` rather than a third copy of a base64 encoder |
-| `src/core/tui/TerminalOutput.hpp` | contour-terminal/endo | `src/tui/TerminalOutput.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | post-import fix: `SyncGuard` holds the `TerminalOutput` it brackets instead of a native handle, so its `#if _WIN32` `NativeHandle` alias is gone (Ruling R41); `isTerminal()` added |
-| `src/core/tui/TerminalOutput_test.cpp` | origin: core-cpp | - | - | the upstream file has no test; written for the `SyncGuard` and `isTerminal()` fix |
+| `src/core/tui/TerminalOutput.cpp` | contour-terminal/endo | `src/tui/platform/TerminalOutput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `SyncGuard` and `syncGuard()` are here rather than per platform, because the sequences now go through `writeToDestination()`; the members that only compose bytes, which endo duplicated in `src/tui/platform/TerminalOutputWin32.cpp` (same commit); `copyToClipboard()` encodes through `core::base64::encode()` rather than a third copy of a base64 encoder. A7 fix round 1: `~SyncGuard()` and its move-assignment flush before writing the end sequence |
+| `src/core/tui/TerminalOutput.hpp` | contour-terminal/endo | `src/tui/TerminalOutput.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | post-import fix: `SyncGuard` holds the `TerminalOutput` it brackets instead of a native handle, so its `#if _WIN32` `NativeHandle` alias is gone (Ruling R41); `isTerminal()` added. A7 fix round 1 restores "and flushes" to the destructor's description |
+| `src/core/tui/TerminalOutput_test.cpp` | origin: core-cpp | - | - | the upstream file has no test; written for the `SyncGuard` and `isTerminal()` fix. A7 fix round 1 replaces `a default-constructed SyncGuard writes nothing`, which asserted on an unrelated capture, with the two flush cases |
 | `src/core/tui/TerminalProtocols.hpp` | contour-terminal/endo | `src/tui/TerminalProtocols.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/TerminalProtocols_test.cpp` | contour-terminal/endo | `src/tui/TerminalProtocols_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/TerminalProtocols_test.cpp` | contour-terminal/endo | `src/tui/TerminalProtocols_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | A7 fix round 1: the sample OSC 8 id is `1f2e`, not `endo-1f2e` |
 | `src/core/tui/TerminalQuery_test.cpp` | contour-terminal/endo | `src/tui/TerminalQuery_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/TestHelpers.hpp` | contour-terminal/endo | `src/tui/TestHelpers.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Text.cpp` | contour-terminal/endo | `src/tui/Text.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
@@ -345,9 +361,9 @@ others in notes.
 | `src/core/tui/Unicode.cpp` | contour-terminal/endo | `src/tui/Unicode.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Unicode.hpp` | contour-terminal/endo | `src/tui/Unicode.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Unicode_test.cpp` | contour-terminal/endo | `src/tui/Unicode_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/VtParser.cpp` | contour-terminal/endo | `src/tui/VtParser.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/VtParser.hpp` | contour-terminal/endo | `src/tui/VtParser.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/VtParser_test.cpp` | contour-terminal/endo | `src/tui/VtParser_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/VtParser.cpp` | contour-terminal/endo | `src/tui/VtParser.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | a condition in `dispatchCsi` is rewritten by De Morgan; A7 fix round 1 bounds `_pasteBuf`, `_paramBuf` and `_dcsBuf`, which grew without limit from untrusted bytes |
+| `src/core/tui/VtParser.hpp` | contour-terminal/endo | `src/tui/VtParser.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | A7 fix round 1 adds the public `MaxPasteLength`, `MaxCsiParamLength` and `MaxDcsLength` caps and the private `abandonIfOverlong()` |
+| `src/core/tui/VtParser_test.cpp` | contour-terminal/endo | `src/tui/VtParser_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | A7 fix round 1 adds the three bounded-buffer cases |
 | `src/core/tui/completer/Completer.cpp` | contour-terminal/endo | `src/tui/completer/Completer.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `addProvider()` sorts stably, so equal priorities keep registration order |
 | `src/core/tui/completer/Completer.hpp` | contour-terminal/endo | `src/tui/completer/Completer.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/completer/CompletionItem.hpp` | contour-terminal/endo | `src/tui/completer/CompletionItem.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
@@ -359,8 +375,8 @@ others in notes.
 | `src/core/tui/detail/XtVersion.hpp` | contour-terminal/endo | `src/tui/platform/TerminalOutput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `parseXTVersionName()` and the unscroll terminal list, which endo had verbatim in `src/tui/platform/TerminalOutputWin32.cpp` too; spelled `parseXtVersionName()` and `supportsUnscroll()` here |
 | `src/core/tui/posix/ImageLoader.cpp` | contour-terminal/endo | `src/tui/ImageLoader.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the POSIX `readClipboardImage()` and its helper |
 | `src/core/tui/posix/PosixIO.hpp` | contour-terminal/endo | `src/tui/platform/PosixIO.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | moved out of `tui/platform/`, which Ruling R40 does not keep |
-| `src/core/tui/posix/Terminal.cpp` | contour-terminal/endo | `src/tui/platform/Terminal.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the destructor, `initialize()` and `shutdown()`: what SIGWINCH makes different. The NOLINTs on the file-scope signal state are gone with the `g` prefixes |
-| `src/core/tui/posix/TerminalInput.cpp` | contour-terminal/endo | `src/tui/platform/TerminalInput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the POSIX half, over `TerminalInput::NativeState`, which this file defines: Ruling R41 keeps `<termios.h>` out of `TerminalInput.hpp` |
+| `src/core/tui/posix/Terminal.cpp` | contour-terminal/endo | `src/tui/platform/Terminal.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the destructor, `initialize()` and `shutdown()`: what SIGWINCH makes different. The NOLINTs on the file-scope signal state are gone with the `g` prefixes. A7 fix round 1: the SIGWINCH handler saves and restores `errno` and reads `activeInput` as a lock-free `std::atomic` |
+| `src/core/tui/posix/TerminalInput.cpp` | contour-terminal/endo | `src/tui/platform/TerminalInput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the POSIX half, over `TerminalInput::NativeState`, which this file defines: Ruling R41 keeps `<termios.h>` out of `TerminalInput.hpp`. A7 fix round 1: both ends of the resize self-pipe are `O_NONBLOCK`, so the signal handler's write cannot block |
 | `src/core/tui/posix/TerminalOutput.cpp` | contour-terminal/endo | `src/tui/platform/TerminalOutput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | only what goes through the OS: the write, the window size, the XTVERSION read and `isTerminal()` (core-cpp) |
 | `src/core/tui/runtime/EventSource.hpp` | contour-terminal/endo | `src/tui/runtime/EventSource.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/runtime/Modal.hpp` | contour-terminal/endo | `src/tui/runtime/Modal.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
@@ -368,10 +384,10 @@ others in notes.
 | `src/core/tui/runtime/Modal_test.cpp` | contour-terminal/endo | `src/tui/runtime/Modal_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/runtime/PollEventSource.cpp` | contour-terminal/endo | `src/tui/runtime/PollEventSource.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/runtime/PollEventSource.hpp` | contour-terminal/endo | `src/tui/runtime/PollEventSource.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/runtime/TerminalEventSource.hpp` | contour-terminal/endo | `src/tui/runtime/TerminalEventSource.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/runtime/TerminalEventSource.hpp` | contour-terminal/endo | `src/tui/runtime/TerminalEventSource.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | A7 fix round 1: `_signalFd` is `[[maybe_unused]]` and the `signalFd()` accessor, which existed only to silence `-Wunused-private-field` on Windows, is gone |
 | `src/core/tui/runtime/TuiRuntime.cpp` | contour-terminal/endo | `src/tui/runtime/TuiRuntime.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/runtime/TuiRuntime.hpp` | LASTRADA-Software/fastcached | `vendor/endo/tui/runtime/TuiRuntime.hpp` | `5389e29a5eeca9c2319f43757bd7d6d0ac1c1a13` | endo `f774a210` plus fastcached `6483abd8`, which makes `DelayAwaiter::await_ready()` a constant and decides an elapsed deadline in `await_suspend()`: MSVC 19.44's ARM64 code generator loses the enclosing `try` of a `co_await` on an awaiter whose `await_ready()` reads the clock through a virtual `now()` |
-| `src/core/tui/runtime/TuiRuntime_test.cpp` | LASTRADA-Software/fastcached | `vendor/endo/tui/runtime/TuiRuntime_test.cpp` | `5389e29a5eeca9c2319f43757bd7d6d0ac1c1a13` | endo `f774a210` plus fastcached `6483abd8`, which makes `DelayAwaiter::await_ready()` a constant and decides an elapsed deadline in `await_suspend()`: MSVC 19.44's ARM64 code generator loses the enclosing `try` of a `co_await` on an awaiter whose `await_ready()` reads the clock through a virtual `now()` |
+| `src/core/tui/runtime/TuiRuntime.hpp` | LASTRADA-Software/fastcached | `vendor/endo/tui/runtime/TuiRuntime.hpp` | `5389e29a5eeca9c2319f43757bd7d6d0ac1c1a13` | endo `f774a210` plus fastcached `6483abd8`, which makes `DelayAwaiter::await_ready()` a constant and decides an elapsed deadline in `await_suspend()`: MSVC 19.44's ARM64 code generator loses the enclosing `try` of a `co_await` on an awaiter whose `await_ready()` reads the clock through a virtual `now()`. A7 fix round 1 drops `static` from `DelayAwaiter::await_ready()`, keeping the constant return |
+| `src/core/tui/runtime/TuiRuntime_test.cpp` | LASTRADA-Software/fastcached | `vendor/endo/tui/runtime/TuiRuntime_test.cpp` | `5389e29a5eeca9c2319f43757bd7d6d0ac1c1a13` | endo `f774a210` plus fastcached `6483abd8`, which makes `DelayAwaiter::await_ready()` a constant and decides an elapsed deadline in `await_suspend()`: MSVC 19.44's ARM64 code generator loses the enclosing `try` of a `co_await` on an awaiter whose `await_ready()` reads the clock through a virtual `now()`. Beyond that delta, the pipe case reads `got->bytesRead() == 1` where upstream reads `*got == 1` (`:531`), because core-cpp's `SystemPipe::read()` returns a `ChannelResult` rather than a count. A7 fix round 1 replaces the `static_assert` on `DelayAwaiter::await_ready()` with a case that calls it on an awaiter, since the function is no longer static |
 | `src/core/tui/runtime/WithTimeout.hpp` | contour-terminal/endo | `src/tui/runtime/WithTimeout.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/runtime/posix/PollHelpers.hpp` | contour-terminal/endo | `src/tui/runtime/platform/PollHelpers.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | moved out of `runtime/platform/`; the file-wide `#if !defined(_WIN32)` is gone, because only POSIX translation units include it |
 | `src/core/tui/runtime/posix/TerminalEventSource.cpp` | contour-terminal/endo | `src/tui/runtime/platform/TerminalEventSourcePosix.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | moved out of `runtime/platform/`; the file-wide `#if !defined(_WIN32)` is gone, because SOURCES_POSIX selects the file |
