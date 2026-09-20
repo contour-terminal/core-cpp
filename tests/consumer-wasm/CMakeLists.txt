@@ -58,11 +58,54 @@ CPMAddPackage(
 add_library(consumer-wasm-core INTERFACE)
 target_link_libraries(consumer-wasm-core INTERFACE core::base core::async core::net_types)
 
+## @brief Appends every target defined under directory @p dir, and under its subdirectories, to
+## the list named by @p outVar.
+function(consumer_collect_targets dir outVar)
+    set(collected ${${outVar}})
+    get_property(targets DIRECTORY "${dir}" PROPERTY BUILDSYSTEM_TARGETS)
+    list(APPEND collected ${targets})
+    get_property(children DIRECTORY "${dir}" PROPERTY SUBDIRECTORIES)
+    foreach(child IN LISTS children)
+        consumer_collect_targets("${child}" collected)
+    endforeach()
+    set(${outVar} "${collected}" PARENT_SCOPE)
+endfunction()
+
 # Nothing in a single-threaded WebAssembly build may link Threads: it would force -pthread, and
 # with it SharedArrayBuffer, onto every page that loads this.
-if(TARGET Threads::Threads)
-    message(FATAL_ERROR "consumer-wasm: Threads was resolved, which a single-threaded WebAssembly build must not link.")
+#
+# Read off core-cpp's own targets, not with `if(TARGET Threads::Threads)`: find_package(Threads)
+# inside core-cpp creates a DIRECTORY-SCOPED imported target, which this scope cannot see, so the
+# target test is false here whether or not core-cpp resolved and linked Threads. A link is what
+# would reach this consumer, and a link is what the closure of LINK_LIBRARIES and
+# INTERFACE_LINK_LIBRARIES holds.
+set(coreCppTargetsInTree "")
+consumer_collect_targets("${CORE_CPP_SOURCE_DIR}" coreCppTargetsInTree)
+list(FILTER coreCppTargetsInTree INCLUDE REGEX "^core-cpp-")
+if(NOT coreCppTargetsInTree)
+    message(FATAL_ERROR
+        "consumer-wasm: core-cpp defined no target under '${CORE_CPP_SOURCE_DIR}', so the Threads "
+        "check below would pass by having nothing to look at.")
 endif()
+set(threadedTargets "")
+foreach(target IN LISTS coreCppTargetsInTree)
+    foreach(property IN ITEMS LINK_LIBRARIES INTERFACE_LINK_LIBRARIES)
+        get_target_property(linked ${target} ${property})
+        if(linked MATCHES "Threads::Threads|(^|;)-?pthread")
+            list(APPEND threadedTargets "${target} ${property}='${linked}'")
+        endif()
+    endforeach()
+endforeach()
+if(threadedTargets)
+    list(JOIN threadedTargets "\n  " named)
+    message(FATAL_ERROR
+        "consumer-wasm: core-cpp links threads, which a single-threaded WebAssembly build must "
+        "not:\n  ${named}\n"
+        "-pthread forces SharedArrayBuffer, and with it cross-origin isolation, onto every page "
+        "that loads this program.")
+endif()
+list(LENGTH coreCppTargetsInTree inTreeCount)
+message(STATUS "consumer-wasm: ${inTreeCount} core-cpp target(s), none of them linking threads")
 
 add_executable(consumer-wasm main.cpp)
 target_link_libraries(consumer-wasm PRIVATE consumer-wasm-core)

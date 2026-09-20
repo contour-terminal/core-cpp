@@ -43,6 +43,27 @@ endif()
 # in: core-cpp's headers reach a consumer through its targets, never through the directory.
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}")
 
+# The rest of what the comparison below watches, given a value here so that the comparison is a
+# comparison: a watched value that is empty on both sides can only catch core-cpp SETTING it, never
+# core-cpp changing or clearing what the consumer chose. Each is something a real consumer sets and
+# a subproject could plausibly overwrite, and each is harmless to the build: a definition of this
+# project's own, a library search path that holds no library, and two switches at their own
+# defaults.
+add_compile_definitions(CONSUMER_CPM_OWN_DEFINITION=1)
+if(MSVC)
+    add_link_options("/LIBPATH:${CMAKE_CURRENT_BINARY_DIR}")
+else()
+    add_link_options("-L${CMAKE_CURRENT_BINARY_DIR}")
+endif()
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF)
+
+# A compiler launcher of the consumer's own. core-cpp builds through fastcache-cc when it is the
+# top-level project and through nothing at all when it is not, and this is what says so: `cmake -E
+# env` is a launcher that does nothing but run the compiler, so the value is real without the build
+# depending on a tool being installed.
+set(CMAKE_CXX_COMPILER_LAUNCHER "${CMAKE_COMMAND}" -E env)
+
 # What this project's build consists of, recorded before core-cpp is added and compared after.
 # These are the values a subproject can reach: a cache entry written with FORCE, a global property,
 # a PARENT_SCOPE assignment. A directory property is read with get_directory_property(), a variable
@@ -146,8 +167,16 @@ foreach(target IN LISTS published)
     if(target MATCHES "-test$")
         string(APPEND problems "\n  CORE_CPP_TARGETS names the test binary '${target}'")
     endif()
-    # The no-PUBLIC-flags rule, read off the targets rather than off the CMake sources: a usage
-    # requirement here would reach this project's own compiles through target_link_libraries().
+endforeach()
+
+# The no-PUBLIC-flags rule, read off the targets rather than off the CMake sources: a usage
+# requirement here would reach this project's own compiles through target_link_libraries().
+#
+# Over every target core-cpp defined, not over the published ones: CORE_CPP_TARGETS holds the
+# compiled libraries a parent instruments, and leaves out the INTERFACE libraries -- core::async,
+# core::net_types -- whose every usage requirement is interface-scoped by construction, and which
+# are therefore exactly where an INTERFACE flag would reach a consumer's every compile.
+foreach(target IN LISTS coreCppTargetsInTree)
     foreach(property IN ITEMS INTERFACE_COMPILE_OPTIONS INTERFACE_COMPILE_DEFINITIONS INTERFACE_LINK_OPTIONS)
         get_target_property(value ${target} ${property})
         if(value)
@@ -180,7 +209,10 @@ if(problems)
         "CORE_CPP_TARGETS holds: ${publishedList}")
 endif()
 list(LENGTH published publishedCount)
-message(STATUS "consumer-cpm: core-cpp published ${publishedCount} compiled target(s): ${published}")
+list(LENGTH coreCppTargetsInTree inTreeCount)
+message(STATUS
+    "consumer-cpm: core-cpp defined ${inTreeCount} target(s), inspected for a usage requirement; "
+    "${publishedCount} of them are published as compiled libraries: ${published}")
 
 # --- and it all links and runs --------------------------------------------------
 

@@ -14,8 +14,10 @@
 # the copy must configure, build and verify with no network and no version control, which is the
 # whole reason a packager vendors.
 #
-# It deliberately shares no code with tests/consumer-cpm: each is what one kind of consumer writes,
-# and a helper shared between them would be neither.
+# What it shares with tests/consumer-cpm is ../consumer-shared/ConsumerSmoke.hpp, the loopback echo
+# and the log line that read the same whatever way core-cpp was added; what is here is what only a
+# vendored consumer does. The container mounts that directory next to this one, so the relative
+# include resolves there as it does in a checkout.
 cmake_minimum_required(VERSION 3.25...3.31)
 project(core-cpp-consumer-vendored VERSION 1.0.0 LANGUAGES CXX)
 

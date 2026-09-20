@@ -158,6 +158,7 @@ foreach(_consumerProject IN ITEMS consumer-cpm consumer-vendored consumer-wasm)
     core_cpp_hygiene_allow(global-cmake-variable "tests/${_consumerProject}/CMakeLists.txt" "${_consumerProjectReason}")
 endforeach()
 core_cpp_hygiene_allow(unprefixed-function tests/consumer-cpm/CMakeLists.txt "${_consumerProjectReason}")
+core_cpp_hygiene_allow(unprefixed-function tests/consumer-wasm/CMakeLists.txt "${_consumerProjectReason}")
 core_cpp_hygiene_allow(diagnostic-pragma src/core/testing/SuppressWindowsDialogsAtStartup.cpp
     "#pragma init_seg(lib) raises C4073 by design, to say that it was used; the file exists to run before ordinary static initializers")
 

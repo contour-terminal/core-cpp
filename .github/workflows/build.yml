@@ -723,6 +723,7 @@ jobs:
         run: |
           docker run --rm --network none \
             -v "$GITHUB_WORKSPACE/tests/consumer-vendored:/consumer:ro" \
+            -v "$GITHUB_WORKSPACE/tests/consumer-shared:/consumer-shared:ro" \
             -v "$RUNNER_TEMP/vendor:/vendor:ro" \
             -e CXX=g++-14 \
             core-cpp-vendored-smoke bash -eu -c '
