@@ -11,9 +11,10 @@
 # -pthread, so no SharedArrayBuffer is forced on the page that loads it), with CORE_CPP_WITH_TUI
 # off and CORE_CPP_FETCH_DEPS off, so the configure resolves every dependency without a fetch.
 #
-# Today the subset it links is core::base, core::async and core::net_types: core::net itself is
-# native-only until Tasks B3 to B5 bring its WebAssembly backend, and there are no timers to await
-# yet. Task B5 extends this program to await a coroutine `delay` on a host-driven loop under
+# Today the subset it links is core::base, core::async and core::net_types. core::net has a
+# WebAssembly subset of its own as of Task B3 -- the IoBackend contract and the host-driven backend
+# -- but nothing here awaits anything yet, so there is no consumer-visible behaviour to prove.
+# Task B5 extends this program to await a coroutine `delay` on a host-driven loop under
 # -sASYNCIFY, and links core::net here.
 cmake_minimum_required(VERSION 3.25...3.31)
 project(core-cpp-consumer-wasm VERSION 1.0.0 LANGUAGES CXX)
