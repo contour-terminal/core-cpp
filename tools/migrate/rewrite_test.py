@@ -169,6 +169,37 @@ class ProfilesSelectRows(unittest.TestCase):
         self.assertEqual(result, "sock.Read(buffer);\n")
 
 
+class ARemovedRowCanNeverBeARewriteSource(unittest.TestCase):
+    """A `removed` symbol has no replacement, so rewriting it would produce code that cannot compile.
+
+    The kind exists to document a removal and to catch a re-introduction, never to edit anything
+    (controller ruling R75). "The rewrite tools skip it" is made structural rather than
+    conventional: the loader refuses to hand one out, and building a pattern for one raises.
+    """
+
+    def test_no_profile_is_handed_a_removed_row(self) -> None:
+        table = renames.load(TABLE)
+        self.assertTrue([row for row in table.rows if row.kind == "removed"], "the table has no removed row")
+        for profile in table.profiles:
+            with self.subTest(profile=profile):
+                kinds = {row.kind for row in table.textRows(profile)} | {
+                    row.kind for row in table.semanticRows(profile)
+                }
+                self.assertNotIn("removed", kinds)
+
+    def test_a_removed_symbol_survives_the_codemod_untouched(self) -> None:
+        source = "auto id = core::tui::LanguageId::Endo;\ncore::tui::registerEndoHighlighter(f);\n"
+        for profile in ("contour", "endo", "tuidu", "fastcached"):
+            with self.subTest(profile=profile):
+                result, _ = rewrite.rewriteText(source, rowsFor(profile))
+                self.assertEqual(result, source)
+
+    def test_building_a_pattern_for_a_removed_row_raises(self) -> None:
+        row = renames.Row(kind="removed", source="core::tui::LanguageId::Endo", target="", profiles=("endo",))
+        with self.assertRaises(renames.TableError):
+            rewrite._patternsFor(row)
+
+
 class TheToolReportsAndStaysInsideItsPath(unittest.TestCase):
     def test_it_reports_what_it_changed_per_file(self) -> None:
         with TemporaryDirectory() as directory:

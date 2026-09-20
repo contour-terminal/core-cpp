@@ -19,6 +19,14 @@ A **pending** row -- one whose target a Phase B task still owes -- is checked th
 its symbol must be absent from `src/core/`. So the row cannot rot in either direction; the day the
 task lands `core::net::IoBackend`, this gate fails and says to mark the row delivered.
 
+A **removed** row is that inversion made permanent: its `from` names a symbol core-cpp no longer
+has, and the gate asserts it stays gone, so a re-introduction is refused (Ruling R75).
+
+Every arm reads a qualified symbol through `declaresQualified()`, which walks the namespace prefixes
+instead of testing the whole path as a namespace. That is what lets it see a symbol scoped to an
+**enum or a class** -- `core::net::NetErrorCode::SystemError` -- which a whole-path test would call
+absent forever, and a pending row that can never resolve is worse than no row at all (Ruling R74).
+
 What it cannot check: the source side (fastcached's and contour's symbols are not in this tree),
 a signature, an overload set, or a declaration behind an `#if`. It is a text scan over the headers,
 not a compile.
@@ -54,6 +62,7 @@ class Summary:
     rows: int
     validated: int
     pending: int
+    removed: int
     headers: int
 
 
@@ -100,6 +109,33 @@ def declares(text: str, name: str) -> bool:
         rf"(?<![\w.>:]){escaped}\s*(?:=|,|;|\}})",
     )
     return any(re.search(pattern, body, re.MULTILINE) for pattern in patterns)
+
+
+def declaresQualified(text: str, components: list[str]) -> bool:
+    """Whether the header declares the qualified symbol @p components, e.g. `core::net::EventLoop`.
+
+    The prefix walk is what makes a symbol scoped to an **enum or a class** findable:
+    `core::net::NetErrorCode::SystemError` has no namespace called `core::net::NetErrorCode`, so a
+    test for the whole path as a namespace answers "absent" forever. Every arm of the gate --
+    delivered, pending and removed -- reads a symbol through this one function, so none of them can
+    drift into that hole on its own (controller ruling R74).
+    """
+    if len(components) == 1:
+        return definesMacro(text, components[0])
+    namespaces = openNamespaces(text)
+    return any(
+        "::".join(components[:cut]) in namespaces and all(declares(text, name) for name in components[cut:])
+        for cut in range(len(components) - 1, 0, -1)
+    )
+
+
+def findSymbol(root: Path, symbol: str) -> Path | None:
+    """The header under `src/core/` that declares @p symbol, or None if nothing does."""
+    components = symbol.split("::")
+    for header in sorted((root / "src" / "core").rglob("*.hpp")):
+        if declaresQualified(header.read_text(encoding="utf-8"), components):
+            return header
+    return None
 
 
 def definesMacro(text: str, name: str) -> bool:
@@ -225,26 +261,24 @@ def _checkPending(root: Path, row: renames.Row, where: str) -> list[str]:
     target = row.delivers
     if not target or not target.symbol:
         return []
-    components = target.symbol.split("::")
-    for header in sorted((root / "src" / "core").rglob("*.hpp")):
-        text = header.read_text(encoding="utf-8")
-        if len(components) == 1:
-            landed = definesMacro(text, target.symbol)
-        else:
-            # The same rule the delivered side uses, so that an enumerator or a nested class is
-            # found where a "namespace core::net::NetErrorCode" test would never have matched.
-            namespaces = openNamespaces(text)
-            landed = any(
-                "::".join(components[:cut]) in namespaces and all(declares(text, n) for n in components[cut:])
-                for cut in range(len(components) - 1, 0, -1)
-            )
-        if landed:
-            return [
-                f"{where}: {target.symbol} now exists in "
-                f"{header.relative_to(root).as_posix()}, so mark the row delivered "
-                f"(it waits on task {row.task})"
-            ]
-    return []
+    header = findSymbol(root, target.symbol)
+    if header is None:
+        return []
+    return [
+        f"{where}: {target.symbol} now exists in {header.relative_to(root).as_posix()}, "
+        f"so mark the row delivered (it waits on task {row.task})"
+    ]
+
+
+def _checkRemoved(root: Path, row: renames.Row, where: str) -> list[str]:
+    """The gate run backwards: a symbol core-cpp removed must stay removed (controller ruling R75)."""
+    header = findSymbol(root, row.source)
+    if header is None:
+        return []
+    return [
+        f"{where}: {row.source} is a removed symbol, but {header.relative_to(root).as_posix()} "
+        f"declares it again. Either the removal was reverted, or the row is stale and should go."
+    ]
 
 
 def validate(root: Path, table: Path) -> list[str]:
@@ -257,7 +291,9 @@ def validate(root: Path, table: Path) -> list[str]:
     failures: list[str] = []
     for index, row in enumerate(loaded.rows):
         where = f"rows[{index}]"
-        if row.status == "pending":
+        if row.kind == "removed":
+            failures += _checkRemoved(root, row, where)
+        elif row.status == "pending":
             failures += _checkPending(root, row, where)
         elif row.delivers is not None:
             failures += _checkDelivered(root, row, public, where)
@@ -270,6 +306,7 @@ def summarise(root: Path, table: Path) -> Summary:
         rows=len(loaded.rows),
         validated=len([row for row in loaded.rows if row.status == "delivered" and row.delivers]),
         pending=len([row for row in loaded.rows if row.status == "pending"]),
+        removed=len([row for row in loaded.rows if row.kind == "removed"]),
         headers=len(publicHeaders(root)),
     )
 
@@ -294,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(
         f"check-renames: {summary.rows} rows, {summary.validated} with a delivered core-cpp target, "
-        f"{summary.pending} pending, over {summary.headers} public headers: "
+        f"{summary.pending} pending, {summary.removed} removed, over {summary.headers} public headers: "
         f"{len(failures)} failure(s)"
     )
     return 1 if failures else 0

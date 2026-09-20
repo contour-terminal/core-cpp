@@ -321,6 +321,16 @@ workflow refuses one without a section here.
   `whenAll` and `whenAny` runners, so a coroutine parked underneath a combinator still states what
   an executor may free.
 
+- `renames.json` gains a `removed` kind, which runs the drift gate backwards: the row names a
+  symbol core-cpp deleted, carries no `to` and no `target`, and `check-renames.py` asserts the
+  symbol stays **absent** from the delivered headers, so a re-introduction is refused. It exists
+  because a removal that changes the shape of a call, rather than just its name, must stay a compile
+  error at the consumer's call site instead of becoming a codemod that rewrites it into something
+  that compiles and is wrong — while the row's `note` still carries the migration instruction beside
+  every other rename the same pull request applies. The schema refuses such a row that carries a
+  `to`, a `target` or any `apply` but `none`, so no rewrite tool can be handed one. The first two
+  rows are `core::tui::LanguageId::Endo` and `core::tui::registerEndoHighlighter()`.
+
 ### Breaking
 
 - `core::platform::testing::InMemoryFileSystem` models a file's lifetime the way POSIX does, where

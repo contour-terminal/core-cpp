@@ -5402,6 +5402,22 @@
         "endo"
       ],
       "note": "stays in endo: it is shell-specific. Its namespace is not rewritten, which is why endo::testing has symbol rows rather than a namespace row"
+    },
+    {
+      "kind": "removed",
+      "from": "core::tui::LanguageId::Endo",
+      "profiles": [
+        "endo"
+      ],
+      "note": "core::tui ships no consumer's language (Task B13a, core-cpp#24). endo registers its own through core::tui::SyntaxHighlighterRegistry::registerLanguage({.name=\"endo\", .extensions={\".endo\"}, .fenceTags={\"endo\"}, .highlight=highlightEndoLine}), which returns the LanguageId to use in place of this one. No rewrite row: the call shape changes, so a compile error here is the better signal."
+    },
+    {
+      "kind": "removed",
+      "from": "core::tui::registerEndoHighlighter",
+      "profiles": [
+        "endo"
+      ],
+      "note": "the process-wide registration callback is gone (Task B13a, core-cpp#24). The application owns a core::tui::SyntaxHighlighterRegistry, fills it once at startup and passes it to MarkdownRenderer, StyledText::fromMarkdown, detectLanguageFromPath and highlightLine, each of which takes it as a trailing argument defaulting to nullptr."
     }
   ]
 }

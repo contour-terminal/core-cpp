@@ -65,6 +65,31 @@ What it deliberately does not do, and what is therefore yours:
   `SleepUntil{&reactor, tp}` becoming `loop.sleepUntil(tp)`. Each carries a `note` saying what to
   write instead; `python -c` over the table lists them for your profile.
 
+### What each row's `kind` means, and which tool consumes it
+
+A table whose kinds are discoverable only by reading the checker is a table people misuse, so:
+
+| `kind` | What the row's `from` matches | Applied by |
+|---|---|---|
+| `include` | an `#include` directive, either spelling | `rewrite.py` (always emits the angle form) |
+| `namespace` | a qualified use `from::`, and `using namespace from;` — never a namespace *definition* | `rewrite.py` |
+| `symbol` | one fully qualified name, anchored so a longer one never matches | `rewrite.py` |
+| `member` | `.from(` and `->from(` | `rewrite.py`, or `semantic_rename.py` where `apply` is `semantic` |
+| `macro` | the bare identifier | `rewrite.py` |
+| `removed` | **nothing** — core-cpp no longer has this symbol | **nobody**; see below |
+
+`apply` picks the consumer: `text` (`rewrite.py`), `semantic` (`semantic_rename.py`), `manual` (a
+human, following the row's `note`), `none` (a `removed` row, which no tool may touch).
+
+**A `removed` row runs the gate backwards.** It names a symbol core-cpp deleted, has no `to` and no
+`target`, and `check-renames.py` asserts the symbol is **absent** from the delivered headers — so a
+re-introduction is refused. It exists for two reasons: a removal that changes the *shape* of a call,
+not just its name, must stay a compile error at the call site rather than become a codemod that
+rewrites it into something that compiles and is wrong; and the `note` is where the migration
+instruction lives, beside every other rename the same pull request applies. The schema refuses a
+`removed` row that carries a `to`, a `target`, or any `apply` but `none`, so no rewrite tool is ever
+handed one.
+
 ### The table is checked against the delivered headers
 
 `tools/migrate/check-renames.py` runs in every build as ctest `core-cpp.migrate-renames`

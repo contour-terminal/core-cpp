@@ -19,7 +19,10 @@ Two deliberate boundaries:
   qualified uses and `using namespace` directives are mechanical.
 
 What the tool cannot decide is in the table as an `apply` of `semantic` (semantic_rename.py owns it)
-or `manual` (a human does), and neither is touched here.
+or `manual` (a human does), and neither is touched here. Nor is a row of kind `removed`, which names
+a symbol core-cpp deleted: there is nothing to rename it to, so rewriting it would produce code that
+cannot compile. `renames.py` refuses to hand one to a rewrite tool and `_patternsFor` raises on one,
+so it is structurally impossible rather than a convention somebody remembers.
 """
 
 from __future__ import annotations

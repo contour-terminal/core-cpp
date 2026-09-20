@@ -163,6 +163,140 @@ class APendingRowIsCheckedTheOtherWayRound(unittest.TestCase):
             self.assertIn("mark the row delivered", failures)
 
 
+class APendingRowScopedToAnEnumIsSeenWhenItLands(unittest.TestCase):
+    """The shape that had no case: a symbol scoped to an enum, not to a namespace.
+
+    `core::net::NetErrorCode::SystemError` has no namespace called `core::net::NetErrorCode`, so a
+    pending arm that asked for one would answer "not landed" forever -- a row that can never
+    resolve, which is worse than no row, because it teaches the next reader to ignore the pending
+    list (controller ruling R74). A symbol scoped to a class or a struct has the same shape.
+    """
+
+    PENDING = {
+        "kind": "symbol",
+        "from": "net::NetErrorCode::Other",
+        "to": "core::net::NetErrorCode::SystemError",
+        "profiles": ["contour"],
+        "status": "pending",
+        "task": "B2",
+        "target": {"header": "core/net/NetError.hpp", "symbol": "core::net::NetErrorCode::SystemError"},
+    }
+
+    ENUM_HEADER = (
+        "#pragma once\nnamespace core::net\n{\nenum class NetErrorCode : int\n"
+        "{\n    BadHandle,\n    SystemError,\n};\n}\n"
+    )
+    CLASS_HEADER = (
+        "#pragma once\nnamespace core::net\n{\nclass IListener\n{\n"
+        "  public:\n    int boundPort() const;\n};\n}\n"
+    )
+
+    def test_a_pending_enum_scoped_row_that_has_landed_is_refused(self) -> None:
+        with TemporaryDirectory() as directory:
+            sandbox = ASandbox(directory)
+            landed = sandbox.root / "src" / "core" / "net" / "NetError.hpp"
+            landed.write_text(self.ENUM_HEADER, encoding="utf-8")
+            failures = "\n".join(check.validate(sandbox.root, sandbox.write([self.PENDING])))
+            self.assertIn("core::net::NetErrorCode::SystemError", failures)
+            self.assertIn("mark the row delivered", failures)
+
+    def test_a_pending_enum_scoped_row_that_has_not_landed_is_accepted(self) -> None:
+        with TemporaryDirectory() as directory:
+            sandbox = ASandbox(directory)
+            absent = sandbox.root / "src" / "core" / "net" / "NetError.hpp"
+            absent.write_text(self.ENUM_HEADER.replace("SystemError", "Other"), encoding="utf-8")
+            self.assertEqual(check.validate(sandbox.root, sandbox.write([self.PENDING])), [])
+
+    def test_a_pending_class_scoped_row_that_has_landed_is_refused(self) -> None:
+        row = {
+            "kind": "member",
+            "from": "localPort",
+            "to": "boundPort",
+            "profiles": ["contour"],
+            "status": "pending",
+            "task": "B6",
+            "target": {"header": "core/net/IListener.hpp", "symbol": "core::net::IListener::boundPort"},
+        }
+        with TemporaryDirectory() as directory:
+            sandbox = ASandbox(directory)
+            landed = sandbox.root / "src" / "core" / "net" / "IListener.hpp"
+            landed.write_text(self.CLASS_HEADER, encoding="utf-8")
+            failures = "\n".join(check.validate(sandbox.root, sandbox.write([row])))
+            self.assertIn("core::net::IListener::boundPort", failures)
+
+    def test_the_delivered_arm_reads_the_same_shape(self) -> None:
+        # Both arms must read a qualified symbol the same way, or one of them is a hole.
+        delivered = {
+            "kind": "symbol",
+            "from": "net::NetErrorCode::Other",
+            "to": "core::net::NetErrorCode::SystemError",
+            "profiles": ["contour"],
+            "target": {
+                "header": "core/net/NetError.hpp",
+                "symbol": "core::net::NetErrorCode::SystemError",
+                "public": False,
+            },
+        }
+        with TemporaryDirectory() as directory:
+            sandbox = ASandbox(directory)
+            header = sandbox.root / "src" / "core" / "net" / "NetError.hpp"
+            header.write_text(self.ENUM_HEADER, encoding="utf-8")
+            self.assertEqual(check.validate(sandbox.root, sandbox.write([delivered])), [])
+
+
+class ARemovedRowIsAnInverseGate(unittest.TestCase):
+    """A `removed` row names what core-cpp no longer has, and the gate asserts it stays gone (R75)."""
+
+    REMOVED = {
+        "kind": "removed",
+        "from": "core::tui::LanguageId::Endo",
+        "profiles": ["contour"],  # the sandbox declares one profile; the real row's is endo
+        "note": "an application registers its own language through core::tui::SyntaxHighlighterRegistry",
+    }
+
+    BACK = "#pragma once\nnamespace core::tui\n{\nenum class LanguageId : int\n{\n    PlainText,\n    Endo,\n};\n}\n"
+    GONE = "#pragma once\nnamespace core::tui\n{\nenum class LanguageId : int\n{\n    PlainText,\n    Cpp,\n};\n}\n"
+
+    def test_a_removed_symbol_that_is_absent_is_accepted(self) -> None:
+        with TemporaryDirectory() as directory:
+            sandbox = ASandbox(directory)
+            (sandbox.root / "src" / "core" / "net" / "Highlighter.hpp").write_text(
+                self.GONE, encoding="utf-8"
+            )
+            self.assertEqual(check.validate(sandbox.root, sandbox.write([self.REMOVED])), [])
+
+    def test_a_removed_symbol_that_came_back_is_refused(self) -> None:
+        with TemporaryDirectory() as directory:
+            sandbox = ASandbox(directory)
+            (sandbox.root / "src" / "core" / "net" / "Highlighter.hpp").write_text(
+                self.BACK, encoding="utf-8"
+            )
+            failures = "\n".join(check.validate(sandbox.root, sandbox.write([self.REMOVED])))
+            self.assertIn("core::tui::LanguageId::Endo", failures)
+            self.assertIn("removed", failures)
+
+    def test_a_removed_free_function_that_came_back_is_refused(self) -> None:
+        row = self.REMOVED | {"from": "core::tui::registerEndoHighlighter"}
+        with TemporaryDirectory() as directory:
+            sandbox = ASandbox(directory)
+            (sandbox.root / "src" / "core" / "net" / "Highlighter.hpp").write_text(
+                "#pragma once\nnamespace core::tui\n{\nvoid registerEndoHighlighter(Fn f);\n}\n",
+                encoding="utf-8",
+            )
+            failures = "\n".join(check.validate(sandbox.root, sandbox.write([row])))
+            self.assertIn("registerEndoHighlighter", failures)
+
+    def test_the_real_table_carries_the_symbols_B13a_removed(self) -> None:
+        removed = {row.source for row in renames.load(TABLE).rows if row.kind == "removed"}
+        self.assertIn("core::tui::LanguageId::Endo", removed)
+        self.assertIn("core::tui::registerEndoHighlighter", removed)
+
+    def test_every_removed_row_says_what_to_do_instead(self) -> None:
+        for row in renames.load(TABLE).rows:
+            if row.kind == "removed":
+                self.assertTrue(row.note, f"{row.source} is removed with no note saying what replaces it")
+
+
 class TheSchemaIsChecked(unittest.TestCase):
     def loadOne(self, row: dict) -> None:
         with TemporaryDirectory() as directory:
@@ -202,6 +336,34 @@ class TheSchemaIsChecked(unittest.TestCase):
             )
             with self.assertRaisesRegex(renames.TableError, "twice"):
                 renames.load(path)
+
+    def test_a_removed_row_that_claims_to_be_rewritten_is_refused(self) -> None:
+        with self.assertRaisesRegex(renames.TableError, "never rewritten"):
+            self.loadOne(
+                {
+                    "kind": "removed",
+                    "from": "core::tui::LanguageId::Endo",
+                    "profiles": ["contour"],
+                    "note": "gone",
+                    "apply": "text",
+                }
+            )
+
+    def test_a_removed_row_that_names_a_target_is_refused(self) -> None:
+        with self.assertRaisesRegex(renames.TableError, "names no 'target'"):
+            self.loadOne(
+                {
+                    "kind": "removed",
+                    "from": "core::tui::LanguageId::Endo",
+                    "profiles": ["contour"],
+                    "note": "gone",
+                    "target": {"header": "core/tui/GenericSyntaxHighlighter.hpp"},
+                }
+            )
+
+    def test_a_removed_row_without_a_note_is_refused(self) -> None:
+        with self.assertRaisesRegex(renames.TableError, "note"):
+            self.loadOne({"kind": "removed", "from": "core::tui::LanguageId::Endo", "profiles": ["contour"]})
 
     def test_the_real_table_loads(self) -> None:
         table = renames.load(TABLE)

@@ -10,11 +10,19 @@ profiles it applies to, and how it is applied:
 
 | field | meaning |
 |---|---|
-| `kind` | `include`, `namespace`, `symbol`, `member` or `macro`: what shape the source has |
-| `apply` | `text` (rewrite.py), `semantic` (semantic_rename.py) or `manual` (a human) |
+| `kind` | `include`, `namespace`, `symbol`, `member`, `macro`, or `removed` |
+| `apply` | `text` (rewrite.py), `semantic` (semantic_rename.py), `manual` (a human), `none` |
 | `status` | `delivered` (the target exists in this tree) or `pending` (a Phase B task owes it) |
 | `scope` | for a semantic row, the qualified name of the class whose member is renamed |
 | `target` | the core-cpp header and symbol the drift gate (check-renames.py) checks |
+
+`removed` is the one kind that runs the gate backwards. Its `from` names a symbol core-cpp **no
+longer has**, and check-renames.py asserts the symbol is *absent* from the delivered headers, so a
+re-introduction is refused. It has no `to` and no `target`, because there is nothing to rename to;
+it carries a `note` saying what a consumer writes instead, and its `apply` can only be `none`, so no
+rewrite tool is ever handed one. A removal that changes the shape of a call -- not just its name --
+is a compile error at the call site, which is a better signal than a codemod that rewrites it into
+something that compiles and is wrong.
 """
 
 from __future__ import annotations
@@ -25,9 +33,10 @@ from pathlib import Path
 
 # In the order rewrite.py applies them, which is not arbitrary: a symbol row carries the source's
 # full qualification (`crispy::cli::command`), so every namespace row has to run after it or the
-# prefix swap would leave the symbol rows nothing to match.
-KINDS = ("include", "symbol", "member", "macro", "namespace")
-APPLICATIONS = ("text", "semantic", "manual")
+# prefix swap would leave the symbol rows nothing to match. `removed` is last because it is never
+# applied at all.
+KINDS = ("include", "symbol", "member", "macro", "namespace", "removed")
+APPLICATIONS = ("text", "semantic", "manual", "none")
 STATUSES = ("delivered", "pending")
 
 
@@ -59,8 +68,12 @@ class Row:
 
     @property
     def label(self) -> str:
-        """How the row reads in a report: `namespace net -> core::net`."""
-        return f"{self.kind} {self.source} -> {self.target}"
+        """How the row reads in a report: `namespace net -> core::net`, or `removed <symbol>`."""
+        return (
+            f"removed {self.source}"
+            if self.kind == "removed"
+            else f"{self.kind} {self.source} -> {self.target}"
+        )
 
     def appliesTo(self, profile: str) -> bool:
         return profile in self.profiles
@@ -118,9 +131,14 @@ def _row(raw: object, index: int, profiles: dict[str, str]) -> Row:
     if kind not in KINDS:
         raise TableError(f"{where}: kind '{kind}' is not one of {', '.join(KINDS)}")
     source, target = raw.get("from"), raw.get("to")
-    for name, value in (("from", source), ("to", target)):
+    required = ("from",) if kind == "removed" else ("from", "to")
+    for name in required:
+        value = raw.get(name)
         if not isinstance(value, str) or not value:
             raise TableError(f"{where}: '{name}' must be a non-empty string")
+    if kind == "removed" and target:
+        raise TableError(f"{where}: a removed row has no 'to': core-cpp has no such symbol to rename to")
+    target = target or ""
 
     rowProfiles = raw.get("profiles")
     if not isinstance(rowProfiles, list) or not rowProfiles:
@@ -130,12 +148,23 @@ def _row(raw: object, index: int, profiles: dict[str, str]) -> Row:
             declared = ", ".join(sorted(profiles))
             raise TableError(f"{where}: unknown profile '{name}'; the table declares {declared}")
 
-    apply = raw.get("apply", "text")
+    apply = raw.get("apply", "none" if kind == "removed" else "text")
     if apply not in APPLICATIONS:
         raise TableError(f"{where}: apply '{apply}' is not one of {', '.join(APPLICATIONS)}")
+    # A removed symbol has no replacement, so rewriting it would produce code that cannot compile.
+    # The kind documents a removal and catches a re-introduction; it never edits anything (R75).
+    if kind == "removed" and apply != "none":
+        raise TableError(f"{where}: a removed row is never rewritten, so its 'apply' can only be 'none'")
+    if kind != "removed" and apply == "none":
+        raise TableError(f"{where}: 'apply' of 'none' belongs to a removed row; this one is a {kind}")
+
     status = raw.get("status", "delivered")
     if status not in STATUSES:
         raise TableError(f"{where}: status '{status}' is not one of {', '.join(STATUSES)}")
+    if kind == "removed" and status != "delivered":
+        raise TableError(
+            f"{where}: a removed row is not pending: the symbol is gone now, or the row is wrong"
+        )
 
     task = raw.get("task")
     if status == "pending" and not task:
@@ -150,6 +179,15 @@ def _row(raw: object, index: int, profiles: dict[str, str]) -> Row:
     note = raw.get("note")
     if apply == "manual" and not note:
         raise TableError(f"{where}: a manual row says in 'note' what a human has to do")
+    if kind == "removed" and not note:
+        raise TableError(f"{where}: a removed row says in 'note' what a consumer writes instead")
+
+    delivers = _target(raw.get("target"), where)
+    if kind == "removed" and delivers is not None:
+        raise TableError(
+            f"{where}: a removed row names no 'target'; the gate asserts the symbol is ABSENT, "
+            f"which is the opposite of what a target means"
+        )
 
     return Row(
         kind=kind,
@@ -160,7 +198,7 @@ def _row(raw: object, index: int, profiles: dict[str, str]) -> Row:
         status=status,
         task=task,
         scope=scope,
-        delivers=_target(raw.get("target"), where),
+        delivers=delivers,
         note=note,
     )
 
