@@ -369,17 +369,26 @@ Task<void> echoOnceDraining(core::net::IListener* listener, bool* served)
 }
 
 /// The client flow for a unix socket: connect to @p path, send a request, read the echo back.
-Task<void> unixProbe(EventLoop* loop, std::string path, bool* matched)
+///
+/// Closes @p listener when it gives up, because its whenAll sibling is parked in accept() and
+/// whenAll cancels nobody: an arm that returns early without a stop turns a red into a hang.
+Task<void> unixProbe(EventLoop* loop, core::net::IListener* listener, std::string path, bool* matched)
 {
     auto connected = co_await core::net::connectUnix(loop, path);
     if (!connected.has_value())
+    {
+        listener->close();
         co_return;
+    }
     auto sock = std::move(*connected);
 
     auto wroteOk = false;
     co_await writeAll(sock.get(), "probe", &wroteOk);
     if (!wroteOk)
+    {
+        listener->close();
         co_return;
+    }
     co_await expectRead(sock.get(), "probe", matched);
 }
 
@@ -409,17 +418,28 @@ Task<void> unixProbe(EventLoop* loop, std::string path, bool* matched)
 Task<void> unixEcho(
     EventLoop* loop, core::net::IListener* listener, std::string path, bool* served, bool* matched)
 {
-    auto client = [](EventLoop* innerLoop, std::string target, bool* ok) -> Task<void> {
+    // No REQUIRE inside a whenAll arm: whenAll deliberately does not cancel its siblings when
+    // one throws, and the sibling here is parked in accept() with nobody left to close the
+    // listener — so a failed assertion HUNG the suite instead of failing it
+    // (`.agent/rules/testing.md`: a REQUIRE above a stop turns a red into a hang). The arm
+    // records what it saw and releases its sibling; the case asserts once whenAll has returned.
+    auto client =
+        [](EventLoop* innerLoop, core::net::IListener* acceptor, std::string target, bool* ok) -> Task<void> {
         auto socket = co_await core::net::connectUnix(innerLoop, target);
-        REQUIRE(socket.has_value());
+        if (!socket.has_value())
+        {
+            acceptor->close(); // nothing will ever arrive: release the accept parked behind us
+            co_return;
+        }
         auto const request = std::string_view { "unix-ping" };
         std::ignore = co_await (*socket)->write(std::as_bytes(std::span { request }));
         auto buffer = std::array<std::byte, 32> {};
         auto const n = co_await (*socket)->read(buffer);
-        REQUIRE(n.has_value());
+        if (!n.has_value())
+            co_return; // the server arm already accepted and finishes on its own
         *ok = std::string_view { reinterpret_cast<char const*>(buffer.data()), *n } == "unix-ping";
     };
-    co_await core::async::whenAll(echoServer(listener, served), client(loop, path, matched));
+    co_await core::async::whenAll(echoServer(listener, served), client(loop, listener, path, matched));
 }
 
 } // namespace
@@ -539,7 +559,8 @@ TEST_CASE("a live server on the path is not hijacked", "[net][afunix]")
             auto matched = false;
             auto run = [](core::net::IListener* listener, EventLoop* lp, std::string p, bool* s, bool* m)
                 -> Task<void> {
-                co_await core::async::whenAll(echoOnceDraining(listener, s), unixProbe(lp, std::move(p), m));
+                co_await core::async::whenAll(echoOnceDraining(listener, s),
+                                              unixProbe(lp, listener, std::move(p), m));
             };
             loop.blockOn(run(first->get(), &loop, path, &served, &matched));
 
@@ -602,16 +623,25 @@ Task<void> duplexBulk(EventLoop* loop,
         auto conn = std::move(*accepted);
         co_await core::async::whenAll(writeBulk(conn.get(), bytes, sent), readBulk(conn.get(), bytes, got));
     };
-    auto client = [](EventLoop* innerLoop, uint16_t port, std::size_t bytes, std::size_t* got, bool* sent)
-        -> Task<void> {
-        auto connected = co_await core::net::connect(innerLoop, "127.0.0.1", port);
+    // The client closes the listener when it cannot connect, for the same reason unixProbe
+    // does: its sibling is parked in accept() and whenAll cancels nobody, so an arm that
+    // simply returns leaves the case hanging rather than failing.
+    auto client = [](EventLoop* innerLoop,
+                     core::net::IListener* acceptor,
+                     std::size_t bytes,
+                     std::size_t* got,
+                     bool* sent) -> Task<void> {
+        auto connected = co_await core::net::connect(innerLoop, "127.0.0.1", acceptor->localPort());
         if (!connected)
+        {
+            acceptor->close();
             co_return;
+        }
         auto sock = std::move(*connected);
         co_await core::async::whenAll(writeBulk(sock.get(), bytes, sent), readBulk(sock.get(), bytes, got));
     };
     co_await core::async::whenAll(server(listener, payload, serverGot, serverSent),
-                                  client(loop, listener->localPort(), payload, clientGot, clientSent));
+                                  client(loop, listener, payload, clientGot, clientSent));
 }
 
 } // namespace

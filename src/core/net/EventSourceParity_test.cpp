@@ -21,6 +21,7 @@
 #include <core/net/EventSource.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/Sockets.hpp>
+#include <core/net/detail/ScopeGuard.hpp>
 #include <core/net/testing/EventSourceBackends.hpp>
 #include <core/net/testing/InMemoryTransport.hpp>
 #include <core/platform/SystemPipe.hpp>
@@ -1068,23 +1069,35 @@ TEST_CASE("a duplicate registration refuses cleanly when descriptors run out", "
             // Lower the soft descriptor limit to what is already open so that dup()
             // must fail, and require a refusal rather than a token for a registration
             // the kernel never accepted — parking on one of those is unresumable.
-            // The soft limit is restored below, so this stays scoped to this case
-            // rather than starving the rest of the suite.
             auto limit = rlimit {};
             REQUIRE(::getrlimit(RLIMIT_NOFILE, &limit) == 0);
             auto const originalSoft = limit.rlim_cur;
 
-            auto const probe = ::dup(0); // the lowest descriptor still free
-            REQUIRE(probe >= 0);
-            auto squeezed = limit;
-            squeezed.rlim_cur = static_cast<rlim_t>(probe); // no descriptor >= probe may be opened
-            REQUIRE(::setrlimit(RLIMIT_NOFILE, &squeezed) == 0);
-            ::close(probe);
+            auto underPressure = core::net::FdToken {};
+            {
+                auto const probe = ::dup(0); // the lowest descriptor still free
+                REQUIRE(probe >= 0);
+                auto squeezed = limit;
+                squeezed.rlim_cur = static_cast<rlim_t>(probe); // no descriptor >= probe may be opened
+                REQUIRE(::setrlimit(RLIMIT_NOFILE, &squeezed) == 0);
+                ::close(probe);
 
-            auto const underPressure = source->attach((*pipe)->waitHandle(), FdInterest::Read);
+                // The soft limit is PROCESS-wide, so it has to come back on EVERY exit from this
+                // scope, not only the one that falls through: the attach() below allocates, and a
+                // throw (a failed Catch assertion is one) used to skip a plain restore statement
+                // and leave every later case in this binary running squeezed — a cascade of
+                // failures whose cause appears nowhere in their own output.
+                auto const restoreLimit = core::net::detail::ScopeGuard { [originalSoft]() noexcept {
+                    auto restored = rlimit {};
+                    if (::getrlimit(RLIMIT_NOFILE, &restored) != 0)
+                        return;
+                    restored.rlim_cur = originalSoft;
+                    static_cast<void>(::setrlimit(RLIMIT_NOFILE, &restored));
+                } };
 
-            limit.rlim_cur = originalSoft;
-            REQUIRE(::setrlimit(RLIMIT_NOFILE, &limit) == 0);
+                underPressure = source->attach((*pipe)->waitHandle(), FdInterest::Read);
+            }
+            // Descriptors are available again from here: the guard above restored the limit.
 
             // What must hold on EVERY backend is that the answer is honest: either
             // the registration was refused, or it was genuinely armed. What must

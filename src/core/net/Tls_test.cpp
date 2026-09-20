@@ -57,7 +57,9 @@ TEST_CASE("TLS handshakes and echoes application data over the reactor", "[net][
 {
     auto source = core::net::PollEventSource {};
     auto loop = core::net::EventLoop { source };
-    auto pair = *core::net::testing::makeSocketPair(loop);
+    auto made = core::net::testing::makeSocketPair(loop);
+    REQUIRE(made.has_value()); // a loopback failure is a test failure, not UB
+    auto pair = std::move(*made);
 
     // Server presents a freshly generated self-signed cert; the client trusts on
     // first use (VERIFY_NONE) — the daemon's zero-config TOFU posture.
@@ -85,7 +87,9 @@ TEST_CASE("a generated dev certificate drives a verified TLS handshake", "[net][
 {
     auto source = core::net::PollEventSource {};
     auto loop = core::net::EventLoop { source };
-    auto pair = *core::net::testing::makeSocketPair(loop);
+    auto made = core::net::testing::makeSocketPair(loop);
+    REQUIRE(made.has_value()); // a loopback failure is a test failure, not UB
+    auto pair = std::move(*made);
 
     // Generate a self-signed dev certificate (library-only — no `openssl` CLI, so
     // identical on Windows and every UNIX), build the SERVER context from its PEM
@@ -127,7 +131,9 @@ TEST_CASE("a pinned CA is not enough: the certificate must name the host asked f
     {
         auto source = core::net::PollEventSource {};
         auto loop = core::net::EventLoop { source };
-        auto pair = *core::net::testing::makeSocketPair(loop);
+        auto made = core::net::testing::makeSocketPair(loop);
+        REQUIRE(made.has_value()); // a loopback failure is a test failure, not UB
+        auto pair = std::move(*made);
 
         auto serverCtx = core::net::makeTlsServerContext(material->certPem, material->keyPem);
         auto clientCtx = core::net::makeTlsClientContext(material->certPem, "the-real-daemon");
@@ -148,7 +154,9 @@ TEST_CASE("a pinned CA is not enough: the certificate must name the host asked f
     {
         auto source = core::net::PollEventSource {};
         auto loop = core::net::EventLoop { source };
-        auto pair = *core::net::testing::makeSocketPair(loop);
+        auto made = core::net::testing::makeSocketPair(loop);
+        REQUIRE(made.has_value()); // a loopback failure is a test failure, not UB
+        auto pair = std::move(*made);
 
         auto serverCtx = core::net::makeTlsServerContext(material->certPem, material->keyPem);
         // Same certificate pinned as the trust anchor — only the expected NAME differs.

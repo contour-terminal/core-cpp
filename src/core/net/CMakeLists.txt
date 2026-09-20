@@ -62,6 +62,7 @@ core_cpp_add_module(net KIND STATIC
         HttpServer.cpp
         WriteQueue.cpp
         detail/PeerAddress.hpp
+        detail/ScopeGuard.hpp
         detail/WaitChunking.hpp
     SOURCES_POSIX
         detail/WouldBlock.hpp
@@ -98,11 +99,12 @@ core_cpp_add_module(net KIND STATIC
     PUBLIC_LIBS core::net_types core::async core::platform Threads::Threads
     PRIVATE_LIBS ${_coreCppNetPrivateLibs})
 
+# detail/ScopeGuard.hpp is listed with core::net, not here: net's own tests use it too, and a
+# header belongs with the target every user of it links.
 core_cpp_add_module(net_tls KIND STATIC
     HEADERS Tls.hpp
     SOURCES
         Tls.cpp
-        detail/ScopeGuard.hpp
     PUBLIC_LIBS core::net
     PRIVATE_LIBS OpenSSL::SSL OpenSSL::Crypto)
 
