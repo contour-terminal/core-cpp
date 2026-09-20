@@ -96,6 +96,9 @@ struct StreamOutcome
 }
 
 /// What one backend's read stream does for unget() and putback().
+///
+/// Deliberately not equality-comparable as a whole: only some of these fields are answers the
+/// standard pins down, and the rest must not be compared between backends. See the case below.
 struct PutbackOutcome
 {
     bool ungetGood = false;
@@ -105,13 +108,13 @@ struct PutbackOutcome
     bool putbackOtherGood = false;
     std::string afterPutbackOther;
     std::string fileAfter;
-
-    bool operator==(PutbackOutcome const&) const = default;
 };
 
-/// Runs one unget/putback script over @p fs, so the model and the real filesystem can be held to
-/// the same answers. Which of the two is right is not a matter of opinion here: std::ifstream and
-/// std::fstream decide it, and the model has to follow.
+/// Runs one unget/putback script over @p fs.
+///
+/// The model and the real filesystem are held to the same answers only where the standard gives
+/// one; where it leaves the behaviour open, the standard libraries differ and the case says so
+/// rather than picking a winner.
 [[nodiscard]] PutbackOutcome runPutbackScript(FileSystem const& fs, std::filesystem::path const& path)
 {
     auto outcome = PutbackOutcome {};
@@ -869,15 +872,14 @@ TEST_CASE("unget and putback answer alike in the model and on the real filesyste
     auto const fromModel = runPutbackScript(model, "/root/file.txt");
     auto const fromNative = runPutbackScript(core::platform::NativeFileSystem::instance(), dir / "file.txt");
 
-    // What the real streams do, stated rather than merely compared -- otherwise two backends
-    // wrong in the same way would agree and pass.
+    // Putting back the character that was just read is satisfied out of the get area, so every
+    // standard library answers alike. Stated outright as well as compared, since two backends
+    // wrong in the same way would otherwise agree and pass.
     CHECK(fromNative.ungetGood);
     CHECK(fromNative.afterUnget == "a");
     CHECK(fromNative.putbackSameGood);
     CHECK(fromNative.afterPutbackSame == "a");
-    CHECK(fromNative.putbackOtherGood);
-    CHECK(fromNative.afterPutbackOther == "X");
-    // A put-back of a character the file does not hold does not write it to the file.
+    // Neither kind of put-back writes to the file.
     CHECK(fromNative.fileAfter == "abcdef");
 
     // Field by field, so a regression names which answer moved rather than only that one did.
@@ -885,8 +887,18 @@ TEST_CASE("unget and putback answer alike in the model and on the real filesyste
     CHECK(fromModel.afterUnget == fromNative.afterUnget);
     CHECK(fromModel.putbackSameGood == fromNative.putbackSameGood);
     CHECK(fromModel.afterPutbackSame == fromNative.afterPutbackSame);
-    CHECK(fromModel.putbackOtherGood == fromNative.putbackOtherGood);
-    CHECK(fromModel.afterPutbackOther == fromNative.afterPutbackOther);
     CHECK(fromModel.fileAfter == fromNative.fileAfter);
-    CHECK(fromModel == fromNative);
+
+    // Putting back a character the file does *not* hold is expressly permitted to fail
+    // ([streambuf.virt.pback]): only one put-back is guaranteed at all, and a different character
+    // need not be accepted. libstdc++ and MSVC accept it; libc++ refuses, so macOS and FreeBSD
+    // answer differently from Linux and Windows. There is therefore nothing here to compare the
+    // model against, and asserting the native answer would only encode whichever library ran.
+    //
+    // The model stays permissive: it is a memory buffer with an exact position, so it can always
+    // satisfy the put-back, and a fake that is more capable than the weakest implementation costs
+    // a test nothing. That is its own behaviour, stated, and it is in core-cpp#27's divergence
+    // list rather than pretended away.
+    CHECK(fromModel.putbackOtherGood);
+    CHECK(fromModel.afterPutbackOther == "X");
 }
