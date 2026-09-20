@@ -87,14 +87,16 @@ workflow refuses one without a section here.
   carries the `StopToken` it inherits from the awaiting coroutine; `detail::UniqueCoroHandle`;
   `OperationCancelled` and `thisCoroStopToken()` (`Cancellation.hpp`); the `Awaiter` and
   `HasStopToken` concepts (`Awaitable.hpp`); `whenAll()`, which joins `Task<void>`s and rethrows the
-  first failure once all have finished; and `whenAny()`, which resolves to the first to finish and
-  cancels the others. Their tests also run over the `StopToken` fallback. A `Task`'s symmetric
+  first failure once all have finished; and `whenAny()`, which resolves to a
+  `std::optional<std::size_t>`, the index of the first to complete, and cancels the others. Their
+  tests also run over the `StopToken` fallback, and `core-cpp.async-link-smoke` links `core::async`
+  alone over it, which is the link a consumer makes. A `Task`'s symmetric
   transfer is a tail call with Clang and MSVC at every optimisation level, with GCC only when it
   optimises sibling calls, and not in WebAssembly without `-mtail-call`. So awaits that complete
   synchronously grow the stack: at GCC `-O0` both a nested chain and a *loop* of 100000 of them
   overflow an 8 MiB stack, at GCC `-Og`/`-O1` the nested chain does, and under emsdk 3.1.56 the
   nested chain exceeds node's call stack. The deep-chain test is skipped under Emscripten without
-  `-mtail-call` and for GCC without `__OPTIMIZE__`
+  `-mtail-call`, and on GCC unless the build's optimisation level is `-O2` or better
   ([core-cpp#15](https://github.com/contour-terminal/core-cpp/issues/15)).
 - `core::testing`: `ScopedTempDir`, `ScopedWorkingDirectory` and `EnvHelper` (`setTestEnv()`,
   `unsetTestEnv()`, `ScopedEnv`).
