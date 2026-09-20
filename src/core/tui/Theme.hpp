@@ -184,11 +184,11 @@ class ThemeManager
 
 /// @brief Maps a category index to its color from the syntax palette.
 ///
-/// This is the single source of truth for the category-to-color mapping, shared by
-/// both the generic syntax highlighter (core::tui::HighlightCategory) and the Endo-specific
-/// highlighter (endo::TokenCategory).
+/// This is the single source of truth for the category-to-color mapping, shared by the generic
+/// syntax highlighter (core::tui::HighlightCategory) and by a host application's own highlighter,
+/// whose category ordinals line up with HighlightCategory's.
 ///
-/// @param index Category ordinal (matching HighlightCategory / TokenCategory values).
+/// @param index Category ordinal (matching HighlightCategory's values).
 /// @param palette The syntax color palette.
 /// @return The color for the category, or defaultText for unknown indices.
 [[nodiscard]] constexpr RgbColor categoryColorFromIndex(int index,

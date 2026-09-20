@@ -269,9 +269,9 @@ others in notes.
 | `src/core/tui/FuzzyPickerPopup.cpp` | contour-terminal/endo | `src/tui/FuzzyPickerPopup.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/FuzzyPickerPopup.hpp` | contour-terminal/endo | `src/tui/FuzzyPickerPopup.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/FuzzyPickerPopup_test.cpp` | contour-terminal/endo | `src/tui/FuzzyPickerPopup_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/GenericSyntaxHighlighter.cpp` | contour-terminal/endo | `src/tui/GenericSyntaxHighlighter.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | A7 fix round 1: `toLowerInto()` takes a `std::span<char>` and bounds the copy itself; endo's took a bare `char*` and three of its seven call sites overran a 64-byte stack buffer |
+| `src/core/tui/GenericSyntaxHighlighter.cpp` | contour-terminal/endo | `src/tui/GenericSyntaxHighlighter.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | A7 fix round 1: `toLowerInto()` takes a `std::span<char>` and bounds the copy itself; endo's took a bare `char*` and three of its seven call sites overran a 64-byte stack buffer. A7 fix round 1b: the well-known-filename table has no `.endo-format` row |
 | `src/core/tui/GenericSyntaxHighlighter.hpp` | contour-terminal/endo | `src/tui/GenericSyntaxHighlighter.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/GenericSyntaxHighlighter_test.cpp` | contour-terminal/endo | `src/tui/GenericSyntaxHighlighter_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | A7 fix round 1 adds the oversized-assembly-token case |
+| `src/core/tui/GenericSyntaxHighlighter_test.cpp` | contour-terminal/endo | `src/tui/GenericSyntaxHighlighter_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | A7 fix round 1 adds the oversized-assembly-token case. A7 fix round 1b asserts `.endo-format` is `LanguageId::None` |
 | `src/core/tui/GhostTextHelper.hpp` | contour-terminal/endo | `src/tui/GhostTextHelper.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/HoverState.cpp` | contour-terminal/endo | `src/tui/HoverState.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/HoverState.hpp` | contour-terminal/endo | `src/tui/HoverState.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
@@ -350,8 +350,8 @@ others in notes.
 | `src/core/tui/Text.cpp` | contour-terminal/endo | `src/tui/Text.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Text.hpp` | contour-terminal/endo | `src/tui/Text.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/TextDecorator.hpp` | contour-terminal/endo | `src/tui/TextDecorator.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/Theme.cpp` | contour-terminal/endo | `src/tui/Theme.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/Theme.hpp` | contour-terminal/endo | `src/tui/Theme.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/Theme.cpp` | contour-terminal/endo | `src/tui/Theme.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | A7 fix round 1b: the path-gradient colours are described as blue and teal, not as one application's signature |
+| `src/core/tui/Theme.hpp` | contour-terminal/endo | `src/tui/Theme.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | A7 fix round 1b: `categoryColorFromIndex()`'s Doxygen names a host's own highlighter rather than `endo::TokenCategory` |
 | `src/core/tui/TimerUtils.hpp` | contour-terminal/endo | `src/tui/TimerUtils.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Tooltip.cpp` | contour-terminal/endo | `src/tui/Tooltip.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Tooltip.hpp` | contour-terminal/endo | `src/tui/Tooltip.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
@@ -368,7 +368,7 @@ others in notes.
 | `src/core/tui/completer/Completer.hpp` | contour-terminal/endo | `src/tui/completer/Completer.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/completer/CompletionItem.hpp` | contour-terminal/endo | `src/tui/completer/CompletionItem.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/completer/CompletionProvider.hpp` | contour-terminal/endo | `src/tui/completer/CompletionProvider.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/completer/FuzzyMatch.cpp` | contour-terminal/endo | `src/tui/completer/FuzzyMatch.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/completer/FuzzyMatch.cpp` | contour-terminal/endo | `src/tui/completer/FuzzyMatch.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | A7 fix round 1b: the substring-first comment's worked example is a generic file name |
 | `src/core/tui/completer/FuzzyMatch.hpp` | contour-terminal/endo | `src/tui/completer/FuzzyMatch.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/completer/SmartCaseMatch.cpp` | contour-terminal/endo | `src/tui/completer/SmartCaseMatch.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/completer/SmartCaseMatch.hpp` | contour-terminal/endo | `src/tui/completer/SmartCaseMatch.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |

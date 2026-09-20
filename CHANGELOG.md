@@ -170,6 +170,15 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- `core::tui` carries no consumer's name in the code it runs. Beyond the OSC 8 hyperlink id
+  below, `detectLanguageFromPath()`'s well-known-filename table no longer has a row for endo's
+  `.endo-format`, so that name now answers `LanguageId::None`; the table keeps only names that
+  are well known beyond one project, and a consumer that wants its own configuration file
+  highlighted passes the language to `highlightLine()` itself. The default theme's path-gradient
+  colours and the fuzzy matcher's worked example no longer describe themselves in terms of one
+  application either. (`LanguageId::Endo`, `registerEndoHighlighter()` and the `.endo` and `endo`
+  token rows are the same finding and are unchanged: renaming them is public API and giving a
+  host a seam for its own tokens is a design decision, both pending a ruling.)
 - `core::tui`'s assembly highlighter no longer overruns a stack buffer. Its three scanners
   lowercased an identifier, a `%register` or a `.directive` into a 64-character array through a
   helper that took a bare `char*` and wrote `src.size()` bytes; the four other call sites bounded

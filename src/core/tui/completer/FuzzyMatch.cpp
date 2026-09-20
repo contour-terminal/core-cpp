@@ -173,9 +173,9 @@ FuzzyMatchResult FuzzyMatch::match(std::string_view text,
     //
     // The greedy matcher below binds each pattern grapheme to its first available
     // occurrence, which scatters the match when an earlier occurrence of the
-    // leading grapheme exists — e.g. matching "endo.exe" against
-    // "./build/clangcl-debug/src/shell/endo.exe" would bind the leading 'e' to
-    // "...clangcl-debug..." and highlight a stray 'e' plus "ndo.exe". When the
+    // leading grapheme exists — e.g. matching "editor.exe" against
+    // "./build/clangcl-debug/src/shell/editor.exe" would bind the leading 'e' to
+    // "...clangcl-debug..." and highlight a stray 'e' plus "ditor.exe". When the
     // pattern occurs verbatim we instead report that contiguous block: it
     // highlights the run the user actually typed and ranks ahead of a scattered
     // match (single run, word-start aware). All fuzzy consumers — history search,

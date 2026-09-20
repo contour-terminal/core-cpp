@@ -152,12 +152,14 @@ TEST_CASE("GenericSyntaxHighlighter.detectLanguageFromPath", "[tui][highlight]")
     // Well-known config file names are detected by name (not extension).
     CHECK(detectLanguageFromPath(".clang-format") == LanguageId::Yaml);
     CHECK(detectLanguageFromPath(".clang-tidy") == LanguageId::Yaml);
-    CHECK(detectLanguageFromPath(".endo-format") == LanguageId::Yaml);
     CHECK(detectLanguageFromPath(".editorconfig") == LanguageId::Ini);
+    // A consumer's own dotfile is not in the table: `.endo-format` was, and a consumer that
+    // wants its configuration file highlighted names the language itself.
+    CHECK(detectLanguageFromPath(".endo-format") == LanguageId::None);
     // Filename detection works with leading directories too.
     CHECK(detectLanguageFromPath("/home/user/project/.clang-format") == LanguageId::Yaml);
     CHECK(detectLanguageFromPath(R"(C:\proj\.editorconfig)") == LanguageId::Ini);
-    // .endo-format must not be mistaken for the .endo extension.
+    // A dotted name is matched whole, not read as the extension that follows its first dot.
     CHECK(detectLanguageFromPath("main.endo") == LanguageId::Endo);
     // New extensions resolve through the path entry point as well.
     CHECK(detectLanguageFromPath("Build.props") == LanguageId::Xml);

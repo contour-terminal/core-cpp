@@ -126,10 +126,12 @@ auto darkTheme() -> Theme
         .spinnerColor = 0xAA55FF_rgb,
         .errorText = 0xFF5555_rgb,
         .statusText = 0x888888_rgb,
-        .planModeText = 0x4ADE80_rgb,      // Spring green
-        .executeModeText = 0xEF4444_rgb,   // Strong red
-        .pathGradientStart = 0x5078FF_rgb, // Blue (endo-signature)
-        .pathGradientEnd = 0x00DCC8_rgb,   // Teal (endo-signature)
+        .planModeText = 0x4ADE80_rgb,    // Spring green
+        .executeModeText = 0xEF4444_rgb, // Strong red
+        // The path gradient runs blue → teal. A host with its own brand colours replaces the
+        // pair; these two are the default theme's, not any one application's.
+        .pathGradientStart = 0x5078FF_rgb, // Blue
+        .pathGradientEnd = 0x00DCC8_rgb,   // Teal
     };
 
     theme.borderStyle = BorderStyle::Rounded;

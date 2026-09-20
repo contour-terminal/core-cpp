@@ -2305,10 +2305,14 @@ namespace
 {
     /// @brief Well-known file names (matched against the full basename) → language.
     ///
-    /// These files carry no conventional extension yet have a well-defined format:
-    /// the *.clang-format / *.clang-tidy / .endo-format tool configs are YAML, and
-    /// .editorconfig is INI. Build files (Makefile, Dockerfile, …) are folded onto
-    /// their closest existing highlighter. Add a row to recognize a new file name.
+    /// These files carry no conventional extension yet have a well-defined format: the
+    /// .clang-format and .clang-tidy tool configs are YAML, and .editorconfig is INI. Build
+    /// files (Makefile, Dockerfile, …) are folded onto their closest existing highlighter.
+    ///
+    /// A row belongs here only when the name is well known beyond any one project. A consumer's
+    /// own dotfile is that consumer's business: it knows what its configuration file is called
+    /// and passes the language to highlightLine() rather than asking this table to guess. endo's
+    /// `.endo-format` was a row here and is not one any more, for that reason.
     constexpr auto FilenameLanguageTable = std::to_array<LanguageToken>({
         { .token = "CMakeLists.txt", .language = LanguageId::CMake },
         { .token = "Makefile", .language = LanguageId::Bash },
@@ -2317,7 +2321,6 @@ namespace
         { .token = "Dockerfile", .language = LanguageId::Bash },
         { .token = ".clang-format", .language = LanguageId::Yaml },
         { .token = ".clang-tidy", .language = LanguageId::Yaml },
-        { .token = ".endo-format", .language = LanguageId::Yaml },
         { .token = ".editorconfig", .language = LanguageId::Ini },
     });
 } // namespace
