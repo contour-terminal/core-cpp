@@ -66,7 +66,15 @@ switch with no `default`, which is what makes a compiler name it when a code is 
 | `Unsupported` | `unsupported` | The operation is not supported on this platform or transport |
 | `MessageTooLarge` | `message too large` | A framed unit (line, PDU, datagram) exceeded its configured bound |
 | `SystemError` | `system error` | An OS error nothing classified further; read `NetError::systemCode` |
-| `Last` | — | Not a code: the number of codes above it, so a table or a test covers every one without restating the list. Never constructed, never returned |
+| `Last` | `unknown error` | Not a code: the number of codes above it, so a table or a test covers every one without restating the list. Never constructed, never returned |
+
+A new code goes **above** `Last`, never below. One appended after it still satisfies the
+`default`-less switch and still leaves `Last` looking like a count, while every check that walks
+`[0, Last)` misses it; `NetError_test.cpp`'s "No code hides above Last" is what refuses that.
+
+`AddressNotAvail`, `HostUnreach` and `PermissionDenied` have no producer in core-cpp yet. The errno
+and WSA tables that classify a socket failure gain their rows when fastcached's sockets and dialler
+are merged in (Tasks B6 to B8); until then the codes exist and nothing returns them.
 
 `isDeadlineExpiry(code)` answers "did this operation run out of time", and it is `Timeout` **or**
 `WouldBlock`, because a deadline armed with `SO_RCVTIMEO`/`SO_SNDTIMEO` or a poll timeout expires as

@@ -115,6 +115,34 @@ TEST_CASE("Last counts the codes; it is not one of them", "[net][types]")
     CHECK_FALSE(isDeadlineExpiry(NetErrorCode::Last));
 }
 
+TEST_CASE("No code hides above Last", "[net][types]")
+{
+    // Every case here walks `[0, Last)`, so a code appended AFTER `Last` is invisible to all of
+    // them -- and it breaks nothing that would otherwise catch it: it has a `toString` case, so
+    // -Wswitch is satisfied, and `static_assert(SystemError < Last)` still holds because
+    // `SystemError` did not move. Measured: with such a code in the enumeration the other twelve
+    // cases pass green.
+    //
+    // The enumeration is dense from zero, so "nothing above the count is described" says the same
+    // thing as "`Last` is the count" -- and unlike the count, it is still true to check once a code
+    // has been appended past it. `.agent/rules/design-principles.md` names the general version: a
+    // check anchored on an enumerator by name fires only when nothing is wrong.
+    auto hiddenAt = -1;
+    auto hidden = std::string_view {};
+    for (auto const value: std::views::iota(CodeCount, 256))
+    {
+        auto const text = core::net::toString(static_cast<NetErrorCode>(value));
+        if (text != "unknown error")
+        {
+            hiddenAt = value;
+            hidden = text;
+            break;
+        }
+    }
+    CAPTURE(hiddenAt, hidden);
+    CHECK(hiddenAt == -1);
+}
+
 TEST_CASE("A value outside the enumeration is described as unknown", "[net][types]")
 {
     CHECK(core::net::toString(static_cast<NetErrorCode>(0xFF)) == "unknown error");
@@ -194,20 +222,33 @@ TEST_CASE("NetError renders words, never an enumerator's position", "[net][types
     CHECK_FALSE(text.contains("NetError("));
 }
 
-TEST_CASE("Every code either lineage had survives the merge", "[net][types]")
+TEST_CASE("The merge gave each lineage exactly what the other one had", "[net][types]")
 {
-    for (auto const code: ContourLineage)
-    {
-        CAPTURE(static_cast<int>(code));
-        CHECK(static_cast<int>(code) < CodeCount);
-        CHECK(core::net::toString(code) != "unknown error");
-    }
-    for (auto const code: FastcachedLineage)
-    {
-        CAPTURE(static_cast<int>(code));
-        CHECK(static_cast<int>(code) < CodeCount);
-        CHECK(core::net::toString(code) != "unknown error");
-    }
+    // That every code either lineage had survives is settled by the compiler, not here: the two
+    // arrays above are written in the merged spelling, so they name codes that must exist for this
+    // file to build, and the first case already proves each has a description of its own. Asserting
+    // it again at run time would be a case that cannot fail.
+    //
+    // What is not settled anywhere else is the merge's actual content: which codes each lineage did
+    // not have before and does now. Get that wrong -- drop one, or add a code to only one side --
+    // and a caller of that lineage has nowhere to put a failure it used to distinguish, which is
+    // the thing this whole task exists to prevent.
+    auto const contour = std::set<NetErrorCode>(ContourLineage.begin(), ContourLineage.end());
+    auto const fastcached = std::set<NetErrorCode>(FastcachedLineage.begin(), FastcachedLineage.end());
+
+    // Described rather than compared as codes, so a failure reads as words rather than as numbers.
+    auto const gainedBy = [](std::set<NetErrorCode> const& lineage, std::set<NetErrorCode> const& other) {
+        auto descriptions = std::set<std::string_view> {};
+        for (auto const code: other)
+            if (!lineage.contains(code))
+                descriptions.insert(core::net::toString(code));
+        return descriptions;
+    };
+
+    CHECK(gainedBy(contour, fastcached)
+          == std::set<std::string_view> { "address not available", "host unreachable", "permission denied" });
+    CHECK(gainedBy(fastcached, contour)
+          == std::set<std::string_view> { "address error", "message too large", "unsupported" });
 }
 
 TEST_CASE("The two renamed codes keep the meaning their call sites relied on", "[net][types]")

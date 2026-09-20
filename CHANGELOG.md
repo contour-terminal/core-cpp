@@ -249,14 +249,20 @@ workflow refuses one without a section here.
   used to distinguish. From fastcached it gains `AddressNotAvail` (a bind whose address is not
   available locally), `HostUnreach` and `PermissionDenied` (a low-numbered port without privileges,
   a firewall's `EACCES`) — three causes that were an unclassified `Other` here and that no caller
-  could match on. `core::net::isDeadlineExpiry(NetErrorCode)` joins it, also from fastcached
+  could match on. **Nothing in core-cpp returns those three yet**: the errno and WSA tables that
+  classify a socket failure gain their rows when fastcached's sockets and dialler are merged in
+  (Tasks B6 to B8), so until then a migrated `== HostUnreach` branch compiles and is dead code. The
+  codes are here now because the vocabulary is settled before the backends are rewritten on top of
+  it. `core::net::isDeadlineExpiry(NetErrorCode)` joins it, also from fastcached
   (`IsDeadlineExpiry`): a deadline armed with `SO_RCVTIMEO`/`SO_SNDTIMEO`, and a poll given a
   timeout, expire as `EAGAIN`/`WouldBlock` on POSIX and as `WSAETIMEDOUT`/`Timeout` on Winsock, so
   the question is asked through one predicate over both operands rather than open-coded
   ([fastcached#824](https://github.com/LASTRADA-Software/fastcached/issues/824)). A trailing
   `NetErrorCode::Last` states how many codes there are, so a table or a test covers every one of
   them without restating the list; it is not a code, `toString()` gives it no description, and
-  nothing constructs or returns it. `core::net_types` still links nothing and still includes no
+  nothing constructs or returns it. A new code goes above it, never below — one appended after
+  `Last` would satisfy both the switch and the count while every walk of `[0, Last)` missed it, so
+  a test refuses that case by name. `core::net_types` still links nothing and still includes no
   `<format>`: it is what `fastcache-cc` links alone in Task C4.
 
 - `tools/migrate/`, the tooling every consumer migration runs: `renames.json`, the 438-row rename

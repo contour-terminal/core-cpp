@@ -45,7 +45,10 @@ enum class NetErrorCode : std::uint8_t
 
     Last, ///< Not a code: the number of codes above it, so a table or a test can cover every one of
           ///< them without restating the list. Never constructed, never returned, never compared
-          ///< against a result.
+          ///< against a result. **A new code goes above it, never below.** One appended after
+          ///< `Last` still satisfies the switch and still leaves `Last` looking like a count, and
+          ///< every case that walks `[0, Last)` would miss it; `NetError_test.cpp`'s
+          ///< "No code hides above Last" is what refuses that, and it is the only thing that does.
 };
 
 /// @param code The error code to describe.
@@ -56,6 +59,11 @@ enum class NetErrorCode : std::uint8_t
 /// function, which is how a new code is stopped from silently rendering as `"unknown error"` in
 /// every log line that carries it. Do not add one. The statement after the switch handles the
 /// values that are not enumerators, which a cast can still produce.
+///
+/// A description is lower-case words separated by single spaces, with no punctuation and no
+/// capital: these strings end up in log lines that people grep, so one that shouts or ends in a
+/// full stop changes the shape of every line carrying that code. `NetError_test.cpp` enforces it
+/// rather than trusting the next author to notice the pattern.
 [[nodiscard]] constexpr std::string_view toString(NetErrorCode code) noexcept
 {
     switch (code)
@@ -91,7 +99,9 @@ enum class NetErrorCode : std::uint8_t
 ///
 /// **Both operands are load-bearing, and neither may be dropped.** The callers this exists for are
 /// the accept loops of the blocking transports, whose listener arms a poll timeout and whose loop
-/// reads an expiry as *the poll ticked; re-check the stop flag and accept again*. Narrow this to
+/// reads an expiry as *the poll ticked; re-check the stop flag and accept again*. Nothing in
+/// core-cpp asks this yet: those transports arrive with Task B9, and the predicate is here now
+/// because it belongs to the vocabulary rather than to them. Narrow this to
 /// `Timeout` alone and each of those loops treats every POSIX tick as a fatal accept error, logs
 /// once and returns: the server stops accepting about a quarter of a second after it starts, with
 /// one `Debug` line as the only symptom. That is worth spelling out because the obvious mental
