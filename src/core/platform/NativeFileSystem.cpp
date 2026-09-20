@@ -215,11 +215,14 @@ std::expected<std::unique_ptr<std::iostream>, std::string> NativeFileSystem::ope
 std::expected<void, std::string> NativeFileSystem::createDirectory(fs::path const& path) const
 {
     std::error_code ec;
-    if (!fs::create_directory(path, ec) || ec)
-        return std::unexpected(std::format("Cannot create directory '{}': {}",
-                                           path.string(),
-                                           ec ? ec.message() : "No such file or directory"));
-    return {};
+    if (fs::create_directory(path, ec))
+        return {};
+    // create_directory() answering false with no error means one thing: the directory is already
+    // there. Naming that "No such file or directory" -- the operating system's diagnosis for the
+    // other way this fails, a missing parent -- sends a caller looking in the wrong place.
+    if (!ec)
+        ec = std::make_error_code(std::errc::file_exists);
+    return std::unexpected(std::format("Cannot create directory '{}': {}", path.string(), ec.message()));
 }
 
 std::expected<void, std::string> NativeFileSystem::createDirectories(fs::path const& path) const
@@ -267,6 +270,16 @@ std::expected<void, std::string> NativeFileSystem::copyFile(fs::path const& from
 namespace
 {
 
+    /// What a two-hop recase ended up doing.
+    struct RecaseResult
+    {
+        bool renamed = false;     ///< The entry carries the requested spelling now.
+        std::error_code error {}; ///< Why it does not, when it does not.
+        /// Where the entry was left when the second hop failed and the rollback failed too.
+        /// Empty otherwise. Nothing else would say, and the name is not one a caller can guess.
+        fs::path stranded {};
+    };
+
     /// Renames @p from to @p to in two hops via a unique temporary name in the
     /// destination's parent directory.
     ///
@@ -279,36 +292,41 @@ namespace
     ///
     /// @param from The existing source entry.
     /// @param to The desired destination, in the same directory and differing only in case.
-    /// @param ec Set to the error that aborted the operation; cleared on success.
-    /// @return True on success, false otherwise (with @p ec describing the failure).
-    [[nodiscard]] bool renameViaTemporary(fs::path const& from, fs::path const& to, std::error_code& ec)
+    /// @return What happened, including the reason the operation aborted and, where it applies,
+    ///         the temporary name the entry was left under.
+    [[nodiscard]] RecaseResult renameViaTemporary(fs::path const& from, fs::path const& to)
     {
+        // The temporary name is built in UTF-8, not through path::string(): that narrows to the
+        // ANSI code page on Windows, and a mangled candidate would rename the entry to a name
+        // nobody asked for rather than merely misreport one.
         auto const parent = to.parent_path();
-        auto const baseName = to.filename().string();
+        auto const baseName = to.filename().u8string();
+        auto ec = std::error_code {};
         for (auto const attempt: std::views::iota(0, 1000))
         {
-            auto const candidate = parent / (baseName + ".recase-" + std::to_string(attempt));
+            auto const digits = std::to_string(attempt);
+            auto const candidate =
+                parent / fs::path(baseName + u8".recase-" + std::u8string(digits.begin(), digits.end()));
             if (fs::exists(candidate, ec))
                 continue;
             ec.clear();
 
             fs::rename(from, candidate, ec);
             if (ec)
-                return false;
+                return { .error = ec };
 
             fs::rename(candidate, to, ec);
             if (!ec)
-                return true;
+                return { .renamed = true };
 
             // Second hop failed: restore the original name so the entry is not stranded
-            // under the temporary. Best-effort — the reported error stays the second hop's.
-            std::error_code rollbackError;
-            auto const& originalName = from;
-            fs::rename(candidate, originalName, rollbackError);
-            return false;
+            // under the temporary. The reported reason stays this hop's, and when the rollback
+            // fails too, so does where the entry actually ended up.
+            auto rollbackError = std::error_code {};
+            fs::rename(candidate, from, rollbackError);
+            return { .error = ec, .stranded = rollbackError ? candidate : fs::path {} };
         }
-        ec = std::make_error_code(std::errc::file_exists);
-        return false;
+        return { .error = std::make_error_code(std::errc::file_exists) };
     }
 
 } // namespace
@@ -327,9 +345,20 @@ std::expected<void, std::string> NativeFileSystem::rename(fs::path const& from, 
     // lettercase change still takes effect.
     if (isCaseOnlyRename(from, to))
     {
-        std::error_code recaseError;
-        if (renameViaTemporary(from, to, recaseError))
+        // The retry's own reason, not the first attempt's: the two fail for different things --
+        // a direct case-only rename is refused because the two names resolve to one entry, while
+        // the retry fails over the temporary name, the destination, or the rollback.
+        auto const recase = renameViaTemporary(from, to);
+        if (recase.renamed)
             return {};
+        if (!recase.stranded.empty())
+            return std::unexpected(std::format("Cannot rename '{}' to '{}': {}; it is now at '{}'",
+                                               from.string(),
+                                               to.string(),
+                                               recase.error.message(),
+                                               recase.stranded.string()));
+        return std::unexpected(std::format(
+            "Cannot rename '{}' to '{}': {}", from.string(), to.string(), recase.error.message()));
     }
 
     return std::unexpected(

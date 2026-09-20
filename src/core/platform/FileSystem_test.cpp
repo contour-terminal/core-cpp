@@ -428,3 +428,59 @@ TEST_CASE("the model tells apart two paths the native narrow encoding cannot", "
     CHECK(fs.readFile(first) == "one");
     CHECK(fs.readFile(second) == "two");
 }
+
+TEST_CASE("createDirectory says which of the two reasons it failed for", "[FileSystem]")
+{
+    // create_directory() answering false with no error means the directory is already there.
+    // The one path in this backend where a hard-coded string, not the operating system, picks
+    // the message read that as "No such file or directory" -- which is the diagnosis for the
+    // other way it fails, a missing parent, and sends a caller looking in the wrong place.
+    auto const& backend = core::platform::NativeFileSystem::instance();
+    auto const dir = core::testing::ScopedTempDir { "core_mkdir" };
+
+    REQUIRE(backend.createDirectory(dir / "sub").has_value());
+
+    auto const again = backend.createDirectory(dir / "sub");
+    REQUIRE_FALSE(again.has_value());
+    CHECK(again.error().contains(std::make_error_code(std::errc::file_exists).message()));
+
+    auto const missingParent = backend.createDirectory(dir / "absent" / "sub");
+    REQUIRE_FALSE(missingParent.has_value());
+    CHECK(again.error() != missingParent.error());
+}
+
+#ifndef _WIN32
+TEST_CASE("rename reports why the recase failed, not why the first attempt did", "[FileSystem]")
+{
+    // A rename that changes only lettercase is retried in two hops through a temporary name.
+    // renameViaTemporary()'s comment promises the second attempt's reason, but the error it set
+    // was never read and the caller got the first attempt's instead.
+    //
+    // Here the direct rename fails because the destination is a non-empty directory, and the
+    // retry fails for a different reason: the temporary name is nine characters longer than the
+    // destination's, which already sits at NAME_MAX.
+    auto const& backend = core::platform::NativeFileSystem::instance();
+    auto const dir = core::testing::ScopedTempDir { "core_recase" };
+
+    constexpr auto NameMax = 255;
+    auto const lower = std::string(NameMax, 'a');
+    auto upper = lower;
+    upper[0] = 'A';
+
+    for (auto const& name: { lower, upper })
+    {
+        REQUIRE(backend.createDirectory(dir / name).has_value());
+        REQUIRE(backend.writeFile(dir / name / "occupant", "x").has_value());
+    }
+    if (backend.createDirectory(dir / (upper + ".recase-0")).has_value())
+        SKIP("this filesystem accepts names past NAME_MAX, so the retry would not fail here");
+
+    auto const renamed = backend.rename(dir / lower, dir / upper);
+    REQUIRE_FALSE(renamed.has_value());
+    CHECK(renamed.error().contains(std::make_error_code(std::errc::filename_too_long).message()));
+    CHECK_FALSE(renamed.error().contains(std::make_error_code(std::errc::directory_not_empty).message()));
+
+    // The rollback put it back under its original name, so nothing is stranded.
+    CHECK(backend.isDirectory(dir / lower));
+}
+#endif
