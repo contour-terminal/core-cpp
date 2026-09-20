@@ -306,7 +306,13 @@ SyncGuard::SyncGuard(TerminalOutput& output): _output(&output)
 SyncGuard::~SyncGuard()
 {
     if (_output != nullptr)
+    {
+        // Flush first: anything composed inside the region and still buffered would otherwise be
+        // emitted after the end sequence, landing outside the very region it was composed in.
+        // syncGuard() flushes on the way in, so the two ends match.
+        _output->flush();
         _output->writeToDestination(EndSynchronizedOutput);
+    }
 }
 
 SyncGuard::SyncGuard(SyncGuard&& other) noexcept: _output(std::exchange(other._output, nullptr))
@@ -318,7 +324,10 @@ auto SyncGuard::operator=(SyncGuard&& other) noexcept -> SyncGuard&
     if (this != &other)
     {
         if (_output != nullptr)
+        {
+            _output->flush(); // As in the destructor: the region ends after its own bytes.
             _output->writeToDestination(EndSynchronizedOutput);
+        }
         _output = std::exchange(other._output, nullptr);
     }
     return *this;

@@ -180,6 +180,10 @@ workflow refuses one without a section here.
   `dialogWidth = min(config.width, termCols - 4)` and `inputWidth = dialogWidth - 4` had no floor,
   and the negative width reached `substr()` as a huge `std::size_t`, throwing `std::out_of_range`
   out of a `render()` no caller expects to throw. All three dialogs clamp both to zero.
+- `core::tui::SyncGuard` flushes before it ends the synchronized region, as it already did before
+  beginning one. Anything composed inside the region and still buffered was emitted after
+  `CSI ?2026l` and so applied outside it -- `Screen::flush()`'s `applyCursorShape()` is the live
+  case. Move-assignment, which ends a region the same way, flushes too.
 - `core::tui::SyncGuard` writes its begin and end sequences (DEC mode 2026) through the
   `TerminalOutput` it brackets, so they follow that output's `writeToDestination()` wherever its
   bytes go. endo's guard wrote them to the process's standard output whatever the output was

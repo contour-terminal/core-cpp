@@ -65,6 +65,36 @@ TEST_CASE("tui.TerminalOutput: SyncGuard writes through writeToDestination")
     CHECK(output.captured() == "before\033[?2026hinside\033[?2026l");
 }
 
+TEST_CASE("tui.TerminalOutput: ~SyncGuard flushes before it ends the synchronized region")
+{
+    auto output = CapturingOutput { Destination::File };
+
+    {
+        auto const guard = output.syncGuard();
+        output.writeRaw("inside"); // Composed, not yet flushed.
+    }
+
+    // The point of the region is that everything composed inside it is applied at once. A
+    // destructor that wrote the end sequence without flushing first left "inside" in the buffer,
+    // so it reached the terminal after `CSI ?2026l` -- outside the very region it was composed in.
+    // `Screen::flush()`'s applyCursorShape() is the live case: it composes after its last flush.
+    CHECK(output.captured() == "\033[?2026hinside\033[?2026l");
+}
+
+TEST_CASE("tui.TerminalOutput: move-assignment flushes the region it ends")
+{
+    auto first = CapturingOutput { Destination::File };
+    auto second = CapturingOutput { Destination::File };
+
+    auto guard = first.syncGuard();
+    first.writeRaw("inside");
+
+    // Two different outputs, so that the right-hand side's own flush cannot be what empties
+    // `first`: ending `first`'s region is the assignment's job, and so is flushing it.
+    guard = second.syncGuard();
+    CHECK(first.captured() == "\033[?2026hinside\033[?2026l");
+}
+
 TEST_CASE("tui.TerminalOutput: a moved-from SyncGuard leaves the mode to its successor")
 {
     auto output = CapturingOutput { Destination::File };
@@ -75,17 +105,11 @@ TEST_CASE("tui.TerminalOutput: a moved-from SyncGuard leaves the mode to its suc
         CHECK(output.captured() == "\033[?2026h");
     }
 
-    // Exactly one end sequence: the moved-from guard must not write one of its own.
+    // Exactly one end sequence: the moved-from guard must not write one of its own. This is also
+    // the only seam a guard holding no output has -- a default-constructed one has nowhere to
+    // write at all, so no case can distinguish it from any other implementation of `~SyncGuard()`;
+    // what the null check is actually for is the moved-from state exercised here.
     CHECK(output.captured() == "\033[?2026h\033[?2026l");
-}
-
-TEST_CASE("tui.TerminalOutput: a default-constructed SyncGuard writes nothing")
-{
-    auto output = CapturingOutput { Destination::File };
-    {
-        auto const guard = core::tui::SyncGuard {};
-    }
-    CHECK(output.captured().empty());
 }
 
 TEST_CASE("tui.TerminalOutput: isTerminal() reflects the destination")

@@ -86,7 +86,9 @@ class TerminalOutput;
 /// @brief RAII guard for synchronized terminal output.
 ///
 /// Uses CSI ?2026h/l (synchronized output mode) to prevent tearing.
-/// The constructor writes the begin sequence, the destructor writes the end sequence.
+/// The constructor flushes what was composed before it and writes the begin sequence; the
+/// destructor flushes what was composed inside the region and writes the end sequence. Both
+/// ends flush, so nothing composed within the region is emitted outside it.
 ///
 /// Both go to the @c TerminalOutput the guard was made from, through the same
 /// @c writeToDestination() every other byte takes, so a retargeted output (a test capture, a
@@ -103,7 +105,7 @@ class SyncGuard
     /// @param output The output to bracket; it must outlive the guard.
     explicit SyncGuard(TerminalOutput& output);
 
-    /// @brief Ends synchronized output mode.
+    /// @brief Flushes the bracketed output and ends synchronized output mode.
     ~SyncGuard();
 
     SyncGuard(SyncGuard const&) = delete;
