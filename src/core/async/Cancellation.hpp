@@ -11,6 +11,7 @@
 /// cancelled frame unwinds with, and an awaitable that yields the awaiting
 /// coroutine's own token.
 
+#include <core/async/Awaitable.hpp>
 #include <core/async/StopToken.hpp>
 
 #include <coroutine>
@@ -45,7 +46,7 @@ struct ThisCoroStopToken
     template <typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> awaiting) noexcept
     {
-        if constexpr (requires { awaiting.promise().stopToken(); })
+        if constexpr (HasStopToken<Promise>)
             token = awaiting.promise().stopToken();
         return false;
     }

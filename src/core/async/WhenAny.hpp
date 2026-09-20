@@ -32,6 +32,7 @@
 /// to keep a stop state alive across its own @c request_stop(), and neither
 /// `std::stop_source` nor the fallback promises to do it for us.
 
+#include <core/async/Awaitable.hpp>
 #include <core/async/Cancellation.hpp>
 #include <core/async/Task.hpp>
 #include <core/async/UniqueCoroHandle.hpp>
@@ -234,7 +235,7 @@ namespace detail
 
             // Chain parent cancellation into the child source so cancelling the
             // awaiting flow cancels every child.
-            if constexpr (requires { awaiting.promise().stopToken(); })
+            if constexpr (HasStopToken<Promise>)
             {
                 _parentToken = awaiting.promise().stopToken();
                 _parentReg.emplace(_parentToken, WhenAnyCancelBridge { _state });

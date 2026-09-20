@@ -51,7 +51,7 @@ struct ManualEvent
     template <typename Promise>
     [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting) noexcept
     {
-        if constexpr (requires { awaiting.promise().stopToken(); })
+        if constexpr (HasStopToken<Promise>)
             token = awaiting.promise().stopToken();
         if (token.stop_requested())
             return false;

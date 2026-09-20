@@ -14,6 +14,7 @@ core_cpp_add_module(async KIND INTERFACE
 
 # The tests of everything that names a StopToken.
 set(_coreCppAsyncStopTokenTests
+    Awaitable_test.cpp
     StopToken_test.cpp
     Task_test.cpp
     WhenAll_test.cpp

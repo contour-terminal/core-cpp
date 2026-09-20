@@ -27,6 +27,7 @@
 /// shipping standard library provides a usable `std::task`, so `Task` is always
 /// hand-rolled. Only the core `<coroutine>` language support is required.
 
+#include <core/async/Awaitable.hpp>
 #include <core/async/Cancellation.hpp>
 #include <core/async/UniqueCoroHandle.hpp>
 
@@ -145,7 +146,7 @@ class [[nodiscard]] Task
         [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> awaiting) noexcept
         {
             _child.promise().continuation = awaiting;
-            if constexpr (requires { awaiting.promise().stopToken(); })
+            if constexpr (HasStopToken<Promise>)
                 _child.promise().setStopToken(awaiting.promise().stopToken());
             return _child;
         }
@@ -238,7 +239,7 @@ class [[nodiscard]] Task<void>
         [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> awaiting) noexcept
         {
             _child.promise().continuation = awaiting;
-            if constexpr (requires { awaiting.promise().stopToken(); })
+            if constexpr (HasStopToken<Promise>)
                 _child.promise().setStopToken(awaiting.promise().stopToken());
             return _child;
         }

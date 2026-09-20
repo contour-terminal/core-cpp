@@ -3,12 +3,15 @@
 
 /// @file
 /// Concepts shared across @c core::async awaitables and coroutine promises.
+///
+/// It sits below @c Cancellation.hpp rather than beside it: @c HasStopToken is the contract every
+/// templated `await_suspend` in this module reads the awaiting promise through, so the header that
+/// states it may depend on nothing of the module but @c StopToken.
 
-#include <core/async/Cancellation.hpp>
+#include <core/async/StopToken.hpp>
 
 #include <concepts>
 #include <coroutine>
-#include <utility>
 
 namespace core::async
 {

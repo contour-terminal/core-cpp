@@ -16,6 +16,7 @@
 /// every child has finished. Pair it with a shared token when you need
 /// one-fails-all-stop semantics.
 
+#include <core/async/Awaitable.hpp>
 #include <core/async/Cancellation.hpp>
 #include <core/async/Task.hpp>
 #include <core/async/UniqueCoroHandle.hpp>
@@ -161,7 +162,7 @@ namespace detail
                 // awaiter reads it through the promise, so wire both to the same
                 // join state before starting the runner.
                 runner.handle().promise().state = &_state;
-                if constexpr (requires { awaiting.promise().stopToken(); })
+                if constexpr (HasStopToken<Promise>)
                     runner.handle().promise().token = awaiting.promise().stopToken();
                 runner.handle().resume();
             }
