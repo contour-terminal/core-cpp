@@ -491,3 +491,27 @@ TEST_CASE("rename reports why the recase failed, not why the first attempt did",
     CHECK(backend.isDirectory(dir / lower));
 }
 #endif
+
+TEST_CASE("rename changes the lettercase of a name, whatever the volume", "[FileSystem]")
+{
+    // The case above can only run on a case-sensitive volume: it needs `foo` and `Foo` to be two
+    // entries so the direct rename fails over the destination. That left the two-hop recase with
+    // no case at all on the volumes it was written for -- its whole point is that a case-only
+    // rename still takes effect where a single rename is refused because both names resolve to
+    // the same entry.
+    //
+    // This asserts that contract, and it runs everywhere: on a case-sensitive volume the direct
+    // rename does the work, and on a case-insensitive one whichever of the two paths the OS
+    // forces. Either way the entry has to end up spelled with the capital, exactly once.
+    auto const& backend = core::platform::NativeFileSystem::instance();
+    auto const dir = core::testing::ScopedTempDir { "core_recase_ok" };
+
+    REQUIRE(backend.writeFile(dir / "foo", "content").has_value());
+    REQUIRE(backend.rename(dir / "foo", dir / "Foo").has_value());
+
+    auto const listed = backend.listDirectory(dir.path());
+    REQUIRE(listed.has_value());
+    REQUIRE(listed->size() == 1); // Renamed, not copied, and no temporary left behind.
+    CHECK(listed->front().path.filename() == "Foo");
+    CHECK(backend.readFile(dir / "Foo") == "content");
+}
