@@ -10,12 +10,25 @@
 in `renames.json` are applied through libclang: a cursor is rewritten only when the **declaration**
 it refers to lives under `--decl-paths` and its enclosing class is the row's `scope`.
 
-Two details that are the whole reason this is a tool and not a `sed` line:
+Four details that are the whole reason this is a tool and not a `sed` line:
 
 - **Several compile databases are unioned.** fastcached's Windows and Linux builds compile
   different files, so one database alone silently misses the other platform's call sites.
 - **Edits are applied back to front within a file**, so a replacement of a different length cannot
   invalidate the offsets of the edits before it.
+- **Overrides are followed.** Renaming an interface's method without its implementations leaves an
+  override of a virtual that no longer exists, so the migrated tree does not compile.
+- **A translation unit that did not parse stops the run**, because a partial AST yields a partial
+  rename reported as a confident total. `--allow-parse-errors` takes what can be resolved.
+
+**Run each compile database on the host that produced it.** A compile database carries no target
+triple, so libclang parses with the host default: parsing fastcached's Linux database on Windows
+activates the `_WIN32` branches for *both* databases and misses every POSIX call site, silently.
+Unioning databases across hosts works only if each is parsed where it was generated, or a
+`--target=` is added to its command lines. Task C4 should run this pass once per platform and union
+the resulting trees, not run one host over both databases. For the same reason a member call on a
+dependent type inside a template is invisible to any AST tool; the count of undecided call sites is
+printed so the operator knows how many a human still owes.
 
 libclang's Python bindings are optional (`python -m pip install libclang`). Where they are missing
 this tool refuses to run and says so; it never falls back to a textual pass.
@@ -39,6 +52,10 @@ TABLE = Path(__file__).resolve().parent / "renames.json"
 #: Compiler arguments that name the build's output rather than how to parse the input.
 DROPPED_FLAGS = frozenset({"-c", "-o", "-MD", "-MMD", "-MP", "-MF", "-MT", "-MQ", "--"})
 DROPPED_WITH_VALUE = frozenset({"-o", "-MF", "-MT", "-MQ"})
+
+
+class ParseError(Exception):
+    """A translation unit libclang could not parse cleanly, so its call sites cannot be trusted."""
 
 
 @dataclass(frozen=True, order=True)
@@ -86,6 +103,76 @@ def _cursor_kinds():
         CursorKind.TYPE_ALIAS_DECL,
         CursorKind.TYPEDEF_DECL,
     }
+
+
+def overridden_cursors(cursor) -> list:
+    """The declarations @p cursor directly overrides.
+
+    `clang_getOverriddenCursors` is in the shared library but **not** wrapped by the `libclang` PyPI
+    bindings (checked against 18.1.1: `Cursor` has no `get_overriden_cursors`), so it is bound here
+    by hand. Each result is copied out of libclang's array before that array is disposed of, and
+    carries the translation unit its properties need.
+    """
+    import ctypes
+
+    from clang.cindex import Cursor, conf
+
+    entry = getattr(conf.lib, "clang_getOverriddenCursors", None)
+    if entry is None:  # pragma: no cover -- guarded by _require_override_support()
+        return []
+    if not getattr(entry, "_coreCppBound", False):
+        entry.argtypes = [Cursor, ctypes.POINTER(ctypes.POINTER(Cursor)), ctypes.POINTER(ctypes.c_uint)]
+        entry.restype = None
+        conf.lib.clang_disposeOverriddenCursors.argtypes = [ctypes.POINTER(Cursor)]
+        conf.lib.clang_disposeOverriddenCursors.restype = None
+        entry._coreCppBound = True
+
+    array = ctypes.POINTER(Cursor)()
+    count = ctypes.c_uint()
+    entry(cursor, ctypes.byref(array), ctypes.byref(count))
+    try:
+        found = []
+        for index in range(count.value):
+            copied = Cursor.from_buffer_copy(array[index])
+            copied._tu = cursor._tu
+            found.append(copied)
+        return found
+    finally:
+        conf.lib.clang_disposeOverriddenCursors(array)
+
+
+def _require_override_support() -> None:
+    """Refuses to run where overrides cannot be followed, rather than renaming half a hierarchy."""
+    from clang.cindex import conf
+
+    if getattr(conf.lib, "clang_getOverriddenCursors", None) is None:
+        raise TableError(
+            "this libclang exposes no clang_getOverriddenCursors, so an interface's overrides "
+            "cannot be found and a rename would leave a tree that does not compile. Install the "
+            "pinned bindings: python -m pip install libclang"
+        )
+
+
+def declaration_chain(cursor) -> list:
+    """@p cursor and every declaration it transitively overrides, nearest first.
+
+    An interface's method is renamed across the hierarchy that implements it, or not at all:
+    renaming `ISocket::Read` while `TcpSocket::Read` **override** keeps its name leaves an override
+    of a virtual that no longer exists -- a hard compile error -- plus every call site typed to the
+    concrete class. The walk runs to a fixed point, so a grandchild override is reached through its
+    parent (controller ruling R91).
+    """
+    found: dict[tuple[str, int], object] = {}
+    pending = [cursor]
+    while pending:
+        current = pending.pop()
+        location = current.location
+        key = (location.file.name if location.file else "", location.offset)
+        if key in found:
+            continue
+        found[key] = current
+        pending.extend(overridden_cursors(current))
+    return list(found.values())
 
 
 def qualified_name(cursor) -> str:
@@ -142,37 +229,95 @@ def _is_under(path: Path, roots: list[Path]) -> bool:
     return any(resolved == root or resolved.is_relative_to(root) for root in roots)
 
 
-def collect_edits(databases: list[Path], decl_paths: list[Path], rows: list[Row]) -> dict[Path, list[Edit]]:
-    """Unions the edits @p rows imply over every translation unit of every @p databases entry."""
+def collect_edits(
+    databases: list[Path],
+    decl_paths: list[Path],
+    rows: list[Row],
+    allow_parse_errors: bool = False,
+) -> dict[Path, list[Edit]]:
+    """Unions the edits @p rows imply over every translation unit of every @p databases entry.
+
+    Raises ParseError when libclang reported an error for any translation unit, unless
+    @p allow_parse_errors: a stale compile database parses to a partial AST, where `cursor.referenced`
+    is null at the call sites whose class failed to resolve, and the run then reports a confident
+    count of the edits it *did* make. That is the difference between "53 call sites moved" and
+    "53 of 80 moved, and you find the rest on the platform you did not build" (finding I6).
+    """
     if not bindings_available():
         raise TableError("libclang's Python bindings are missing: python -m pip install libclang")
-    from clang.cindex import Index
+    _require_override_support()
+    from clang.cindex import Diagnostic, Index
 
     by_scope = {(row.scope, row.source): row for row in rows}
+    sources = {row.source for row in rows}
     roots = [path.resolve() for path in decl_paths]
     kinds = _cursor_kinds()
     index = Index.create()
     found: dict[Path, set[Edit]] = {}
     contents: dict[Path, bytes] = {}
+    problems: list[str] = []
+    undecided = 0
 
     for database in databases:
         for directory, source, arguments in compile_commands(database):
             unit = index.parse(str(source), args=[f"-working-directory={directory}", *arguments])
+            problems += [
+                f"{source}: {diagnostic.spelling}"
+                for diagnostic in unit.diagnostics
+                if diagnostic.severity >= Diagnostic.Error
+            ]
             for cursor in _walk(unit.cursor):
                 if cursor.kind not in kinds:
                     continue
-                declaration = cursor.referenced or cursor
-                if declaration.spelling not in {row.source for _, row in by_scope.items()}:
+                declaration = cursor.referenced
+                if declaration is None:
+                    # A dependent or unresolved expression: libclang cannot say what it refers to,
+                    # so neither can this tool. Counted rather than ignored.
+                    if cursor.spelling in sources:
+                        undecided += 1
                     continue
-                location = declaration.location.file
-                if location is None or not _is_under(Path(location.name), roots):
+                if declaration.spelling not in sources:
                     continue
-                row = by_scope.get((qualified_name(declaration.semantic_parent), declaration.spelling))
+                # The declaration, plus everything it overrides: an override lives in a different
+                # class, so its own scope never matches an interface's row.
+                chain = declaration_chain(declaration)
+                if not any(
+                    _is_under(Path(entry.location.file.name), roots)
+                    for entry in chain
+                    if entry.location.file is not None
+                ):
+                    continue
+                row = next(
+                    (
+                        match
+                        for match in (
+                            by_scope.get((qualified_name(entry.semantic_parent), entry.spelling))
+                            for entry in chain
+                        )
+                        if match is not None
+                    ),
+                    None,
+                )
                 if row is None:
                     continue
                 edit = _edit_at(cursor, row, contents)
                 if edit is not None:
                     found.setdefault(Path(cursor.location.file.name).resolve(), set()).add(edit)
+
+    if problems and not allow_parse_errors:
+        listed = "\n  ".join(sorted(set(problems))[:20])
+        raise ParseError(
+            f"libclang reported {len(problems)} error(s); the call sites in those translation units "
+            f"cannot be trusted, so nothing was rewritten. Fix the compile database, or pass "
+            f"--allow-parse-errors to take what can be resolved:\n  {listed}"
+        )
+
+    if undecided:
+        print(
+            f"semantic_rename: {undecided} call site(s) name a renamed member but could not be "
+            f"resolved -- a dependent type in a template, or a branch this host does not compile. "
+            f"A human owes those."
+        )
 
     return {path: sorted(edits) for path, edits in found.items() if edits}
 
@@ -224,6 +369,11 @@ def main(argv: list[str] | None = None) -> int:
         "--decl-paths", type=Path, nargs="+", required=True, help="where the declarations live"
     )
     parser.add_argument("--dry-run", action="store_true", help="report what would change and write nothing")
+    parser.add_argument(
+        "--allow-parse-errors",
+        action="store_true",
+        help="rewrite what could be resolved even where a translation unit failed to parse",
+    )
     arguments = parser.parse_args(argv)
 
     if not bindings_available():
@@ -242,7 +392,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"semantic_rename: profile '{arguments.profile}' has no semantic rows")
         return 0
 
-    edits = collect_edits(arguments.compile_db, arguments.decl_paths, rows)
+    try:
+        edits = collect_edits(
+            arguments.compile_db,
+            arguments.decl_paths,
+            rows,
+            allow_parse_errors=arguments.allow_parse_errors,
+        )
+    except ParseError as error:
+        print(f"semantic_rename: {error}")
+        return 1
     total = apply_edits(edits, arguments.dry_run)
     verb = "would apply" if arguments.dry_run else "applied"
     print(
