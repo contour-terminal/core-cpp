@@ -35,8 +35,17 @@
 # does not have. Its commit is tagged, because the tool takes a tag or a full SHA and nothing else.
 #
 # The sections after the table are the cases that need more than one run of the tool: a re-sync, a
-# refusal over a copy that must survive it, a sync from inside a vendored copy, a check with no git
-# on PATH, a sync from a file:// remote, and the command lines the tool refuses before it acts.
+# refusal over a copy that must survive it, a leftover backup beside a copy, a sync from inside a
+# vendored copy, a check with no git on PATH, a sync from a file:// remote, and the command lines
+# the tool refuses before it acts.
+#
+# One case calls cmake/CoreCppVendorReplace.cmake rather than the tool. The replacement's restore
+# path cannot be reached through the script -- the two renames it is made of are the same operation
+# in the same directory, so the second cannot fail once the first has worked -- and that is why the
+# replacement is a function: `restores-the-copy-when-the-replacement-fails` calls it with a new
+# copy that does not exist, which is the portable way to fail a rename. Its last outcome,
+# FAILED-KEEP-BOTH, stays unreached for the same reason one level down: it needs the restore itself
+# to fail.
 #
 # Usage: cmake -DTOOL=<path to cmake/CoreCppVendor.cmake> -DWORK_DIR=<scratch directory>
 #              [-DSKIP_EXIT_CODE=<code>] -P tests/cmake/check-vendor-selftest.cmake
@@ -73,8 +82,23 @@ endif()
 set(fixtureTag "v0.0.1")
 set(absentCommit "0123456789abcdef0123456789abcdef01234567")
 
-# The staging directory the tool assembles a new copy in, which no refusal may leave behind.
-set(stagingName ".core-cpp-vendor-staging")
+# The two siblings of DEST the tool uses -- the one it assembles a new copy in, and the one it moves
+# the previous copy to while it swaps them. Neither may outlive a run, whether that run refused or
+# succeeded: they sit beside the copy in the consumer's own tree, so one left behind is one the
+# consumer finds in their next `git status`.
+set(newSuffix ".core-cpp-vendor-new")
+set(oldSuffix ".core-cpp-vendor-old")
+
+## @brief Appends to @p outVar if a run left either sibling of @p copy behind.
+##
+## @param what What the run was, for the report.
+macro(core_cpp_selftest_no_siblings copy what outVar)
+    foreach(suffix IN ITEMS "${newSuffix}" "${oldSuffix}")
+        if(EXISTS "${copy}${suffix}")
+            string(APPEND ${outVar} " ${what} left ${suffix} beside the copy")
+        endif()
+    endforeach()
+endmacro()
 
 # Every judgement the tool refuses with, so a case can assert that no OTHER refusal fired. A
 # judgement missing from this list is one a case could fire by accident without anyone noticing, so
@@ -106,6 +130,7 @@ set(refusalPhrases
     "not a repository root"
     "nor a tag of"
     "resolving the commit"
+    "already exists"
     "MODE must be sync or check"
     "DEST is not set"
     "REF is not set")
@@ -557,9 +582,7 @@ core_cpp_selftest_expect("the first sync" ACCEPT "${rc}" "${said}" problems)
 set(arguments -DMODE=sync "-DREF=${absentCommit}" "-DREPO=${repository}" "-DDEST=${copy}")
 core_cpp_selftest_run(arguments said rc)
 core_cpp_selftest_expect("a sync of a ref that does not resolve" "resolving the commit" "${rc}" "${said}" problems)
-if(EXISTS "${copy}/${stagingName}")
-    string(APPEND problems " the unresolvable ref left ${stagingName} inside the copy")
-endif()
+core_cpp_selftest_no_siblings("${copy}" "the unresolvable ref" problems)
 set(arguments -DMODE=check "-DDEST=${copy}")
 core_cpp_selftest_run(arguments said rc)
 core_cpp_selftest_expect("the check after it" ACCEPT "${rc}" "${said}" problems)
@@ -567,15 +590,110 @@ core_cpp_selftest_expect("the check after it" ACCEPT "${rc}" "${said}" problems)
 set(arguments -DMODE=sync "-DREF=${fixtureTag}" "-DREPO=${crRepository}" "-DDEST=${copy}")
 core_cpp_selftest_run(arguments said rc)
 core_cpp_selftest_expect("a sync of a tree with a CR byte" "contains a CR byte" "${rc}" "${said}" problems)
-if(EXISTS "${copy}/${stagingName}")
-    string(APPEND problems " the refused blob left ${stagingName} inside the copy")
-endif()
+core_cpp_selftest_no_siblings("${copy}" "the refused blob" problems)
 set(arguments -DMODE=check "-DDEST=${copy}")
 core_cpp_selftest_run(arguments said rc)
 core_cpp_selftest_expect("the check after it" ACCEPT "${rc}" "${said}" problems)
 math(EXPR caseCount "${caseCount} + 1")
 if(problems)
     string(APPEND failures "\n  a-failed-sync-leaves-the-copy-alone:${problems}")
+endif()
+
+# --- the replacement, which is the one part that can damage a copy ---------------
+#
+# `<DEST>.core-cpp-vendor-old` exists only while a sync is swapping the new copy in. One left on
+# disk is a previous run that failed between the two renames, so it holds the only copy of what was
+# there before, and it is the one thing a sync must not delete to make room. The refusal is also
+# what makes the first of the two renames fail in a way a test can arrange, which is why this case
+# exists on both counts.
+set(root "${WORK_DIR}/refuses-a-leftover-backup-beside-the-copy")
+set(repository "${root}/repo")
+set(copy "${root}/vendor/core-cpp")
+file(REMOVE_RECURSE "${root}")
+core_cpp_selftest_repository("${repository}" "${baseRepository}")
+set(problems "")
+set(arguments -DMODE=sync "-DREF=${fixtureTag}" "-DREPO=${repository}" "-DDEST=${copy}")
+core_cpp_selftest_run(arguments said rc)
+core_cpp_selftest_expect("the first sync" ACCEPT "${rc}" "${said}" problems)
+
+file(WRITE "${copy}${oldSuffix}/CMakeLists.txt" "# what a previous run moved aside\n")
+core_cpp_selftest_run(arguments said rc)
+core_cpp_selftest_expect("a sync beside a leftover backup" "already exists" "${rc}" "${said}" problems)
+if(NOT EXISTS "${copy}${oldSuffix}/CMakeLists.txt")
+    string(APPEND problems " the refusal deleted the leftover backup, which holds the only copy of what was there")
+endif()
+if(EXISTS "${copy}${newSuffix}")
+    string(APPEND problems " the refusal left ${newSuffix} beside the copy")
+endif()
+set(arguments -DMODE=check "-DDEST=${copy}")
+core_cpp_selftest_run(arguments said rc)
+core_cpp_selftest_expect("the check after it" ACCEPT "${rc}" "${said}" problems)
+math(EXPR caseCount "${caseCount} + 1")
+if(problems)
+    string(APPEND failures "\n  refuses-a-leftover-backup-beside-the-copy:${problems}")
+endif()
+
+# --- and the restore, called directly --------------------------------------------
+#
+# The failure this guards against is the SECOND rename failing after the first has succeeded: the
+# previous copy is already out of DEST, and DEST has to get it back. Nothing a test can set up
+# makes that happen through the tool -- the two renames are the same operation in the same
+# directory, so the second cannot fail once the first has worked -- which is exactly why
+# cmake/CoreCppVendorReplace.cmake is a function and not a passage of the script. It is called here
+# with a new copy that does not exist, which is the portable way to make a rename fail, over a real
+# vendored copy that then has to pass its own check.
+get_filename_component(replaceModule "${TOOL}" DIRECTORY)
+set(replaceModule "${replaceModule}/CoreCppVendorReplace.cmake")
+set(root "${WORK_DIR}/restores-the-copy-when-the-replacement-fails")
+set(repository "${root}/repo")
+set(copy "${root}/vendor/core-cpp")
+file(REMOVE_RECURSE "${root}")
+core_cpp_selftest_repository("${repository}" "${baseRepository}")
+set(problems "")
+if(NOT EXISTS "${replaceModule}")
+    string(APPEND problems " ${replaceModule} does not exist, so the replacement is not callable")
+else()
+    set(arguments -DMODE=sync "-DREF=${fixtureTag}" "-DREPO=${repository}" "-DDEST=${copy}")
+    core_cpp_selftest_run(arguments said rc)
+    core_cpp_selftest_expect("the sync that made the copy" ACCEPT "${rc}" "${said}" problems)
+    file(SHA256 "${copy}/MANIFEST" manifestBefore)
+
+    include("${replaceModule}")
+    core_cpp_vendor_replace("${root}/a-new-copy-that-was-never-made" "${copy}"
+                            "${copy}${oldSuffix}" replaceState replaceMessage)
+    if(NOT replaceState STREQUAL "FAILED")
+        string(APPEND problems " the replacement reported '${replaceState}' where the rename could not have worked")
+    endif()
+    foreach(phrase IN ITEMS "could not move the new copy" "put back")
+        string(FIND "${replaceMessage}" "${phrase}" at)
+        if(at EQUAL -1)
+            string(APPEND problems " the message does not say '${phrase}': ${replaceMessage}")
+        endif()
+    endforeach()
+    # A message assembled from several arguments to set() would be a LIST, and the caller prints a
+    # list with a semicolon at every join. Nothing in these messages is a list, so a semicolon in
+    # one is that bug and nothing else.
+    string(FIND "${replaceMessage}" ";" at)
+    if(NOT at EQUAL -1)
+        string(APPEND problems " the message is a list, so it prints with stray semicolons: ${replaceMessage}")
+    endif()
+    # Not merely "the directory is back": back, whole, and still what its manifest describes.
+    core_cpp_selftest_no_siblings("${copy}" "the restore" problems)
+    if(NOT EXISTS "${copy}/MANIFEST")
+        string(APPEND problems " the restore did not put the copy back")
+    else()
+        file(SHA256 "${copy}/MANIFEST" manifestAfter)
+        if(NOT manifestBefore STREQUAL manifestAfter)
+            string(APPEND problems " the copy that came back carries a different manifest")
+        endif()
+    endif()
+    set(arguments -DMODE=check "-DDEST=${copy}")
+    core_cpp_selftest_run(arguments said rc)
+    core_cpp_selftest_expect("the copy's own check after the restore" ACCEPT "${rc}" "${said}" problems)
+endif()
+math(EXPR caseCount "${caseCount} + 1")
+if(problems)
+    string(APPEND failures "\n  restores-the-copy-when-the-replacement-fails:${problems}")
 endif()
 
 # --- a sync run with a vendored copy's own script --------------------------------
@@ -630,9 +748,7 @@ core_cpp_selftest_expect("a sync of the consumer's own repository" "is not a cor
 
 # The copy is what it was: not merely still there, but still passing the check the consumer
 # registers as a test of its own.
-if(EXISTS "${copy}/${stagingName}")
-    string(APPEND problems " the refused sync left ${stagingName} inside the copy")
-endif()
+core_cpp_selftest_no_siblings("${copy}" "the refused sync" problems)
 set(arguments -DMODE=check "-DDEST=${copy}")
 core_cpp_selftest_run(arguments said rc)
 core_cpp_selftest_expect("the copy's own check afterwards" ACCEPT "${rc}" "${said}" problems)

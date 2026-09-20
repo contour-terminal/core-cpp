@@ -32,6 +32,11 @@
 # refuses a manifest that says nothing: an emptied copy beside an emptied manifest would otherwise
 # have no file to disagree about and would pass.
 #
+# sync assembles the whole new copy in <DEST>.core-cpp-vendor-new and puts it in place with two
+# directory renames, through <DEST>.core-cpp-vendor-old: see cmake/CoreCppVendorReplace.cmake for
+# why, and for what happens when one of those renames fails. DEST ends up holding the previous copy
+# or the new one, never a mixture of the two.
+#
 # Every refusal that applies is reported, not only the first.
 # tests/cmake/check-vendor-selftest.cmake proves each of them by name.
 
@@ -55,20 +60,31 @@ set(CORE_CPP_VENDOR_NAMED_FILES
     .clang-format
     .clang-tidy)
 
-# The manifest's name inside the copy, and the staging directory a sync assembles the new copy in
-# before it replaces the old one (so a refusal leaves the previous copy intact).
+# The manifest's name inside the copy, and the two SIBLINGS of DEST a sync uses: it assembles the
+# new copy in one and moves the previous copy into the other, so that putting the new copy in place
+# is two directory renames with a restore between them rather than a file-by-file move into an
+# emptied DEST. See cmake/CoreCppVendorReplace.cmake, which does that part.
+#
+# Siblings rather than children of DEST, because DEST itself is what gets renamed. They are on the
+# same filesystem as DEST for the same reason, and they are named after it so that one surviving a
+# crash says which copy it belongs to. Neither outlives a run of this script.
 set(CORE_CPP_VENDOR_MANIFEST "MANIFEST")
-set(CORE_CPP_VENDOR_STAGING ".core-cpp-vendor-staging")
+set(CORE_CPP_VENDOR_NEW_SUFFIX ".core-cpp-vendor-new")
+set(CORE_CPP_VENDOR_OLD_SUFFIX ".core-cpp-vendor-old")
 
-# The staging directory this run owns, empty until MODE=sync creates one.
+# This script's own directory, captured before any include() moves CMAKE_CURRENT_LIST_DIR.
+set(CORE_CPP_VENDOR_SCRIPT_DIR "${CMAKE_CURRENT_LIST_DIR}")
+
+# The directory holding the copy this run is assembling, empty until MODE=sync creates one.
 set(CORE_CPP_VENDOR_STAGING_DIR "")
 
-## @brief Removes the staging directory this run created, if it has one.
+## @brief Removes the directory of the copy this run was assembling, if it has one.
 ##
-## Every message(FATAL_ERROR) of MODE=sync is preceded by a call to this. A refusal that left the
-## staging directory behind would leave `.core-cpp-vendor-staging/` inside a copy the run never
-## replaced, and the consumer's own MODE=check would then report every staged file as unlisted --
-## on a copy nothing touched. "A refusal leaves the previous copy exactly as it was" is a promise
+## Every message(FATAL_ERROR) of MODE=sync is preceded by a call to this, bar the one that reports
+## that a restore failed and says where both trees are -- that one must keep what it names. A
+## refusal that left the directory behind would leave a `<DEST>.core-cpp-vendor-new` beside a copy
+## the run never replaced, and the consumer would find it in their next `git status`. "A refusal
+## leaves the previous copy exactly as it was, and nothing beside it" is a promise
 ## docs/vendoring.md makes, so it is this macro's job to keep it on every path, not only on the
 ## ones that happen to remember.
 macro(core_cpp_vendor_unstage)
@@ -289,7 +305,7 @@ endif()
 # `cmake -DMODE=sync ...` means. Anything that is not a directory is a remote and is cloned, bare
 # and once, into the staging area; a local path (a checkout or a bare repository) is read in place.
 if(NOT DEFINED REPO OR REPO STREQUAL "")
-    get_filename_component(REPO "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
+    get_filename_component(REPO "${CORE_CPP_VENDOR_SCRIPT_DIR}/.." ABSOLUTE)
 elseif(IS_DIRECTORY "${REPO}")
     # One spelling in the messages, in the comparison below and in the manifest's own header.
     get_filename_component(REPO "${REPO}" ABSOLUTE)
@@ -331,7 +347,8 @@ if(IS_DIRECTORY "${REPO}")
     endif()
 endif()
 
-set(stagingDir "${DEST}/${CORE_CPP_VENDOR_STAGING}")
+set(stagingDir "${DEST}${CORE_CPP_VENDOR_NEW_SUFFIX}")
+set(backupDir "${DEST}${CORE_CPP_VENDOR_OLD_SUFFIX}")
 file(REMOVE_RECURSE "${stagingDir}")
 
 # Before anything is written: an existing DEST is only ever emptied when it is a copy of ours, and
@@ -586,23 +603,28 @@ endif()
 
 # The copy is whole and legal; only now is the old one replaced -- a refusal above left the
 # previous copy exactly as it was.
-file(GLOB existing LIST_DIRECTORIES true "${DEST}/*")
-foreach(entry IN LISTS existing)
-    if(NOT entry STREQUAL "${stagingDir}")
-        file(REMOVE_RECURSE "${entry}")
-    endif()
-endforeach()
-
+#
+# The two things this run made for itself, and that the copy must not carry, go first: git's
+# ls-tree output, and the bare clone of a remote REPO.
 file(REMOVE "${lsTreeFile}")
 if(clonePath)
     file(REMOVE_RECURSE "${clonePath}")
 endif()
-file(GLOB staged LIST_DIRECTORIES true "${stagingDir}/*")
-foreach(entry IN LISTS staged)
-    get_filename_component(name "${entry}" NAME)
-    file(RENAME "${entry}" "${DEST}/${name}")
-endforeach()
-file(REMOVE_RECURSE "${stagingDir}")
+
+# The replacement is the one part of a sync that can damage a copy that was already there, so it is
+# a module of its own, and a test calls it. Two directory renames with a restore between them: DEST
+# ends up holding the previous copy or this one, never a mixture of the two.
+include("${CORE_CPP_VENDOR_SCRIPT_DIR}/CoreCppVendorReplace.cmake")
+core_cpp_vendor_replace("${stagingDir}" "${DEST}" "${backupDir}" replaceState replaceMessage)
+if(NOT replaceState STREQUAL "OK")
+    # FAILED-KEEP-BOTH is the one refusal that keeps what it names: its message is a pair of paths
+    # for a human to finish by hand, and unstaging would delete one of them.
+    if(NOT replaceState STREQUAL "FAILED-KEEP-BOTH")
+        core_cpp_vendor_unstage()
+    endif()
+    message(FATAL_ERROR "core-cpp-vendor: ${replaceMessage}")
+endif()
+set(CORE_CPP_VENDOR_STAGING_DIR "")
 
 # The manifest, hashed from the files as they now lie in DEST, sorted by path so the same ref
 # always lists the same files in the same order.
