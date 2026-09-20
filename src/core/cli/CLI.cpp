@@ -589,26 +589,40 @@ namespace // {{{ helpers
         return stylizer(style);
     }
 
-    string_view wordWrapped(string_view text, unsigned margin, unsigned cursor, bool* trimLeadingWhitespaces)
+    /// One line's worth of a text, and how much of that text it stands for.
+    struct WrappedChunk
+    {
+        /// What to write out.
+        string_view text;
+        /// How much of the input the chunk accounts for: the emitted text plus anything trimmed
+        /// off it. The caller advances by THIS, never by `text.size()`. Advancing by the emitted
+        /// length left the trimmed bytes in front of the index, and the loop that skips what a
+        /// chunk stopped at skips line feeds, not spaces -- so a space before a line feed
+        /// reproduced the same empty chunk for ever, and `--help` never returned.
+        size_t consumed;
+        /// Whether the next turn skips leading spaces (true) or the line feed this chunk stopped
+        /// at (false).
+        bool trimLeadingWhitespaces;
+    };
+
+    WrappedChunk nextWrappedChunk(string_view text, unsigned margin, unsigned cursor)
     {
         auto const linefeed = text.find('\n');
         if (linefeed != string_view::npos)
         {
             // The chunk ends at the line feed, with its trailing spaces trimmed off. Counted
             // down from the line feed rather than up from `linefeed - 1`, which is SIZE_MAX
-            // when the text begins with one.
+            // when the text begins with one. The line feed itself is left for the caller's skip
+            // loop, which is what guarantees progress when this chunk is empty.
             auto end = linefeed;
             while (end > 0 && text[end - 1] == ' ')
                 --end;
-            *trimLeadingWhitespaces = false;
-            return text.substr(0, end);
+            return { .text = text.substr(0, end), .consumed = linefeed, .trimLeadingWhitespaces = false };
         }
-
-        *trimLeadingWhitespaces = true;
 
         auto const unwrappedLength = cursor + text.size();
         if (unwrappedLength <= margin)
-            return text;
+            return { .text = text, .consumed = text.size(), .trimLeadingWhitespaces = true };
 
         // How much of the line is left. This was `margin - cursor + 1` with a `<= 0` guard below
         // it, which is dead for an unsigned type: a cursor at or past the margin -- an option
@@ -616,7 +630,7 @@ namespace // {{{ helpers
         // four billion, and the index below walked off the end of the text.
         auto const available = margin > cursor ? margin - cursor + 1 : 1u;
         if (available >= text.size())
-            return text;
+            return { .text = text, .consumed = text.size(), .trimLeadingWhitespaces = true };
 
         // Cut at the right margin, then shift left until we've hit a whitespace character.
         auto i = static_cast<size_t>(available - 1);
@@ -626,7 +640,8 @@ namespace // {{{ helpers
         // A word longer than the line has no whitespace to shift to. Cut it hard: an empty chunk
         // makes no progress, and the caller loops until it has emitted an indent per iteration
         // for as long as the process lives.
-        return text.substr(0, i > 0 ? i : available);
+        auto const cut = i > 0 ? i : static_cast<size_t>(available);
+        return { .text = text.substr(0, cut), .consumed = cut, .trimLeadingWhitespaces = true };
     }
 
     string wordWrapped(string_view text, unsigned indent, unsigned margin, unsigned* cursor)
@@ -640,11 +655,14 @@ namespace // {{{ helpers
             while (i < text.size() && text[i] == trimChar)
                 ++i; // skip leading whitespaces
 
-            auto const chunk = wordWrapped(text.substr(i), margin, *cursor, &trimLeadingWhitespaces);
+            auto const chunk = nextWrappedChunk(text.substr(i), margin, *cursor);
+            trimLeadingWhitespaces = chunk.trimLeadingWhitespaces;
 
-            output += chunk;
-            *cursor += static_cast<unsigned>(chunk.size());
-            i += chunk.size();
+            output += chunk.text;
+            // The cursor counts emitted columns; the index counts consumed input. They differ by
+            // whatever the chunk trimmed, which is why they are two numbers and not one.
+            *cursor += static_cast<unsigned>(chunk.text.size());
+            i += chunk.consumed;
 
             if (i == text.size())
                 break;

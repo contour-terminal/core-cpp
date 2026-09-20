@@ -5,6 +5,7 @@
 
 #include <format>
 #include <stdexcept>
+#include <string_view>
 
 // TODO API / impl:
 //
@@ -248,5 +249,55 @@ TEST_CASE("CLI.parse.failure-modes")
     {
         auto const args = cli::StringViewList { "contour", "count", "1" };
         CHECK_THROWS_AS(cli::parse(cmd, args), std::invalid_argument);
+    }
+}
+
+// The chunk that ends at a line feed is trimmed of its trailing spaces, but the caller advanced
+// its index by the chunk's LENGTH: the trimmed spaces stayed in front of it, the skip loop skips
+// line feeds and not spaces, and so the same empty chunk came back for ever. Any help text with a
+// space before a line feed hung the renderer -- and `--help` with it.
+TEST_CASE("CLI.helpText.space-before-linefeed")
+{
+    auto const render = [](std::string_view helpText) {
+        auto const cmd = cli::Command {
+            .name = "contour",
+            .helpText = "Terminal emulator."sv,
+            .options = cli::OptionList { cli::Option {
+                .name = "config"sv, .v = cli::Value { ""s }, .helpText = helpText } },
+        };
+        return cli::helpText(cmd, plainStyle(), 80);
+    };
+
+    SECTION("in the middle of the text")
+    {
+        auto const text = render("First line. \nSecond line."sv);
+        CHECK(text.contains("First line."));
+        CHECK(text.contains("Second line."));
+    }
+
+    SECTION("at the very start")
+    {
+        auto const text = render(" \nAfter a space and a line feed."sv);
+        CHECK(text.contains("After a space and a line feed."));
+    }
+
+    SECTION("at the very end")
+    {
+        auto const text = render("Ends with a space before its line feed. \n"sv);
+        CHECK(text.contains("Ends with a space before its line feed."));
+    }
+
+    SECTION("several in a row")
+    {
+        auto const text = render("One. \n \nTwo.   \n\nThree."sv);
+        CHECK(text.contains("One."));
+        CHECK(text.contains("Two."));
+        CHECK(text.contains("Three."));
+    }
+
+    SECTION("nothing but spaces and line feeds")
+    {
+        // Nothing to emit, and the renderer still has to finish.
+        CHECK(!render("  \n  \n \n"sv).empty());
     }
 }
