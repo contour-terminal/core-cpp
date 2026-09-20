@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# How core-cpp's Python is formatted. `scripts/ruff.py --check` is the gate, and the `style` CI job
+# runs it beside clang-format's.
+#
+# The line length is `.clang-format`'s ColumnLimit, so one number governs the whole repository: a
+# Python file and a C++ file beside it wrap at the same column, and moving one moves both.
+line-length = 110
+
+# The floor every environment that runs this meets: CI's Python is 3.12, and the developer machines
+# are newer. It is not a claim that the code runs on anything older, because nothing tests that.
+target-version = "py312"

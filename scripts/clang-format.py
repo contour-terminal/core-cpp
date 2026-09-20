@@ -35,7 +35,9 @@ BATCH_SIZE = 100
 
 def load_tool_versions():
     """Loads scripts/tool-versions.py, the one reader of the version pins."""
-    spec = importlib.util.spec_from_file_location("tool_versions", Path(__file__).with_name("tool-versions.py"))
+    spec = importlib.util.spec_from_file_location(
+        "tool_versions", Path(__file__).with_name("tool-versions.py")
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -85,8 +87,12 @@ def sources() -> list[str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--check", action="store_true", help="report unformatted files instead of rewriting them")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--check", action="store_true", help="report unformatted files instead of rewriting them"
+    )
     parser.add_argument("--binary", help="the clang-format to run (must be the pinned version)")
     parser.add_argument("paths", nargs="*", help="files to format instead of every C++ source")
     arguments = parser.parse_args()
@@ -118,7 +124,10 @@ def main() -> int:
             failed = True
 
     if failed and arguments.check:
-        print("clang-format.py: the files above are not formatted; run: python scripts/clang-format.py", file=sys.stderr)
+        print(
+            "clang-format.py: the files above are not formatted; run: python scripts/clang-format.py",
+            file=sys.stderr,
+        )
     elif not failed:
         verb = "are formatted" if arguments.check else "formatted"
         print(f"clang-format.py: {len(files)} file(s) {verb} with clang-format {version}")

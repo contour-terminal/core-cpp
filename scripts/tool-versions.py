@@ -4,10 +4,16 @@
 
 Each tool is pinned by a `.<tool>-version` file at the repository root, in the organisation's
 format: `#` comments and `key: value` lines, whose `version:` line names the PyPI release of the
-tool (`clang-format`, `clang-tidy`). `.clang-format-version` spells it as the full banner
+tool (`clang-format`, `clang-tidy`, `ruff`). `.clang-format-version` spells it as the full banner
 (`clang-format version 22.1.8`) because the contour-workflows format-on-edit hook compares that line
-exactly; `.clang-tidy-version` spells the bare number. This script is the one reader of both:
-scripts/clang-format.py loads it for the clang-format pin, and CI installs the tools through it.
+exactly; `.clang-tidy-version` and `.ruff-version` spell the bare number. This script is the one
+reader of all three: scripts/clang-format.py and scripts/ruff-format.py load it for their pin, and CI
+installs the tools through it.
+
+A tool belongs here when the *tree* is held to its version -- when two releases of it disagree about
+whether this repository is correct. libclang's Python bindings, which tools/migrate/semantic_rename.py
+needs, are pinned in the CI job that installs them instead: nothing here is formatted or analysed by
+libclang, so `--check` must not start failing for a developer who has no reason to install it.
 
     python scripts/tool-versions.py              # prints the pip requirements, one per line
     python scripts/tool-versions.py --install    # python -m pip install --user <them>
@@ -26,7 +32,7 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 
 # The pinned tools, each with its `.<tool>-version` file at the repository root.
-TOOLS = ("clang-format", "clang-tidy")
+TOOLS = ("clang-format", "clang-tidy", "ruff")
 
 
 def pinned(tool: str) -> str:
@@ -68,7 +74,9 @@ def installed(tool: str) -> str | None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--install", action="store_true", help="install the pinned tools with pip --user")
     action.add_argument("--check", action="store_true", help="fail unless the pinned versions are installed")
@@ -86,7 +94,10 @@ def main() -> int:
         for mismatch in mismatches:
             print(f"tool-versions: {mismatch}", file=sys.stderr)
         if mismatches:
-            print("tool-versions: install the pins with: python scripts/tool-versions.py --install", file=sys.stderr)
+            print(
+                "tool-versions: install the pins with: python scripts/tool-versions.py --install",
+                file=sys.stderr,
+            )
             return 1
         return 0
 

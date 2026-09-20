@@ -1,0 +1,10 @@
+# The ruff build core-cpp's Python is formatted with, and the one place its version is stated.
+#
+# PyPI's ruff release: one build, with the same output on Linux, macOS and Windows.
+# scripts/tool-versions.py installs it, and scripts/ruff.py refuses every other build, because
+# ruff's formatter output changes between releases: an unpinned ruff would reformat a file CI then
+# reports as unformatted, which is the clang-format hazard with a different tool's name on it.
+#
+# Only the formatter is pinned to it. ruff's linter is not run (scripts/ruff.py says why).
+package: ruff
+version: 0.16.8

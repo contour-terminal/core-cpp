@@ -41,8 +41,9 @@ DEFAULT_ROOT = HERE.parent.parent
 DEFAULT_TABLE = HERE / "renames.json"
 
 COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
-STRING = re.compile(r"""R"([^()\\\s]{0,16})\(.*?\)\1" | "(?:[^"\\\n]|\\.)*" | '(?:[^'"\\\n]|\\.)*'""",
-                    re.VERBOSE | re.DOTALL)
+STRING = re.compile(
+    r"""R"([^()\\\s]{0,16})\(.*?\)\1" | "(?:[^"\\\n]|\\.)*" | '(?:[^'"\\\n]|\\.)*'""", re.VERBOSE | re.DOTALL
+)
 NAMESPACE_OPEN = re.compile(r"\bnamespace\s+([A-Za-z_][\w:]*)\s*\{")
 MODULE_CALL = re.compile(r"\bcore_cpp_add_module\s*\(")
 CMAKE_KEYWORD = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -189,7 +190,7 @@ def _checkDelivered(root: Path, row: renames.Row, public: set[str], where: str) 
     if target.public and target.header not in public:
         failures.append(
             f"{where}: src/{target.header} is in no FILE_SET HEADERS, so a consumer cannot include it "
-            f"(say \"public\": false if that is the point)"
+            f'(say "public": false if that is the point)'
         )
     if row.kind == "include" and row.target != target.header:
         failures.append(

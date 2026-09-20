@@ -273,6 +273,16 @@ workflow refuses one without a section here.
   bindings and fails on a skip, so the semantic pass is tested for real. None of this is part of
   the library: no target links it and no consumer builds it.
 
+- `ruff` is pinned like clang-format and clang-tidy, and the repository's Python is formatted with
+  it: `.ruff-version` states the release, `scripts/tool-versions.py` installs it and refuses a
+  mismatch, `scripts/ruff-format.py --check` is the gate, and the `style` CI job runs it beside
+  clang-format's. `ruff.toml` sets the line length to `.clang-format`'s `ColumnLimit`, so a Python
+  file and the C++ beside it wrap at the same column and one number governs both. The wrapper
+  refuses any ruff but the pin, because its formatter output changes between releases: an unpinned
+  ruff reformats a file that CI then reports as unformatted. Only the formatter runs; enabling
+  ruff's linter is a decision of its own. Nothing here enters a consumer's build, so there is no row
+  in `cmake/CoreCppDependencies.cmake`.
+
 ### Breaking
 
 - `core::platform::testing::InMemoryFileSystem` models a file's lifetime the way POSIX does, where

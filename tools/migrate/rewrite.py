@@ -185,8 +185,7 @@ def main(argv: list[str] | None = None) -> int:
     pending = (row for row in rows if row.status == "pending" and totals[row])
     for row in sorted(pending, key=lambda r: r.label):
         print(
-            f"rewrite: warning: applied {totals[row]}x {row.label}, "
-            f"whose target task {row.task} still owes"
+            f"rewrite: warning: applied {totals[row]}x {row.label}, whose target task {row.task} still owes"
         )
     return 0
 

@@ -131,8 +131,8 @@ class ItRenamesByDeclarationNotBySpelling(unittest.TestCase):
 class ItUnionsSeveralCompileDatabases(unittest.TestCase):
     """fastcached's Windows and Linux builds see different files; one database alone misses half."""
 
-    WINDOWS_CPP = 'int onWindows(FastCache::ISocket& sock) { char b[4]; return sock.Read(b, 4); }\n'
-    LINUX_CPP = 'int onLinux(FastCache::ISocket& sock) { char b[4]; return sock.Read(b, 4); }\n'
+    WINDOWS_CPP = "int onWindows(FastCache::ISocket& sock) { char b[4]; return sock.Read(b, 4); }\n"
+    LINUX_CPP = "int onLinux(FastCache::ISocket& sock) { char b[4]; return sock.Read(b, 4); }\n"
 
     def test_edits_from_both_databases_are_applied(self) -> None:
         with TemporaryDirectory() as directory:

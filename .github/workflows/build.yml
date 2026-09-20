@@ -58,6 +58,15 @@ jobs:
       - name: clang-format
         run: python scripts/clang-format.py --check
 
+      # The same, for the repository's Python. ruff's formatter output changes between releases, so
+      # scripts/ruff-format.py refuses any build but the pin, and ruff.toml's line length is
+      # .clang-format's ColumnLimit: one number governs both languages.
+      - name: Install the pinned ruff
+        run: python -m pip install "$(python scripts/tool-versions.py | grep '^ruff==')"
+
+      - name: ruff format
+        run: python scripts/ruff-format.py --check
+
       # Also namespace = directory: the first named namespace of every source under src/core/.
       - name: CMake and C++ hygiene
         run: cmake -DROOT="$GITHUB_WORKSPACE" -P tests/cmake/check-cmake-hygiene.cmake

@@ -144,7 +144,8 @@ refuses otherwise. Use the `/draft-release` skill, then `/publish-release`. Deta
 
 ## Workflow checklist
 
-1. `python scripts/clang-format.py --check` (the pinned clang-format).
+1. `python scripts/clang-format.py --check` (the pinned clang-format), and
+   `python scripts/ruff-format.py --check` if any Python changed (the pinned ruff).
 2. The `clang-tidy` preset (the pinned clang-tidy), clean.
 3. `clang-debug`, then `gcc-release`; on Windows `cl-debug` and `clangcl-release`
    (`--clean-first` on a cache-populated clang-cl tree if fastcache-cc predates fastcached

@@ -42,18 +42,25 @@ every preset.
 
 ## Formatting and static analysis
 
-clang-format and clang-tidy are pinned to one PyPI release each, because successive LLVM
-releases format differently and an older clang-tidy is silent about newer checks:
+clang-format, clang-tidy and ruff are pinned to one PyPI release each, because successive LLVM
+releases format differently, an older clang-tidy is silent about newer checks, and ruff's formatter
+output changes between its releases too:
 
 ```sh
-pip install clang-format==22.1.8 clang-tidy==22.1.8   # or: python scripts/tool-versions.py --install
+python scripts/tool-versions.py --install             # the three pins, from .<tool>-version
 python scripts/clang-format.py                        # format every C++ source
 python scripts/clang-format.py --check                # what CI runs
+python scripts/ruff-format.py                         # format every Python source
+python scripts/ruff-format.py --check                 # what CI runs
 cmake --preset clang-tidy && cmake --build --preset clang-tidy
 ```
 
-`scripts/clang-format.py` refuses any clang-format that is not the pinned one. Never format with
-another version, and never silence a finding with `NOLINT`: fix it.
+`scripts/clang-format.py` and `scripts/ruff-format.py` each refuse any build that is not the pinned
+one. Never format with another version, and never silence a finding with `NOLINT`: fix it.
+
+The Python wraps at the same column as the C++: `ruff.toml`'s `line-length` is `.clang-format`'s
+`ColumnLimit`, so one number governs the repository. Only ruff's formatter is run; its linter is a
+decision nobody has made.
 
 ## What a change carries
 
