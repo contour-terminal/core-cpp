@@ -197,10 +197,10 @@ std::expected<std::unique_ptr<std::istream>, std::string> NativeFileSystem::open
 }
 
 std::expected<std::unique_ptr<std::ostream>, std::string> NativeFileSystem::openWrite(fs::path const& path,
-                                                                                      bool append) const
+                                                                                      WriteMode mode) const
 {
     return openStream<std::ofstream, std::ostream>(
-        path, std::ios::binary | (append ? std::ios::app : std::ios::trunc));
+        path, std::ios::binary | (mode == WriteMode::Append ? std::ios::app : std::ios::trunc));
 }
 
 std::expected<std::unique_ptr<std::iostream>, std::string> NativeFileSystem::openReadWrite(
@@ -249,10 +249,11 @@ std::expected<std::uintmax_t, std::string> NativeFileSystem::removeAll(fs::path 
 
 std::expected<void, std::string> NativeFileSystem::copyFile(fs::path const& from,
                                                             fs::path const& to,
-                                                            bool overwrite) const
+                                                            OverwritePolicy policy) const
 {
     std::error_code ec;
-    auto const opts = overwrite ? fs::copy_options::overwrite_existing : fs::copy_options::none;
+    auto const opts =
+        policy == OverwritePolicy::Replace ? fs::copy_options::overwrite_existing : fs::copy_options::none;
     fs::copy_file(from, to, opts, ec);
     if (ec)
         return std::unexpected(

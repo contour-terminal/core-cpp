@@ -17,6 +17,25 @@
 namespace core::platform
 {
 
+/// @brief What an opened-for-writing file starts out holding.
+///
+/// Named rather than a `bool`, so `openWrite(path, WriteMode::Append)` says at the call site what
+/// `openWrite(path, true)` only said in the header (`.agent/rules/design-principles.md`).
+enum class WriteMode
+{
+    Truncate, ///< Discard whatever the file held.
+    Append,   ///< Write after whatever the file held.
+};
+
+/// @brief What a copy does when the destination already exists.
+///
+/// Named rather than a `bool`, for the reason @ref WriteMode gives.
+enum class OverwritePolicy
+{
+    Refuse,  ///< Fail, leaving the destination as it was.
+    Replace, ///< Replace the destination's content.
+};
+
 /// Abstract interface for filesystem operations.
 ///
 /// This interface abstracts all filesystem I/O, so code that takes it can be unit-tested
@@ -72,12 +91,17 @@ class FileSystem
 
     /// @brief Opens a file for writing, creating it if absent.
     /// @param path The file to open.
-    /// @param append Append to the existing content rather than truncating it.
+    /// @param mode Whether to keep the existing content and write after it, or discard it.
     /// @return The stream, or why it could not be opened. See openRead() on the error's form.
     [[nodiscard]] virtual std::expected<std::unique_ptr<std::ostream>, std::string> openWrite(
-        std::filesystem::path const& path, bool append = false) const = 0;
+        std::filesystem::path const& path, WriteMode mode = WriteMode::Truncate) const = 0;
 
-    /// @brief Opens a file for reading and writing.
+    /// @brief Opens a file for reading and writing, keeping what it holds.
+    ///
+    /// The stream starts at the beginning of the file and carries one position for reading and
+    /// writing, as `std::fstream` does: a write overwrites from wherever the stream stands and
+    /// only extends the file past its end. Seek before switching between the two directions.
+    ///
     /// @param path The file to open.
     /// @return The stream, or why it could not be opened. See openRead() on the error's form.
     [[nodiscard]] virtual std::expected<std::unique_ptr<std::iostream>, std::string> openReadWrite(
@@ -94,9 +118,15 @@ class FileSystem
         std::filesystem::path const& path) const = 0;
     [[nodiscard]] virtual std::expected<std::uintmax_t, std::string> removeAll(
         std::filesystem::path const& path) const = 0;
-    [[nodiscard]] virtual std::expected<void, std::string> copyFile(std::filesystem::path const& from,
-                                                                    std::filesystem::path const& to,
-                                                                    bool overwrite = false) const = 0;
+    /// Copies @p from onto @p to, creating it.
+    /// @param from The file to copy.
+    /// @param to Where to copy it.
+    /// @param policy What to do when @p to already exists.
+    /// @return Nothing, or why the copy failed.
+    [[nodiscard]] virtual std::expected<void, std::string> copyFile(
+        std::filesystem::path const& from,
+        std::filesystem::path const& to,
+        OverwritePolicy policy = OverwritePolicy::Refuse) const = 0;
     [[nodiscard]] virtual std::expected<void, std::string> rename(std::filesystem::path const& from,
                                                                   std::filesystem::path const& to) const = 0;
 

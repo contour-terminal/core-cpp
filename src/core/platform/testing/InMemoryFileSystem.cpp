@@ -20,9 +20,9 @@ namespace
     class MemoryOutputBuf final: public std::streambuf
     {
       public:
-        MemoryOutputBuf(std::string* target, bool append): _target(target)
+        MemoryOutputBuf(std::string* target, WriteMode mode): _target(target)
         {
-            if (!append)
+            if (mode == WriteMode::Truncate)
                 _target->clear();
             _writePos = _target->size();
         }
@@ -54,7 +54,7 @@ namespace
     class MemoryOStream final: public std::ostream
     {
       public:
-        MemoryOStream(std::string* target, bool append): std::ostream(&_buf), _buf(target, append) {}
+        MemoryOStream(std::string* target, WriteMode mode): std::ostream(&_buf), _buf(target, mode) {}
 
       private:
         MemoryOutputBuf _buf;
@@ -285,7 +285,7 @@ std::expected<std::unique_ptr<std::istream>, std::string> InMemoryFileSystem::op
 }
 
 std::expected<std::unique_ptr<std::ostream>, std::string> InMemoryFileSystem::openWrite(
-    std::filesystem::path const& path, bool append) const
+    std::filesystem::path const& path, WriteMode mode) const
 {
     auto const key = normalize(path);
     if (auto refusal = refuseOpen(key))
@@ -293,7 +293,7 @@ std::expected<std::unique_ptr<std::ostream>, std::string> InMemoryFileSystem::op
     ensureParentDirectories(path);
     if (!_files.contains(key))
         _files[key] = {};
-    return std::make_unique<MemoryOStream>(&_files[key], append);
+    return std::make_unique<MemoryOStream>(&_files[key], mode);
 }
 
 std::expected<std::unique_ptr<std::iostream>, std::string> InMemoryFileSystem::openReadWrite(
@@ -370,7 +370,7 @@ std::expected<std::uintmax_t, std::string> InMemoryFileSystem::removeAll(
 
 std::expected<void, std::string> InMemoryFileSystem::copyFile(std::filesystem::path const& from,
                                                               std::filesystem::path const& to,
-                                                              bool overwrite) const
+                                                              OverwritePolicy policy) const
 {
     auto const srcKey = normalize(from);
     auto const dstKey = normalize(to);
@@ -379,7 +379,7 @@ std::expected<void, std::string> InMemoryFileSystem::copyFile(std::filesystem::p
     if (it == _files.end())
         return std::unexpected(std::format("Source file not found: {}", srcKey));
 
-    if (!overwrite && _files.contains(dstKey))
+    if (policy == OverwritePolicy::Refuse && _files.contains(dstKey))
         return std::unexpected(std::format("Destination already exists: {}", dstKey));
 
     ensureParentDirectories(to);

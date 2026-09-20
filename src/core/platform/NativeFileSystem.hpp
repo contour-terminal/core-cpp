@@ -29,7 +29,7 @@ class NativeFileSystem final: public FileSystem
     [[nodiscard]] std::expected<std::unique_ptr<std::istream>, std::string> openRead(
         std::filesystem::path const& path) const override;
     [[nodiscard]] std::expected<std::unique_ptr<std::ostream>, std::string> openWrite(
-        std::filesystem::path const& path, bool append = false) const override;
+        std::filesystem::path const& path, WriteMode mode = WriteMode::Truncate) const override;
     [[nodiscard]] std::expected<std::unique_ptr<std::iostream>, std::string> openReadWrite(
         std::filesystem::path const& path) const override;
 
@@ -40,9 +40,10 @@ class NativeFileSystem final: public FileSystem
     [[nodiscard]] std::expected<bool, std::string> remove(std::filesystem::path const& path) const override;
     [[nodiscard]] std::expected<std::uintmax_t, std::string> removeAll(
         std::filesystem::path const& path) const override;
-    [[nodiscard]] std::expected<void, std::string> copyFile(std::filesystem::path const& from,
-                                                            std::filesystem::path const& to,
-                                                            bool overwrite = false) const override;
+    [[nodiscard]] std::expected<void, std::string> copyFile(
+        std::filesystem::path const& from,
+        std::filesystem::path const& to,
+        OverwritePolicy policy = OverwritePolicy::Refuse) const override;
     [[nodiscard]] std::expected<void, std::string> rename(std::filesystem::path const& from,
                                                           std::filesystem::path const& to) const override;
 
