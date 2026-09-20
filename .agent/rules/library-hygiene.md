@@ -168,6 +168,14 @@ packagers get no new dependency. The contract is in
   each of them must change.
 - **Every public change has a CHANGELOG entry under `[Unreleased]`**, and a breaking one goes
   under **Breaking** with a migration note.
+- **A correction is not finished until every document that carried the wrong version carries the
+  right one.** A behaviour that is described in more than one place — the code's comments, a
+  test, the CHANGELOG, an issue's list — is corrected in *all* of them or in none. Task A10
+  asserted that real streams accept a `putback()` of a character the file does not hold; libc++
+  refuted it, and the fix, the test and the issue were all put right within the hour while the
+  CHANGELOG entry, written earlier, kept telling consumers the refuted story. It was invisible
+  precisely because it had been written before the question arose. When a claim changes, grep the
+  tree and the issues for the claim, not for the file you were editing.
 - **SemVer, with `vX.Y.Z` tags.** In 0.x a minor release may break; a patch release never
   does. The literal in `project(core-cpp VERSION ...)` is the source of truth, and the release
   workflow refuses a tag that does not equal it.
