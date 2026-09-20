@@ -34,9 +34,16 @@ check = loadChecker()
 
 
 class TheDeliveredTableValidates(unittest.TestCase):
-    def test_this_tree_passes_the_gate(self) -> None:
-        failures = check.validate(REPOSITORY_ROOT, TABLE)
-        self.assertEqual(failures, [], "\n".join(failures))
+    """What the table itself must be true of, without reading the working tree.
+
+    There is deliberately no case here asserting that *this tree* passes the gate. A unit test must
+    not take the mutable working tree as its fixture: in a checkout three other lanes are writing
+    into, the verdict would depend on what they have half-written, and one true fact would be
+    reported twice -- by this case and by the ctest -- which makes triage harder, not easier, and
+    teaches people to ignore reds (controller ruling R76). The tree-level assertion is
+    `core-cpp.migrate-renames`, which runs the identical check under `ctest -L hygiene` in every
+    local and CI build. Everything below is hermetic: a sandbox tree, or the table alone.
+    """
 
     def test_the_gate_checked_something(self) -> None:
         # A gate that validated no row at all reports the same green as one that validated them all.
