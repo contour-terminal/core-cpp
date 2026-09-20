@@ -51,11 +51,13 @@ src/core/
                             WriteQueue, WithTimeout, HttpServer, Diagnostics; native only),
                             core::net_tls (Tls, OpenSSL private); posix/ (PollBackend, sockets)
                             linux/ (EpollBackend) bsd/ (KqueueBackend) windows/ (WfmoBackend,
-                            sockets) detail/ are private, and each platform directory has the
-                            DefaultBackend.cpp CMake picks one of; testing/ holds the fakes
-                            (ScriptedBackend, NullBackend, makeSocketPair, BackendMatrix,
-                            CoroTestSupport), makeSocketPair's halves in testing/posix/ and
-                            testing/windows/; IOCP, dialling (planned, B4-B11)
+                            sockets) emscripten/ (the browser as a host) detail/ are private, and
+                            each platform directory has the DefaultBackend.cpp CMake picks one of;
+                            testing/ holds the fakes (ScriptedBackend, NullBackend,
+                            ManualHostScheduler, makeSocketPair, BackendMatrix, CoroTestSupport),
+                            makeSocketPair's halves in testing/posix/ and testing/windows/. The
+                            WebAssembly subset is IoBackend, IHostScheduler and HostDrivenBackend;
+                            IOCP, the loop's own subset and dialling (planned, B4-B11)
   tui/                      core::tui_output (endo: TerminalOutput, SyncGuard, SgrBuilder,
                             TerminalProtocols, CursorShape, Error; links base alone), and
                             core::tui (TerminalInput, VtParser, Terminal, Buffer, Canvas,

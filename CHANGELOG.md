@@ -375,6 +375,24 @@ workflow refuses one without a section here.
   a hand edit mixed into a codemod commit; it does not catch a correct rewrite to a wrong target,
   which is what the drift gate is for.
 
+- `core::net::HostDrivenBackend` (`<core/net/HostDrivenBackend.hpp>`) and the `IHostScheduler`
+  seam behind it: the backend for an event loop that does not own its thread. It does not block —
+  there is nothing to block on inside a browser, and under single-threaded WebAssembly nothing to
+  block with — so the loop is PUMPED instead. `attach` and `setInterest` answer
+  `NetErrorCode::Unsupported`, `wait()` returns at once, and `wake()` and `armWakeAt(deadline)`
+  ask the host for a pump through `IHostScheduler::callAfter(delay, fn, state)`, coalescing
+  several requests into one and clamping a deadline already past to a zero delay. It is portable
+  and is tested on every platform over `core::net::testing::ManualHostScheduler`, because a
+  behaviour observable only in a node run is one nobody reads;
+  `core::net::EmscriptenHostScheduler` (`emscripten_async_call`, which is the browser's
+  `setTimeout`) is what `makeDefaultBackend()` uses there.
+- `core::net` has a WebAssembly subset: its module row is `wasm-subset`, and under single-threaded
+  Emscripten it builds the `IoBackend` contract, `HostDrivenBackend`, the pure logic behind them
+  and the test doubles — and links no `Threads::Threads`, which would force `-pthread` and
+  SharedArrayBuffer onto every consumer. The event loop, its timers and the sockets join in Tasks
+  B4 and B5. `core-cpp.net_backend` is the test binary that runs everywhere, Emscripten included;
+  `core-cpp.net` keeps the cases that need a loop, a socket or a descriptor.
+
 ### Breaking
 
 - `core::platform::testing::InMemoryFileSystem` models a file's lifetime the way POSIX does, where

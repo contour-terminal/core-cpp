@@ -186,10 +186,13 @@ core_cpp_module(NAME async KIND INTERFACE PLATFORMS any)
 # GlobMatch, FileUri and the POSIX providers build: see its SOURCES_EMSCRIPTEN.
 core_cpp_module(NAME platform KIND STATIC DEPS base log PLATFORMS wasm-subset)
 
-# contour's event loop, sockets and HTTP server, native only until Tasks B3 to B5 bring its
-# WebAssembly subset. Its error vocabulary, core::net_types, is header-only, links nothing and
-# builds everywhere; core::net_tls is the part that needs OpenSSL, on top of core::net.
-core_cpp_module(NAME net KIND STATIC DEPS async platform PLATFORMS native)
+# The event loop, the backends, the sockets and the HTTP server. PLATFORMS wasm-subset: under
+# single-threaded Emscripten only its SOURCES_EMSCRIPTEN builds -- the IoBackend contract and the
+# host-driven backend, which is pumped by the browser rather than blocking a thread it does not own
+# (Task B3). The loop, its timers and the sockets join in Tasks B4 and B5. Its error vocabulary,
+# core::net_types, is header-only, links nothing and builds everywhere; core::net_tls is the part
+# that needs OpenSSL, on top of core::net, and stays native.
+core_cpp_module(NAME net KIND STATIC DEPS async platform PLATFORMS wasm-subset)
 core_cpp_module_target(NAME net_types MODULE net KIND INTERFACE PLATFORMS any)
 core_cpp_module_target(NAME net_tls MODULE net KIND STATIC DEPS net PLATFORMS native WHEN CORE_CPP_WITH_TLS)
 

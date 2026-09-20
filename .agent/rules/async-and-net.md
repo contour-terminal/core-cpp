@@ -233,6 +233,17 @@ frames rather than sockets, and every rule below is enforced by a case in
   was asked for. poll(2) needs a negative descriptor in the `pollfd` (`events == 0` does not mute
   it), and epoll needs the descriptor out of the set entirely, because `EPOLLHUP` on a muted
   registration is level-triggered and spins the pump. Windows and kqueue are silent already.
+- **A loop that does not own its thread is PUMPED, and the host is what waits.**
+  `HostDrivenBackend` has no readiness at all — `attach` and `setInterest` answer
+  `NetErrorCode::Unsupported`, because accepting would park a flow on a registration nothing can
+  report — and its `wait()` returns at once. The timeout is not dropped but delegated, through
+  `armWakeAt`. Two requests before the host gets a turn are ONE pump, or a burst of `post()`s
+  queues a browser timer each and the page spends its frame budget in the scheduler; a request
+  earlier than the pump already out is scheduled BESIDE it, because a host's timer cannot be
+  retracted and a spurious pump costs one empty turn where a missed one is a hang. The schedule is
+  cleared before a pump runs, not after, or the turn it drives cannot arm the next one. It is
+  portable and tested on every platform over `testing::ManualHostScheduler`: the browser is one of
+  its hosts, not its definition, and a behaviour observable only in a node run is one nobody reads.
 - **The wakeup channel belongs to the backend, not to the loop.** `IoBackend::wake()` is the one
   member of that interface another thread may call, and every backend that blocks needs the same
   mechanism behind it (`detail::WakeupChannel`). A wakeup raised with no wait in flight is not

@@ -6,7 +6,10 @@
 # each held to its row in cmake/CoreCppModules.cmake:
 #
 #   core::net_types  NetError and IoResult: header-only, and built everywhere, Emscripten included;
-#   core::net        everything else: native only until Tasks B3 to B5 bring its WebAssembly subset;
+#   core::net        everything else. Its row says PLATFORMS wasm-subset: under single-threaded
+#                    Emscripten only the files in the SOURCES_EMSCRIPTEN lists below build, which is
+#                    why the subset's sources appear in both lists. The loop, the sockets and the
+#                    readiness backends join it in Tasks B4 and B5;
 #   core::net_tls    the TLS decorator, only with CORE_CPP_WITH_TLS. OpenSSL is PRIVATE to it, and no
 #                    OpenSSL type appears in its header.
 core_cpp_add_module(net_types KIND INTERFACE
@@ -25,14 +28,33 @@ endif()
 # (EventLoop.hpp above all) expose std::mutex and std::thread, so consumers instantiate them too.
 # net states it itself rather than inheriting it through core::platform and core::base, because it
 # is what net's own headers need. Free on glibc, fatal on FreeBSD, where the symbols live in libthr.
-# (contour's src/net/CMakeLists.txt, 6777ff05)
+# (contour's src/net/CMakeLists.txt, 6777ff05) Not under single-threaded Emscripten, where linking it
+# would force -pthread, and with it SharedArrayBuffer, onto every consumer: CORE_CPP_USE_THREADS is
+# the gate core::base uses for the same reason, and nothing in the WebAssembly subset below has a
+# mutex or a thread in it.
+set(_coreCppNetPublicLibs core::net_types core::async core::platform)
+if(CORE_CPP_USE_THREADS)
+    list(APPEND _coreCppNetPublicLibs Threads::Threads)
+endif()
+
+# What builds under single-threaded WebAssembly: the backend interface, the host-driven backend and
+# the pure logic behind them. There is no thread to block and no descriptor to poll there, so a loop
+# is PUMPED by the browser through an IHostScheduler; readiness arrives through the browser's own
+# APIs and reaches the loop as a post. The test doubles are header-only and need no row here.
+set(_coreCppNetSubset
+    HostDrivenBackend.cpp
+    detail/ReadyBatch.hpp
+    detail/WaitTimeout.hpp)
+set(_coreCppNetSubsetTests HostDrivenBackend_test.cpp IoBackend_test.cpp)
 #
 # Exactly one DefaultBackend.cpp is compiled, and it is the whole of how a platform picks its
 # backend — no `#ifdef` chooses one (Ruling R40). It cannot simply be listed per directory the way
 # the backends themselves are: SOURCES_POSIX and SOURCES_LINUX BOTH apply on Linux, so a
 # posix/DefaultBackend.cpp and a linux/DefaultBackend.cpp would both define makeBackend and collide
 # at link time. The platform is therefore asked once, here.
-if(WIN32)
+if(EMSCRIPTEN)
+    set(_coreCppNetDefaultBackend emscripten/DefaultBackend.cpp)
+elseif(WIN32)
     set(_coreCppNetDefaultBackend windows/DefaultBackend.cpp)
 elseif(LINUX)
     set(_coreCppNetDefaultBackend linux/DefaultBackend.cpp)
@@ -55,7 +77,9 @@ core_cpp_add_module(net KIND STATIC
         AsyncBufferedReader.hpp
         Diagnostics.hpp
         EventLoop.hpp
+        HostDrivenBackend.hpp
         HttpServer.hpp
+        IHostScheduler.hpp
         IListener.hpp
         IoBackend.hpp
         ISocket.hpp
@@ -66,9 +90,11 @@ core_cpp_add_module(net KIND STATIC
         testing/BackendMatrix.hpp
         testing/CoroTestSupport.hpp
         testing/InMemoryTransport.hpp
+        testing/ManualHostScheduler.hpp
         testing/NullBackend.hpp
         testing/ScriptedBackend.hpp
     SOURCES
+        ${_coreCppNetSubset}
         AsyncBufferedReader.cpp
         Diagnostics.cpp
         EventLoop.cpp
@@ -76,10 +102,8 @@ core_cpp_add_module(net KIND STATIC
         WriteQueue.cpp
         ${_coreCppNetDefaultBackend}
         detail/PeerAddress.hpp
-        detail/ReadyBatch.hpp
         detail/ScopeGuard.hpp
         detail/WaitChunking.hpp
-        detail/WaitTimeout.hpp
         detail/WakeupChannel.hpp
     SOURCES_POSIX
         detail/WouldBlock.hpp
@@ -115,7 +139,12 @@ core_cpp_add_module(net KIND STATIC
         windows/WindowsLoopback.hpp
         windows/WindowsSocket.cpp
         windows/WindowsSocket.hpp
-    PUBLIC_LIBS core::net_types core::async core::platform Threads::Threads
+    SOURCES_EMSCRIPTEN
+        ${_coreCppNetSubset}
+        ${_coreCppNetDefaultBackend}
+        emscripten/EmscriptenHostScheduler.cpp
+        emscripten/EmscriptenHostScheduler.hpp
+    PUBLIC_LIBS ${_coreCppNetPublicLibs}
     PRIVATE_LIBS ${_coreCppNetPrivateLibs})
 
 # detail/ScopeGuard.hpp is listed with core::net, not here: net's own tests use it too, and a
@@ -132,13 +161,26 @@ core_cpp_add_test(net NAME net_types SOURCES NetError_test.cpp)
 
 # Nearly every case moves bytes over a socket: a real one, a socketpair, or on Windows the loopback
 # TCP pair that backs SystemPipe and the in-memory transport alike, hence the label on the binary.
+# The backend contract, and the host-driven backend over testing::ManualHostScheduler: a binary of
+# its own because it is the part that builds everywhere, Emscripten included, and because none of it
+# moves a byte over a socket — so it carries neither the `loopback` label nor the timeout the cases
+# that do need.
+core_cpp_add_test(net NAME net_backend
+    SOURCES ${_coreCppNetSubsetTests}
+    SOURCES_EMSCRIPTEN ${_coreCppNetSubsetTests})
+
+# Everything that needs a loop, a socket or a descriptor, and so nothing that builds under
+# Emscripten yet. Asked here rather than left to an empty SOURCES_EMSCRIPTEN, which
+# core_cpp_add_test reads as a mistake and refuses: a binary named after the module follows the
+# module's row, and that row now says the module has a WebAssembly subset. The subset's own cases
+# are the net_backend binary above.
+if(NOT EMSCRIPTEN)
 core_cpp_add_test(net
     SOURCES
         AsyncBufferedReader_test.cpp
         BackendParity_test.cpp
         EventLoop_test.cpp
         HttpServer_test.cpp
-        IoBackend_test.cpp
         Socket_test.cpp
         WriteQueue_test.cpp
     SOURCES_POSIX
@@ -153,6 +195,7 @@ core_cpp_add_test(net
     # than ctest's default 1500 seconds. The binary runs in about 1.5s locally and under 10s on
     # the slowest CI runner, so the margin is two orders of magnitude.
     TIMEOUT 120)
+endif()
 
 # TIMEOUT for the same reason as above, and with more cause: two of these cases say in their own
 # comments that a regression does not fail them, it hangs them.

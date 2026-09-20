@@ -6,7 +6,7 @@ directory `src/core/net/`. Three targets:
 | Target | Kind | What it has | Builds |
 |---|---|---|---|
 | `core::net_types` | header-only | `NetError`, `NetErrorCode`, `IoResult` | everywhere, Emscripten included |
-| `core::net` | static | everything else below | Linux, macOS, the BSDs, Windows |
+| `core::net` | static | everything else below | Linux, macOS, the BSDs, Windows; under single-threaded WebAssembly, the `IoBackend` contract and the host-driven backend |
 | `core::net_tls` | static | `ITlsContext` and the TLS socket | with `CORE_CPP_WITH_TLS`, natively |
 
 !!! note "Status"
@@ -18,8 +18,9 @@ directory `src/core/net/`. Three targets:
     `EventSource` — a backend dispatches readiness to the callbacks a caller registers, instead of
     reporting tokens for the caller to route. Still to come: IOCP as the Windows default,
     fastcached's sockets and dialler, and the event loop and its timers joining the WebAssembly
-    subset (Tasks B4 to B11). Until then nothing of `core::net` but `core::net_types` builds under
-    Emscripten.
+    subset (Tasks B4 to B11). Under Emscripten `core::net_types` and Task B3's WebAssembly
+    subset — `IoBackend`, `IHostScheduler`, `HostDrivenBackend` and the test doubles — build; the
+    loop, its timers and the sockets do not yet.
 
 ## What it has
 
@@ -29,6 +30,8 @@ directory `src/core/net/`. Three targets:
 | `<core/net/IoResult.hpp>` | `IoResult`, `std::expected<std::size_t, NetError>`: what every byte transfer returns |
 | `<core/net/EventLoop.hpp>` | `EventLoop`: the single-threaded driver that resumes coroutines on descriptor readiness and timers; `blockOn()`, `spawn()`, `post()` (the one member other threads may call), `requestStop()`, `delay()`, `sleepUntil()`, `waitReadable()`, `waitWritable()`, `notifyHandleClosing()`; `pollUntil()` |
 | `<core/net/IoBackend.hpp>` | `IoBackend`, the injected blocking wait the loop drives and the readiness dispatcher behind it: `ReadinessHandler` (a handle, an owner and the callbacks a backend invokes), `Interest`, `HandleKind`, `Readiness`, `selectReadinessCallback()`, `BackendKind`, `WaitResult`; and the factories `makeDefaultBackend()`, `makeBackend(BackendKind)` and `preferredBackendKind()`. Every backend's own header is private, so the factories are how a program gets one: poll(2) on POSIX, epoll on Linux, kqueue on macOS and the BSDs, `WSAEventSelect` + `WaitForMultipleObjects` on Windows |
+| `<core/net/IHostScheduler.hpp>` | `IHostScheduler::callAfter()`, the one thing a host event loop has to lend core-cpp's, and `HostCallback` |
+| `<core/net/HostDrivenBackend.hpp>` | `HostDrivenBackend`: the backend for a loop that is PUMPED rather than one that blocks. It has no readiness (`attach` and `setInterest` answer `Unsupported`), its `wait()` never blocks, `wake()` and `armWakeAt()` ask the host for a pump and coalesce, and `isHostDriven()` is true. Portable, and the browser is only one of its hosts |
 | `<core/net/ISocket.hpp>`, `<core/net/IListener.hpp>` | the transport interfaces: `read`, `readWithFd`, `write`, `close`; `accept`, `localPort` |
 | `<core/net/Sockets.hpp>` | `listen()`, `connect()`, `listenUnix()`, `connectUnix()`, `adoptFd()`, `appendReadChunk()` |
 | `<core/net/AsyncBufferedReader.hpp>` | `readLine()`, `readUntil()`, `readExactly()` over an `ISocket`, each buffered byte scanned once |
@@ -87,6 +90,8 @@ or zero, so `makeNetError(NetErrorCode::Eof)` renders as `end of stream`.
 The test doubles are public, in `testing/` and namespace `core::net::testing`, and compiled into
 `core::net`: `ScriptedBackend` (readiness scripted against a `HandlerId`, and recorded timeouts,
 with no descriptors), `NullBackend` (accepts registrations, reports nothing, never blocks),
+`ManualHostScheduler` (a host that does nothing until a case tells it to, which is what makes
+`HostDrivenBackend` testable on every platform rather than only in a browser),
 `makeSocketPair()` (a connected pair over a socketpair, or a loopback TCP pair on Windows),
 `BackendMatrix` (every `BackendKind` `makeBackend` can build, for tests that run one scenario on
 each), and
@@ -100,9 +105,9 @@ private, and CMake's per-platform source lists choose it: `posix/` (`poll(2)`, t
 loopback pair). No file there guards itself with an `#ifdef` of its platform. contour's
 `PollEventSource.cpp` is split along its `#ifdef` into `posix/PollBackend.cpp` and
 `windows/WfmoBackend.cpp`, and `makeSocketPair()` into `testing/posix/` and `testing/windows/`.
-`DefaultBackend.cpp` sits in each of the four, and the `CMakeLists.txt` names exactly one of them,
-because that is what "no `#ifdef` chooses a backend" means: the platform is asked once, where the
-source lists are. One exception remains: `BackendParity_test.cpp` keeps three POSIX-only cases (a
+`DefaultBackend.cpp` sits in each of those and in `emscripten/` (the browser's own host, over
+`emscripten_async_call`), and the `CMakeLists.txt` names exactly one of the five, because that is
+what "no `#ifdef` chooses a backend" means: the platform is asked once, where the source lists are. One exception remains: `BackendParity_test.cpp` keeps three POSIX-only cases (a
 closed descriptor's registration, descriptor exhaustion, a muted registration whose peer hangs up)
 under `#ifndef _WIN32`. `detail/` has the rest that is private: the ready batch every backend
 dispatches through, the wakeup channel every blocking one is woken by, the timeout conversion, the
@@ -145,6 +150,12 @@ From contour's `src/net/README.md` at `6777ff05`, as far as they hold here:
   `EventLoop::post()` uses to break a wait in flight.
 - **No OpenSSL type crosses a header.** `Tls.cpp` keeps it behind `ITlsContext`, and
   `core::net_tls` links OpenSSL PRIVATE.
+- **A loop that does not own its thread is pumped, not blocked.** `HostDrivenBackend` has no wait:
+  it asks its `IHostScheduler` for a pump and returns, and the host is what waits. Several
+  requests before the host gets a turn become ONE pump, or a burst of `post()`s would queue a
+  browser timer each; a request EARLIER than the one already out is scheduled beside it, because a
+  host's timer cannot be retracted and a spurious pump costs an empty turn where a missed one is a
+  hang.
 
 ## Limits
 
@@ -166,6 +177,7 @@ These are contour's, carried as they are:
 | Test | Binary | Labels | What |
 |---|---|---|---|
 | `core-cpp.net_types` | `core-cpp-net_types-test` | `core-cpp`, `net` | `NetError_test.cpp`; runs under Emscripten too |
+| `core-cpp.net_backend` | `core-cpp-net_backend-test` | `core-cpp`, `net` | the backend contract that needs no kernel (`selectReadinessCallback`, the ready batch, the timeout conversion) and the host-driven backend over `ManualHostScheduler`; runs under Emscripten too |
 | `core-cpp.net` | `core-cpp-net-test` | `core-cpp`, `net`, `loopback` | the event loop, the backends' parity, sockets, AF_UNIX and descriptor passing (POSIX), the buffered reader, the write queue, the HTTP server |
 | `core-cpp.net_tls` | `core-cpp-net_tls-test` | `core-cpp`, `net`, `loopback` | `Tls_test.cpp`, with `CORE_CPP_WITH_TLS` |
 
