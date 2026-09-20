@@ -68,8 +68,8 @@ namespace detail
     struct WhenAnyState
     {
         std::size_t remaining = 0;            ///< Live children plus the start-phase guard.
-        std::size_t winner = WhenAnyNoWinner; ///< Index of the first child to finish.
-        bool decided = false;                 ///< Latch: only the first finisher claims the win.
+        std::size_t winner = WhenAnyNoWinner; ///< Index of the first child to complete.
+        bool decided = false;                 ///< Latch: a child completed and claimed the win.
         std::coroutine_handle<> continuation; ///< The `whenAny` awaiter's coroutine.
         std::exception_ptr exception;         ///< Winner's exception, rethrown to the awaiter.
         StopSource childStop;                 ///< request_stop() cancels the losing children.
@@ -87,6 +87,7 @@ namespace detail
             std::size_t index = 0;               ///< This runner's position in the input list.
             StopToken token;                     ///< The shared child token (cancels losers).
             std::exception_ptr failure;          ///< This child's failure, if its task threw.
+            bool cancelled = false;              ///< Its task unwound on OperationCancelled: a loser.
 
             WhenAnyRunner get_return_object() noexcept
             {
@@ -95,11 +96,13 @@ namespace detail
 
             [[nodiscard]] std::suspend_always initial_suspend() const noexcept { return {}; }
 
-            /// Final awaiter: the first child to finish claims the win, propagates its
+            /// Final awaiter: the first child to COMPLETE claims the win, propagates its
             /// failure (if any) to the shared state, and requests stop so the losers
-            /// unwind. The LAST child to finish (winner or unwound loser) tail-transfers
-            /// to the awaiting coroutine — so the awaiter, which owns every child frame,
-            /// is not destroyed until no child is still parked.
+            /// unwind. A child that unwound cancelled claims nothing: it is a loser,
+            /// whether the winner cancelled it or the awaiting flow did. The LAST child
+            /// to finish (winner or unwound loser) tail-transfers to the awaiting
+            /// coroutine — so the awaiter, which owns every child frame, is not
+            /// destroyed until no child is still parked.
             struct FinalAwaiter
             {
                 [[nodiscard]] bool await_ready() const noexcept { return false; }
@@ -112,7 +115,7 @@ namespace detail
                     // this whole race and destroy this frame's owner, and the state has to outlive
                     // the rest of this function.
                     auto const race = promise.state;
-                    if (!race->decided)
+                    if (!race->decided && !promise.cancelled)
                     {
                         race->decided = true;
                         race->winner = promise.index;
@@ -129,9 +132,27 @@ namespace detail
 
             [[nodiscard]] FinalAwaiter final_suspend() const noexcept { return {}; }
 
-            /// The runner body try/catches its task, so nothing should escape; capture
-            /// defensively into this child's failure slot.
-            void unhandled_exception() noexcept { failure = std::current_exception(); }
+            /// Sorts what escaped the child's task into the two things it can be: a
+            /// cancellation, which makes this child a loser, or a failure, which the
+            /// final awaiter surfaces if this child is the winner. Classifying here
+            /// rather than in the runner body is what tells the two apart at all: a
+            /// body that swallowed its @c OperationCancelled would reach the final
+            /// awaiter looking exactly like a child that ran to completion.
+            void unhandled_exception() noexcept
+            {
+                try
+                {
+                    throw;
+                }
+                catch (OperationCancelled const&)
+                {
+                    cancelled = true;
+                }
+                catch (...)
+                {
+                    failure = std::current_exception();
+                }
+            }
 
             void return_void() const noexcept {}
 
@@ -156,25 +177,15 @@ namespace detail
         UniqueCoroHandle<PromiseType> _handle;
     };
 
-    /// Wraps one task so it participates in the race. A child cancelled by the
-    /// winner swallows its @c OperationCancelled (a loser, not a failure) and
-    /// returns normally; any other exception escapes to the runner promise's
-    /// @c unhandled_exception, which records it in this child's failure slot so the
-    /// final awaiter can surface it if this child is the winner.
+    /// Wraps one task so it participates in the race. Whatever the task throws goes
+    /// to the runner promise's @c unhandled_exception, which tells a cancellation
+    /// (this child lost) from a failure (this child's, to surface if it wins); either
+    /// way the runner reaches its final awaiter, so the join counter is always
+    /// decremented.
     /// @param task The work to run.
     inline WhenAnyRunner makeWhenAnyRunner(Task<void> task)
     {
-        try
-        {
-            co_await std::move(task);
-        }
-        catch (OperationCancelled const&)
-        {
-            // A losing child cancelled by the winner: expected control flow, not a
-            // failure. Swallow it so the runner returns normally and its final
-            // awaiter runs (as a no-op, since the winner already latched).
-            co_return;
-        }
+        co_await std::move(task);
     }
 
     /// The parent→child cancellation bridge: the callback registered on the awaiting coroutine's
@@ -255,17 +266,18 @@ namespace detail
             return --_state->remaining != 0;
         }
 
-        /// @return The index of the first task to finish.
+        /// @return The index of the first task to complete.
         /// @throws The winner's exception, if it failed; @c OperationCancelled if the
-        ///         awaiting flow itself was cancelled before any child won.
+        ///         awaiting flow itself was cancelled and no child completed.
         [[nodiscard]] std::size_t await_resume() const
         {
-            // A cancelled awaiting flow sees NO winner: the child that latched
-            // `decided` did so while unwinding through its own (swallowed)
-            // OperationCancelled, so returning its index would report a cancelled
-            // loser as a successful result and let the flow continue on its
-            // success path. Cancellation dominates even a latched winner.
-            if (_parentToken.stop_requested())
+            // Only where nothing won: a child that completed did so, and a cancellation
+            // that arrives after it cannot undo it. `whenAny(readSocket(), timeout())`
+            // whose read consumed bytes has nowhere to put them back, and
+            // .agent/rules/async-and-net.md is explicit that the data wins. Where no
+            // child completed, `decided` is false -- a cancelled loser latches nothing --
+            // and a stopped parent token is what says why.
+            if (!_state->decided && _parentToken.stop_requested())
                 throw OperationCancelled {};
             if (_state->exception)
                 std::rethrow_exception(_state->exception);

@@ -53,6 +53,10 @@ struct ManualEvent
 
 /// Parks on a ManualEvent, then records that it ran to completion (the winner path)
 /// or, if cancelled while parked, that it was cancelled (the loser path).
+///
+/// A cancelled racer notes it and lets the OperationCancelled out, which is the contract whenAny
+/// states for a loser: a child that swallows its cancellation and returns has, as far as the race
+/// can tell, completed, and a completion is a win.
 Task<void> racer(std::vector<std::coroutine_handle<>>* waiters, bool* completed, bool* cancelled)
 {
     try
@@ -63,6 +67,7 @@ Task<void> racer(std::vector<std::coroutine_handle<>>* waiters, bool* completed,
     catch (OperationCancelled const&)
     {
         *cancelled = true;
+        throw;
     }
 }
 
@@ -145,6 +150,7 @@ Task<void> stopCallbackRacer(std::vector<std::coroutine_handle<>>* waiters, bool
     catch (OperationCancelled const&)
     {
         *cancelled = true;
+        throw;
     }
 }
 
@@ -185,6 +191,26 @@ Task<void> raceTwo(std::vector<std::coroutine_handle<>>* waiters,
                    std::size_t* winner)
 {
     *winner = co_await whenAny(racer(waiters, aDone, aCancelled), racer(waiters, bDone, bCancelled));
+}
+
+/// Drives whenAny over two manual racers, catching a cancellation in its own frame rather than
+/// letting it out of the coroutine (which the Catch2 harness cannot take on Windows).
+Task<void> raceTwoCatching(std::vector<std::coroutine_handle<>>* waiters,
+                           bool* aDone,
+                           bool* aCancelled,
+                           bool* bDone,
+                           bool* bCancelled,
+                           std::size_t* winner,
+                           bool* threwCancelled)
+{
+    try
+    {
+        *winner = co_await whenAny(racer(waiters, aDone, aCancelled), racer(waiters, bDone, bCancelled));
+    }
+    catch (OperationCancelled const&)
+    {
+        *threwCancelled = true;
+    }
 }
 
 /// Drives whenAny where the first child completes synchronously.
@@ -253,6 +279,40 @@ TEST_CASE("whenAny completes synchronously when a child wins during start", "[wh
     REQUIRE(waiters.empty());
     REQUIRE(parkedCancelled);
     REQUIRE_FALSE(parkedDone);
+}
+
+TEST_CASE("whenAny keeps a winner that already ran when the flow is cancelled after it", "[whenAny]")
+{
+    auto waiters = std::vector<std::coroutine_handle<>> {};
+    auto aDone = false;
+    auto aCancelled = false;
+    auto bDone = false;
+    auto bCancelled = false;
+    auto threwCancelled = false;
+    auto winner = core::async::detail::WhenAnyNoWinner;
+
+    auto root = raceTwoCatching(&waiters, &aDone, &aCancelled, &bDone, &bCancelled, &winner, &threwCancelled);
+    auto source = core::async::StopSource {};
+    root.handle().promise().setStopToken(source.get_token());
+    root.handle().resume();
+    REQUIRE(waiters.size() == 2);
+
+    // The first child completes — `whenAny(readSocket(), timeout())` where the read consumed
+    // bytes. It wins and requests stop on the loser, which is still parked.
+    waiters[0].resume();
+    REQUIRE(aDone);
+    REQUIRE_FALSE(root.done());
+
+    // Only now is the awaiting flow cancelled, before the loser has unwound.
+    source.request_stop();
+    waiters[1].resume();
+
+    REQUIRE(root.done());
+    REQUIRE(bCancelled);
+    // A cancellation that arrives after a child has completed does not undo that completion:
+    // there is no way to hand the bytes back, so the winner is reported and the flow decides.
+    REQUIRE_FALSE(threwCancelled);
+    REQUIRE(winner == 0);
 }
 
 TEST_CASE("whenAny survives children resumed from inside the cancel bridge's own callback", "[whenAny]")
