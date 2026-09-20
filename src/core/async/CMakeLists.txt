@@ -16,31 +16,37 @@ if(CORE_CPP_USE_THREADS)
     list(APPEND _coreCppAsyncLibs Threads::Threads)
 endif()
 
-#
 # ThreadPoolExecutor.hpp is the module's one platform-shaped header: it needs threads, and
-# single-threaded Emscripten has none, so it refuses to compile there (its own #error) and is left
-# out of the file set that build installs. Everything else is in the WebAssembly subset.
-set(_coreCppAsyncHeaders
-    AsyncQueue.hpp
-    Awaitable.hpp
-    Cancellation.hpp
-    DetachedTask.hpp
-    IExecutor.hpp
-    Join.hpp
-    ParkedWork.hpp
-    ResumeOn.hpp
-    StopToken.hpp
-    SyncRun.hpp
-    Task.hpp
-    UniqueCoroHandle.hpp
-    WhenAll.hpp
-    WhenAny.hpp)
+# single-threaded Emscripten has none, so it refuses to compile there (its own #error) and is in no
+# file set that build installs. Everything else is in the WebAssembly subset.
+#
+# It reaches HEADERS through a variable of its own rather than a list(APPEND) over the whole list,
+# so the rest stays literal where the file set is declared: tools/migrate/check-renames.py reads
+# this call to answer whether a header a rename row names is one a consumer can include, and it
+# resolves a ${...} in HEADERS through the set() beside it -- a list(APPEND) is invisible to it, and
+# the row would then read as private.
+set(_coreCppAsyncThreadedHeaders "")
 if(CORE_CPP_USE_THREADS)
-    list(APPEND _coreCppAsyncHeaders ThreadPoolExecutor.hpp)
+    set(_coreCppAsyncThreadedHeaders ThreadPoolExecutor.hpp)
 endif()
 
 core_cpp_add_module(async KIND INTERFACE
-    HEADERS ${_coreCppAsyncHeaders}
+    HEADERS
+        AsyncQueue.hpp
+        Awaitable.hpp
+        Cancellation.hpp
+        DetachedTask.hpp
+        IExecutor.hpp
+        Join.hpp
+        ParkedWork.hpp
+        ResumeOn.hpp
+        StopToken.hpp
+        SyncRun.hpp
+        Task.hpp
+        UniqueCoroHandle.hpp
+        WhenAll.hpp
+        WhenAny.hpp
+        ${_coreCppAsyncThreadedHeaders}
     PUBLIC_LIBS ${_coreCppAsyncLibs})
 
 # That the module carries the dependency, asserted here because a host whose pthread is part of
@@ -123,7 +129,12 @@ if(CORE_CPP_TESTING)
     target_compile_definitions(core-cpp-async-link-smoke PRIVATE CORE_ASYNC_FORCE_STOP_TOKEN_FALLBACK)
     core_cpp_apply_toolchain(core-cpp-async-link-smoke)
     add_test(NAME core-cpp.async-link-smoke COMMAND core-cpp-async-link-smoke)
-    set_tests_properties(core-cpp.async-link-smoke PROPERTIES LABELS "core-cpp;async;hygiene")
+    # Bounded here because core_cpp_add_test()'s 300-second default does not reach a bare
+    # add_test(), and an unbounded one inherits ctest's 1500 seconds, which names neither the test
+    # nor what it waited for. 60 rather than 300: this program asserts a handful of StopToken
+    # operations and returns, so it runs in milliseconds or it is broken, and a bound that says so
+    # is worth more than one copied from a suite whose slowest binary takes nine seconds.
+    set_tests_properties(core-cpp.async-link-smoke PROPERTIES LABELS "core-cpp;async;hygiene" TIMEOUT 60)
 endif()
 
 # Which StopToken this toolchain gets, in the configure log: whether core-cpp.async tests

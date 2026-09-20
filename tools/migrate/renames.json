@@ -4863,6 +4863,61 @@
     },
     {
       "kind": "include",
+      "from": "FastCache/Async/ParkedWork.hpp",
+      "to": "core/async/ParkedWork.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/ParkedWork.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Async/IExecutor.hpp",
+      "to": "core/async/IExecutor.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/IExecutor.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Async/ResumeOn.hpp",
+      "to": "core/async/ResumeOn.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/ResumeOn.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Async/ThreadPoolExecutor.hpp",
+      "to": "core/async/ThreadPoolExecutor.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/ThreadPoolExecutor.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Async/AsyncQueue.hpp",
+      "to": "core/async/AsyncQueue.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/AsyncQueue.hpp"
+      }
+    },
+    {
+      "kind": "include",
       "from": "FastCache/Net/ISocket.hpp",
       "to": "core/net/ISocket.hpp",
       "profiles": [
@@ -5396,9 +5451,373 @@
       "profiles": [
         "fastcached"
       ],
-      "status": "pending",
-      "task": "B1",
-      "note": "core::async::syncRun is Task B1's; the row carries no target yet, so the gate checks nothing here. B1 adds \"target\": {\"header\": \"core/async/SyncRun.hpp\", \"symbol\": \"core::async::syncRun\"} and marks the row delivered"
+      "target": {
+        "header": "core/async/SyncRun.hpp",
+        "symbol": "core::async::syncRun"
+      },
+      "note": "Task B1. fastcached's SECOND SyncRun -- the overload taking a callable that retrieves the park -- is a name of its own here, core::async::syncRunWith(task, retrieve), declared in the same header. The table keys on the source symbol, so it cannot carry a second row: the rewrite turns every SyncRun into syncRun, and a two-argument call then fails to compile, which names the site to change by hand. That is deliberate -- the alternative is a call that compiles and means something else."
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::DetachedTask",
+      "to": "core::async::DetachedTask",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/DetachedTask.hpp",
+        "symbol": "core::async::DetachedTask"
+      },
+      "note": "Task B1. Its own header here, where fastcached keeps it in Task.hpp."
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::ParkedWork",
+      "to": "core::async::ParkedWork",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/ParkedWork.hpp",
+        "symbol": "core::async::ParkedWork"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::Detail::Parked",
+      "to": "core::async::detail::Parked",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/ParkedWork.hpp",
+        "symbol": "core::async::detail::Parked"
+      },
+      "note": "Task B1. An executor's parked-work entry; only an executor implementation names it."
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::IExecutor",
+      "to": "core::async::IExecutor",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/IExecutor.hpp",
+        "symbol": "core::async::IExecutor"
+      },
+      "note": "Task B1. Every class deriving from it says `using IExecutor::submit;`, or its own submit(std::coroutine_handle<>) hides the base's submit(ParkedWork) (LASTRADA-Software/fastcached#1041)."
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::ResumeOn",
+      "to": "core::async::ResumeOn",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/ResumeOn.hpp",
+        "symbol": "core::async::ResumeOn"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::ThreadPoolExecutor",
+      "to": "core::async::ThreadPoolExecutor",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/ThreadPoolExecutor.hpp",
+        "symbol": "core::async::ThreadPoolExecutor"
+      },
+      "note": "Task B1. Header-only here: fastcached's ThreadPoolExecutor.cpp is inlined, so a consumer links nothing new for it. Not in the WebAssembly subset."
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::AsyncQueue",
+      "to": "core::async::AsyncQueue",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/AsyncQueue.hpp",
+        "symbol": "core::async::AsyncQueue"
+      },
+      "note": "Task B1. It is built over core::async::IExecutor rather than fastcached's IReactor, so the constructor's first argument changes type: an EventLoop still satisfies it. Its members become camelBack -- push, pop, isClosed, size, hasWaiter, displaced, each a row below -- except Close: the table keys a member row on (profile, name) and ISocket::Close already holds it, so AsyncQueue::Close -> close is recorded here rather than rewritten. Its pop() is also stop-aware now: a cancel from the awaiting flow's own token throws core::async::OperationCancelled, where fastcached's could only answer nullopt on close."
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::AsyncQueueOptions",
+      "to": "core::async::AsyncQueueOptions",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/AsyncQueue.hpp",
+        "symbol": "core::async::AsyncQueueOptions"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::AsyncQueueOverflow",
+      "to": "core::async::AsyncQueueOverflow",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/AsyncQueue.hpp",
+        "symbol": "core::async::AsyncQueueOverflow"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::AsyncQueueOverflow::DropOldest",
+      "to": "core::async::AsyncQueueOverflow::DropOldest",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/AsyncQueue.hpp",
+        "symbol": "core::async::AsyncQueueOverflow::DropOldest"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::AsyncQueueOverflow::DropNewest",
+      "to": "core::async::AsyncQueueOverflow::DropNewest",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/AsyncQueue.hpp",
+        "symbol": "core::async::AsyncQueueOverflow::DropNewest"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::AsyncQueuePush",
+      "to": "core::async::AsyncQueuePush",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/AsyncQueue.hpp",
+        "symbol": "core::async::AsyncQueuePush"
+      },
+      "note": "Task B1. Its `bool accepted` is `AsyncQueueAdmission admission`: a bool result reporting success is a finding (.agent/rules/design-principles.md). No rewrite row, for the reason core::tui::LanguageId::Endo has none -- the TYPE changes with the name, so every use site needs a human: `if (queue.Push(x).accepted)` becomes `if (queue.push(x).admission == AsyncQueueAdmission::Accepted)`. `displaced` keeps its name and meaning."
+    },
+    {
+      "kind": "member",
+      "from": "IsReady",
+      "to": "done",
+      "apply": "semantic",
+      "scope": "FastCache::Task",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/Task.hpp",
+        "symbol": "core::async::Task::done"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Native",
+      "to": "handle",
+      "apply": "semantic",
+      "scope": "FastCache::Task",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/Task.hpp",
+        "symbol": "core::async::Task::handle"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Release",
+      "to": "release",
+      "apply": "semantic",
+      "scope": "FastCache::Task",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/Task.hpp",
+        "symbol": "core::async::Task::release"
+      },
+      "note": "Task B1. It also empties the task, which fastcached's does -- but here the awaiter takes the frame too, so a Task awaited with co_await std::move(t) is empty afterwards and t.handle(), t.done() and t.result() no longer answer about it."
+    },
+    {
+      "kind": "member",
+      "from": "Submit",
+      "to": "submit",
+      "apply": "semantic",
+      "scope": "FastCache::IExecutor",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/IExecutor.hpp",
+        "symbol": "core::async::IExecutor::submit"
+      },
+      "note": "Task B1. The table keys a member row on (profile, name), so this one row carries Submit for every executor: ThreadPoolExecutor's override and EventLoop's are the same rename."
+    },
+    {
+      "kind": "member",
+      "from": "Stop",
+      "to": "stop",
+      "apply": "semantic",
+      "scope": "FastCache::ThreadPoolExecutor",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/ThreadPoolExecutor.hpp",
+        "symbol": "core::async::ThreadPoolExecutor::stop"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Threads",
+      "to": "threads",
+      "apply": "semantic",
+      "scope": "FastCache::ThreadPoolExecutor",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/ThreadPoolExecutor.hpp",
+        "symbol": "core::async::ThreadPoolExecutor::threads"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Resume",
+      "to": "resume",
+      "apply": "semantic",
+      "scope": "FastCache::Detail::Parked",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/ParkedWork.hpp",
+        "symbol": "core::async::detail::Parked::resume"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Handle",
+      "to": "handle",
+      "apply": "semantic",
+      "scope": "FastCache::Detail::Parked",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/ParkedWork.hpp",
+        "symbol": "core::async::detail::Parked::handle"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Take",
+      "to": "take",
+      "apply": "semantic",
+      "scope": "FastCache::Detail::Parked",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/ParkedWork.hpp",
+        "symbol": "core::async::detail::Parked::take"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Push",
+      "to": "push",
+      "apply": "semantic",
+      "scope": "FastCache::AsyncQueue",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/AsyncQueue.hpp",
+        "symbol": "core::async::AsyncQueue::push"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Pop",
+      "to": "pop",
+      "apply": "semantic",
+      "scope": "FastCache::AsyncQueue",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/AsyncQueue.hpp",
+        "symbol": "core::async::AsyncQueue::pop"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "IsClosed",
+      "to": "isClosed",
+      "apply": "semantic",
+      "scope": "FastCache::AsyncQueue",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/AsyncQueue.hpp",
+        "symbol": "core::async::AsyncQueue::isClosed"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Size",
+      "to": "size",
+      "apply": "semantic",
+      "scope": "FastCache::AsyncQueue",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/AsyncQueue.hpp",
+        "symbol": "core::async::AsyncQueue::size"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "HasWaiter",
+      "to": "hasWaiter",
+      "apply": "semantic",
+      "scope": "FastCache::AsyncQueue",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/AsyncQueue.hpp",
+        "symbol": "core::async::AsyncQueue::hasWaiter"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Displaced",
+      "to": "displaced",
+      "apply": "semantic",
+      "scope": "FastCache::AsyncQueue",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/AsyncQueue.hpp",
+        "symbol": "core::async::AsyncQueue::displaced"
+      }
     },
     {
       "kind": "symbol",
