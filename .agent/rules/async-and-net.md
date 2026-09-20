@@ -86,12 +86,13 @@ frames rather than sockets, and every rule below is enforced by a case in
   disowns and resumes in one expression, and a handle it *declines* to resume (already done, or
   empty) has its owned chain root destroyed there rather than dropped. Taking the work out and
   then walking away is a silent leak on the one path the type exists to close.
-- **`using IExecutor::submit;` in every derived class, and GCC already says so.** A derived class
-  that re-declares one overload of a name hides every other overload of it. On top of the
-  compile-time check in `ParkedWork_test.cpp`, GCC's `-Woverloaded-virtual` — part of core-cpp's
-  pedantic set, so a build break — refuses the hiding declaration outright; clang does not. Keep
-  that second line of defence: the negative control in the test is written over a non-virtual base
-  precisely so the real one stays refused. Origin:
+- **`using IExecutor::submit;` in every derived class, and two tools already say so.** A derived
+  class that re-declares one overload of a name hides every other overload of it. On top of the
+  compile-time check in `ParkedWork_test.cpp`, GCC's `-Woverloaded-virtual` and clang-tidy's
+  `bugprone-derived-method-shadowing-base-method` each refuse the hiding declaration outright, and
+  both are errors here. Keep those: `ParkedWork_test.cpp`'s negative control is a plain type
+  offering only `submit(handle)` — what the hiding leaves reachable — rather than the inheriting
+  form, precisely because the inheriting form no longer compiles in this tree. Origin:
   [fastcached#1041](https://github.com/LASTRADA-Software/fastcached/issues/1041).
 - **A queue or a resource never resumes its consumer inline.** `AsyncQueue::push()` and `close()`
   hand the parked handle to `IExecutor::submit` and return. A producer commonly pushes while
