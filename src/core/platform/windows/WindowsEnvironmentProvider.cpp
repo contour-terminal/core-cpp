@@ -2,12 +2,14 @@
 #include <core/platform/windows/WindowsEnvironmentProvider.hpp>
 
 #ifdef _WIN32
+    #include <core/Environment.hpp>
     #include <core/platform/PathUtils.hpp>
 
     #include <algorithm>
     #include <cctype>
     #include <filesystem>
     #include <memory>
+    #include <tuple>
 
     #include <windows.h>
 
@@ -44,30 +46,26 @@ std::optional<std::string> WindowsEnvironmentProvider::get(std::string_view name
     if (auto const it = _values.find(std::string(name)); it != _values.end())
         return it->second;
 
-    std::string buffer(32767, '\0');
-
-    auto const nameStr = std::string(name);
-    auto const len =
-        GetEnvironmentVariableA(nameStr.c_str(), buffer.data(), static_cast<DWORD>(buffer.size()));
-    if (len == 0)
-        return std::nullopt;
-
-    buffer.resize(len);
-    return buffer;
+    // core::LiveEnvironment reads the same Win32 block, and reads it right: a return of 0 from
+    // GetEnvironmentVariableA is an empty value -- a variable that is set -- unless the call says
+    // the name is gone, and a value that does not fit the buffer needs the size it reports. The
+    // copy that used to stand here got both wrong, so the two readers disagreed about the same
+    // block; it also allocated 32 KiB on every lookup, where this sizes the buffer to the value.
+    return core::LiveEnvironment {}.get(name);
 }
 
 void WindowsEnvironmentProvider::unset(std::string_view name)
 {
     _values.erase(std::string(name));
-    auto const nameStr = std::string(name);
-    SetEnvironmentVariableA(nameStr.c_str(), nullptr);
+    // The interface has no error channel; a name the environment cannot hold is not set there.
+    std::ignore = core::unsetProcessEnvironmentVariable(name);
 }
 
 void WindowsEnvironmentProvider::exportVariable(std::string_view name)
 {
-    auto const it = _values.find(std::string(name));
-    if (it != _values.end())
-        SetEnvironmentVariableA(it->first.c_str(), it->second.c_str());
+    if (auto const it = _values.find(std::string(name)); it != _values.end())
+        // The interface has no error channel; a name the environment cannot hold stays local.
+        std::ignore = core::setProcessEnvironmentVariable(it->first, it->second);
 }
 
 std::vector<std::string> WindowsEnvironmentProvider::keys() const

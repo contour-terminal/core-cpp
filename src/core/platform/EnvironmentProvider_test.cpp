@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <string>
+#include <tuple>
 
 #ifdef _WIN32
     #include <core/platform/windows/WindowsEnvironmentProvider.hpp>
@@ -216,4 +217,50 @@ TEST_CASE("the native EnvironmentProvider reads what the process environment hol
     auto const provider = nativeEnvironmentProvider();
     REQUIRE(provider != nullptr);
     CHECK(provider->get("PATH") == core::LiveEnvironment {}.get("PATH"));
+}
+
+namespace
+{
+/// Removes a variable this file wrote, however the test case leaves.
+///
+/// The process environment is global to the binary, so a REQUIRE that throws past the cleanup
+/// would leave the variable set for every test that runs afterwards.
+struct WrittenVariable
+{
+    char const* name;
+    ~WrittenVariable() { std::ignore = core::unsetProcessEnvironmentVariable(name); }
+};
+} // namespace
+
+TEST_CASE("the native EnvironmentProvider reads an empty variable as set, not as absent", "[platform]")
+{
+    // An empty value is a variable that is set, which is what core::LiveEnvironment answers and
+    // what Environment_test asserts of the writer. The Windows provider hand-rolled its own
+    // GetEnvironmentVariableA call instead of delegating, and a return of 0 there cannot tell an
+    // empty value from a missing name -- so two readers of the same Win32 block disagreed.
+    constexpr auto Name = "CORE_CPP_NATIVE_PROVIDER_EMPTY_TEST_VARIABLE";
+    auto const cleanup = WrittenVariable { .name = Name };
+    auto const provider = nativeEnvironmentProvider();
+    REQUIRE(provider != nullptr);
+
+    REQUIRE(core::setProcessEnvironmentVariable(Name, "").has_value());
+    REQUIRE(core::LiveEnvironment {}.get(Name) == "");
+    CHECK(provider->get(Name) == "");
+
+    REQUIRE(core::unsetProcessEnvironmentVariable(Name).has_value());
+    CHECK(!provider->get(Name).has_value());
+}
+
+TEST_CASE("the native EnvironmentProvider reads a value longer than a page", "[platform]")
+{
+    // A reader that sizes a fixed buffer and ignores the "too small" return hands back a string
+    // of NUL bytes instead of the value.
+    constexpr auto Name = "CORE_CPP_NATIVE_PROVIDER_LONG_TEST_VARIABLE";
+    auto const cleanup = WrittenVariable { .name = Name };
+    auto const provider = nativeEnvironmentProvider();
+    REQUIRE(provider != nullptr);
+
+    auto const value = std::string(8192, 'v');
+    REQUIRE(core::setProcessEnvironmentVariable(Name, value).has_value());
+    CHECK(provider->get(Name) == value);
 }
