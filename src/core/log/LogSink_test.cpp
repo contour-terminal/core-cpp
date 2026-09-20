@@ -5,7 +5,6 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
-#include <cstdio>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -24,9 +23,14 @@
     #define CORE_CPP_TEST_THREADS 0
 #endif
 
+#include <sys/stat.h>
+
+#include <fcntl.h>
+
 #ifdef _WIN32
     #include <io.h>
     #include <process.h>
+    #include <share.h>
 #else
     #include <unistd.h>
 #endif
@@ -139,12 +143,13 @@ class ScopedRedirect
   public:
     ScopedRedirect(int fd, std::filesystem::path const& path): _fd { fd }
     {
-        _file = std::fopen(path.string().c_str(), "w");
-        if (_file == nullptr)
+        auto const target = openForWriting(path);
+        if (target == -1)
             return;
         _saved = duplicate(fd);
         if (_saved != -1)
-            duplicate2(descriptorOf(_file), fd);
+            duplicate2(target, fd);
+        closeDescriptor(target);
     }
 
     ~ScopedRedirect()
@@ -154,8 +159,6 @@ class ScopedRedirect
             duplicate2(_saved, _fd);
             closeDescriptor(_saved);
         }
-        if (_file != nullptr)
-            std::fclose(_file);
     }
 
     ScopedRedirect(ScopedRedirect const&) = delete;
@@ -167,6 +170,19 @@ class ScopedRedirect
     [[nodiscard]] bool isActive() const noexcept { return _saved != -1; }
 
   private:
+    /// @return A descriptor for @p path, truncated, or -1.
+    [[nodiscard]] static int openForWriting(std::filesystem::path const& path) noexcept
+    {
+#ifdef _WIN32
+        auto fd = -1;
+        (void) ::_wsopen_s(
+            &fd, path.c_str(), _O_WRONLY | _O_CREAT | _O_TRUNC, _SH_DENYNO, _S_IREAD | _S_IWRITE);
+        return fd;
+#else
+        return ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+#endif
+    }
+
     [[nodiscard]] static int duplicate(int fd) noexcept
     {
 #ifdef _WIN32
@@ -194,18 +210,8 @@ class ScopedRedirect
 #endif
     }
 
-    [[nodiscard]] static int descriptorOf(std::FILE* file) noexcept
-    {
-#ifdef _WIN32
-        return ::_fileno(file);
-#else
-        return ::fileno(file);
-#endif
-    }
-
     int _fd;
     int _saved = -1;
-    std::FILE* _file = nullptr;
 };
 } // namespace
 
