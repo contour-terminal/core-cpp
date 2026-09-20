@@ -125,9 +125,16 @@ struct NetError
     int systemCode = 0;                            ///< The raw OS error number, or 0.
     std::string context;                           ///< Optional human context (e.g. the failing call).
 
-    /// Renders the error as words, not as an enumerator's position: a reader of a log line needs no
-    /// copy of this header to know what happened, and a code added later does not change what an
-    /// older line meant.
+    /// Renders the error as words, never as an enumerator's position.
+    ///
+    /// The rejected alternative is fastcached's `NetError(code=9 system=104 context=recv)`, and the
+    /// reason it is rejected leaves no trace when it bites: `code=` is an index into
+    /// @c NetErrorCode, and the merge that produced this enumeration renumbered it. A line written
+    /// before that merge and a line written after it are then identical character for character and
+    /// mean different codes, so a reader comparing two runs, or a filter written against the old
+    /// numbering, is wrong with nothing to notice. Words cannot fail that way, and they cost a
+    /// reader no copy of this header. Keeping @c std::format out is the smaller reason: this is
+    /// `core::net_types`, which links nothing.
     /// @return A descriptive string combining the category, context, and OS code, for example
     ///         `connection reset (recv) [errno 104]`.
     [[nodiscard]] std::string toString() const
