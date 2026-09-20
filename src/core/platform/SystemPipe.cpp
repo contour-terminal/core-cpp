@@ -385,7 +385,9 @@ std::expected<std::unique_ptr<SystemPipe>, PlatformError> createSystemPipe()
     // never park on a full wakeup channel, and write() answers WSAEWOULDBLOCK with success
     // because a wakeup is already pending then.
     auto nonBlocking = u_long { 1 };
-    if (::ioctlsocket(pair[1], FIONBIO, &nonBlocking) == SOCKET_ERROR)
+    // FIONBIO is an unsigned constant and ioctlsocket takes a signed command, so the cast is the
+    // conversion the header implies; clang-cl reports the implicit one as a signedness change.
+    if (::ioctlsocket(pair[1], static_cast<long>(FIONBIO), &nonBlocking) == SOCKET_ERROR)
     {
         closesocket(pair[0]);
         closesocket(pair[1]);
