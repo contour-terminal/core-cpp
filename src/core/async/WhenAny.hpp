@@ -39,7 +39,6 @@
 #include <coroutine>
 #include <cstddef>
 #include <exception>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <ranges>
@@ -53,9 +52,6 @@ namespace core::async
 namespace detail
 {
 
-    /// Sentinel "no winner yet" index.
-    inline constexpr std::size_t WhenAnyNoWinner = std::numeric_limits<std::size_t>::max();
-
     /// Shared join state for a `whenAny`. The first child to finish latches the
     /// winner index and requests stop so the losers unwind; the awaiting coroutine
     /// is resumed only once EVERY child has finished (winner completed + losers
@@ -68,8 +64,7 @@ namespace detail
     struct WhenAnyState
     {
         std::size_t remaining = 0;            ///< Live children plus the start-phase guard.
-        std::size_t winner = WhenAnyNoWinner; ///< Index of the first child to complete.
-        bool decided = false;                 ///< Latch: a child completed and claimed the win.
+        std::optional<std::size_t> winner;    ///< The first child to complete; the latch as well.
         std::coroutine_handle<> continuation; ///< The `whenAny` awaiter's coroutine.
         std::exception_ptr exception;         ///< Winner's exception, rethrown to the awaiter.
         StopSource childStop;                 ///< request_stop() cancels the losing children.
@@ -115,9 +110,8 @@ namespace detail
                     // this whole race and destroy this frame's owner, and the state has to outlive
                     // the rest of this function.
                     auto const race = promise.state;
-                    if (!race->decided && !promise.cancelled)
+                    if (!race->winner.has_value() && !promise.cancelled)
                     {
-                        race->decided = true;
                         race->winner = promise.index;
                         race->exception = promise.failure; // surface the winner's failure, if any
                         race->childStop.request_stop();    // unwind the losing siblings
@@ -266,18 +260,19 @@ namespace detail
             return --_state->remaining != 0;
         }
 
-        /// @return The index of the first task to complete.
+        /// @return The index of the first task to complete, or nothing where none did:
+        ///         an empty input, or every child unwound cancelled.
         /// @throws The winner's exception, if it failed; @c OperationCancelled if the
         ///         awaiting flow itself was cancelled and no child completed.
-        [[nodiscard]] std::size_t await_resume() const
+        [[nodiscard]] std::optional<std::size_t> await_resume() const
         {
             // Only where nothing won: a child that completed did so, and a cancellation
             // that arrives after it cannot undo it. `whenAny(readSocket(), timeout())`
             // whose read consumed bytes has nowhere to put them back, and
             // .agent/rules/async-and-net.md is explicit that the data wins. Where no
-            // child completed, `decided` is false -- a cancelled loser latches nothing --
+            // child completed, `winner` is empty -- a cancelled loser latches nothing --
             // and a stopped parent token is what says why.
-            if (!_state->decided && _parentToken.stop_requested())
+            if (!_state->winner.has_value() && _parentToken.stop_requested())
                 throw OperationCancelled {};
             if (_state->exception)
                 std::rethrow_exception(_state->exception);
@@ -299,8 +294,8 @@ namespace detail
 /// @param tasks The tasks to race (moved in). Losers are cancelled via a shared
 ///        child stop source, so each must unwind cleanly on @c OperationCancelled.
 /// @return An awaitable; `co_await` it to suspend until the first task finishes.
-///         It resolves to the winner's index (or @c detail::WhenAnyNoWinner if the
-///         input was empty).
+///         It resolves to the winner's index, or to @c std::nullopt where no child
+///         completed at all (an empty input, or every child unwound cancelled).
 [[nodiscard]] inline auto whenAny(std::vector<Task<void>> tasks) -> detail::WhenAnyAwaiter
 {
     return detail::WhenAnyAwaiter { std::move(tasks) };
@@ -308,7 +303,8 @@ namespace detail
 
 /// Convenience overload: races the given tasks.
 /// @param tasks The tasks to race (moved in).
-/// @return An awaitable resolving to the index of the first task to finish.
+/// @return An awaitable resolving to the index of the first task to complete, or to
+///         @c std::nullopt where none did.
 template <typename... Tasks>
     requires(sizeof...(Tasks) > 0 && (std::is_same_v<std::remove_cvref_t<Tasks>, Task<void>> && ...))
 [[nodiscard]] auto whenAny(Tasks&&... tasks) -> detail::WhenAnyAwaiter

@@ -188,7 +188,7 @@ Task<void> raceTwo(std::vector<std::coroutine_handle<>>* waiters,
                    bool* aCancelled,
                    bool* bDone,
                    bool* bCancelled,
-                   std::size_t* winner)
+                   std::optional<std::size_t>* winner)
 {
     *winner = co_await whenAny(racer(waiters, aDone, aCancelled), racer(waiters, bDone, bCancelled));
 }
@@ -200,7 +200,7 @@ Task<void> raceTwoCatching(std::vector<std::coroutine_handle<>>* waiters,
                            bool* aCancelled,
                            bool* bDone,
                            bool* bCancelled,
-                           std::size_t* winner,
+                           std::optional<std::size_t>* winner,
                            bool* threwCancelled)
 {
     try
@@ -218,7 +218,7 @@ Task<void> raceWithInstantWinner(std::vector<std::coroutine_handle<>>* waiters,
                                  bool* instantDone,
                                  bool* parkedDone,
                                  bool* parkedCancelled,
-                                 std::size_t* winner)
+                                 std::optional<std::size_t>* winner)
 {
     *winner = co_await whenAny(instantRacer(instantDone), racer(waiters, parkedDone, parkedCancelled));
 }
@@ -232,7 +232,7 @@ TEST_CASE("whenAny resumes on the first child and cancels the loser", "[whenAny]
     auto aCancelled = false;
     auto bDone = false;
     auto bCancelled = false;
-    auto winner = core::async::detail::WhenAnyNoWinner;
+    auto winner = std::optional<std::size_t> {};
 
     auto root = raceTwo(&waiters, &aDone, &aCancelled, &bDone, &bCancelled, &winner);
     root.handle().resume();
@@ -265,7 +265,7 @@ TEST_CASE("whenAny completes synchronously when a child wins during start", "[wh
     auto instantDone = false;
     auto parkedDone = false;
     auto parkedCancelled = false;
-    auto winner = core::async::detail::WhenAnyNoWinner;
+    auto winner = std::optional<std::size_t> {};
 
     auto root = raceWithInstantWinner(&waiters, &instantDone, &parkedDone, &parkedCancelled, &winner);
     root.handle().resume();
@@ -289,7 +289,7 @@ TEST_CASE("whenAny keeps a winner that already ran when the flow is cancelled af
     auto bDone = false;
     auto bCancelled = false;
     auto threwCancelled = false;
-    auto winner = core::async::detail::WhenAnyNoWinner;
+    auto winner = std::optional<std::size_t> {};
 
     auto root = raceTwoCatching(&waiters, &aDone, &aCancelled, &bDone, &bCancelled, &winner, &threwCancelled);
     auto source = core::async::StopSource {};
@@ -352,16 +352,16 @@ TEST_CASE("whenAny survives children resumed from inside the cancel bridge's own
     REQUIRE(root.done());
 }
 
-TEST_CASE("whenAny over no tasks resolves to the no-winner sentinel", "[whenAny]")
+TEST_CASE("whenAny over no tasks resolves to no winner", "[whenAny]")
 {
-    auto winner = std::size_t { 0 };
-    auto root = [](std::size_t* w) -> Task<void> {
+    auto winner = std::optional<std::size_t> { 7 };
+    auto root = [](std::optional<std::size_t>* w) -> Task<void> {
         *w = co_await whenAny(std::vector<Task<void>> {});
     }(&winner);
     root.handle().resume();
 
     REQUIRE(root.done());
-    REQUIRE(winner == core::async::detail::WhenAnyNoWinner);
+    REQUIRE_FALSE(winner.has_value());
 }
 
 #ifndef _WIN32
@@ -415,7 +415,7 @@ TEST_CASE("whenAny throws OperationCancelled when the awaiting flow is cancelled
     auto aCancelled = false;
     auto bDone = false;
     auto bCancelled = false;
-    auto winner = core::async::detail::WhenAnyNoWinner;
+    auto winner = std::optional<std::size_t> {};
 
     auto root = raceTwo(&waiters, &aDone, &aCancelled, &bDone, &bCancelled, &winner);
     auto source = core::async::StopSource {};
@@ -438,7 +438,7 @@ TEST_CASE("whenAny throws OperationCancelled when the awaiting flow is cancelled
     REQUIRE(root.done());
     // No child won, so await_resume throws OperationCancelled (surfaced through
     // the root task) instead of returning a cancelled loser's index.
-    REQUIRE(winner == core::async::detail::WhenAnyNoWinner);
+    REQUIRE_FALSE(winner.has_value());
     REQUIRE_THROWS_AS(root.result(), OperationCancelled);
 }
 #endif
