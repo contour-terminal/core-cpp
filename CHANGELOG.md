@@ -355,7 +355,6 @@ workflow refuses one without a section here.
   `noexcept`, so the failure landed at teardown, far from the call that caused it, and could not be
   reported at all. A constructed object is usable (`.agent/rules/design-principles.md`). Migration:
   check `wrap()`'s result and drop the connection instead of queueing onto nothing.
-
 - `core::detail::Times2D::operator[]` answers the same type its `value_type` declares: a
   `std::tuple` of both coordinates, in the order iteration yields them (the inner range advances
   fastest). It answered the inner coordinate alone, so subscripting and iterating disagreed on
