@@ -181,16 +181,19 @@ workflow refuses one without a section here.
   an unparsable line, a missing `# repository` or `# ref` header, a `# commit` that is not 40
   lowercase hex digits, and a `# files` count that is absent, is not a number, is zero or disagrees
   with the lines below it -- needing no git, because a consumer runs it in its own CI. A sync
-  assembles the new copy in `DEST.core-cpp-vendor-new`, a sibling of `DEST`, and touches `DEST`
-  itself only once that copy is legal; every refusal deletes the sibling on its way out, so a copy
-  a refused sync found still passes its own check with nothing new beside it. The replacement is
-  then two directory renames through `DEST.core-cpp-vendor-old`
+  assembles the new copy in `DEST.core-cpp-vendor-new`, a sibling of `DEST`, writes its `MANIFEST`
+  there, and touches `DEST` itself only once that copy is complete; every refusal deletes the
+  sibling on its way out, so a copy a refused sync found still passes its own check with nothing
+  new beside it. The replacement is then two directory renames through `DEST.core-cpp-vendor-old`
   (`cmake/CoreCppVendorReplace.cmake`) rather than a file-by-file move into an emptied `DEST`, so
-  `DEST` ends up holding the old copy or the new one and never half of each: a rename that fails --
-  on Windows an open handle, a lock or a scanner can fail one -- puts the previous copy back and
-  refuses, and if that restore fails too the refusal names both directories and deletes neither. A
+  whichever of the two directories exists when a sync stops -- for any reason, including being
+  killed -- is a whole copy that passes its own check, and `DEST` is never half of each nor
+  unfinished. A rename that fails -- on Windows an open handle, a lock or a scanner can fail one --
+  puts the previous copy back and refuses; if that restore fails too the refusal names both
+  directories, deletes neither, and says that either can be adopted by renaming it. A
   `DEST.core-cpp-vendor-old` left by a previous run holds the only copy of what was there, so a
-  sync refuses rather than delete it to make room. It refuses a `DEST` that is not one of ours, and
+  sync refuses rather than delete it to make room. It refuses a `DEST` that is not one of ours --
+  a directory with files and no manifest, or a regular file where a directory belongs -- and
   it refuses what it cannot copy correctly: a `REF` that is not a tag or a full 40-character SHA,
   a local `REPO` that is not the root of its own repository, a ref whose tree is not core-cpp's,
   and a `MODULES` list that omits a module the ref's own table builds unconditionally. The last

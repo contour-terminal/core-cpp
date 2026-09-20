@@ -35,9 +35,11 @@ cmake -DMODE=sync -DREF=<tag or full SHA> -DDEST=<dir> -DREPO=<url or path> \
 cmake -DMODE=check -DDEST=<dir> -P <dir>/cmake/CoreCppVendor.cmake
 ```
 
-- **`REPO`** is a local checkout, a bare repository, or a URL, which is cloned once into a
-  temporary directory under `DEST`. It defaults to the repository the script itself is part of,
-  which is why `sync` is run with a *checkout's* script and never with the copy's: from inside a
+- **`REPO`** is a local checkout, a bare repository, or a URL, which is cloned once, bare, into
+  the directory `sync` assembles the new copy in — `<dir>.core-cpp-vendor-new`, beside `<dir>` —
+  and removed again before that copy is put in place. It defaults to the repository the script
+  itself is part of, which is why `sync` is run with a *checkout's* script and never with the
+  copy's: from inside a
   copy that default is the repository the copy lives in — yours. `sync` refuses a `REPO` that is
   not the root of its own repository, and a ref whose tree is not core-cpp's, so that
   mis-invocation stops with a message instead of replacing the copy with your own files.
@@ -56,17 +58,23 @@ cmake -DMODE=check -DDEST=<dir> -P <dir>/cmake/CoreCppVendor.cmake
   `<dir>` itself only once that copy is complete and legal. Every refusal deletes the sibling on
   its way out, so a `DEST` that a refused `sync` found still passes its own `check` afterwards, with
   nothing new beside it.
-- **`<dir>` is the old copy or the new one, never half of each.** Putting the new copy in place is
-  two directory renames — `<dir>` to `<dir>.core-cpp-vendor-old`, then `<dir>.core-cpp-vendor-new`
-  to `<dir>` — and the old copy is deleted only after both have succeeded. If the second fails, and
-  on Windows a rename can fail on an open handle, a lock or a scanner, the previous copy is put back
-  and `sync` refuses. If that restore fails too, `sync` refuses and names both directories, deleting
-  neither, so you can finish by hand. A `<dir>.core-cpp-vendor-old` you find on disk is a previous
-  run that got that far: it holds the only copy of what was there, so `sync` refuses to run again
-  until you have moved it back or deleted it.
-- **`sync` replaces the copy it finds.** A `DEST` holding a manifest is emptied first, so a file
-  the new ref no longer has is gone rather than left behind; a `DEST` with files and no manifest
-  is refused, because it is not a copy of ours to delete.
+- **`<dir>` is the old copy or the new one, never half of each, and never an unfinished one.** The
+  `MANIFEST` is written into `<dir>.core-cpp-vendor-new` *before* the swap, so that tree is already
+  a copy you could verify. Putting it in place is then two directory renames — `<dir>` to
+  `<dir>.core-cpp-vendor-old`, then `<dir>.core-cpp-vendor-new` to `<dir>` — and the old copy is
+  deleted only after both have succeeded. Whichever of the two directories exists when a `sync`
+  stops, for any reason including being killed, is a complete copy that passes `check`.
+  If the second rename fails, and on Windows a rename can fail on an open handle, a lock or a
+  scanner, the previous copy is put back and `sync` refuses. If that restore fails too, `sync`
+  refuses and names both directories, deleting neither, so you can adopt either one by renaming it
+  to `<dir>`. A `<dir>.core-cpp-vendor-old` you find on disk is a previous run that got that far:
+  it holds the only copy of what was there, so `sync` refuses to run again — before it reads
+  anything — until you have moved it back or deleted it.
+- **`sync` replaces the copy it finds, whole.** `<dir>` is swapped for the new tree rather than
+  edited in place, so a file the new ref no longer has is gone rather than left behind. What it
+  refuses to replace: a `<dir>` holding files and no manifest, because that is not a copy of ours;
+  and a `<dir>` that is a regular file rather than a directory, because that is someone's file.
+  Both are refused before anything is read or written.
 - **`MANIFEST`** starts with header lines naming the repository, the ref, the commit, the modules
   and the file count (`# repository ...`, `# ref ...`, `# commit ...`, `# modules ...`,
   `# files ...`), followed by one `<sha256>  <path>` line per file, sorted by path. It is written
