@@ -467,11 +467,18 @@ TEST_CASE("rename reports why the recase failed, not why the first attempt did",
     auto upper = lower;
     upper[0] = 'A';
 
+    // Both spellings have to name two entries for the direct rename to fail over the destination
+    // rather than resolve to the source, which a case-insensitive filesystem -- macOS's default
+    // volume format -- cannot arrange. The logic under test is the same everywhere, and the
+    // case-sensitive hosts cover it.
+    REQUIRE(backend.createDirectory(dir / lower).has_value());
+    if (backend.exists(dir / upper))
+        SKIP("this filesystem is case-insensitive, so the two directories cannot both exist");
+
+    REQUIRE(backend.createDirectory(dir / upper).has_value());
     for (auto const& name: { lower, upper })
-    {
-        REQUIRE(backend.createDirectory(dir / name).has_value());
         REQUIRE(backend.writeFile(dir / name / "occupant", "x").has_value());
-    }
+
     if (backend.createDirectory(dir / (upper + ".recase-0")).has_value())
         SKIP("this filesystem accepts names past NAME_MAX, so the retry would not fail here");
 
