@@ -5,6 +5,7 @@
 #include <core/net/EventLoop.hpp>
 #include <core/net/PollEventSource.hpp>
 #include <core/net/Sockets.hpp>
+#include <core/net/posix/FdUtils.hpp>
 #include <core/net/posix/UnixListener.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -21,6 +22,7 @@
 #include <span>
 #include <string>
 
+#include <fcntl.h>
 #include <unistd.h>
 
 using core::async::Task;
@@ -288,4 +290,25 @@ TEST_CASE("connectUnix to a missing socket reports connection refused", "[net][u
     loop.blockOn(tryConnect(&loop, (tmp.path / "nothing-here").string(), &failed));
 
     REQUIRE(failed);
+}
+
+TEST_CASE("makeStreamSocket hands back a non-blocking, close-on-exec descriptor", "[net][unix]")
+{
+    // The helper both listeners now create their socket with, rather than a bare ::socket()
+    // followed by fcntl: on Linux the flags come from socket(2) itself, so there is no window
+    // in which a fork+exec from another thread inherits a listening descriptor and keeps the
+    // port — or the socket file — claimed after this process exits. What is assertable from
+    // here is the outcome the listeners depend on; the window itself is only visible to a
+    // concurrent exec.
+    auto const fd = core::net::makeStreamSocket(AF_UNIX, 0);
+    REQUIRE(fd >= 0);
+
+    auto const status = ::fcntl(fd, F_GETFL, 0);
+    auto const descriptorFlags = ::fcntl(fd, F_GETFD, 0);
+    ::close(fd);
+
+    REQUIRE(status >= 0);
+    REQUIRE(descriptorFlags >= 0);
+    CHECK((status & O_NONBLOCK) != 0);
+    CHECK((descriptorFlags & FD_CLOEXEC) != 0);
 }

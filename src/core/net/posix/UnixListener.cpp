@@ -171,7 +171,12 @@ std::expected<std::unique_ptr<UnixListener>, NetError> UnixListener::bind(EventL
     // (bind() refuses an existing path). A no-op when the path is already gone.
     ::unlink(pathString.c_str());
 
-    auto const fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    // makeStreamSocket, not a bare ::socket: it asks for SOCK_CLOEXEC atomically where the
+    // platform offers it, closing the window in which a fork+exec from another thread inherited
+    // the listening descriptor — and so kept the socket FILE claimed by a live connect() after
+    // this daemon exited, which is exactly what the liveness probe above reads as "still
+    // serving". probeSocketOwner right here already creates its socket this way.
+    auto const fd = makeStreamSocket(AF_UNIX, 0);
     if (fd < 0)
         return std::unexpected(makeNetError(NetErrorCode::Other, errno, "socket"));
 

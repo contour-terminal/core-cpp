@@ -78,7 +78,12 @@ std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::bind(Even
     {
         // Step to the next candidate first, so every `continue` below moves on to it.
         auto const* ai = std::exchange(next, next->ai_next);
-        fd = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        // makeStreamSocket, not a bare ::socket: it asks for SOCK_CLOEXEC atomically where the
+        // platform offers it, closing the window in which a fork+exec from another thread
+        // inherited the listening descriptor — and kept the port (or the socket file) alive
+        // after this process exited. connect()/connectUnix() already create their sockets this
+        // way. The hints above fix ai_socktype at SOCK_STREAM, which is what this supplies.
+        fd = makeStreamSocket(ai->ai_family, ai->ai_protocol);
         if (fd < 0)
         {
             lastError = makeNetError(NetErrorCode::Other, errno, "socket");
@@ -88,6 +93,9 @@ std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::bind(Even
         int const one = 1;
         ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
 
+        // makeNonBlockingCloexec stays: on a platform without the atomic socket() flags
+        // makeStreamSocket sets them best-effort and ignores a failure, while a listener must
+        // not be handed back blocking. Re-applying flags already set is a no-op.
         if (::bind(fd, ai->ai_addr, ai->ai_addrlen) == 0 && ::listen(fd, backlog) == 0
             && makeNonBlockingCloexec(fd))
             break; // success
