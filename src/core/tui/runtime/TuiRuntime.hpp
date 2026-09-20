@@ -445,7 +445,12 @@ class DelayAwaiter
     }
 
     /// @return false: an elapsed deadline is answered by @c await_suspend instead.
-    [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
+    ///
+    /// Not `static`, although it reads nothing: `co_await` calls it on the awaiter object, and a
+    /// static member reached that way is what `readability-static-accessed-through-instance`
+    /// flags -- with a fix (`DelayAwaiter::runtime->delay(...)`) that does not compile. What the
+    /// ARM64 workaround needs is a constant here, not staticness.
+    [[nodiscard]] constexpr bool await_ready() const noexcept { return false; }
 
     /// @return false, resuming at once, when the deadline has elapsed or the flow is
     ///         already cancelled; true once the timer and the cancellation are armed.

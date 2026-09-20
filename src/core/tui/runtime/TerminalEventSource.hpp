@@ -65,12 +65,6 @@ class TerminalEventSource: public EventSource
 
     void detach(FdToken token) override { _registry.detach(token); }
 
-    /// @return The POSIX signal fd this also waits on, or @c InvalidHandle.
-    ///
-    /// Windows has no signal fd: there the constructor's argument is carried and nothing waits on
-    /// it, so this is what the member is read through on that platform.
-    [[nodiscard]] core::platform::NativeHandle signalFd() const noexcept { return _signalFd; }
-
   private:
     /// The platform wait: blocks until a source is ready or @p timeoutMs elapses.
     /// @param timeoutMs -1 = block, 0 = non-blocking, >0 = timeout in ms.
@@ -100,8 +94,11 @@ class TerminalEventSource: public EventSource
     Terminal& _terminal;                      ///< Provides input handles, decode, report handlers.
     core::platform::Wakeup* _agentWakeup;     ///< Agent-message wakeup, or nullptr.
     core::platform::Wakeup* _interruptWakeup; ///< Interrupt wakeup, or nullptr.
-    core::platform::NativeHandle _signalFd;   ///< POSIX signal fd, or InvalidHandle.
-    FdRegistry _registry;                     ///< User-attached fds (waitReadable/waitWritable).
+    /// POSIX signal fd, or InvalidHandle. Windows has none: there the constructor's argument is
+    /// carried and nothing waits on it, which is what `[[maybe_unused]]` says -- as
+    /// `core::net::PollEventSource::_waitRotation` does for the mirror-image case.
+    [[maybe_unused]] core::platform::NativeHandle _signalFd;
+    FdRegistry _registry; ///< User-attached fds (waitReadable/waitWritable).
 };
 
 } // namespace core::tui::runtime

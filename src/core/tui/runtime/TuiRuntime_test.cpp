@@ -81,12 +81,6 @@ Task<int> awaitKeyOrCancel(TuiRuntime* runtime, int cancelSentinel)
     }
 }
 
-// A delay's readiness is a constant, so no call is made in await_ready: MSVC 19.44's
-// ARM64 code generator let OperationCancelled escape the try block around a co_await on a
-// DelayAwaiter whose await_ready read the clock, and both cancellation cases below failed
-// there. Reading the clock in await_ready again cannot compile.
-static_assert(!core::tui::runtime::DelayAwaiter::await_ready());
-
 /// Resumes immediately when the delay has already elapsed (it declines to park).
 Task<int> awaitZeroDelay(TuiRuntime* runtime)
 {
@@ -348,6 +342,26 @@ TEST_CASE("A pending delay bounds the wait timeout", "[TuiRuntime]")
     auto const firstTimeout = source.recordedTimeouts().front();
     REQUIRE(firstTimeout > 0);
     REQUIRE(firstTimeout <= 500);
+}
+
+TEST_CASE("A delay's readiness is a constant, not a clock read", "[TuiRuntime][clock]")
+{
+    // MSVC 19.44's ARM64 code generator let OperationCancelled escape the try block around a
+    // co_await on a DelayAwaiter whose await_ready() read the clock through the runtime's virtual
+    // now(), and both cancellation cases above failed there. The deadline is decided in
+    // await_suspend() instead, so await_ready() answers false even for a deadline that elapsed
+    // before the awaiter existed -- which is what this asserts, with the clock frozen so that
+    // "already elapsed" is not a matter of timing.
+    //
+    // Formerly a static_assert on `DelayAwaiter::await_ready()`, which only compiled while the
+    // function was static; `co_await` calls it on the awaiter object, so static is what
+    // readability-static-accessed-through-instance flags.
+    auto source = MockEventSource {};
+    auto clock = ManualClock {};
+    auto runtime = TuiRuntime { source, clock };
+
+    auto const elapsed = runtime.delay(std::chrono::milliseconds { 0 });
+    CHECK_FALSE(elapsed.await_ready());
 }
 
 TEST_CASE("An injected ManualClock makes a delay's computed timeout exact", "[TuiRuntime][clock]")
