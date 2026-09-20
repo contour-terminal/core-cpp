@@ -37,13 +37,14 @@ jobs:
         run: cmake -DTAG="$TAG" -DROOT="$GITHUB_WORKSPACE" -P tests/cmake/check-release.cmake
 
       # The vendoring file set of the tag, for a packager who vendors without git
-      # (docs/vendoring.md). cmake/CoreCppVendor.cmake arrives with Task A8.
+      # (docs/vendoring.md). MODE=sync is the mode that writes a copy; the tool has no other, and
+      # the staged directory is new, so its occupant check passes and the tarball carries the
+      # MANIFEST a packager verifies with MODE=check.
       - name: Vendor archive
         run: |
-          test -f cmake/CoreCppVendor.cmake \
-            || { echo "::error::cmake/CoreCppVendor.cmake does not exist yet (Task A8); no release can be cut before it"; exit 1; }
           stage="$RUNNER_TEMP/core-cpp-$TAG"
-          cmake -DMODE=export -DREF="$TAG" -DREPO="$GITHUB_WORKSPACE" -DDEST="$stage" -P cmake/CoreCppVendor.cmake
+          cmake -DMODE=sync -DREF="$TAG" -DREPO="$GITHUB_WORKSPACE" -DDEST="$stage" -P cmake/CoreCppVendor.cmake
+          sed -n '1,7p' "$stage/MANIFEST"
           tar -czf "core-cpp-$TAG-vendor.tar.gz" -C "$RUNNER_TEMP" "core-cpp-$TAG"
           sha256sum "core-cpp-$TAG-vendor.tar.gz" > SHA256SUMS
           cat SHA256SUMS
