@@ -2,6 +2,7 @@
 #include <core/log/LogSink.hpp>
 
 #include <core/Utils.hpp>
+#include <core/log/detail/LocalTime.hpp>
 #include <core/log/detail/ProcessId.hpp>
 
 #include <algorithm>
@@ -37,13 +38,7 @@ namespace
     void appendNowStamp(std::string& out)
     {
         auto const now = std::chrono::system_clock::now();
-        auto const nowTimeT = std::chrono::system_clock::to_time_t(now);
-        auto brokenDown = std::tm {};
-#ifdef _WIN32
-        localtime_s(&brokenDown, &nowTimeT);
-#else
-        localtime_r(&nowTimeT, &brokenDown);
-#endif
+        auto const brokenDown = detail::localTime(std::chrono::system_clock::to_time_t(now));
         auto const micros =
             std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count() % 1'000'000;
         std::format_to(std::back_inserter(out),
