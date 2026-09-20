@@ -244,6 +244,21 @@ workflow refuses one without a section here.
   can leave it there when both the second hop and the rollback fail, which is not behaviour that
   may ship untested (controller ruling R53).
 
+- `core::net::NetErrorCode` is the merged vocabulary of both lineages, so a caller of contour's
+  `net::NetErrorCode` or of fastcached's `FastCache::NetErrorCode` has a code for every failure it
+  used to distinguish. From fastcached it gains `AddressNotAvail` (a bind whose address is not
+  available locally), `HostUnreach` and `PermissionDenied` (a low-numbered port without privileges,
+  a firewall's `EACCES`) — three causes that were an unclassified `Other` here and that no caller
+  could match on. `core::net::isDeadlineExpiry(NetErrorCode)` joins it, also from fastcached
+  (`IsDeadlineExpiry`): a deadline armed with `SO_RCVTIMEO`/`SO_SNDTIMEO`, and a poll given a
+  timeout, expire as `EAGAIN`/`WouldBlock` on POSIX and as `WSAETIMEDOUT`/`Timeout` on Winsock, so
+  the question is asked through one predicate over both operands rather than open-coded
+  ([fastcached#824](https://github.com/LASTRADA-Software/fastcached/issues/824)). A trailing
+  `NetErrorCode::Last` states how many codes there are, so a table or a test covers every one of
+  them without restating the list; it is not a code, `toString()` gives it no description, and
+  nothing constructs or returns it. `core::net_types` still links nothing and still includes no
+  `<format>`: it is what `fastcache-cc` links alone in Task C4.
+
 - `tools/migrate/`, the tooling every consumer migration runs: `renames.json`, the 438-row rename
   table; `rewrite.py --profile contour|endo|tuidu|fastcached`, an idempotent codemod over its
   include, namespace, symbol, member and macro rows, anchored so that `net::` never matches inside
@@ -384,6 +399,33 @@ workflow refuses one without a section here.
   did not compile before. Migration: a caller that passed something other than a string formats it
   itself — the old signature rendered the separator with `std::format`, so an `int` or a `char`
   was accepted and now is not. Nothing calls it yet, in core-cpp or in any consumer.
+- `core::net::NetErrorCode::Other` is `SystemError`, and `NetErrorCode::BadFileHandle` is
+  `BadHandle`. The merged enumeration takes one spelling per meaning, and these are the two the
+  spec's rename map names: fastcached's `SystemError` says what the code is (an OS error nothing
+  classified further — read `NetError::systemCode`) where contour's `Other` said only what it is
+  not, and contour's `BadHandle` covers the Windows `HANDLE` and the waitable handle that
+  fastcached's `BadFileHandle` did not name. `NetError`'s default code is `SystemError`, as it was
+  `Other`. Migration, for a contour or Lightweight caller:
+  `sed -i 's/NetErrorCode::Other/NetErrorCode::SystemError/g'`; for a fastcached caller:
+  `sed -i 's/NetErrorCode::BadFileHandle/NetErrorCode::BadHandle/g'`. Both rows are in
+  `tools/migrate/renames.json`. 53 call sites moved inside core-cpp, nearly all of them
+  `makeNetError(Other, errno, …)`.
+- `toString(core::net::NetErrorCode::SystemError)` is `"system error"`, where contour's
+  `toString(Other)` was `"network error"`. The description follows the code's name, and both change
+  in the same release. Migration: a log filter or a test matching the exact text `network error`
+  matches `system error` instead; nothing else in the rendering changed.
+- `core::net::NetError::toString()` renders contour's shape for both lineages —
+  `connection reset (recv) [errno 104]` — where fastcached's `NetError::ToString()` rendered
+  `NetError(code=9 system=104 context=recv)`. A log line's shape is API for anyone grepping their
+  logs, and fastcached's is the one that loses: its `code=` is a position in an enumeration this
+  release renumbered, so an old line and a new one that read alike would mean different codes, and
+  a reader needs the header open to decode either. Dropping `std::format` also keeps `<format>` out
+  of `core::net_types`, which links nothing and which `fastcache-cc` will link alone. Migration for
+  a fastcached caller: `ToString()` is `toString()`; `ToStringView(code)`, which gave the
+  enumerator's name (`"Eof"`), is `core::net::toString(code)`, which gives the description
+  (`"end of stream"`) — a caller that wanted the identifier must map it itself. Anything parsing
+  `NetError(code=…)` out of a log reads the words instead, and the OS number is still
+  `[errno <n>]`.
 
 ### Changed
 

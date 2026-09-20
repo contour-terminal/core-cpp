@@ -17,14 +17,15 @@ directory `src/core/net/`. Three targets:
     replaces it: `IoBackend`, `makeDefaultBackend()` and `Interest` take the place of
     `EventSource`, `makeDefaultEventSource()` and `FdInterest`, IOCP becomes the Windows default,
     fastcached's sockets and dialler are merged in, and the event loop, its timers and a
-    host-driven backend join the WebAssembly subset (Tasks B2 to B11). Until then nothing of
-    `core::net` but `core::net_types` builds under Emscripten.
+    host-driven backend join the WebAssembly subset (Tasks B3 to B11). Until then nothing of
+    `core::net` but `core::net_types` builds under Emscripten. Task B2 is done: the error
+    vocabulary below is already the merged one.
 
 ## What it has
 
 | Header | What it has |
 |---|---|
-| `<core/net/NetError.hpp>` | `NetErrorCode`, its `toString()`, `NetError` (a category, the OS error number and a context string) and `makeNetError()` |
+| `<core/net/NetError.hpp>` | `NetErrorCode` and its `toString()`, the predicate `isDeadlineExpiry()`, `NetError` (a category, the OS error number and a context string) and `makeNetError()` |
 | `<core/net/IoResult.hpp>` | `IoResult`, `std::expected<std::size_t, NetError>`: what every byte transfer returns |
 | `<core/net/EventLoop.hpp>` | `EventLoop`: the single-threaded driver that resumes coroutines on descriptor readiness and timers; `blockOn()`, `spawn()`, `post()` (the one member other threads may call), `requestStop()`, `delay()`, `sleepUntil()`, `waitReadable()`, `waitWritable()`, `notifyHandleClosing()`; `pollUntil()` |
 | `<core/net/EventSource.hpp>` | `EventSource`, the injected blocking wait the loop drives, and its registry: `FdToken`, `FdInterest`, `FdRegistry`, `WaitOutcome` |
@@ -39,6 +40,43 @@ directory `src/core/net/`. Three targets:
 | `<core/net/HttpServer.hpp>` | a minimal HTTP/1.1 server: `serve()`, `readRequest()`, `writeResponse()`; `Content-Length` bodies only, every response closes |
 | `<core/net/Diagnostics.hpp>` | `setDiagnosticSink()`: where a failure nobody can be handed goes (a wait that fails mid-sweep); discarded by default |
 | `<core/net/Tls.hpp>` (`core::net_tls`) | `ITlsContext::wrap()`, a TLS `ISocket` over any other, driven through memory BIOs on the same loop; `makeTlsServerContext()`, `makeSelfSignedServerContext()`, `makeTlsClientContext()` (a pinned CA and a host name, or trust on first use), `generateSelfSignedCertificate()`, `constantTimeEquals()` |
+
+## The error vocabulary
+
+`NetErrorCode` is the union of the two vocabularies this module was merged from, contour's
+`net::NetErrorCode` and fastcached's `FastCache::NetErrorCode`, so a caller of either lineage still
+has a code for every failure it used to distinguish. `toString(NetErrorCode)` is a `constexpr`
+switch with no `default`, which is what makes a compiler name it when a code is added.
+
+| Code | `toString()` | What it says |
+|---|---|---|
+| `Ok` | `ok` | No failure. It is not stored in an error result; it is what a `NetErrorCode` variable holds before anything has failed |
+| `Eof` | `end of stream` | The peer finished sending — it closed its write side, which is not the same as being gone |
+| `Cancelled` | `cancelled` | The resource cancelled the operation (`close()`, `cancelRead()`, a closed listener). A cancel from the flow's own stop token throws `core::async::OperationCancelled` instead |
+| `Timeout` | `timed out` | A deadline elapsed. On Winsock this is also how an armed poll or `SO_RCVTIMEO` reports its expiry |
+| `WouldBlock` | `would block` | The operation would block. On POSIX this is also how an armed poll or `SO_RCVTIMEO` reports its expiry |
+| `BadHandle` | `bad handle` | The socket, descriptor or handle is closed or invalid |
+| `ConnReset` | `connection reset` | The peer reset the connection mid-flight |
+| `ConnRefused` | `connection refused` | The peer actively refused a connect |
+| `AddressInUse` | `address in use` | A bind found the endpoint taken |
+| `AddressNotAvail` | `address not available` | A bind found the address not available locally |
+| `AddressError` | `address error` | Address resolution or parsing failed |
+| `HostUnreach` | `host unreachable` | The network reports the destination as unreachable |
+| `PermissionDenied` | `permission denied` | The OS refused the operation — a low-numbered port without privileges, a firewall's `EACCES` |
+| `Unsupported` | `unsupported` | The operation is not supported on this platform or transport |
+| `MessageTooLarge` | `message too large` | A framed unit (line, PDU, datagram) exceeded its configured bound |
+| `SystemError` | `system error` | An OS error nothing classified further; read `NetError::systemCode` |
+| `Last` | — | Not a code: the number of codes above it, so a table or a test covers every one without restating the list. Never constructed, never returned |
+
+`isDeadlineExpiry(code)` answers "did this operation run out of time", and it is `Timeout` **or**
+`WouldBlock`, because a deadline armed with `SO_RCVTIMEO`/`SO_SNDTIMEO` or a poll timeout expires as
+`EAGAIN` on POSIX and as `WSAETIMEDOUT` on Winsock. Both operands are load-bearing at every caller;
+the header says what narrowing it to `Timeout` costs
+([fastcached#824](https://github.com/LASTRADA-Software/fastcached/issues/824)).
+
+`NetError::toString()` renders words, not an enumerator's position:
+`connection reset (recv) [errno 104]`. The context and the `[errno …]` are each omitted when empty
+or zero, so `makeNetError(NetErrorCode::Eof)` renders as `end of stream`.
 
 The test doubles are public, in `testing/` and namespace `core::net::testing`, and compiled into
 `core::net`: `ScriptedEventSource` (scripted readiness and recorded timeouts, no descriptors),
