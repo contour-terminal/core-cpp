@@ -61,8 +61,10 @@ workflow refuses one without a section here.
   Under single-threaded Emscripten its row says
   `wasm-subset`: Types, PlatformError, Clock, StringUtils, PathUtils, GlobMatch, FileUri and the
   POSIX providers build, and their tests run under node.
-- `core::async`, header-only and needing nothing but the standard library; fastcached's executors
-  arrive with Task B1.
+- `core::async`, header-only and including nothing but the standard library; it links Threads,
+  which is what its `StopToken` fallback's `std::mutex`, `std::condition_variable` and
+  `std::this_thread::get_id()` need, and nothing at all under single-threaded Emscripten.
+  fastcached's executors arrive with Task B1.
 - `core::Generator<T>` in `core::base`: `std::generator` where the standard library has it and is
   not libstdc++, otherwise `core::detail::GeneratorFallback<T>`, which is tested on every
   platform. It needs only the standard library, so it lives in base rather than `core::async`,
@@ -242,6 +244,18 @@ workflow refuses one without a section here.
 
 ### Breaking
 
+- `core::async::whenAny()` resolves to `std::optional<std::size_t>` rather than to a `std::size_t`
+  that was `core::async::detail::WhenAnyNoWinner` (`SIZE_MAX`) when nothing won. The sentinel was
+  part of the documented public result but lived in `detail::`, so handling the empty case meant
+  reaching into `detail::`, and a caller who forgot the check indexed a container at `SIZE_MAX`.
+  Migration: `auto const i = co_await whenAny(...);` becomes
+  `auto const i = co_await whenAny(...); if (i) use(*i);`, and any `== detail::WhenAnyNoWinner`
+  becomes `!i.has_value()`. Nothing outside this repository reads the result yet.
+- `core::async::whenAll()` and `whenAny()`'s variadic overloads take their tasks by rvalue. The
+  constraint was written over `std::remove_cvref_t`, so an lvalue `Task<void>` satisfied it and
+  then failed inside `std::vector::push_back` on `Task`'s deleted copy constructor. An lvalue or a
+  `const` rvalue is now "no matching overload" at the call. Migration: `whenAll(std::move(task))`,
+  which is what every call already had to do to compile.
 - `core::platform::FileSystem::openWrite()` takes a `core::platform::WriteMode` and `copyFile()` a
   `core::platform::OverwritePolicy`, in place of the `bool` each took before. A `bool` in an API is
   an anonymous enum whose two values are named after their representation rather than their meaning
@@ -295,6 +309,27 @@ workflow refuses one without a section here.
 
 ### Changed
 
+- `core::async::whenAny()` reports a child that completed even when the awaiting flow's own token
+  is stopped afterwards. It threw `OperationCancelled` whenever that token was stopped, so
+  `whenAny(readSocket(), timeout())` whose read had completed and consumed bytes lost them if the
+  cancellation landed before the last loser unwound; `.agent/rules/async-and-net.md` says the
+  opposite, that a receive which already completed with bytes wins. It now throws only where no
+  child completed at all. A child that *swallows* its `OperationCancelled` and returns counts as
+  one that completed, because nothing can tell the two apart: a loser must let the cancellation
+  out, which is what `whenAny`'s contract already asked of it.
+- `core::async` links `Threads::Threads` (interface), on the same condition `core::base` uses, so
+  a consumer writing `target_link_libraries(app PRIVATE core::async)` links what
+  `<core/async/StopToken.hpp>`'s fallback needs. It linked nothing, which failed wherever pthread
+  is a library of its own and the fallback branch is taken — libc++ before 20 without
+  `-fexperimental-library`, so FreeBSD 15 and AppleClang 17. A single-threaded Emscripten build
+  still links nothing.
+- `.clang-tidy`'s `readability-identifier-naming` no longer exempts `request_stop`,
+  `stop_requested`, `stop_possible` and `get_token` from the *function* naming rule: they are
+  members of `std::stop_token` and friends, which `core::async`'s fallback spells as the standard
+  does, and a free function of one of those names is not a standard-library hook. The
+  `ClassMethod` style is gone with its duplicate of that ~800-character regex; with no
+  `ClassMethod` style configured, a static member function falls through to the `Method` style,
+  which says the same thing.
 - `core::detail::Times2D::operator[]` answers the same type its `value_type` declares: a
   `std::tuple` of both coordinates, in the order iteration yields them (the inner range advances
   fastest). It answered the inner coordinate alone, so subscripting and iterating disagreed on
@@ -309,6 +344,29 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- `core::async::whenAny()` no longer runs the rest of a `request_stop()` on freed memory. Its
+  parent→child cancel bridge requested stop on a `StopSource` that the awaiter held as a member;
+  a child awaitable that resumes its coroutine from inside its own stop callback — how every
+  runtime awaitable delivers cancellation — makes the losers unwind there and then, the last of
+  them transfer to the awaiting coroutine, and that frame unwind, destroying the awaiter and with
+  it the source whose `request_stop()` is still on the stack. The race state is now held by
+  `shared_ptr` and every call into it that can run foreign code holds a reference for that call.
+  This was a use-after-free wherever `StopToken` is `std::stop_token`, whose state a raw pointer
+  reaches; core-cpp's fallback survived it only because its `request_stop()` happens to hold a
+  `shared_ptr` copy of the state.
+- `tests/cmake/check-cmake-hygiene.cmake`'s namespace gate checks every namespace a file declares,
+  not only the first. Its rule is that every segment of every namespace is lowercase, but it
+  stopped after the first declaration, so `namespace core::async { namespace Detail { ... } }`
+  passed clean.
+- `Task_test.cpp`'s deep-chain case skips on GCC unless the build's optimisation level is known to
+  make symmetric transfer a tail call. It keyed on `__OPTIMIZE__`, which GCC defines at `-Og` and
+  `-O1` as well, where the 100000-frame chain overflows the stack and kills the process, taking
+  every other case in the binary with it — so a build outside core-cpp's presets lost the binary
+  rather than getting a red. `src/core/async/CMakeLists.txt` now reads the level off the build's
+  own flags and says in the configure log which it decided.
+- `<core/async/WhenAll.hpp>` includes `<type_traits>`, which it names; `<core/async/Awaitable.hpp>`
+  no longer includes `<utility>`, which it does not; `Task_test.cpp` includes `<stdexcept>` rather
+  than relying on Catch2 for it, and not `<string>`, which it does not use.
 - `core::cli`'s `--help` no longer reads past the text it is laying out. `wordWrapped()` computed
   the room left on the line as `margin - cursor + 1` in unsigned arithmetic, with a `<= 0` guard
   below it that is dead for an unsigned type; `printOptions()` sets the cursor to the option

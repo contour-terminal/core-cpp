@@ -73,10 +73,19 @@ Imported from contour's `src/coro` at `6777ff05`, with `coro::` renamed `core::a
     the coroutine really suspends, which is what a read loop over buffered data does.
   - emsdk 3.1.56 under node, the nested chain: exceeds node's call stack.
 
-  `Task_test.cpp` skips its deep-chain case under Emscripten without `-mtail-call` and for GCC
-  without `__OPTIMIZE__`. GCC at `-Og` or `-O1` defines `__OPTIMIZE__`, so the case is not skipped
-  there and crashes the test binary; no preset builds at those levels. The fix is tracked in
+  `Task_test.cpp` skips its deep-chain case under Emscripten without `-mtail-call`, and on GCC
+  unless the build says the level gives the tail call: GCC defines no macro for the level
+  (`__OPTIMIZE__` is 1 at `-Og` and `-O1` too, where the chain overflows and takes the whole
+  binary with it), so `src/core/async/CMakeLists.txt` reads the last `-O` off the build's own
+  flags, defines `CORE_ASYNC_SYMMETRIC_TRANSFER_IS_TAIL_CALL` only at `-O2` or better, and says
+  which it decided in the configure log. `gcc-release` keeps the case, `gcc-debug` and any build
+  outside the presets skip it. The fix is tracked in
   [core-cpp#15](https://github.com/contour-terminal/core-cpp/issues/15), to be decided in Task B1.
+
+  The teardown of such a chain is not a tail call and does not need to be: each level destroys
+  the child it awaited at the end of its own `co_return` expression, by which time that child has
+  already destroyed its own, so a completed chain is released one frame at a time. A chain
+  destroyed *before* it completes is torn down by plain recursion, one `~Task` per level.
 - `detail::UniqueCoroHandle<Promise>` (`<core/async/UniqueCoroHandle.hpp>`) is the move-only owner
   of a coroutine handle that `Task` and the combinators' child runners share.
 - `<core/async/Cancellation.hpp>` has `OperationCancelled`, which a cancelled frame throws to
@@ -84,17 +93,32 @@ Imported from contour's `src/coro` at `6777ff05`, with `coro::` renamed `core::a
   coroutine's token without suspending it (a default token where the promise has none). contour's
   copy also aliased `std::stop_token` and friends, which are now `<core/async/StopToken.hpp>`.
 - `<core/async/Awaitable.hpp>` has the concepts `Awaiter` (`await_ready`, `await_suspend`,
-  `await_resume`) and `HasStopToken` (a promise with `stopToken()`).
+  `await_resume`) and `HasStopToken` (a promise whose `stopToken()` yields a `StopToken`). Every
+  templated `await_suspend` in the module reads the awaiting promise through `HasStopToken`, so
+  what a promise must offer is stated in one place; `Awaitable_test.cpp` asserts both concepts
+  over the module's own types and over the near misses.
 - `whenAll(tasks...)` (`<core/async/WhenAll.hpp>`) starts every `Task<void>` and resumes the
   awaiting coroutine once all have finished. Each child inherits the awaiting coroutine's token.
   It does not cancel siblings when one throws: the first exception is rethrown once every child
   has finished.
-- `whenAny(tasks...)` (`<core/async/WhenAny.hpp>`) resolves to the index of the first
-  `Task<void>` to finish and requests stop on a child `StopSource` shared by the others, which
-  must unwind on `OperationCancelled`. The awaiting coroutine resumes only once every child has
-  finished, so the frames it owns outlive them. Cancelling the awaiting coroutine's own token
-  cancels every child through a `StopCallback`, and then `whenAny` throws `OperationCancelled`
-  rather than report a cancelled child as the winner.
+- `whenAny(tasks...)` (`<core/async/WhenAny.hpp>`) resolves to
+  `std::optional<std::size_t>`: the index of the first `Task<void>` to **complete**, or
+  `std::nullopt` where none did (an empty input, or every child unwound cancelled). The winner
+  requests stop on a child `StopSource` shared by the others, which must unwind on
+  `OperationCancelled` — a child that swallows its cancellation and returns has, as far as the
+  race can tell, completed. The awaiting coroutine resumes only once every child has finished, so
+  the frames it owns outlive them. Cancelling the awaiting coroutine's own token cancels every
+  child through a `StopCallback`, and `whenAny` then throws `OperationCancelled` — but only if no
+  child completed. A cancellation that arrives after one did cannot undo it, and
+  `.agent/rules/async-and-net.md` is explicit that bytes a receive already took win; the winner is reported and the flow decides.
+
+  The race state is held by `shared_ptr`, and every call into it that can run foreign code holds
+  a reference for that call's duration. Requesting stop runs the children's stop callbacks, and a
+  runtime awaitable resumes its coroutine from inside one: the losers unwind there and then, the
+  last transfers to the awaiting coroutine, and the awaiter — with the child source whose
+  `request_stop()` is still on the stack — is destroyed before that request returns. Keeping a
+  stop state alive across one's own `request_stop()` is the caller's job, and neither
+  `std::stop_source` nor the fallback promises to do it.
 
 Changes from contour's copy, besides the namespace:
 
@@ -104,16 +128,24 @@ Changes from contour's copy, besides the namespace:
   `WhenAny_test.cpp`'s `ManualEvent` initialises its pointer member
   (`cppcoreguidelines-pro-type-member-init`), and its two helpers that only a case compiled off
   Windows uses are compiled off Windows too (`-Wunused-function` on clang-cl). `Task_test.cpp`
-  skips its deep-chain case under Emscripten without `-mtail-call` and for GCC without
-  optimisation (above).
+  skips its deep-chain case under Emscripten without `-mtail-call` and on GCC below `-O2` (above).
+- The Phase A gate's third pass (Task A11): `whenAny`'s race state is reference-counted rather
+  than a member of the awaiter, a child that completed beats a cancellation that follows, the
+  result is a `std::optional` rather than a `detail::` `SIZE_MAX` sentinel, the variadic overloads
+  require rvalues, the runner promise classifies what escaped its task instead of the body
+  swallowing it, and the parent→child cancel bridge is a named functor rather than a
+  `StopCallback<std::function<void()>>`.
 - `Cancellation.hpp` no longer defines the stop-token aliases, nor refuses to compile without
   `__cpp_lib_jthread`.
 - contour's `src/coro/test_main.cpp` is not imported: every test binary links
   `core::testing_main`. Its `src/coro/testing/SuppressWindowsDialogs.hpp` was merged into
   `core::testing` in Task A1.
 
-`Task_test.cpp`, `WhenAll_test.cpp` and `WhenAny_test.cpp` run in `core-cpp.async` and again,
-over the `StopToken` fallback, in `core-cpp.async-fallback`. `Task_test.cpp` and
+`Awaitable_test.cpp`, `Task_test.cpp`, `WhenAll_test.cpp` and `WhenAny_test.cpp` run in
+`core-cpp.async` and again, over the `StopToken` fallback, in `core-cpp.async-fallback`.
+`core-cpp.async-link-smoke` is a third binary, `StopTokenLinkSmoke.cpp`, which links `core::async`
+alone with the fallback forced: the link a consumer makes, which the other two hide by linking
+`core::testing_main`. `Task_test.cpp` and
 `WhenAny_test.cpp` do not compile their cases that propagate an exception out of a coroutine
 frame on Windows, where contour found that throwing through a coroutine frame crashes the Catch2
 harness (an MSVC coroutine-unwind interaction that also affects `std::generator`).
