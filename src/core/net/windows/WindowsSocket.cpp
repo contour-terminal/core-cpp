@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/windows/WindowsSocket.hpp>
 
+#include <core/net/windows/NetworkEvents.hpp>
+
 #include <utility>
 
 namespace core::net
@@ -76,16 +78,12 @@ std::optional<NetError> WindowsSocket::closedError(char const* op) const noexcep
 
 void WindowsSocket::latchNetworkEvents() noexcept
 {
-    if (_event == WSA_INVALID_EVENT || _socket == INVALID_SOCKET)
-        return;
-    auto events = WSANETWORKEVENTS {};
-    if (WSAEnumNetworkEvents(_socket, _event, &events) != 0)
-        return;
+    auto const indications = consumeNetworkEvents(_socket, _event);
     // FD_CLOSE feeds BOTH latches: a peer that hung up makes recv report EOF and send fail, and
     // whichever direction is parked has to wake up to observe it.
-    if ((events.lNetworkEvents & (FD_READ | FD_CLOSE)) != 0)
+    if ((indications & (FD_READ | FD_CLOSE)) != 0)
         _readReady = true;
-    if ((events.lNetworkEvents & (FD_WRITE | FD_CLOSE)) != 0)
+    if ((indications & (FD_WRITE | FD_CLOSE)) != 0)
         _writeReady = true;
 }
 

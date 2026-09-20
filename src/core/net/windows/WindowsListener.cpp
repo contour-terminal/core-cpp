@@ -11,6 +11,7 @@
 #include <core/net/windows/WindowsListener.hpp>
 
 #include <core/net/detail/PeerAddress.hpp>
+#include <core/net/windows/NetworkEvents.hpp>
 #include <core/net/windows/WindowsSocket.hpp>
 
 #include <cstring>
@@ -270,7 +271,16 @@ async::Task<AcceptResult> WindowsListener::accept()
         auto const err = WSAGetLastError();
         if (err == WSAEWOULDBLOCK)
         {
-            WSAResetEvent(_event);
+            // Consume the indication rather than reset the event. A connection that landed
+            // between the ::accept above and this point has already been RECORDED, and Winsock
+            // raises a recorded indication only once — so `WSAResetEvent` cleared the event
+            // while the record stood, the park never woke, and the listener went silent for
+            // that connection AND every later one. Enumerating clears both and says what it
+            // took, so an indication from that window is served here instead of lost.
+            // @see consumeNetworkEvents; WindowsSocket::latchNetworkEvents does the same for
+            // the two directions that share a connected socket's event.
+            if ((consumeNetworkEvents(_socket, _event) & FD_ACCEPT) != 0)
+                continue; // a connection arrived in that window: take it rather than park
             try
             {
                 co_await _loop.waitReadable(static_cast<HANDLE>(_event));

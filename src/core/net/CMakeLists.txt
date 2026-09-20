@@ -85,6 +85,8 @@ core_cpp_add_module(net KIND STATIC
         bsd/KqueueEventSource.hpp
     SOURCES_WINDOWS
         testing/windows/InMemoryTransport.cpp
+        windows/NetworkEvents.cpp
+        windows/NetworkEvents.hpp
         windows/PollEventSource.cpp
         windows/SocketsWin32.cpp
         windows/WindowsListener.cpp
@@ -120,6 +122,8 @@ core_cpp_add_test(net
     SOURCES_POSIX
         posix/FdPassing_test.cpp
         posix/UnixSocket_test.cpp
+    SOURCES_WINDOWS
+        windows/NetworkEvents_test.cpp
     LABELS loopback)
 
 core_cpp_add_test(net NAME net_tls SOURCES Tls_test.cpp LABELS loopback)
