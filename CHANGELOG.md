@@ -34,7 +34,9 @@ workflow refuses one without a section here.
   Tracy profiling macros (`CORE_ZONE_*`) and the `core::ranges::Iota`/`FoldLeft` seam. It owns the
   generated `core/Config.hpp`.
 - `core::log`: categorised logging (`Category`, `Sink`, `configure()`), its sinks and formatters
-  (`ScopedOutput`, `ScopedCapture`), and `fatal()` and `SoftRequire()`, which report through it.
+  (`ScopedOutput`, `ScopedCapture`), `fatal()` and `SoftRequire()`, which report through it, and
+  `isStdOutTerminal()`/`isStdErrTerminal()` — the one place the platform is asked whether a
+  standard stream is a terminal, which is what decides colourisation.
 - `core::cli`: the command-line parser (`core::cli::parse`, help and usage text) and the
   application scaffold `core::cli::App`.
 - The Tracy dependency, 0.14.1 as contour pins it, resolved when `CORE_CPP_WITH_TRACY` is on:
@@ -231,6 +233,69 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- `core::cli`'s `--help` no longer reads past the text it is laying out. `wordWrapped()` computed
+  the room left on the line as `margin - cursor + 1` in unsigned arithmetic, with a `<= 0` guard
+  below it that is dead for an unsigned type; `printOptions()` sets the cursor to the option
+  column, so an option column wider than the terminal — an 80-column terminal and an option whose
+  rendered text exceeds 65 characters, a narrower terminal, or a pty reporting `ws_col == 0` —
+  wrapped it to about 4294967295 and indexed the help text far past its end. It also read
+  `text[SIZE_MAX]` for a help text beginning with a line feed, and returned an empty chunk for a
+  word longer than the line, which made the caller loop forever. The options column now accounts
+  for the verbatim placeholder as well, so a placeholder longer than the longest option no longer
+  underflows its padding into a string of about four billion spaces (the `assert` above it is
+  compiled out under NDEBUG), and the hyperlink scan's `isalpha()` widens through `unsigned char`,
+  which is what it is defined for.
+- `core::cli::App` keeps the contracts it documents. `installLogging()` assigned the replacement
+  over the member holding the previous output, so the previous `ScopedOutput` was destroyed after
+  the new one had installed itself: its destructor restores every category to the sink it
+  snapshotted, so a second call silently sent every later log line back to the console and left
+  each category holding a reference into a destroyed sink. It releases the previous output first
+  now. `reparseParameters()` and `parseParametersForTesting()`, both documented "false on
+  failure", catch what `cli::parse()` throws rather than letting it escape a function whose
+  contract is a bool (`cli::parse()`'s declaration now states what it throws;
+  [core-cpp#13](https://github.com/contour-terminal/core-cpp/issues/13) converts this API to
+  `std::expected` at the end of the plan). `screenWidth()` rejects a reported width of 0.
+  `listDebugTags()` sorts a copy rather than the process-wide category registry, whose order is
+  its construction order.
+- `core::log` asks the platform whether a standard stream is a terminal, on Windows too.
+  `ScopedOutput`'s private `isStdErrTty()` returned `true` unconditionally there, so a redirected
+  standard error received SGR escapes — against the header's own contract — and
+  `core::cli::App`'s `helpStyle()` and `customizeLogStoreOutput()` each carried a second copy of
+  the same branch for standard output. All three now call `core::log::isStdOutTerminal()` or
+  `isStdErrTerminal()`, and the platform branch lives in one place.
+- `core::Flags::operator&=` intersects instead of clearing. It called `disable()`, so `f &= X::A`
+  kept everything except `A` while `f = f & Flags { X::A }` kept only `A`: the compound operator
+  computed the complement of its binary form. A consumer that relied on the old spelling wants
+  `disable()`. An overload taking a `Flags` was added, so the pair is symmetric with `operator|`
+  and `operator|=`.
+- `core::escape()` and `core::unescape()` round-trip again. 0x7E was outside the printable range,
+  so `~` came out as a numeric escape; `escape()` writes a quote as `\"` and `unescape()`
+  re-emitted it as `\"`; and an octal escape is three digits of which only those below `\100`
+  begin with a zero, but the reader keyed the sequence on `'0'`, so `\101` and everything above it
+  came back as literal text. The reader now opens an octal sequence on any octal digit and
+  consumes exactly three, which reads the `\0dd` form it used to accept identically.
+- `core::base64::decodeLength()` measures the base64 prefix. Its scan compared the index-table
+  entry against the table's own size (256) rather than against the 64 the table stores for a byte
+  outside the alphabet, so every byte passed and the length came from the whole input: a short
+  payload followed by padding or junk sized the buffer for the junk.
+- `core::FNV`'s byte-wise overload takes only a type with unique object representations. It
+  accepted any trivially copyable type and walked its object representation, padding included, so
+  two objects with equal members hashed differently depending on what their padding held. A type
+  with padding no longer compiles against it, and hashes its members instead. The bytes come from
+  `std::bit_cast`, so the overload's `constexpr` can now be taken up.
+- `core::Utils` stays inside the bounds it is given. `splitKeyValuePairs()` rebuilt its last
+  segment with the length-less `std::string_view(char const*)` constructor, which calls `strlen()`:
+  it read past the view (AddressSanitizer reports a heap-buffer-overflow) and returned whatever
+  followed as part of the value. `toLower()`/`toUpper()` passed a plain `char` to
+  `tolower()`/`toupper()`, undefined for any byte with the high bit set — every continuation byte
+  of a UTF-8 sequence, and `cli::about::registerProjects()` sorts project titles through them.
+  `readFileAsString()` sized from `file_size()` and read in text mode, so Windows' CRLF
+  translation left the shortfall behind as trailing NULs, and it narrowed the path through
+  `path::string()`, which cannot represent every name. `eachElement()`'s end iterator was
+  `max + 1` computed in `int` and cast back, which for a type narrower than `int` wraps onto
+  `begin()` — so the range was empty — and for one as wide as `int` overflows. Windows'
+  `threadName()` resized by `len - 1` with `len == 0` on a failed conversion, which threw
+  `length_error` before the `LocalFree()` below it ran.
 - `core::tui` carries no consumer's name in the code it runs. Beyond the OSC 8 hyperlink id
   below, `detectLanguageFromPath()`'s well-known-filename table no longer has a row for endo's
   `.endo-format`, so that name now answers `LanguageId::None`; the table keeps only names that
