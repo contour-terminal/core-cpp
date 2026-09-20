@@ -25,7 +25,8 @@ cmake/
   portable/
     CompileCache.cmake      verbatim from fastcached: fastcache-cc > sccache (opt-in) > ccache
     README.md               provenance of the verbatim files, and how to re-sync them
-  CoreCppVendor.cmake       (planned, A8) MODE=sync|check|export of the vendoring contract
+  CoreCppVendor.cmake       the vendoring contract: MODE=sync copies a ref's file set out of git's
+                            blobs and writes MANIFEST; MODE=check re-hashes a copy, needing no git
 src/core/
   Config.hpp.in             generates <core/Config.hpp>: version, skip exit code, WITH_* flags
   *.hpp, *.cpp              core::base (crispy, fastcached Core): Assert, Defines, Environment,
@@ -83,6 +84,14 @@ tests/
     check-layering.cmake            each module-table row bounds what its target links; refusals by name
     check-release.cmake             a release tag equals project(VERSION) and has a CHANGELOG section
     check-release-selftest.cmake    proves each refusal of check-release.cmake
+    check-vendor-selftest.cmake     proves each refusal of cmake/CoreCppVendor.cmake, against git
+                                    repositories it builds for the purpose
+  consumer-cpm/             a consumer's own project, added to core-cpp with CPM: asserts that
+                            core-cpp changed none of its flags, launcher or targets
+  consumer-vendored/        the same for a verbatim copy, built with nothing fetched; CI runs it
+                            in a container with no network and no git
+  consumer-wasm/            the same for the WebAssembly subset behind one INTERFACE library,
+                            run under node
 scripts/
   tool-versions.py          prints, installs or checks the pinned clang-format/clang-tidy
   clang-format.py           formats or checks every C++ source with the pinned clang-format
