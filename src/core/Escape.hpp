@@ -31,7 +31,7 @@ enum class NumericEscape : uint8_t
 /// @param ch The byte to render.
 /// @param numericEscape Which numeric form to use for a byte that has no named escape.
 /// @return The escaped text; never empty.
-inline std::string escape(uint8_t ch, NumericEscape numericEscape = NumericEscape::Hex)
+[[nodiscard]] inline std::string escape(uint8_t ch, NumericEscape numericEscape = NumericEscape::Hex)
 {
     switch (ch)
     {
@@ -54,7 +54,7 @@ inline std::string escape(uint8_t ch, NumericEscape numericEscape = NumericEscap
 }
 
 template <typename T>
-inline std::string escape(T begin, T end, NumericEscape numericEscape = NumericEscape::Hex)
+[[nodiscard]] inline std::string escape(T begin, T end, NumericEscape numericEscape = NumericEscape::Hex)
 {
     static_assert(sizeof(*std::declval<T>()) == 1,
                   "should be only 1 byte, such as: char, char8_t, uint8_t, byte, ...");
@@ -68,7 +68,7 @@ inline std::string escape(T begin, T end, NumericEscape numericEscape = NumericE
 }
 
 template <typename T>
-inline std::string escapeMarkdown(T begin, T end)
+[[nodiscard]] inline std::string escapeMarkdown(T begin, T end)
 {
     static_assert(sizeof(*std::declval<T>()) == 1,
                   "should be only 1 byte, such as: char, char8_t, uint8_t, byte, ...");
@@ -84,12 +84,12 @@ inline std::string escapeMarkdown(T begin, T end)
     return result;
 }
 
-inline std::string escape(std::string_view s, NumericEscape numericEscape = NumericEscape::Hex)
+[[nodiscard]] inline std::string escape(std::string_view s, NumericEscape numericEscape = NumericEscape::Hex)
 {
     return escape(begin(s), end(s), numericEscape);
 }
 
-inline std::string escapeMarkdown(std::string_view s)
+[[nodiscard]] inline std::string escapeMarkdown(std::string_view s)
 {
     return escapeMarkdown(begin(s), end(s));
 }
