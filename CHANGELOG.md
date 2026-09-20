@@ -242,6 +242,21 @@ workflow refuses one without a section here.
   can leave it there when both the second hop and the rollback fail, which is not behaviour that
   may ship untested (controller ruling R53).
 
+- `core::platform::testing::InMemoryFileSystem` keeps a name the platform's narrow encoding
+  cannot spell in *both* directions. The keys were made UTF-8 earlier in this release, but ten
+  sites turned a key back into a path through `std::filesystem::path`'s narrow constructor -- the
+  ANSI code page on Windows -- so `listDirectory()`, `walkDirectoryRecursive()`,
+  `weaklyCanonical()` and the parent-key derivations handed back a path that no longer named the
+  entry it came from, and a symlink's target was narrowed on the way in as well. One helper now
+  spells the way out, as `normalizePath()` spells the way in.
+- `core::platform::testing::InMemoryFileSystem`'s write streams share the file's storage instead
+  of pointing into the map. A `writeFile()` through the filesystem reallocates the string under an
+  open stream, and `remove()` or `rename()` took the entry away from under it -- a use-after-free
+  in each case, on the fake every consumer's tests are written against. The read-write stream also
+  caches no pointer into that storage at all now, so a file that changes behind it is read from
+  where it lives rather than from where it was. An open stream consequently survives a remove and
+  follows a rename, as an open file descriptor does on POSIX.
+
 ### Breaking
 
 - `core::async::whenAny()` resolves to `std::optional<std::size_t>` rather than to a `std::size_t`
@@ -302,10 +317,14 @@ workflow refuses one without a section here.
   trimmed trailing NULs off the result can stop; one that caught `std::filesystem::filesystem_error`
   for a missing path checks for an empty string instead. contour reads a CA certificate and a
   forced-DPI file through it.
-- `core::unescape()` and `core::readFileAsString()` are `[[nodiscard]]`. Discarding either is a
-  bug — neither has an effect other than its return value — but a consumer that does so and
-  builds with `-Werror` stops building. Migration: use the result, or cast it to `void` at the
-  one call site that means to throw it away.
+- Every function in `<core/Escape.hpp>` — `escape()` in all three of its spellings,
+  `escapeMarkdown()` in both of its, and `unescape()` — and `core::readFileAsString()` are
+  `[[nodiscard]]`. Discarding any of them is a bug: none has an effect other than its return
+  value. A consumer that does so and builds with `-Werror` stops building. Migration: use the
+  result, or cast it to `void` at the one call site that means to throw it away. The whole header
+  rather than the one overload that changed behaviour, because the surprise would be the
+  inconsistency — `escape(text)` is the spelling most likely to be called for its return value
+  alone.
 
 ### Changed
 
@@ -406,7 +425,9 @@ workflow refuses one without a section here.
   `isStdErrTerminal()`, which `core::log` implements once per platform in
   `src/core/log/posix/TerminalQuery.cpp` and `src/core/log/windows/TerminalQuery.cpp` — an
   operating-system difference is an implementation, never an `#ifdef` inside the decision
-  (`.agent/rules/platform.md`).
+  (`.agent/rules/platform.md`). The module's other one, the process id the `[PID]` field prints,
+  went the same way (`posix/ProcessId.cpp`, `windows/ProcessId.cpp`, declared in the private
+  `detail/ProcessId.hpp`), so `core::log` has no `#ifdef` in its logic left.
 - `core::escape()` and `core::unescape()` round-trip again. 0x7E was outside the printable range,
   so `~` came out as a numeric escape; `escape()` writes a quote as `\"` and `unescape()`
   re-emitted it as `\"`; and an octal escape is three digits of which only those below `\100`
