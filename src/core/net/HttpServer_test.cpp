@@ -344,6 +344,34 @@ TEST_CASE("readRequest parses a bare-LF request head", "[net][http]")
     REQUIRE(seen->header("Host") == "example");
 }
 
+TEST_CASE("readRequest refuses a head whose blank line is a bare LF", "[net][http]")
+{
+    // Request smuggling. A front-end that honours a bare LF as a line terminator — which
+    // RFC 9112 §2.2 permits, and which this parser itself does for every other line — reads
+    // the blank line as the end of the head and "Host: evil …" as a SECOND request. Folding
+    // those headers into the first instead made the two ends disagree about where the next
+    // request begins, which is the desync RFC 9112 §11.2 is about.
+    //
+    // Refused rather than parsed: the bytes behind that blank line were already consumed as
+    // part of the head block, so a Content-Length read before it would index into the wrong
+    // place. Same posture as Transfer-Encoding and a conflicting Content-Length.
+    auto source = core::net::PollEventSource {};
+    auto loop = EventLoop { source };
+    auto pair = core::net::testing::makeSocketPair(loop);
+    REQUIRE(pair.has_value());
+
+    auto const wire = std::string { "GET / HTTP/1.1\n\nHost: evil\r\nContent-Length: 0\r\n\r\n" };
+    auto const limits = HttpLimits {};
+    auto reply = std::string {};
+    auto seen = std::optional<HttpRequest> {};
+    auto error = std::optional<core::net::NetError> {};
+    loop.blockOn(exchange(pair->first.get(), pair->second.get(), &wire, &reply, &limits, &seen, &error));
+
+    REQUIRE_FALSE(seen.has_value()); // NOT one request carrying the smuggled headers
+    REQUIRE(error.has_value());
+    REQUIRE(error->code == NetErrorCode::Other);
+}
+
 TEST_CASE("readRequest rejects an unparsable Content-Length", "[net][http]")
 {
     auto source = core::net::PollEventSource {};

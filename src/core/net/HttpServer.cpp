@@ -69,8 +69,11 @@ namespace
     /// Parses the request line and headers from @p headerText into @p request.
     /// @param headerText The head block, delimiter excluded.
     /// @param request The request to populate (not owned).
-    /// @return The advertised Content-Length, or std::nullopt if the request line
-    ///         was malformed (fewer than three space-separated tokens).
+    /// @return The advertised Content-Length, or std::nullopt when the head must be
+    ///         refused: a malformed request line (fewer than three space-separated
+    ///         tokens), an obs-fold continuation, a header without a colon, an
+    ///         unparsable or conflicting Content-Length, a Transfer-Encoding, or a
+    ///         blank line with bytes still behind it (see the empty-line case below).
     [[nodiscard]] std::optional<std::size_t> parseHead(std::string_view headerText, HttpRequest* request)
     {
         auto contentLength = std::size_t { 0 };
@@ -107,8 +110,25 @@ namespace
                 continue;
             }
 
+            // The head ends at the FIRST empty line, whichever terminator produced it.
+            // Skipping it and carrying on was a request-smuggling desync: a front-end that
+            // honours a bare LF as a line terminator (RFC 9112 §2.2 permits it, and this
+            // parser does it for every other line) reads "GET / HTTP/1.1\n\nHost: evil…" as
+            // TWO requests, while folding those headers into the first makes it one — the
+            // two ends then disagree about where the next request begins.
+            //
+            // The bytes after that empty line were already consumed as part of the head
+            // block readUntil("\r\n\r\n") delivered, so they can be neither re-framed as
+            // the body nor pushed back for the next request: any Content-Length parsed
+            // before the empty line would index into the wrong place. An ambiguous
+            // message is therefore refused, as Transfer-Encoding and a conflicting
+            // Content-Length already are, rather than resolved by guessing.
             if (line.empty())
-                continue;
+            {
+                if (lineStart < headerText.size())
+                    return std::nullopt; // bytes follow the blank line: ambiguous framing
+                break;                   // the blank line is the block's end: the head is complete
+            }
 
             // An obs-fold continuation (a header line starting with SP/HTAB) belongs
             // to the previous header's value. RFC 9112 §5.2 deprecates it and permits
