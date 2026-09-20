@@ -40,6 +40,7 @@ core_cpp_add_module(base KIND STATIC
 core_cpp_add_test(base SOURCES
     Base64_test.cpp
     Environment_test.cpp
+    Escape_test.cpp
     FNV_test.cpp
     Generator_test.cpp
     Profiling_test.cpp

@@ -32,7 +32,9 @@ inline std::string escape(uint8_t ch, NumericEscape numericEscape = NumericEscap
         case '\n': return "\\n";
         case '"': return "\\\"";
         default:
-            if (0x20 <= ch && ch < 0x7E)
+            // 0x20 (space) to 0x7E (tilde) inclusive is what prints as itself; 0x7E was left
+            // out, so `~` came back as a numeric escape.
+            if (0x20 <= ch && ch <= 0x7E)
                 return std::format("{}", static_cast<char>(ch));
             else if (numericEscape == NumericEscape::Hex)
                 return std::format("\\x{:02x}", ch & 0xFF);
@@ -82,7 +84,11 @@ inline std::string escapeMarkdown(std::string_view s)
     return escapeMarkdown(begin(s), end(s));
 }
 
-inline std::string unescape(std::string_view escapedText)
+/// Reads back what escape() wrote.
+///
+/// @param escapedText The escaped text.
+/// @return The bytes it stands for. Anything that is not an escape sequence is copied through.
+[[nodiscard]] inline std::string unescape(std::string_view escapedText)
 {
     std::string out;
     out.reserve(escapedText.size());
@@ -91,13 +97,13 @@ inline std::string unescape(std::string_view escapedText)
     {
         Text,
         Escape,
-        Octal1,
         Octal2,
+        Octal3,
         Hex1,
         Hex2
     };
     StateType state = StateType::Text;
-    char buf[3] = {};
+    char buf[4] = {};
 
     for (char const ch: escapedText)
     {
@@ -110,15 +116,24 @@ inline std::string unescape(std::string_view escapedText)
                     out.push_back(ch);
                 break;
             case StateType::Escape:
+                // An octal escape is three digits (\000 to \377), and only the ones below \100
+                // begin with a zero: keying the sequence on '0' alone left `\101` unreadable.
+                if ('0' <= ch && ch <= '7')
+                {
+                    buf[0] = ch;
+                    state = StateType::Octal2;
+                    break;
+                }
                 switch (ch)
                 {
-                    case '0':
-                        //.
-                        state = StateType::Octal1;
-                        break;
                     case 'x':
                         //.
                         state = StateType::Hex1;
+                        break;
+                    case '"':
+                        // escape() writes a quote as \", so unescape() must read it back as one.
+                        out.push_back('"');
+                        state = StateType::Text;
                         break;
                     case 'e':
                         state = StateType::Text;
@@ -164,12 +179,13 @@ inline std::string unescape(std::string_view escapedText)
                         break;
                 }
                 break;
-            case StateType::Octal1:
-                buf[0] = ch;
-                state = StateType::Octal2;
-                break;
             case StateType::Octal2:
                 buf[1] = ch;
+                state = StateType::Octal3;
+                break;
+            case StateType::Octal3:
+                buf[2] = ch;
+                buf[3] = '\0';
                 out.push_back(static_cast<char>(std::strtoul(buf, nullptr, 8)));
                 state = StateType::Text;
                 break;
@@ -179,6 +195,7 @@ inline std::string unescape(std::string_view escapedText)
                 break;
             case StateType::Hex2:
                 buf[1] = ch;
+                buf[2] = '\0'; // an octal sequence before this one left a third digit behind
                 out.push_back(static_cast<char>(std::strtoul(buf, nullptr, 16)));
                 state = StateType::Text;
                 break;
