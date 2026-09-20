@@ -279,7 +279,7 @@ Size CompletionPopup::preferredSize() const
 // Visibility and Items
 // ============================================================================
 
-void CompletionPopup::show(std::vector<CompletionItem> items)
+void CompletionPopup::show(std::vector<completer::CompletionItem> items)
 {
     _items = std::move(items);
     _selection.reset();
@@ -300,7 +300,7 @@ void CompletionPopup::hide()
     Component::setVisible(false);
 }
 
-void CompletionPopup::updateItems(std::vector<CompletionItem> items)
+void CompletionPopup::updateItems(std::vector<completer::CompletionItem> items)
 {
     if (items.empty())
     {
@@ -350,7 +350,7 @@ bool CompletionPopup::empty() const noexcept
     return _items.empty();
 }
 
-std::vector<CompletionItem> const& CompletionPopup::items() const noexcept
+std::vector<completer::CompletionItem> const& CompletionPopup::items() const noexcept
 {
     return _items;
 }
@@ -364,14 +364,14 @@ size_t CompletionPopup::selectedIndex() const noexcept
     return _selection.selected();
 }
 
-CompletionItem const* CompletionPopup::selectedItem() const noexcept
+completer::CompletionItem const* CompletionPopup::selectedItem() const noexcept
 {
     if (_items.empty())
         return nullptr;
     return &_items[_selection.selected()];
 }
 
-CompletionItem const* CompletionPopup::itemAt(size_t index) const noexcept
+completer::CompletionItem const* CompletionPopup::itemAt(size_t index) const noexcept
 {
     if (index >= _items.size())
         return nullptr;

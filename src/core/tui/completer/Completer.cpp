@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <ranges>
 
-namespace core::tui
+namespace core::tui::completer
 {
 
 void Completer::addProvider(std::unique_ptr<CompletionProvider> provider)
@@ -120,4 +120,4 @@ std::string Completer::findCommonPrefix(std::vector<CompletionItem> const& items
     return prefix;
 }
 
-} // namespace core::tui
+} // namespace core::tui::completer

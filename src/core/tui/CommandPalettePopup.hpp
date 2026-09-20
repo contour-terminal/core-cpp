@@ -26,7 +26,7 @@ enum class CommandPaletteAction : std::uint8_t
 ///
 /// Renders a bordered popup with a filter input field at the top and a
 /// scrollable list of commands below. Commands are fuzzy-matched against
-/// the filter text using FuzzyMatch::matchSmartCase(). Each item shows
+/// the filter text using completer::FuzzyMatch::matchSmartCase(). Each item shows
 /// category, label (with match highlighting), description, and keybinding hint.
 ///
 /// Follows the CompletionPopup pattern: manages its own visibility state,

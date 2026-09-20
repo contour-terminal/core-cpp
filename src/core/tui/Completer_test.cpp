@@ -10,6 +10,7 @@
 #include <ranges>
 
 using namespace core::tui;
+using namespace core::tui::completer;
 
 namespace
 {

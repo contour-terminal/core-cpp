@@ -26,7 +26,7 @@ enum class FuzzyPickerAction : std::uint8_t
 ///
 /// Renders a bordered popup with a filter input field at the top and a
 /// scrollable list of items below. Items are fuzzy-matched against
-/// the filter text using FuzzyMatch::matchSmartCase(). Each item shows
+/// the filter text using completer::FuzzyMatch::matchSmartCase(). Each item shows
 /// its text with matched character highlighting.
 ///
 /// Designed to be used for file path selection (fzf replacement) but is

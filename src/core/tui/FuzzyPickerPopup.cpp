@@ -247,16 +247,16 @@ void FuzzyPickerPopup::refilter()
     {
         for (auto const& item: _allItems)
         {
-            auto ciResult = FuzzyMatch::match(item, filterText, /*caseSensitive=*/false);
+            auto ciResult = completer::FuzzyMatch::match(item, filterText, /*caseSensitive=*/false);
             if (!ciResult.matches)
                 continue;
 
-            auto score = FuzzyMatch::calculateScore(100, item, filterText, ciResult);
+            auto score = completer::FuzzyMatch::calculateScore(100, item, filterText, ciResult);
 
             // Tiered bonus: case-sensitive substring > case-insensitive substring > fuzzy
             if (ciResult.isContiguousSubstring())
             {
-                auto csResult = FuzzyMatch::match(item, filterText, /*caseSensitive=*/true);
+                auto csResult = completer::FuzzyMatch::match(item, filterText, /*caseSensitive=*/true);
                 if (csResult.matches && csResult.isContiguousSubstring())
                     score += 400; // Tier 1: exact case substring match
                 else

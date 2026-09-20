@@ -13,7 +13,7 @@
 #include <string_view>
 #include <vector>
 
-namespace core::tui
+namespace core::tui::completer
 {
 
 /// @brief Configuration for the completion system.
@@ -99,4 +99,4 @@ class Completer
                                                                 size_t cursorPosition) const;
 };
 
-} // namespace core::tui
+} // namespace core::tui::completer

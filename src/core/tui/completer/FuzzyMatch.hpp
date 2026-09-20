@@ -4,7 +4,7 @@
 #include <string_view>
 #include <vector>
 
-namespace core::tui
+namespace core::tui::completer
 {
 
 /// @brief Configuration for fuzzy matching scoring.
@@ -114,4 +114,4 @@ struct FuzzyMatch
     [[nodiscard]] static size_t countGraphemes(std::string_view text) noexcept;
 };
 
-} // namespace core::tui
+} // namespace core::tui::completer

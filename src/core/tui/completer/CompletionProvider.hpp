@@ -6,7 +6,7 @@
 #include <string_view>
 #include <vector>
 
-namespace core::tui
+namespace core::tui::completer
 {
 
 /// @brief Abstract base for completion providers.
@@ -39,4 +39,4 @@ class CompletionProvider
     [[nodiscard]] virtual int priority() const { return 0; }
 };
 
-} // namespace core::tui
+} // namespace core::tui::completer

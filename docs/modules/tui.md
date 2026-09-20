@@ -57,15 +57,11 @@ and on stb when `CORE_CPP_WITH_IMAGES` is on. Native only: there is no terminal 
   ring, ghost text, selection), `List`, `TreeTableView`, `Dialog`, `StatusBar`, `LogPanel`,
   `Spinner`, `ProgressBar`, `Tooltip`, `QuestionComponent`, and the popups `CompletionPopup`,
   `CommandPalettePopup` and `FuzzyPickerPopup` with `PopupKeyDispatch` and `ScrollableSelection`.
-- **Completion.** `Completer`, `CompletionProvider`, `CompletionItem`, `FuzzyMatch` and
-  `SmartCaseMatch`, in `core::tui` — although they live in `src/core/tui/completer/`, which by
-  core-cpp's namespace-equals-directory rule should make them `core::tui::completer` as the
-  sibling `runtime/` makes its own `core::tui::runtime`. The mismatch came in with the import from
-  endo, whose TUI is one flat `namespace tui`; it is recorded as an allowlist row in
-  `tests/cmake/check-cmake-hygiene.cmake` and in
-  [core-cpp#30](https://github.com/contour-terminal/core-cpp/issues/30), because resolving it
-  either way — renaming the namespace or moving the files up — changes `core::tui`'s public API,
-  and is therefore due before v0.1.0.
+- **Completion.** `core::tui::completer`: `Completer` with `CompletionConfig`,
+  `CompletionProvider`, `CompletionItem`, `FuzzyMatch` with `FuzzyConfig` and `FuzzyMatchResult`,
+  and `SmartCaseMatch` with `SmartCaseConfig`. The namespace is the one the directory names, as
+  `runtime/` is `core::tui::runtime`; endo's TUI is one flat `namespace tui`, and the import kept
+  that until [core-cpp#30](https://github.com/contour-terminal/core-cpp/issues/30).
 - **Markdown and syntax.** `MarkdownRenderer` with `MarkdownTable`, `MarkdownHtml` and the inline
   grammar, and `GenericSyntaxHighlighter`, a lexer per language.
 - **Images.** With `CORE_CPP_WITH_IMAGES`: `loadImage()`, `resizeImage()` and `readClipboardImage()`

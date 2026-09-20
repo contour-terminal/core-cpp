@@ -244,30 +244,26 @@ workflow refuses one without a section here.
   can leave it there when both the second hop and the rollback fail, which is not behaviour that
   may ship untested (controller ruling R53).
 
-- `core::platform::testing::InMemoryFileSystem` keeps a name the platform's narrow encoding
-  cannot spell in *both* directions. The keys were made UTF-8 earlier in this release, but ten
-  sites turned a key back into a path through `std::filesystem::path`'s narrow constructor -- the
-  ANSI code page on Windows -- so `listDirectory()`, `walkDirectoryRecursive()`,
-  `weaklyCanonical()` and the parent-key derivations handed back a path that no longer named the
-  entry it came from, and a symlink's target was narrowed on the way in as well. One helper now
-  spells the way out, as `normalizePath()` spells the way in.
-- `core::platform::testing::InMemoryFileSystem`'s write streams share the file's storage instead
-  of pointing into the map. A `writeFile()` through the filesystem reallocates the string under an
-  open stream, and `remove()` or `rename()` took the entry away from under it -- a use-after-free
-  in each case, on the fake every consumer's tests are written against. The read-write stream also
-  caches no pointer into that storage at all now, so a file that changes behind it is read from
-  where it lives rather than from where it was. An open stream consequently survives a remove and
-  follows a rename, as an open file descriptor does on POSIX.
-
-- `core::platform::testing::InMemoryFileSystem`'s `openRead()` shares the file's storage instead
-  of handing the stream a snapshot, so a read stream sees writes that land after it was opened --
-  which is what a read descriptor does on the real filesystem, and what this fake's write streams
-  already did. A test written against the fake and run against `NativeFileSystem` no longer
-  disagrees on that point; the divergences that remain are listed in
-  [core-cpp#27](https://github.com/contour-terminal/core-cpp/issues/27).
-
 ### Breaking
 
+- `core::platform::testing::InMemoryFileSystem` models a file's lifetime the way POSIX does, where
+  it used to hand each stream a private copy. A stream now survives `remove()` of its file and
+  follows it across `rename()`, `openRead()` sees writes that land after it was opened, and
+  `copyFile()` onto an open destination overwrites in place rather than detaching the stream.
+  Migration: a test that relied on a read stream holding a snapshot of the file it opened must
+  read the file before the write, or re-open it after. The divergences that remain between this
+  fake and `NativeFileSystem` are listed in
+  [core-cpp#27](https://github.com/contour-terminal/core-cpp/issues/27).
+- `core::tui`'s completion types move to `core::tui::completer`, the namespace their directory
+  names, as `src/core/tui/runtime/` already gives `core::tui::runtime`. endo's TUI is one flat
+  `namespace tui` and the import kept that, which core-cpp's namespace-equals-directory rule does
+  not allow; it was invisible until Task A11 fixed the hygiene rule that only looked at the first
+  directory segment. Migration, for each of `Completer`, `CompletionConfig`, `CompletionProvider`,
+  `CompletionItem`, `FuzzyMatch`, `FuzzyConfig`, `FuzzyMatchResult`, `SmartCaseMatch` and
+  `SmartCaseConfig`: `core::tui::Completer` becomes `core::tui::completer::Completer`, and so on.
+  The include paths do not change. Recorded here rather than under **Changed** because this file's
+  preamble puts every API break under **Breaking** with a migration note
+  ([core-cpp#30](https://github.com/contour-terminal/core-cpp/issues/30)).
 - `core::async::whenAny()` resolves to `std::optional<std::size_t>` rather than to a `std::size_t`
   that was `core::async::detail::WhenAnyNoWinner` (`SIZE_MAX`) when nothing won. The sentinel was
   part of the documented public result but lived in `detail::`, so handling the empty case meant
@@ -372,6 +368,23 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- `core::platform::testing::InMemoryFileSystem` keeps a name the platform's narrow encoding
+  cannot spell in *both* directions. The keys were made UTF-8 earlier in this release, but twelve
+  sites turned a key back into a path through `std::filesystem::path`'s narrow constructor -- the
+  ANSI code page on Windows -- so `listDirectory()`, `walkDirectoryRecursive()`,
+  `weaklyCanonical()`, the walk's sort key and the parent-key derivations handed back a path that
+  no longer named the entry it came from, and a symlink's target was narrowed on the way in as
+  well. One helper now spells the way out, as `normalizePath()` spells the way in.
+- `core::platform::testing::InMemoryFileSystem`'s streams no longer point into the file map. A
+  `writeFile()` through the filesystem reallocated the string under an open stream, and `remove()`
+  or `rename()` took the entry away from under it -- a use-after-free in each case, on the fake
+  every consumer's tests are written against. The content is shared now, and the read-write stream
+  caches no pointer into it, so a file that changes behind a stream is read from where it lives.
+- `core::platform::testing::InMemoryFileSystem`'s streams support `unget()` and `putback()`, which
+  set `badbit` while the buffer kept no get area for `std::streambuf` to satisfy a put-back from.
+  `std::ifstream` and `std::fstream` accept all of `unget()`, a `putback()` of the character the
+  file holds, and a `putback()` of one it does not; the fake now answers as they do, keeping a
+  put-back character in a slot of its own and leaving the file unchanged, as `std::filebuf` does.
 - `core::async::whenAny()` no longer runs the rest of a `request_stop()` on freed memory. Its
   parent→child cancel bridge requested stop on a `StopSource` that the awaiter held as a member;
   a child awaitable that resumes its coroutine from inside its own stop callback — how every
@@ -389,10 +402,9 @@ workflow refuses one without a section here.
   `src/core/platform/testing/` declaring `core::platform` passed although the rule is namespace =
   directory. The expected namespace now follows the whole path, with the platform and
   private-detail directories (`posix/`, `windows/`, `linux/`, `bsd/`, `darwin/`, `emscripten/`,
-  `detail/`, `backend/`) skipped as layout. The one thing in the tree the deeper rule finds,
-  `src/core/tui/completer/` declaring `core::tui`, is an allowlist row naming
-  [core-cpp#30](https://github.com/contour-terminal/core-cpp/issues/30), which holds the decision:
-  both ways out of it change `core::tui`'s public API, so it is due before v0.1.0.
+  `detail/`, `backend/`) skipped as layout. The one thing in the tree the deeper rule found,
+  `src/core/tui/completer/` declaring `core::tui`, is fixed rather than exempted: see **Breaking**
+  ([core-cpp#30](https://github.com/contour-terminal/core-cpp/issues/30)).
 - `Task_test.cpp`'s deep-chain case skips on GCC unless the build's optimisation level is known to
   make symmetric transfer a tail call. It keyed on `__OPTIMIZE__`, which GCC defines at `-Og` and
   `-O1` as well, where the 100000-frame chain overflows the stack and kills the process, taking
@@ -501,7 +513,7 @@ workflow refuses one without a section here.
   copy prefixed it `endo-`, so every consumer's hyperlinks carried another project's name on the
   wire. A behaviour change for anything that reads the id back: it is now `1f2e` where it was
   `endo-1f2e`.
-- `core::tui::Completer::addProvider()` sorts stably, so providers of equal priority -- which is
+- `core::tui::completer::Completer::addProvider()` sorts stably, so providers of equal priority -- which is
   every provider that does not set one -- keep the order they were registered in.
   `gatherCompletions()` drops a later duplicate by text, so an unstable sort let the standard
   library decide which provider's item a user saw.

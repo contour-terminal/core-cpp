@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace core::tui
+namespace core::tui::completer
 {
 
 /// @brief A single completion suggestion.
@@ -41,4 +41,4 @@ struct CompletionItem
     auto operator<=>(CompletionItem const&) const = default;
 };
 
-} // namespace core::tui
+} // namespace core::tui::completer

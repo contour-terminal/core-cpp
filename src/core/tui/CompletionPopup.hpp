@@ -76,7 +76,7 @@ class CompletionPopup: public Component
     /// @brief Shows the popup with the given completion items.
     /// @param items The completion items to display.
     /// @note If items is empty, the popup remains hidden.
-    void show(std::vector<CompletionItem> items);
+    void show(std::vector<completer::CompletionItem> items);
 
     /// @brief Hides the popup and clears items.
     void hide();
@@ -88,7 +88,7 @@ class CompletionPopup: public Component
     /// If the new list is empty, hides the popup.
     ///
     /// @param items The new completion items.
-    void updateItems(std::vector<CompletionItem> items);
+    void updateItems(std::vector<completer::CompletionItem> items);
 
     /// @brief Returns whether the popup is currently visible.
     /// @note Overrides Component::visible() to also check for non-empty items.
@@ -101,7 +101,7 @@ class CompletionPopup: public Component
     [[nodiscard]] bool empty() const noexcept;
 
     /// @brief Returns a const reference to the completion items.
-    [[nodiscard]] std::vector<CompletionItem> const& items() const noexcept;
+    [[nodiscard]] std::vector<completer::CompletionItem> const& items() const noexcept;
 
     // ========================================================================
     // Selection
@@ -111,10 +111,10 @@ class CompletionPopup: public Component
     [[nodiscard]] size_t selectedIndex() const noexcept;
 
     /// @brief Returns the currently selected item, or nullptr if none.
-    [[nodiscard]] CompletionItem const* selectedItem() const noexcept;
+    [[nodiscard]] completer::CompletionItem const* selectedItem() const noexcept;
 
     /// @brief Returns the item at the given index, or nullptr if out of bounds.
-    [[nodiscard]] CompletionItem const* itemAt(size_t index) const noexcept;
+    [[nodiscard]] completer::CompletionItem const* itemAt(size_t index) const noexcept;
 
     /// @brief Selects the next item (with wrap-around).
     void selectNext();
@@ -168,7 +168,7 @@ class CompletionPopup: public Component
     [[nodiscard]] int renderedWidth() const noexcept;
 
   private:
-    std::vector<CompletionItem> _items;
+    std::vector<completer::CompletionItem> _items;
     ScrollableSelection _selection { 10 }; ///< Selection and scroll state.
     int _renderedHeight = 0;
     int _renderedWidth = 0;

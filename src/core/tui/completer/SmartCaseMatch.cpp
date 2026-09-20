@@ -5,7 +5,7 @@
 #include <cctype>
 #include <ranges>
 
-namespace core::tui
+namespace core::tui::completer
 {
 
 bool SmartCaseMatch::hasUppercase(std::string_view s) noexcept
@@ -75,4 +75,4 @@ int SmartCaseMatch::adjustScore(int baseScore,
     return score;
 }
 
-} // namespace core::tui
+} // namespace core::tui::completer

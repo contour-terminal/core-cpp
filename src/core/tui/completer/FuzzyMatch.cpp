@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-namespace core::tui
+namespace core::tui::completer
 {
 
 namespace
@@ -299,4 +299,4 @@ int FuzzyMatch::calculateScore(int baseScore,
     return baseScore + percentBonus + consecutiveScore + wordStartScore;
 }
 
-} // namespace core::tui
+} // namespace core::tui::completer

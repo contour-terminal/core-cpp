@@ -3,7 +3,7 @@
 
 #include <string_view>
 
-namespace core::tui
+namespace core::tui::completer
 {
 
 /// @brief Configuration for smart case matching score adjustments.
@@ -78,4 +78,4 @@ struct SmartCaseMatch
                                                          std::string_view pattern) noexcept;
 };
 
-} // namespace core::tui
+} // namespace core::tui::completer

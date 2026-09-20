@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 using namespace core::tui;
+using namespace core::tui::completer;
 using namespace core::tui::test;
 
 // ============================================================================

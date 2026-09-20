@@ -7,6 +7,7 @@
 #include <string_view>
 
 using namespace core::tui;
+using namespace core::tui::completer;
 
 // ============================================================================
 // Basic matching tests

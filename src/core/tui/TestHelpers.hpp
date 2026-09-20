@@ -125,19 +125,19 @@ inline KeyEvent specialKey(KeyCode key, Modifier mod = Modifier::None)
 /// @brief Creates a vector of CompletionItems from strings.
 /// @param texts The completion texts.
 /// @return Vector of CompletionItems with text and displayText set.
-inline std::vector<CompletionItem> makeItems(std::initializer_list<std::string_view> texts)
+inline std::vector<completer::CompletionItem> makeItems(std::initializer_list<std::string_view> texts)
 {
-    std::vector<CompletionItem> items;
+    std::vector<completer::CompletionItem> items;
     items.reserve(texts.size());
     int score = static_cast<int>(texts.size()) * 10;
     for (auto text: texts)
     {
-        items.push_back(CompletionItem { .text = std::string(text),
-                                         .displayText = std::string(text),
-                                         .description = "",
-                                         .detail = {},
-                                         .score = score,
-                                         .matchPositions = {} });
+        items.push_back(completer::CompletionItem { .text = std::string(text),
+                                                    .displayText = std::string(text),
+                                                    .description = "",
+                                                    .detail = {},
+                                                    .score = score,
+                                                    .matchPositions = {} });
         score -= 10;
     }
     return items;
@@ -146,20 +146,20 @@ inline std::vector<CompletionItem> makeItems(std::initializer_list<std::string_v
 /// @brief Creates a vector of CompletionItems with descriptions.
 /// @param items Pairs of (text, description).
 /// @return Vector of CompletionItems.
-inline std::vector<CompletionItem> makeItemsWithDesc(
+inline std::vector<completer::CompletionItem> makeItemsWithDesc(
     std::initializer_list<std::pair<std::string_view, std::string_view>> items)
 {
-    std::vector<CompletionItem> result;
+    std::vector<completer::CompletionItem> result;
     result.reserve(items.size());
     int score = static_cast<int>(items.size()) * 10;
     for (auto const& [text, desc]: items)
     {
-        result.push_back(CompletionItem { .text = std::string(text),
-                                          .displayText = std::string(text),
-                                          .description = std::string(desc),
-                                          .detail = {},
-                                          .score = score,
-                                          .matchPositions = {} });
+        result.push_back(completer::CompletionItem { .text = std::string(text),
+                                                     .displayText = std::string(text),
+                                                     .description = std::string(desc),
+                                                     .detail = {},
+                                                     .score = score,
+                                                     .matchPositions = {} });
         score -= 10;
     }
     return result;
@@ -168,20 +168,20 @@ inline std::vector<CompletionItem> makeItemsWithDesc(
 /// @brief Creates a vector of CompletionItems with detail text.
 /// @param items Triples of (text, description, detail).
 /// @return Vector of CompletionItems.
-inline std::vector<CompletionItem> makeItemsWithDetail(
+inline std::vector<completer::CompletionItem> makeItemsWithDetail(
     std::initializer_list<std::tuple<std::string_view, std::string_view, std::string_view>> items)
 {
-    std::vector<CompletionItem> result;
+    std::vector<completer::CompletionItem> result;
     result.reserve(items.size());
     int score = static_cast<int>(items.size()) * 10;
     for (auto const& [text, desc, detail]: items)
     {
-        result.push_back(CompletionItem { .text = std::string(text),
-                                          .displayText = std::string(text),
-                                          .description = std::string(desc),
-                                          .detail = std::string(detail),
-                                          .score = score,
-                                          .matchPositions = {} });
+        result.push_back(completer::CompletionItem { .text = std::string(text),
+                                                     .displayText = std::string(text),
+                                                     .description = std::string(desc),
+                                                     .detail = std::string(detail),
+                                                     .score = score,
+                                                     .matchPositions = {} });
         score -= 10;
     }
     return result;

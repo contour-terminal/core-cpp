@@ -283,21 +283,21 @@ void CommandPalettePopup::refilter()
     {
         for (auto const& item: _allItems)
         {
-            auto result = FuzzyMatch::matchSmartCase(item.label, filterText);
+            auto result = completer::FuzzyMatch::matchSmartCase(item.label, filterText);
             if (result.matches)
             {
-                auto const score = FuzzyMatch::calculateScore(100, item.label, filterText, result);
+                auto const score = completer::FuzzyMatch::calculateScore(100, item.label, filterText, result);
                 _filteredItems.push_back(FilteredItem {
                     .entry = &item, .matchPositions = std::move(result.positions), .score = score });
                 continue;
             }
 
             auto const combined = item.category + " " + item.label;
-            result = FuzzyMatch::matchSmartCase(combined, filterText);
+            result = completer::FuzzyMatch::matchSmartCase(combined, filterText);
             if (result.matches)
             {
-                auto const score = FuzzyMatch::calculateScore(50, combined, filterText, result);
-                auto const categoryLen = FuzzyMatch::countGraphemes(item.category) + 1;
+                auto const score = completer::FuzzyMatch::calculateScore(50, combined, filterText, result);
+                auto const categoryLen = completer::FuzzyMatch::countGraphemes(item.category) + 1;
                 auto labelPositions = std::vector<size_t> {};
                 for (auto pos: result.positions)
                 {
@@ -309,10 +309,11 @@ void CommandPalettePopup::refilter()
                 continue;
             }
 
-            result = FuzzyMatch::matchSmartCase(item.description, filterText);
+            result = completer::FuzzyMatch::matchSmartCase(item.description, filterText);
             if (result.matches)
             {
-                auto const score = FuzzyMatch::calculateScore(30, item.description, filterText, result);
+                auto const score =
+                    completer::FuzzyMatch::calculateScore(30, item.description, filterText, result);
                 _filteredItems.push_back(
                     FilteredItem { .entry = &item, .matchPositions = {}, .score = score });
             }
