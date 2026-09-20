@@ -73,6 +73,37 @@ set_tests_properties(core-cpp.vendor-selftest PROPERTIES
     SKIP_REGULAR_EXPRESSION "check-vendor-selftest: SKIPPED"
     LABELS "core-cpp;hygiene")
 
+# The migration tooling of tools/migrate/: the rename table every consumer pull request reads, the
+# codemod that applies it, and the drift gate that keeps the table and the delivered headers from
+# parting company. Both are Python, so nothing is built; they are registered here rather than left as
+# a command nobody types (Rulings R67 and R68).
+#
+# The cases are stdlib unittest, not pytest: pytest is installed on no CI image here, and these are
+# plain assertions that need nothing it provides. One of them, over semantic_rename.py, needs
+# libclang's optional Python bindings and skips by name without them -- the `style` CI job installs
+# them and refuses a skip, so the pass is tested for real on every push.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME core-cpp.migrate-renames
+             COMMAND "${Python3_EXECUTABLE}" "${CORE_CPP_SOURCE_DIR}/tools/migrate/check-renames.py"
+                     --root "${CORE_CPP_SOURCE_DIR}")
+    add_test(NAME core-cpp.migrate-codemods
+             COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+                     -s "${CORE_CPP_SOURCE_DIR}/tools/migrate" -p "*_test.py")
+else()
+    # A gate that does not report reads as a gate that passed, so say why it did not run rather than
+    # registering nothing (.agent/rules/build-and-toolchain.md).
+    add_test(NAME core-cpp.migrate-renames COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.migrate-renames: SKIPPED -- no Python 3 interpreter was found at configure time")
+    add_test(NAME core-cpp.migrate-codemods COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.migrate-codemods: SKIPPED -- no Python 3 interpreter was found at configure time")
+    set_tests_properties(core-cpp.migrate-renames core-cpp.migrate-codemods PROPERTIES
+        SKIP_REGULAR_EXPRESSION "SKIPPED")
+endif()
+set_tests_properties(core-cpp.migrate-renames core-cpp.migrate-codemods PROPERTIES
+    LABELS "core-cpp;hygiene"
+    TIMEOUT 300)
+
 # A CRT assert, abort(), invalid parameter or crash must end the process instead of opening a dialog
 # that waits for a click. Each run must fail (WILL_FAIL) within the timeout; a run that hangs has hit a
 # dialog. The canary's main() asks for no suppression: linking core::testing_dialogs installs it.

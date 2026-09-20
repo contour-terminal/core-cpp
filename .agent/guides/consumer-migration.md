@@ -23,13 +23,62 @@ first.
    ```
 2. Pin core-cpp with `GIT_TAG v0.1.0` (CPM) or vendor that tag (contour). For local iteration
    against a core-cpp checkout: `-DCPM_core-cpp_SOURCE=/path/to/core-cpp`.
-3. Rewrite the code with the migration tool (`tools/migrate/`, Task C0): the mechanical pass
-   (`rewrite.py --profile <consumer>`: include paths and namespaces), then the semantic pass for
-   renamed members (`semantic_rename.py` over the compile database).
+3. Rewrite the code with the migration tooling (`tools/migrate/`, Task C0): the mechanical pass,
+   then the semantic one. The two commands a consumer pull request runs are below.
 4. Delete the consumer's copy in the same pull request. A copy left beside core-cpp is the drift
    this project exists to end.
 5. Build and test with the consumer's own presets on Windows and Linux; the pull request body
    carries "Consumer impact" from core-cpp's side and the consumer's CI result.
+
+## The two commands
+
+Both read one table, `tools/migrate/renames.json`, and neither invents a rename: what is not in
+the table is a hand edit.
+
+```sh
+# 1. The mechanical pass: includes, namespaces, symbols, members and macros, in place, under the
+#    path you give it and nowhere else. --dry-run reports without writing.
+python /path/to/core-cpp/tools/migrate/rewrite.py --profile endo src
+
+# 2. The semantic pass: members whose name is too common to rewrite by text (Read, Write, Run,
+#    Stop). Needs libclang's Python bindings (python -m pip install libclang) and one or more
+#    compile databases -- pass every platform's, because each sees files the others do not.
+python /path/to/core-cpp/tools/migrate/semantic_rename.py --profile fastcached \
+    --compile-db build/linux/compile_commands.json build/windows/compile_commands.json \
+    --decl-paths src/FastCache/Net src/FastCache/Async
+```
+
+`rewrite.py` is **idempotent**: a second run changes nothing, and a half-converted tree converges,
+so re-run it after a rebase rather than merging its output by hand. It reports what it changed per
+file, so the diff is reviewable row by row.
+
+What it deliberately does not do, and what is therefore yours:
+
+- **A namespace definition** (`namespace tui { ... }`, `namespace net { ... }`). A consumer's own
+  namespace and the moved one are the same token. endo has five such forward declarations.
+- **A string or character literal.** A codemod may change what the code says, never what the
+  program sends. Comments *are* rewritten, because a comment documents the code beside it.
+- **`crispy::` as a prefix.** contour keeps crispy's renderer half, so the table renames crispy
+  symbol by symbol; the same holds for `endo::platform::`, which keeps `Process` and `Pipe`, and
+  for `endo::testing::`, which keeps `InjectedShell`.
+- **Every row whose `apply` is `manual`** — a shape change rather than a rename, such as
+  `SleepUntil{&reactor, tp}` becoming `loop.sleepUntil(tp)`. Each carries a `note` saying what to
+  write instead; `python -c` over the table lists them for your profile.
+
+### The table is checked against the delivered headers
+
+`tools/migrate/check-renames.py` runs in every build as ctest `core-cpp.migrate-renames`
+(label `hygiene`). For every row naming a core-cpp symbol it asserts that the symbol and its public
+header exist in `src/core/`; for a row whose target a Phase B task still owes (`"status":
+"pending"`) it asserts the opposite, so the row cannot rot in either direction. **A task that
+renames a public symbol updates `renames.json` in the same commit** — the gate fails otherwise, and
+says which row.
+
+Its cases, and the codemods', are stdlib `unittest`, not pytest:
+
+```sh
+python -m unittest discover -s tools/migrate -p '*_test.py'
+```
 
 ## CPM snippet
 

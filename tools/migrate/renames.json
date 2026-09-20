@@ -1,0 +1,5403 @@
+{
+  "version": 1,
+  "profiles": {
+    "contour": "contour, whose src/{coro,net} and crispy's generic half become core-cpp; crispy's renderer half stays, so `crispy::` is rewritten symbol by symbol, never as a prefix",
+    "endo": "endo, whose src/tui, the generic half of src/platform and the src/testing helpers become core-cpp; endo::platform keeps Process, Pipe and the process providers",
+    "tuidu": "tuidu, whose June snapshot of endo's src/{coro,platform,testing,tui} becomes core-cpp; its crispy::cli types are spelled in an older case",
+    "fastcached": "fastcached, whose Async/ and Net/ layers and the moved Core/ files become core-cpp, PascalCase members becoming camelBack"
+  },
+  "rows": [
+    {
+      "kind": "include",
+      "from": "coro/Awaitable.hpp",
+      "to": "core/async/Awaitable.hpp",
+      "profiles": [
+        "contour",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/async/Awaitable.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "coro/Cancellation.hpp",
+      "to": "core/async/Cancellation.hpp",
+      "profiles": [
+        "contour",
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/async/Cancellation.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "coro/Task.hpp",
+      "to": "core/async/Task.hpp",
+      "profiles": [
+        "contour",
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/async/Task.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "coro/UniqueCoroHandle.hpp",
+      "to": "core/async/UniqueCoroHandle.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/async/UniqueCoroHandle.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "coro/WhenAll.hpp",
+      "to": "core/async/WhenAll.hpp",
+      "profiles": [
+        "contour",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/async/WhenAll.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "coro/WhenAny.hpp",
+      "to": "core/async/WhenAny.hpp",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/async/WhenAny.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "coro/testing/SuppressWindowsDialogs.hpp",
+      "to": "core/testing/SuppressWindowsDialogs.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/testing/SuppressWindowsDialogs.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "crispy/App.hpp",
+      "to": "core/cli/App.hpp",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/cli/App.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "crispy/Assert.hpp",
+      "to": "core/Assert.hpp",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/Assert.hpp"
+      },
+      "note": "Require and Guarantee are here; SoftRequire and fatal() moved to <core/log/Assert.hpp>, so a file using those needs that include added"
+    },
+    {
+      "kind": "include",
+      "from": "crispy/Base64.hpp",
+      "to": "core/Base64.hpp",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/Base64.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "crispy/CLI.hpp",
+      "to": "core/cli/CLI.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/cli/CLI.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "crispy/Deferred.hpp",
+      "to": "core/Deferred.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Deferred.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "crispy/Defines.hpp",
+      "to": "core/Defines.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Defines.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "crispy/Environment.hpp",
+      "to": "core/Environment.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Environment.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "crispy/Escape.hpp",
+      "to": "core/Escape.hpp",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/Escape.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "crispy/FNV.hpp",
+      "to": "core/FNV.hpp",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/FNV.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "crispy/Flags.hpp",
+      "to": "core/Flags.hpp",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/Flags.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "crispy/LogSink.hpp",
+      "to": "core/log/LogSink.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/log/LogSink.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "crispy/LogStore.hpp",
+      "to": "core/log/LogStore.hpp",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/log/LogStore.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "crispy/Overloaded.hpp",
+      "to": "core/Overloaded.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Overloaded.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "crispy/SuppressWindowsDialogs.hpp",
+      "to": "core/testing/SuppressWindowsDialogs.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/testing/SuppressWindowsDialogs.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "crispy/Times.hpp",
+      "to": "core/Times.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Times.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "crispy/UserInfo.hpp",
+      "to": "core/UserInfo.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/UserInfo.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "crispy/Utils.hpp",
+      "to": "core/Utils.hpp",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/Utils.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "crispy/testing/Environment.hpp",
+      "to": "core/testing/Environment.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/testing/Environment.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/AsyncBufferedReader.hpp",
+      "to": "core/net/AsyncBufferedReader.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/AsyncBufferedReader.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/DefaultEventSource.hpp",
+      "to": "core/net/DefaultEventSource.hpp",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/net/DefaultEventSource.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/Diagnostics.hpp",
+      "to": "core/net/Diagnostics.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/Diagnostics.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/EpollEventSource.hpp",
+      "to": "core/net/linux/EpollEventSource.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/linux/EpollEventSource.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/EventLoop.hpp",
+      "to": "core/net/EventLoop.hpp",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/net/EventLoop.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/EventSource.hpp",
+      "to": "core/net/EventSource.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/EventSource.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/HttpServer.hpp",
+      "to": "core/net/HttpServer.hpp",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/net/HttpServer.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/IListener.hpp",
+      "to": "core/net/IListener.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/IListener.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/ISocket.hpp",
+      "to": "core/net/ISocket.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/ISocket.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/IoResult.hpp",
+      "to": "core/net/IoResult.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/IoResult.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/KqueueEventSource.hpp",
+      "to": "core/net/bsd/KqueueEventSource.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/bsd/KqueueEventSource.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/PollEventSource.hpp",
+      "to": "core/net/PollEventSource.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/PollEventSource.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/Sockets.hpp",
+      "to": "core/net/Sockets.hpp",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/net/Sockets.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/SplitSocket.hpp",
+      "to": "core/net/SplitSocket.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/SplitSocket.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/Tls.hpp",
+      "to": "core/net/Tls.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/Tls.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/WaitChunking.hpp",
+      "to": "core/net/detail/WaitChunking.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/detail/WaitChunking.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/WithTimeout.hpp",
+      "to": "core/net/WithTimeout.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/WithTimeout.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/WriteQueue.hpp",
+      "to": "core/net/WriteQueue.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/WriteQueue.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/detail/ScopeGuard.hpp",
+      "to": "core/net/detail/ScopeGuard.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/detail/ScopeGuard.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/detail/WouldBlock.hpp",
+      "to": "core/net/detail/WouldBlock.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/detail/WouldBlock.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/platform/Clock.hpp",
+      "to": "core/platform/Clock.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/platform/NativeHandle.hpp",
+      "to": "core/platform/Types.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/platform/PeerAddress.hpp",
+      "to": "core/net/detail/PeerAddress.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/detail/PeerAddress.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/platform/SystemPipe.hpp",
+      "to": "core/platform/SystemPipe.hpp",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/SystemPipe.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/platform/WindowsLoopback.hpp",
+      "to": "core/net/windows/WindowsLoopback.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/windows/WindowsLoopback.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/platform/WinsockInit.hpp",
+      "to": "core/platform/WinsockInit.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/platform/WinsockInit.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/posix/AcceptLoop.hpp",
+      "to": "core/net/posix/AcceptLoop.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/posix/AcceptLoop.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/posix/FdUtils.hpp",
+      "to": "core/net/posix/FdUtils.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/posix/FdUtils.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/posix/PosixListener.hpp",
+      "to": "core/net/posix/PosixListener.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/posix/PosixListener.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/posix/PosixSocket.hpp",
+      "to": "core/net/posix/PosixSocket.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/posix/PosixSocket.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/posix/UnixListener.hpp",
+      "to": "core/net/posix/UnixListener.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/posix/UnixListener.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/testing/CoroTestSupport.hpp",
+      "to": "core/net/testing/CoroTestSupport.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/testing/CoroTestSupport.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/testing/EventSourceBackends.hpp",
+      "to": "core/net/testing/EventSourceBackends.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/testing/EventSourceBackends.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/testing/InMemoryTransport.hpp",
+      "to": "core/net/testing/InMemoryTransport.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemoryTransport.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/testing/ScriptedEventSource.hpp",
+      "to": "core/net/testing/ScriptedEventSource.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/testing/ScriptedEventSource.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/testing/TempDir.hpp",
+      "to": "core/testing/ScopedTempDir.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/testing/ScopedTempDir.hpp"
+      },
+      "note": "core::testing::ScopedTempDir has no default prefix, and throws where TempDir failed a REQUIRE; path() and operator/ are unchanged"
+    },
+    {
+      "kind": "include",
+      "from": "net/windows/WindowsListener.hpp",
+      "to": "core/net/windows/WindowsListener.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/windows/WindowsListener.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "net/windows/WindowsSocket.hpp",
+      "to": "core/net/windows/WindowsSocket.hpp",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/windows/WindowsSocket.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/Clock.hpp",
+      "to": "core/platform/Clock.hpp",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/EnvironmentProvider.hpp",
+      "to": "core/platform/EnvironmentProvider.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/EnvironmentProvider.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/FileInfoProvider.hpp",
+      "to": "core/platform/FileInfoProvider.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/FileInfoProvider.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/FileSystem.hpp",
+      "to": "core/platform/FileSystem.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/FileSystem.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/FileUri.hpp",
+      "to": "core/platform/FileUri.hpp",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/FileUri.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/Generator.hpp",
+      "to": "core/Generator.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/Generator.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/GlobMatch.hpp",
+      "to": "core/platform/GlobMatch.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/GlobMatch.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/MessageQueue.hpp",
+      "to": "core/platform/MessageQueue.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/MessageQueue.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/NativeFileSystem.hpp",
+      "to": "core/platform/NativeFileSystem.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/NativeFileSystem.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/PathUtils.hpp",
+      "to": "core/platform/PathUtils.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/PathUtils.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/PlatformError.hpp",
+      "to": "core/platform/PlatformError.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/PlatformError.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/SignalHandler.hpp",
+      "to": "core/platform/SignalHandler.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/SignalHandler.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/StringUtils.hpp",
+      "to": "core/platform/StringUtils.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/StringUtils.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/SystemInfo.hpp",
+      "to": "core/platform/SystemInfo.hpp",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/SystemInfo.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/SystemPipe.hpp",
+      "to": "core/platform/SystemPipe.hpp",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/SystemPipe.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/Types.hpp",
+      "to": "core/platform/Types.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp"
+      },
+      "note": "core-cpp's Types.hpp includes no <windows.h>, <io.h> or <fcntl.h> and defines no STDIN_FILENO or SIGINT: a consumer that relied on those includes its own"
+    },
+    {
+      "kind": "include",
+      "from": "platform/UserPaths.hpp",
+      "to": "core/platform/UserPaths.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/UserPaths.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/Wakeup.hpp",
+      "to": "core/platform/Wakeup.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Wakeup.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/WinsockInit.hpp",
+      "to": "core/platform/WinsockInit.hpp",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/WinsockInit.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/linux/LinuxFileInfoProvider.hpp",
+      "to": "core/platform/posix/PosixFileInfoProvider.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/posix/PosixFileInfoProvider.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/posix/PosixEnvironmentProvider.hpp",
+      "to": "core/platform/posix/PosixEnvironmentProvider.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/posix/PosixEnvironmentProvider.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/testing/InMemoryFileSystem.hpp",
+      "to": "core/platform/testing/InMemoryFileSystem.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/testing/InMemoryFileSystem.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/testing/MockFileInfoProvider.hpp",
+      "to": "core/platform/testing/MockFileInfoProvider.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/testing/MockFileInfoProvider.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/testing/TestEnvironmentProvider.hpp",
+      "to": "core/platform/testing/TestEnvironmentProvider.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/testing/TestEnvironmentProvider.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/windows/WindowsEnvironmentProvider.hpp",
+      "to": "core/platform/windows/WindowsEnvironmentProvider.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/windows/WindowsEnvironmentProvider.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "platform/windows/WindowsFileInfoProvider.hpp",
+      "to": "core/platform/windows/WindowsFileInfoProvider.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/windows/WindowsFileInfoProvider.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "testing/EnvHelper.hpp",
+      "to": "core/testing/EnvHelper.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/testing/EnvHelper.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "testing/ScopedTempDir.hpp",
+      "to": "core/testing/ScopedTempDir.hpp",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/testing/ScopedTempDir.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "testing/ScopedWorkingDirectory.hpp",
+      "to": "core/testing/ScopedWorkingDirectory.hpp",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/testing/ScopedWorkingDirectory.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "testing/SuppressWindowsDialogs.hpp",
+      "to": "core/testing/SuppressWindowsDialogs.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/testing/SuppressWindowsDialogs.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/Box.hpp",
+      "to": "core/tui/Box.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/Box.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/Buffer.hpp",
+      "to": "core/tui/Buffer.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/Buffer.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/Canvas.hpp",
+      "to": "core/tui/Canvas.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/Canvas.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/Cell.hpp",
+      "to": "core/tui/Cell.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/Cell.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/CommandPalettePopup.hpp",
+      "to": "core/tui/CommandPalettePopup.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/CommandPalettePopup.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/CommandRegistry.hpp",
+      "to": "core/tui/CommandRegistry.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/CommandRegistry.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/CompletionPopup.hpp",
+      "to": "core/tui/CompletionPopup.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/CompletionPopup.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/Component.hpp",
+      "to": "core/tui/Component.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/Component.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/CursorShape.hpp",
+      "to": "core/tui/CursorShape.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/CursorShape.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/Dialog.hpp",
+      "to": "core/tui/Dialog.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/Dialog.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/EditAction.hpp",
+      "to": "core/tui/EditAction.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/EditAction.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/Element.hpp",
+      "to": "core/tui/Element.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/Element.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/Error.hpp",
+      "to": "core/tui/Error.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/Error.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/FuzzyPickerPopup.hpp",
+      "to": "core/tui/FuzzyPickerPopup.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/FuzzyPickerPopup.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/GenericSyntaxHighlighter.hpp",
+      "to": "core/tui/GenericSyntaxHighlighter.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/GenericSyntaxHighlighter.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/GhostTextHelper.hpp",
+      "to": "core/tui/GhostTextHelper.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/GhostTextHelper.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/HoverState.hpp",
+      "to": "core/tui/HoverState.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/HoverState.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/HyperlinkEmitter.hpp",
+      "to": "core/tui/HyperlinkEmitter.hpp",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/tui/HyperlinkEmitter.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/ImageLoader.hpp",
+      "to": "core/tui/ImageLoader.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/ImageLoader.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/ImageProvider.hpp",
+      "to": "core/tui/ImageProvider.hpp",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/tui/ImageProvider.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/InputEvent.hpp",
+      "to": "core/tui/InputEvent.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/InputEvent.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/InputField.hpp",
+      "to": "core/tui/InputField.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/InputField.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/KeyBindings.hpp",
+      "to": "core/tui/KeyBindings.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/KeyBindings.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/KeyCode.hpp",
+      "to": "core/tui/KeyCode.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/KeyCode.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/List.hpp",
+      "to": "core/tui/List.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/List.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/LogPanel.hpp",
+      "to": "core/tui/LogPanel.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/LogPanel.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/MarkdownHtml.hpp",
+      "to": "core/tui/MarkdownHtml.hpp",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/tui/MarkdownHtml.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/MarkdownInline.hpp",
+      "to": "core/tui/MarkdownInline.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/MarkdownInline.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/MarkdownRenderer.hpp",
+      "to": "core/tui/MarkdownRenderer.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/MarkdownRenderer.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/MarkdownTable.hpp",
+      "to": "core/tui/MarkdownTable.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/MarkdownTable.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/MockTerminalOutput.hpp",
+      "to": "core/tui/MockTerminalOutput.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/MockTerminalOutput.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/Modifier.hpp",
+      "to": "core/tui/Modifier.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/Modifier.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/PopupKeyDispatch.hpp",
+      "to": "core/tui/PopupKeyDispatch.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/PopupKeyDispatch.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/QuestionComponent.hpp",
+      "to": "core/tui/QuestionComponent.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/QuestionComponent.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/Rect.hpp",
+      "to": "core/tui/Rect.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/Rect.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/Screen.hpp",
+      "to": "core/tui/Screen.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/Screen.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/ScrollableSelection.hpp",
+      "to": "core/tui/ScrollableSelection.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/ScrollableSelection.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/SemanticBlockClient.hpp",
+      "to": "core/tui/SemanticBlockClient.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/SemanticBlockClient.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/SgrBuilder.hpp",
+      "to": "core/tui/SgrBuilder.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/SgrBuilder.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/Sixel.hpp",
+      "to": "core/tui/Sixel.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/Sixel.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/Spinner.hpp",
+      "to": "core/tui/Spinner.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/Spinner.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/StatusBar.hpp",
+      "to": "core/tui/StatusBar.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/StatusBar.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/StyledText.hpp",
+      "to": "core/tui/StyledText.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/StyledText.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/Terminal.hpp",
+      "to": "core/tui/Terminal.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/Terminal.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/TerminalInput.hpp",
+      "to": "core/tui/TerminalInput.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/TerminalInput.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/TerminalOutput.hpp",
+      "to": "core/tui/TerminalOutput.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/TerminalOutput.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/TerminalProtocols.hpp",
+      "to": "core/tui/TerminalProtocols.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/TerminalProtocols.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/TestHelpers.hpp",
+      "to": "core/tui/TestHelpers.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/TestHelpers.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/Text.hpp",
+      "to": "core/tui/Text.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/Text.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/TextDecorator.hpp",
+      "to": "core/tui/TextDecorator.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/TextDecorator.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/Theme.hpp",
+      "to": "core/tui/Theme.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/Theme.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/TimerUtils.hpp",
+      "to": "core/tui/TimerUtils.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/TimerUtils.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/Tooltip.hpp",
+      "to": "core/tui/Tooltip.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/Tooltip.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/TreeTableView.hpp",
+      "to": "core/tui/TreeTableView.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/TreeTableView.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/Unicode.hpp",
+      "to": "core/tui/Unicode.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/Unicode.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/VtParser.hpp",
+      "to": "core/tui/VtParser.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/VtParser.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/completer/Completer.hpp",
+      "to": "core/tui/completer/Completer.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/completer/Completer.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/completer/CompletionItem.hpp",
+      "to": "core/tui/completer/CompletionItem.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/completer/CompletionItem.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/completer/CompletionProvider.hpp",
+      "to": "core/tui/completer/CompletionProvider.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/completer/CompletionProvider.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/completer/FuzzyMatch.hpp",
+      "to": "core/tui/completer/FuzzyMatch.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/completer/FuzzyMatch.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/completer/SmartCaseMatch.hpp",
+      "to": "core/tui/completer/SmartCaseMatch.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/completer/SmartCaseMatch.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/platform/PosixIO.hpp",
+      "to": "core/tui/posix/PosixIO.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/posix/PosixIO.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/platform/Win32Utf.hpp",
+      "to": "core/tui/windows/Win32Utf.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/windows/Win32Utf.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/runtime/EventSource.hpp",
+      "to": "core/tui/runtime/EventSource.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/runtime/EventSource.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/runtime/Modal.hpp",
+      "to": "core/tui/runtime/Modal.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/runtime/Modal.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/runtime/ModalComponent.hpp",
+      "to": "core/tui/runtime/ModalComponent.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/runtime/ModalComponent.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/runtime/PollEventSource.hpp",
+      "to": "core/tui/runtime/PollEventSource.hpp",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/tui/runtime/PollEventSource.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/runtime/TerminalEventSource.hpp",
+      "to": "core/tui/runtime/TerminalEventSource.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/runtime/TerminalEventSource.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/runtime/TuiRuntime.hpp",
+      "to": "core/tui/runtime/TuiRuntime.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/runtime/TuiRuntime.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/runtime/WithTimeout.hpp",
+      "to": "core/tui/runtime/WithTimeout.hpp",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/tui/runtime/WithTimeout.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/runtime/platform/PollHelpers.hpp",
+      "to": "core/tui/runtime/posix/PollHelpers.hpp",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/tui/runtime/posix/PollHelpers.hpp",
+        "public": false
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tui/runtime/testing/MockEventSource.hpp",
+      "to": "core/tui/runtime/testing/MockEventSource.hpp",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/runtime/testing/MockEventSource.hpp"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::App",
+      "to": "core::cli::App",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/cli/App.hpp",
+        "symbol": "core::cli::App"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::CachingEnvironment",
+      "to": "core::CachingEnvironment",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Environment.hpp",
+        "symbol": "core::CachingEnvironment"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::Environment",
+      "to": "core::Environment",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Environment.hpp",
+        "symbol": "core::Environment"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::FNV",
+      "to": "core::FNV",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/FNV.hpp",
+        "symbol": "core::FNV"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::Finally",
+      "to": "core::Finally",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::Finally"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::Flags",
+      "to": "core::Flags",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/Flags.hpp",
+        "symbol": "core::Flags"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::ForEachKeyValueParams",
+      "to": "core::ForEachKeyValueParams",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::ForEachKeyValueParams"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::LiveEnvironment",
+      "to": "core::LiveEnvironment",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Environment.hpp",
+        "symbol": "core::LiveEnvironment"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::NumericEscape",
+      "to": "core::NumericEscape",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Escape.hpp",
+        "symbol": "core::NumericEscape"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::ascending",
+      "to": "core::ascending",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::ascending"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::currentUserPasswordEntry",
+      "to": "core::currentUserPasswordEntry",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/UserInfo.hpp",
+        "symbol": "core::currentUserPasswordEntry"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::defaultEnvironment",
+      "to": "core::defaultEnvironment",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Environment.hpp",
+        "symbol": "core::defaultEnvironment"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::digitValue",
+      "to": "core::digitValue",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::digitValue"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::eachElement",
+      "to": "core::eachElement",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::eachElement"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::escape",
+      "to": "core::escape",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/Escape.hpp",
+        "symbol": "core::escape"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::escapeMarkdown",
+      "to": "core::escapeMarkdown",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Escape.hpp",
+        "symbol": "core::escapeMarkdown"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::forEachKeyValue",
+      "to": "core::forEachKeyValue",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::forEachKeyValue"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::fromHexString",
+      "to": "core::fromHexString",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::fromHexString"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::homeResolvedPath",
+      "to": "core::homeResolvedPath",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::homeResolvedPath"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::humanReadableBytes",
+      "to": "core::humanReadableBytes",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::humanReadableBytes"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::ignoreUnused",
+      "to": "core::ignoreUnused",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::ignoreUnused"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::joinHumanReadable",
+      "to": "core::joinHumanReadable",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::joinHumanReadable"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::joinHumanReadableQuoted",
+      "to": "core::joinHumanReadableQuoted",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::joinHumanReadableQuoted"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::joinWith",
+      "to": "core::joinWith",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::joinWith"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::locked",
+      "to": "core::locked",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::locked"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::nextPowerOfTwo",
+      "to": "core::nextPowerOfTwo",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::nextPowerOfTwo"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::oneOf",
+      "to": "core::oneOf",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::oneOf"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::readFileAsString",
+      "to": "core::readFileAsString",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::readFileAsString"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::replace",
+      "to": "core::replace",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::replace"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::replaceVariables",
+      "to": "core::replaceVariables",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::replaceVariables"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::split",
+      "to": "core::split",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::split"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::splitKeyValuePairs",
+      "to": "core::splitKeyValuePairs",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::splitKeyValuePairs"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::suppressWindowsDialogs",
+      "to": "core::testing::suppressWindowsDialogs",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/testing/SuppressWindowsDialogs.hpp",
+        "symbol": "core::testing::suppressWindowsDialogs"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::threadName",
+      "to": "core::threadName",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::threadName"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::times",
+      "to": "core::times",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Times.hpp",
+        "symbol": "core::times"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::toHexString",
+      "to": "core::toHexString",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::toHexString"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::toInteger",
+      "to": "core::toInteger",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::toInteger"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::toLower",
+      "to": "core::toLower",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::toLower"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::toUpper",
+      "to": "core::toUpper",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::toUpper"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::trim",
+      "to": "core::trim",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::trim"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::trimLeft",
+      "to": "core::trimLeft",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::trimLeft"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::trimRight",
+      "to": "core::trimRight",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::trimRight"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::unescape",
+      "to": "core::unescape",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Escape.hpp",
+        "symbol": "core::unescape"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::unescapeURL",
+      "to": "core::unescapeURL",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Utils.hpp",
+        "symbol": "core::unescapeURL"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::unreachable",
+      "to": "core::unreachable",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/Assert.hpp",
+        "symbol": "core::unreachable"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::userHomeDirectory",
+      "to": "core::userHomeDirectory",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/UserInfo.hpp",
+        "symbol": "core::userHomeDirectory"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::EnvironmentProvider",
+      "to": "core::platform::EnvironmentProvider",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/EnvironmentProvider.hpp",
+        "symbol": "core::platform::EnvironmentProvider",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::EnvironmentProvider",
+      "to": "core::platform::EnvironmentProvider",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/EnvironmentProvider.hpp",
+        "symbol": "core::platform::EnvironmentProvider",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::FileEntry",
+      "to": "core::platform::FileEntry",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/FileInfoProvider.hpp",
+        "symbol": "core::platform::FileEntry",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::FileEntry",
+      "to": "core::platform::FileEntry",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/FileInfoProvider.hpp",
+        "symbol": "core::platform::FileEntry",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::FileInfoProvider",
+      "to": "core::platform::FileInfoProvider",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/FileInfoProvider.hpp",
+        "symbol": "core::platform::FileInfoProvider",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::FileInfoProvider",
+      "to": "core::platform::FileInfoProvider",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/FileInfoProvider.hpp",
+        "symbol": "core::platform::FileInfoProvider",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::FileSystem",
+      "to": "core::platform::FileSystem",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/FileSystem.hpp",
+        "symbol": "core::platform::FileSystem",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::FileSystem",
+      "to": "core::platform::FileSystem",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/FileSystem.hpp",
+        "symbol": "core::platform::FileSystem",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::FilesystemCaseInsensitive",
+      "to": "core::platform::FilesystemCaseInsensitive",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/PathUtils.hpp",
+        "symbol": "core::platform::FilesystemCaseInsensitive",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::FilesystemCaseInsensitive",
+      "to": "core::platform::FilesystemCaseInsensitive",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/PathUtils.hpp",
+        "symbol": "core::platform::FilesystemCaseInsensitive",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::IClock",
+      "to": "core::platform::IClock",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::IClock",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::IClock",
+      "to": "core::platform::IClock",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::IClock",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::InvalidHandle",
+      "to": "core::platform::InvalidHandle",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::InvalidHandle",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::InvalidHandle",
+      "to": "core::platform::InvalidHandle",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::InvalidHandle",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::InvalidProcessId",
+      "to": "core::platform::InvalidProcessId",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::InvalidProcessId",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::InvalidProcessId",
+      "to": "core::platform::InvalidProcessId",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::InvalidProcessId",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::ManualClock",
+      "to": "core::platform::ManualClock",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::ManualClock",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::ManualClock",
+      "to": "core::platform::ManualClock",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::ManualClock",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::MessageQueue",
+      "to": "core::platform::MessageQueue",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/MessageQueue.hpp",
+        "symbol": "core::platform::MessageQueue",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::MessageQueue",
+      "to": "core::platform::MessageQueue",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/MessageQueue.hpp",
+        "symbol": "core::platform::MessageQueue",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::NativeFileSystem",
+      "to": "core::platform::NativeFileSystem",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/NativeFileSystem.hpp",
+        "symbol": "core::platform::NativeFileSystem",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::NativeFileSystem",
+      "to": "core::platform::NativeFileSystem",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/NativeFileSystem.hpp",
+        "symbol": "core::platform::NativeFileSystem",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::NativeHandle",
+      "to": "core::platform::NativeHandle",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::NativeHandle",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::NativeHandle",
+      "to": "core::platform::NativeHandle",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::NativeHandle",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::PlatformError",
+      "to": "core::platform::PlatformError",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/PlatformError.hpp",
+        "symbol": "core::platform::PlatformError",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::PlatformError",
+      "to": "core::platform::PlatformError",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/PlatformError.hpp",
+        "symbol": "core::platform::PlatformError",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::ProcessId",
+      "to": "core::platform::ProcessId",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::ProcessId",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::ProcessId",
+      "to": "core::platform::ProcessId",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::ProcessId",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::SignalCallback",
+      "to": "core::platform::SignalCallback",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/SignalHandler.hpp",
+        "symbol": "core::platform::SignalCallback",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::SignalCallback",
+      "to": "core::platform::SignalCallback",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/SignalHandler.hpp",
+        "symbol": "core::platform::SignalCallback",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::SignalHandler",
+      "to": "core::platform::SignalHandler",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/SignalHandler.hpp",
+        "symbol": "core::platform::SignalHandler",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::SignalHandler",
+      "to": "core::platform::SignalHandler",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/SignalHandler.hpp",
+        "symbol": "core::platform::SignalHandler",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::SteadyClock",
+      "to": "core::platform::SteadyClock",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::SteadyClock",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::SteadyClock",
+      "to": "core::platform::SteadyClock",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::SteadyClock",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::SteadyTimePoint",
+      "to": "core::platform::SteadyTimePoint",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::SteadyTimePoint",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::SteadyTimePoint",
+      "to": "core::platform::SteadyTimePoint",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::SteadyTimePoint",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::SystemPipe",
+      "to": "core::platform::SystemPipe",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/SystemPipe.hpp",
+        "symbol": "core::platform::SystemPipe",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::SystemPipe",
+      "to": "core::platform::SystemPipe",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/SystemPipe.hpp",
+        "symbol": "core::platform::SystemPipe",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::Wakeup",
+      "to": "core::platform::Wakeup",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Wakeup.hpp",
+        "symbol": "core::platform::Wakeup",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::Wakeup",
+      "to": "core::platform::Wakeup",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Wakeup.hpp",
+        "symbol": "core::platform::Wakeup",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::absoluteDirectory",
+      "to": "core::platform::absoluteDirectory",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/PathUtils.hpp",
+        "symbol": "core::platform::absoluteDirectory",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::absoluteDirectory",
+      "to": "core::platform::absoluteDirectory",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/PathUtils.hpp",
+        "symbol": "core::platform::absoluteDirectory",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::absolutePath",
+      "to": "core::platform::absolutePath",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/FileUri.hpp",
+        "symbol": "core::platform::absolutePath",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::absolutePath",
+      "to": "core::platform::absolutePath",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/FileUri.hpp",
+        "symbol": "core::platform::absolutePath",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::cachedHostName",
+      "to": "core::platform::cachedHostName",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/SystemInfo.hpp",
+        "symbol": "core::platform::cachedHostName",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::cachedHostName",
+      "to": "core::platform::cachedHostName",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/SystemInfo.hpp",
+        "symbol": "core::platform::cachedHostName",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::canonicalCasePath",
+      "to": "core::platform::canonicalCasePath",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/PathUtils.hpp",
+        "symbol": "core::platform::canonicalCasePath",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::canonicalCasePath",
+      "to": "core::platform::canonicalCasePath",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/PathUtils.hpp",
+        "symbol": "core::platform::canonicalCasePath",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::configHome",
+      "to": "core::platform::configHome",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/EnvironmentProvider.hpp",
+        "symbol": "core::platform::configHome",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::configHome",
+      "to": "core::platform::configHome",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/EnvironmentProvider.hpp",
+        "symbol": "core::platform::configHome",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::createSystemPipe",
+      "to": "core::platform::createSystemPipe",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/SystemPipe.hpp",
+        "symbol": "core::platform::createSystemPipe",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::createSystemPipe",
+      "to": "core::platform::createSystemPipe",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/SystemPipe.hpp",
+        "symbol": "core::platform::createSystemPipe",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::defaultSteadyClock",
+      "to": "core::platform::defaultSteadyClock",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::defaultSteadyClock",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::defaultSteadyClock",
+      "to": "core::platform::defaultSteadyClock",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::defaultSteadyClock",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::equalsCaseInsensitive",
+      "to": "core::platform::equalsCaseInsensitive",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/PathUtils.hpp",
+        "symbol": "core::platform::equalsCaseInsensitive",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::equalsCaseInsensitive",
+      "to": "core::platform::equalsCaseInsensitive",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/PathUtils.hpp",
+        "symbol": "core::platform::equalsCaseInsensitive",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::fileUri",
+      "to": "core::platform::fileUri",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/FileUri.hpp",
+        "symbol": "core::platform::fileUri",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::fileUri",
+      "to": "core::platform::fileUri",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/FileUri.hpp",
+        "symbol": "core::platform::fileUri",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::homeDirectory",
+      "to": "core::platform::homeDirectory",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/EnvironmentProvider.hpp",
+        "symbol": "core::platform::homeDirectory",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::homeDirectory",
+      "to": "core::platform::homeDirectory",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/EnvironmentProvider.hpp",
+        "symbol": "core::platform::homeDirectory",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::hostName",
+      "to": "core::platform::hostName",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/SystemInfo.hpp",
+        "symbol": "core::platform::hostName",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::hostName",
+      "to": "core::platform::hostName",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/SystemInfo.hpp",
+        "symbol": "core::platform::hostName",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::isCaseOnlyRename",
+      "to": "core::platform::isCaseOnlyRename",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/PathUtils.hpp",
+        "symbol": "core::platform::isCaseOnlyRename",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::isCaseOnlyRename",
+      "to": "core::platform::isCaseOnlyRename",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/PathUtils.hpp",
+        "symbol": "core::platform::isCaseOnlyRename",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::isTerminal",
+      "to": "core::platform::isTerminal",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::isTerminal",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::isTerminal",
+      "to": "core::platform::isTerminal",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::isTerminal",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::nativeHandleToNumber",
+      "to": "core::platform::nativeHandleToNumber",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::nativeHandleToNumber",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::nativeHandleToNumber",
+      "to": "core::platform::nativeHandleToNumber",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::nativeHandleToNumber",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::normalizePath",
+      "to": "core::platform::normalizePath",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/PathUtils.hpp",
+        "symbol": "core::platform::normalizePath",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::normalizePath",
+      "to": "core::platform::normalizePath",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/PathUtils.hpp",
+        "symbol": "core::platform::normalizePath",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::percentEncode",
+      "to": "core::platform::percentEncode",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/FileUri.hpp",
+        "symbol": "core::platform::percentEncode",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::percentEncode",
+      "to": "core::platform::percentEncode",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/FileUri.hpp",
+        "symbol": "core::platform::percentEncode",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::platformClose",
+      "to": "core::platform::platformClose",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::platformClose",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::platformClose",
+      "to": "core::platform::platformClose",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::platformClose",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::platformRead",
+      "to": "core::platform::platformRead",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::platformRead",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::platformRead",
+      "to": "core::platform::platformRead",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::platformRead",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::platformWrite",
+      "to": "core::platform::platformWrite",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::platformWrite",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::platformWrite",
+      "to": "core::platform::platformWrite",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::platformWrite",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::resolveDevicePath",
+      "to": "core::platform::resolveDevicePath",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/PathUtils.hpp",
+        "symbol": "core::platform::resolveDevicePath",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::resolveDevicePath",
+      "to": "core::platform::resolveDevicePath",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/PathUtils.hpp",
+        "symbol": "core::platform::resolveDevicePath",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::standardError",
+      "to": "core::platform::standardError",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::standardError",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::standardError",
+      "to": "core::platform::standardError",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::standardError",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::standardInput",
+      "to": "core::platform::standardInput",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::standardInput",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::standardInput",
+      "to": "core::platform::standardInput",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::standardInput",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::standardOutput",
+      "to": "core::platform::standardOutput",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::standardOutput",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::standardOutput",
+      "to": "core::platform::standardOutput",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::standardOutput",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::stripTrailingSeparator",
+      "to": "core::platform::stripTrailingSeparator",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/PathUtils.hpp",
+        "symbol": "core::platform::stripTrailingSeparator",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::stripTrailingSeparator",
+      "to": "core::platform::stripTrailingSeparator",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/PathUtils.hpp",
+        "symbol": "core::platform::stripTrailingSeparator",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::trimInPlace",
+      "to": "core::platform::trimInPlace",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/StringUtils.hpp",
+        "symbol": "core::platform::trimInPlace",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::trimInPlace",
+      "to": "core::platform::trimInPlace",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/platform/StringUtils.hpp",
+        "symbol": "core::platform::trimInPlace",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::testing::InMemoryFileSystem",
+      "to": "core::platform::testing::InMemoryFileSystem",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/testing/InMemoryFileSystem.hpp",
+        "symbol": "core::platform::testing::InMemoryFileSystem",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::testing::InMemoryFileSystem",
+      "to": "core::platform::testing::InMemoryFileSystem",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/testing/InMemoryFileSystem.hpp",
+        "symbol": "core::platform::testing::InMemoryFileSystem",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "testing::InMemoryFileSystem",
+      "to": "core::platform::testing::InMemoryFileSystem",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/testing/InMemoryFileSystem.hpp",
+        "symbol": "core::platform::testing::InMemoryFileSystem",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::testing::MockEventSource",
+      "to": "core::tui::runtime::testing::MockEventSource",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/runtime/testing/MockEventSource.hpp",
+        "symbol": "core::tui::runtime::testing::MockEventSource",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "testing::MockEventSource",
+      "to": "core::tui::runtime::testing::MockEventSource",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/runtime/testing/MockEventSource.hpp",
+        "symbol": "core::tui::runtime::testing::MockEventSource",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::platform::testing::MockFileInfoProvider",
+      "to": "core::platform::testing::MockFileInfoProvider",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/testing/MockFileInfoProvider.hpp",
+        "symbol": "core::platform::testing::MockFileInfoProvider",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "platform::testing::MockFileInfoProvider",
+      "to": "core::platform::testing::MockFileInfoProvider",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/testing/MockFileInfoProvider.hpp",
+        "symbol": "core::platform::testing::MockFileInfoProvider",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "testing::MockFileInfoProvider",
+      "to": "core::platform::testing::MockFileInfoProvider",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/testing/MockFileInfoProvider.hpp",
+        "symbol": "core::platform::testing::MockFileInfoProvider",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::testing::ScopedEnv",
+      "to": "core::testing::ScopedEnv",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/testing/EnvHelper.hpp",
+        "symbol": "core::testing::ScopedEnv",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "testing::ScopedEnv",
+      "to": "core::testing::ScopedEnv",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/testing/EnvHelper.hpp",
+        "symbol": "core::testing::ScopedEnv",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::testing::ScopedTempDir",
+      "to": "core::testing::ScopedTempDir",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/testing/ScopedTempDir.hpp",
+        "symbol": "core::testing::ScopedTempDir",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "testing::ScopedTempDir",
+      "to": "core::testing::ScopedTempDir",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/testing/ScopedTempDir.hpp",
+        "symbol": "core::testing::ScopedTempDir",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::testing::ScopedWorkingDirectory",
+      "to": "core::testing::ScopedWorkingDirectory",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/testing/ScopedWorkingDirectory.hpp",
+        "symbol": "core::testing::ScopedWorkingDirectory",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "testing::ScopedWorkingDirectory",
+      "to": "core::testing::ScopedWorkingDirectory",
+      "profiles": [
+        "endo"
+      ],
+      "target": {
+        "header": "core/testing/ScopedWorkingDirectory.hpp",
+        "symbol": "core::testing::ScopedWorkingDirectory",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::testing::setTestEnv",
+      "to": "core::testing::setTestEnv",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/testing/EnvHelper.hpp",
+        "symbol": "core::testing::setTestEnv",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "testing::setTestEnv",
+      "to": "core::testing::setTestEnv",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/testing/EnvHelper.hpp",
+        "symbol": "core::testing::setTestEnv",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::testing::suppressWindowsDialogs",
+      "to": "core::testing::suppressWindowsDialogs",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/testing/SuppressWindowsDialogs.hpp",
+        "symbol": "core::testing::suppressWindowsDialogs",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "testing::suppressWindowsDialogs",
+      "to": "core::testing::suppressWindowsDialogs",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/testing/SuppressWindowsDialogs.hpp",
+        "symbol": "core::testing::suppressWindowsDialogs",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::testing::unsetTestEnv",
+      "to": "core::testing::unsetTestEnv",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/testing/EnvHelper.hpp",
+        "symbol": "core::testing::unsetTestEnv",
+        "public": true
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "testing::unsetTestEnv",
+      "to": "core::testing::unsetTestEnv",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/testing/EnvHelper.hpp",
+        "symbol": "core::testing::unsetTestEnv",
+        "public": true
+      }
+    },
+    {
+      "kind": "namespace",
+      "from": "logstore",
+      "to": "core::log",
+      "profiles": [
+        "contour",
+        "endo",
+        "tuidu"
+      ]
+    },
+    {
+      "kind": "namespace",
+      "from": "coro",
+      "to": "core::async",
+      "profiles": [
+        "contour",
+        "endo",
+        "tuidu"
+      ]
+    },
+    {
+      "kind": "namespace",
+      "from": "endo::coro",
+      "to": "core::async",
+      "profiles": [
+        "tuidu"
+      ]
+    },
+    {
+      "kind": "namespace",
+      "from": "net",
+      "to": "core::net",
+      "profiles": [
+        "contour",
+        "endo"
+      ]
+    },
+    {
+      "kind": "namespace",
+      "from": "tui",
+      "to": "core::tui",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ]
+    },
+    {
+      "kind": "namespace",
+      "from": "crispy::base64",
+      "to": "core::base64",
+      "profiles": [
+        "contour",
+        "endo",
+        "tuidu"
+      ]
+    },
+    {
+      "kind": "namespace",
+      "from": "crispy::views",
+      "to": "core::views",
+      "profiles": [
+        "contour"
+      ]
+    },
+    {
+      "kind": "namespace",
+      "from": "crispy::testing",
+      "to": "core::testing",
+      "profiles": [
+        "contour"
+      ]
+    },
+    {
+      "kind": "namespace",
+      "from": "crispy::cli",
+      "to": "core::cli",
+      "profiles": [
+        "contour",
+        "tuidu"
+      ]
+    },
+    {
+      "kind": "namespace",
+      "from": "FastCache::Ranges",
+      "to": "core::ranges",
+      "profiles": [
+        "fastcached"
+      ]
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::app::customizeLogStoreOutput",
+      "to": "core::cli::App::customizeLogStoreOutput",
+      "profiles": [
+        "contour",
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/cli/App.hpp",
+        "symbol": "core::cli::App::customizeLogStoreOutput"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::flags",
+      "to": "core::Flags",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "note": "endo's and tuidu's crispy snapshots still spell the class `flags`",
+      "target": {
+        "header": "core/Flags.hpp",
+        "symbol": "core::Flags"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::fatal",
+      "to": "core::log::fatal",
+      "profiles": [
+        "contour"
+      ],
+      "note": "moves header too: fatal() and SoftRequire() are in <core/log/Assert.hpp>, not <core/Assert.hpp>",
+      "target": {
+        "header": "core/log/Assert.hpp",
+        "symbol": "core::log::fatal"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "crispy::cli::command",
+      "to": "core::cli::Command",
+      "profiles": [
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/cli/CLI.hpp",
+        "symbol": "core::cli::Command"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "cli::command",
+      "to": "core::cli::Command",
+      "profiles": [
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/cli/CLI.hpp",
+        "symbol": "core::cli::Command"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "cli::command_list",
+      "to": "core::cli::CommandList",
+      "profiles": [
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/cli/CLI.hpp",
+        "symbol": "core::cli::CommandList"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "cli::commandList",
+      "to": "core::cli::CommandList",
+      "profiles": [
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/cli/CLI.hpp",
+        "symbol": "core::cli::CommandList"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "cli::option",
+      "to": "core::cli::Option",
+      "profiles": [
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/cli/CLI.hpp",
+        "symbol": "core::cli::Option"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "cli::option_list",
+      "to": "core::cli::OptionList",
+      "profiles": [
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/cli/CLI.hpp",
+        "symbol": "core::cli::OptionList"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "cli::optionList",
+      "to": "core::cli::OptionList",
+      "profiles": [
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/cli/CLI.hpp",
+        "symbol": "core::cli::OptionList"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "cli::flag_store",
+      "to": "core::cli::FlagStore",
+      "profiles": [
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/cli/CLI.hpp",
+        "symbol": "core::cli::FlagStore"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "cli::flagStore",
+      "to": "core::cli::FlagStore",
+      "profiles": [
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/cli/CLI.hpp",
+        "symbol": "core::cli::FlagStore"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "cli::value",
+      "to": "core::cli::Value",
+      "profiles": [
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/cli/CLI.hpp",
+        "symbol": "core::cli::Value"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "cli::verbatim",
+      "to": "core::cli::Verbatim",
+      "profiles": [
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/cli/CLI.hpp",
+        "symbol": "core::cli::Verbatim"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "cli::help_display_style",
+      "to": "core::cli::HelpDisplayStyle",
+      "profiles": [
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/cli/CLI.hpp",
+        "symbol": "core::cli::HelpDisplayStyle"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "cli::helpDisplayStyle",
+      "to": "core::cli::HelpDisplayStyle",
+      "profiles": [
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/cli/CLI.hpp",
+        "symbol": "core::cli::HelpDisplayStyle"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::IClock",
+      "to": "core::platform::IClock",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::IClock"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::SteadyClock",
+      "to": "core::platform::SteadyClock",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::SteadyClock"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::ManualClock",
+      "to": "core::platform::ManualClock",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::ManualClock"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::defaultSteadyClock",
+      "to": "core::platform::defaultSteadyClock",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::defaultSteadyClock"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::SteadyTimePoint",
+      "to": "core::platform::SteadyTimePoint",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::SteadyTimePoint"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::SteadyDuration",
+      "to": "core::platform::SteadyDuration",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::SteadyDuration"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::NativeHandle",
+      "to": "core::platform::NativeHandle",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::NativeHandle"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::InvalidHandle",
+      "to": "core::platform::InvalidHandle",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::InvalidHandle"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::platformRead",
+      "to": "core::platform::platformRead",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::platformRead"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::platformWrite",
+      "to": "core::platform::platformWrite",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::platformWrite"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::platformClose",
+      "to": "core::platform::platformClose",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::platformClose"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::ensureWinsockInitialized",
+      "to": "core::platform::ensureWinsockInitialized",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/platform/WinsockInit.hpp",
+        "symbol": "core::platform::ensureWinsockInitialized"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::SystemPipe",
+      "to": "core::platform::SystemPipe",
+      "profiles": [
+        "contour"
+      ],
+      "note": "read() now returns std::expected<ChannelResult, PlatformError>: test isEndOfStream() where the code tested for 0, and empty() where it tested for a would-block",
+      "target": {
+        "header": "core/platform/SystemPipe.hpp",
+        "symbol": "core::platform::SystemPipe"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::createSystemPipe",
+      "to": "core::platform::createSystemPipe",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/platform/SystemPipe.hpp",
+        "symbol": "core::platform::createSystemPipe"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::testing::TempDir",
+      "to": "core::testing::ScopedTempDir",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/testing/ScopedTempDir.hpp",
+        "symbol": "core::testing::ScopedTempDir"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::NetErrorCode::Other",
+      "to": "core::net::NetErrorCode::SystemError",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "status": "pending",
+      "task": "B2",
+      "note": "NetErrorCode::Other is still its name at HEAD. The row carries no target yet, so the gate checks nothing here; Task B2 adds \"target\": {\"header\": \"core/net/NetError.hpp\", \"symbol\": \"core::net::NetErrorCode::SystemError\"} and marks the row delivered"
+    },
+    {
+      "kind": "symbol",
+      "from": "NetErrorCode::Other",
+      "to": "core::net::NetErrorCode::SystemError",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "status": "pending",
+      "task": "B2",
+      "note": "NetErrorCode::Other is still its name at HEAD. The row carries no target yet, so the gate checks nothing here; Task B2 adds \"target\": {\"header\": \"core/net/NetError.hpp\", \"symbol\": \"core::net::NetErrorCode::SystemError\"} and marks the row delivered"
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::NativeHandle",
+      "to": "core::platform::NativeHandle",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "note": "one of endo's compatibility aliases in namespace endo; the alias is deleted, not re-pointed",
+      "target": {
+        "header": "core/platform/Types.hpp",
+        "symbol": "core::platform::NativeHandle"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::FileSystem",
+      "to": "core::platform::FileSystem",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/FileSystem.hpp",
+        "symbol": "core::platform::FileSystem"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::SignalHandler",
+      "to": "core::platform::SignalHandler",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/SignalHandler.hpp",
+        "symbol": "core::platform::SignalHandler"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::TestEnvironment",
+      "to": "core::platform::testing::TestEnvironmentProvider",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/testing/TestEnvironmentProvider.hpp",
+        "symbol": "core::platform::testing::TestEnvironmentProvider"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::containsGlobChars",
+      "to": "core::platform::containsGlobChars",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/GlobMatch.hpp",
+        "symbol": "core::platform::containsGlobChars"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::globMatchFilename",
+      "to": "core::platform::globMatchFilename",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/platform/GlobMatch.hpp",
+        "symbol": "core::platform::globMatchFilename"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::Generator",
+      "to": "core::Generator",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/Generator.hpp",
+        "symbol": "core::Generator"
+      }
+    },
+    {
+      "kind": "macro",
+      "from": "CRISPY_PACKED",
+      "to": "CORE_PACKED",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Defines.hpp",
+        "symbol": "CORE_PACKED"
+      }
+    },
+    {
+      "kind": "macro",
+      "from": "CRISPY_REQUIRES",
+      "to": "CORE_REQUIRES",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Defines.hpp",
+        "symbol": "CORE_REQUIRES"
+      }
+    },
+    {
+      "kind": "macro",
+      "from": "CRISPY_CONSTEVAL",
+      "to": "CORE_CONSTEVAL",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Defines.hpp",
+        "symbol": "CORE_CONSTEVAL"
+      }
+    },
+    {
+      "kind": "macro",
+      "from": "CRISPY_CONSTEXPR",
+      "to": "CORE_CONSTEXPR",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Defines.hpp",
+        "symbol": "CORE_CONSTEXPR"
+      }
+    },
+    {
+      "kind": "macro",
+      "from": "CRISPY_CONCEPTS_SUPPORTED",
+      "to": "CORE_CONCEPTS_SUPPORTED",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Defines.hpp",
+        "symbol": "CORE_CONCEPTS_SUPPORTED"
+      }
+    },
+    {
+      "kind": "macro",
+      "from": "ENDO_GENERATOR_FORCE_FALLBACK",
+      "to": "CORE_GENERATOR_FORCE_FALLBACK",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "note": "a macro the consumer defines, not one core-cpp defines, so the gate checks the header alone",
+      "target": {
+        "header": "core/Generator.hpp"
+      }
+    },
+    {
+      "kind": "macro",
+      "from": "FC_RANGES_FORCE_FALLBACK",
+      "to": "CORE_RANGES_FORCE_FALLBACK",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "a macro the consumer defines, not one core-cpp defines, so the gate checks the header alone",
+      "target": {
+        "header": "core/Ranges.hpp"
+      }
+    },
+    {
+      "kind": "macro",
+      "from": "FC_ZONE_SCOPED",
+      "to": "CORE_ZONE_SCOPED",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/Profiling.hpp",
+        "symbol": "CORE_ZONE_SCOPED"
+      }
+    },
+    {
+      "kind": "macro",
+      "from": "FC_ZONE_SCOPED_N",
+      "to": "CORE_ZONE_SCOPED_N",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/Profiling.hpp",
+        "symbol": "CORE_ZONE_SCOPED_N"
+      }
+    },
+    {
+      "kind": "macro",
+      "from": "FC_ZONE_NAME",
+      "to": "CORE_ZONE_NAME",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/Profiling.hpp",
+        "symbol": "CORE_ZONE_NAME"
+      }
+    },
+    {
+      "kind": "macro",
+      "from": "FC_ZONE_TEXT",
+      "to": "CORE_ZONE_TEXT",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/Profiling.hpp",
+        "symbol": "CORE_ZONE_TEXT"
+      }
+    },
+    {
+      "kind": "macro",
+      "from": "FC_ZONE_VALUE",
+      "to": "CORE_ZONE_VALUE",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/Profiling.hpp",
+        "symbol": "CORE_ZONE_VALUE"
+      }
+    },
+    {
+      "kind": "macro",
+      "from": "FC_FRAME_MARK",
+      "to": "CORE_FRAME_MARK",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/Profiling.hpp",
+        "symbol": "CORE_FRAME_MARK"
+      }
+    },
+    {
+      "kind": "macro",
+      "from": "FC_FRAME_MARK_NAMED",
+      "to": "CORE_FRAME_MARK_NAMED",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/Profiling.hpp",
+        "symbol": "CORE_FRAME_MARK_NAMED"
+      }
+    },
+    {
+      "kind": "macro",
+      "from": "FC_THREAD_NAME",
+      "to": "CORE_THREAD_NAME",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/Profiling.hpp",
+        "symbol": "CORE_THREAD_NAME"
+      }
+    },
+    {
+      "kind": "macro",
+      "from": "FC_PLOT",
+      "to": "CORE_PLOT",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/Profiling.hpp",
+        "symbol": "CORE_PLOT"
+      }
+    },
+    {
+      "kind": "macro",
+      "from": "FC_TRACY_ENABLED",
+      "to": "CORE_CPP_WITH_TRACY",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "0 or 1 in the configured <core/Config.hpp>, not a defined/undefined flag",
+      "target": {
+        "header": "core/Config.hpp",
+        "symbol": "CORE_CPP_WITH_TRACY"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Core/Profiling.hpp",
+      "to": "core/Profiling.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/Profiling.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Core/Ranges.hpp",
+      "to": "core/Ranges.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/Ranges.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Core/Base64.hpp",
+      "to": "core/Base64.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/Base64.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Core/Clock.hpp",
+      "to": "core/platform/Clock.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Async/Task.hpp",
+      "to": "core/async/Task.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/Task.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Async/Cancellation.hpp",
+      "to": "core/async/StopToken.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/StopToken.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/ISocket.hpp",
+      "to": "core/net/ISocket.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ISocket.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/IListener.hpp",
+      "to": "core/net/IListener.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IListener.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/NetError.hpp",
+      "to": "core/net/NetError.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/NetError.hpp"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::IClock",
+      "to": "core::platform::IClock",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::IClock"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::SteadyClock",
+      "to": "core::platform::SteadyClock",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::SteadyClock"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::CachedClock",
+      "to": "core::platform::CachedClock",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::CachedClock"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::ManualClock",
+      "to": "core::platform::ManualClock",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::ManualClock"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::IWallClock",
+      "to": "core::platform::IWallClock",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::IWallClock"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::SystemWallClock",
+      "to": "core::platform::SystemWallClock",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::SystemWallClock"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::ManualWallClock",
+      "to": "core::platform::ManualWallClock",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::ManualWallClock"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::WallClockRef",
+      "to": "core::platform::WallClockRef",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::WallClockRef"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::DefaultSystemWallClock",
+      "to": "core::platform::defaultSystemWallClock",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::defaultSystemWallClock"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::TimePoint",
+      "to": "core::platform::SteadyTimePoint",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::SteadyTimePoint"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::Duration",
+      "to": "core::platform::SteadyDuration",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::SteadyDuration"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::FindOrNull",
+      "to": "core::findOrNull",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/Ranges.hpp",
+        "symbol": "core::findOrNull"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::FindIfOrNull",
+      "to": "core::findIfOrNull",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/Ranges.hpp",
+        "symbol": "core::findIfOrNull"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::CancellationSource",
+      "to": "core::async::StopSource",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/StopToken.hpp",
+        "symbol": "core::async::StopSource"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::CancellationToken",
+      "to": "core::async::StopToken",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/async/StopToken.hpp",
+        "symbol": "core::async::StopToken"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::NetErrorCode::BadFileHandle",
+      "to": "core::net::NetErrorCode::BadHandle",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/NetError.hpp",
+        "symbol": "core::net::NetErrorCode::BadHandle"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "NetErrorCode::BadFileHandle",
+      "to": "core::net::NetErrorCode::BadHandle",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/NetError.hpp",
+        "symbol": "core::net::NetErrorCode::BadHandle"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Now",
+      "to": "now",
+      "apply": "semantic",
+      "scope": "FastCache::IClock",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::IClock::now"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Refresh",
+      "to": "refresh",
+      "apply": "semantic",
+      "scope": "FastCache::IClock",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::IClock::refresh"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Advance",
+      "to": "advance",
+      "apply": "semantic",
+      "scope": "FastCache::ManualClock",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::ManualClock::advance"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "SetNow",
+      "to": "setNow",
+      "apply": "semantic",
+      "scope": "FastCache::ManualClock",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::ManualClock::setNow"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Get",
+      "to": "get",
+      "apply": "semantic",
+      "scope": "FastCache::WallClockRef",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/platform/Clock.hpp",
+        "symbol": "core::platform::WallClockRef::get"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Read",
+      "to": "read",
+      "apply": "semantic",
+      "scope": "FastCache::ISocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ISocket.hpp",
+        "symbol": "core::net::ISocket::read"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Write",
+      "to": "write",
+      "apply": "semantic",
+      "scope": "FastCache::ISocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ISocket.hpp",
+        "symbol": "core::net::ISocket::write"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Close",
+      "to": "close",
+      "apply": "semantic",
+      "scope": "FastCache::ISocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ISocket.hpp",
+        "symbol": "core::net::ISocket::close"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::EventSource",
+      "to": "core::net::IoBackend",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "status": "pending",
+      "task": "B3",
+      "target": {
+        "header": "core/net/IoBackend.hpp",
+        "symbol": "core::net::IoBackend"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::FdInterest",
+      "to": "core::net::Interest",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "status": "pending",
+      "task": "B3",
+      "target": {
+        "header": "core/net/IoBackend.hpp",
+        "symbol": "core::net::Interest"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "net::makeDefaultEventSource",
+      "to": "core::net::makeDefaultBackend",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "status": "pending",
+      "task": "B3",
+      "target": {
+        "header": "core/net/IoBackend.hpp",
+        "symbol": "core::net::makeDefaultBackend"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "localPort",
+      "to": "boundPort",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "status": "pending",
+      "task": "B6",
+      "target": {
+        "header": "core/net/IListener.hpp",
+        "symbol": "core::net::IListener::boundPort"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::IReactor",
+      "to": "core::net::EventLoop",
+      "profiles": [
+        "fastcached"
+      ],
+      "status": "pending",
+      "task": "B4",
+      "target": {
+        "header": "core/net/EventLoop.hpp",
+        "symbol": "core::net::EventLoop::submit"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::PlatformReactor",
+      "to": "core::net::PlatformLoop",
+      "profiles": [
+        "fastcached"
+      ],
+      "status": "pending",
+      "task": "B4",
+      "target": {
+        "header": "core/net/EventLoop.hpp",
+        "symbol": "core::net::PlatformLoop"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::TestReactor",
+      "to": "core::net::testing::TestLoop",
+      "profiles": [
+        "fastcached"
+      ],
+      "status": "pending",
+      "task": "B4",
+      "target": {
+        "header": "core/net/testing/TestLoop.hpp",
+        "symbol": "core::net::testing::TestLoop"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::SyncRun",
+      "to": "core::async::syncRun",
+      "profiles": [
+        "fastcached"
+      ],
+      "status": "pending",
+      "task": "B1",
+      "note": "core::async::syncRun is Task B1's; the row carries no target yet, so the gate checks nothing here. B1 adds \"target\": {\"header\": \"core/async/SyncRun.hpp\", \"symbol\": \"core::async::syncRun\"} and marks the row delivered"
+    },
+    {
+      "kind": "symbol",
+      "from": "SleepUntil",
+      "to": "loop.sleepUntil(tp)",
+      "apply": "manual",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "a shape change, not a rename: the awaitable aggregate SleepUntil{&reactor, tp} becomes a call on the loop"
+    },
+    {
+      "kind": "symbol",
+      "from": "InterruptibleSleepUntil",
+      "to": "interruptibleSleepUntil(&loop, token, tp)",
+      "apply": "manual",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "a shape change: the aggregate takes the loop, the stop token and the deadline as arguments"
+    },
+    {
+      "kind": "member",
+      "from": "Bind",
+      "to": "listen(loop, ListenOptions)",
+      "apply": "manual",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "*Listener::Bind(...) becomes the free function listen(loop, ListenOptions); the arguments regroup"
+    },
+    {
+      "kind": "symbol",
+      "from": "gsl::not_null",
+      "to": "a reference, or an asserted pointer",
+      "apply": "manual",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "note": "core-cpp takes no dependency on GSL; each use becomes a reference where the callee never rebinds, or a pointer with Require()"
+    },
+    {
+      "kind": "symbol",
+      "from": "logstore::SourceLocationCustom",
+      "to": "std::source_location",
+      "apply": "manual",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "note": "removed: core::log::SourceLocation is std::source_location, so the custom type has no replacement"
+    },
+    {
+      "kind": "symbol",
+      "from": "Overloaded",
+      "to": "core::Overloaded",
+      "apply": "manual",
+      "profiles": [
+        "contour"
+      ],
+      "note": "the unqualified global Overloaded of <crispy/Overloaded.hpp> is core::Overloaded now; too common a word to rewrite unqualified"
+    },
+    {
+      "kind": "namespace",
+      "from": "namespace tui {",
+      "to": "namespace core::tui {",
+      "apply": "manual",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "note": "a namespace DEFINITION is not mechanical: only a human can tell a consumer's own namespace from the moved one. endo has five such forward declarations"
+    },
+    {
+      "kind": "symbol",
+      "from": "endo::testing::InjectedShell",
+      "to": "endo::testing::InjectedShell",
+      "apply": "manual",
+      "profiles": [
+        "endo"
+      ],
+      "note": "stays in endo: it is shell-specific. Its namespace is not rewritten, which is why endo::testing has symbol rows rather than a namespace row"
+    }
+  ]
+}

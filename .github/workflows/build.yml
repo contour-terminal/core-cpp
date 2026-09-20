@@ -94,6 +94,37 @@ jobs:
           cmake -DROOT="$GITHUB_WORKSPACE" -DWORK_DIR="$RUNNER_TEMP/layering"
           -P tests/cmake/check-layering.cmake
 
+      # The rename table of tools/migrate/ against the headers this tree actually delivers. Every
+      # build runs it as ctest core-cpp.migrate-renames; here it runs before anything is configured,
+      # so a table that has drifted is the first thing a pull request is told.
+      - name: Consumer rename table matches the delivered headers
+        run: python tools/migrate/check-renames.py --root "$GITHUB_WORKSPACE"
+
+      # libclang's Python bindings are optional, so semantic_rename.py's cases skip wherever they are
+      # missing -- and a suite whose only untested tool always skips is an untested tool. This is the
+      # one job that installs them, and it fails on a skip rather than reporting the same green.
+      #
+      # The pin lives here rather than in scripts/tool-versions.py, which is for the tools whose
+      # version the *tree* is held to (clang-format, clang-tidy); nothing in core-cpp is formatted or
+      # checked by libclang, and `tool-versions.py --check` must not start failing for a developer
+      # who has no reason to install it.
+      - name: Install libclang's Python bindings
+        run: python -m pip install "libclang==18.1.1"
+
+      - name: Migration codemod tests, with the semantic pass running for real
+        run: |
+          python -c "import clang.cindex; print('clang.cindex from', clang.cindex.__file__)"
+          python - <<'PY'
+          import sys, unittest
+          suite = unittest.defaultTestLoader.discover("tools/migrate", pattern="*_test.py")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          print(f"ran={result.testsRun} failures={len(result.failures)} "
+                f"errors={len(result.errors)} skipped={len(result.skipped)}")
+          for case, reason in result.skipped:
+              print(f"::error::{case} skipped in the job that exists to run it: {reason}")
+          sys.exit(0 if result.wasSuccessful() and not result.skipped else 1)
+          PY
+
       # .gitattributes normalises text to LF, so a CR byte in a tracked file means a file git
       # treated as binary, which a text import must never be.
       - name: No tracked file contains a CR byte

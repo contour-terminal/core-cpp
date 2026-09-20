@@ -244,6 +244,20 @@ workflow refuses one without a section here.
   can leave it there when both the second hop and the rollback fail, which is not behaviour that
   may ship untested (controller ruling R53).
 
+- `tools/migrate/`, the tooling every consumer migration runs: `renames.json`, the 438-row rename
+  table; `rewrite.py --profile contour|endo|tuidu|fastcached`, an idempotent codemod over its
+  include, namespace, symbol, member and macro rows, anchored so that `net::` never matches inside
+  `std::net::`, `endo::net::` or `mynet::` and so that a string literal is left alone; and
+  `semantic_rename.py`, which renames a member through libclang only where the **declaration** it
+  refers to is the one named, so `sock.Read(` moves where `sock` is a `FastCache::ISocket` and
+  another class's `Read` does not. `check-renames.py` (ctest `core-cpp.migrate-renames`, label
+  `hygiene`) holds the table to the tree: every core-cpp symbol a row names must exist in the
+  delivered headers, and a row still waiting on a Phase B task must *not* exist yet, so a rename
+  that forgets the table fails the build and names the row to update. The cases are stdlib
+  `unittest` (ctest `core-cpp.migrate-codemods`); the `style` CI job installs libclang's Python
+  bindings and fails on a skip, so the semantic pass is tested for real. None of this is part of
+  the library: no target links it and no consumer builds it.
+
 ### Breaking
 
 - `core::platform::testing::InMemoryFileSystem` models a file's lifetime the way POSIX does, where
