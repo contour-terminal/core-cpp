@@ -98,7 +98,10 @@ async::Task<IoResult> PosixSocket::read(std::span<std::byte> buffer)
         if (n > 0)
             co_return static_cast<std::size_t>(n);
         if (n == 0)
+        {
+            _peerClosed = true;          // isClosed() now answers true, as ISocket documents
             co_return std::size_t { 0 }; // clean EOF
+        }
 
         auto const err = errno;
         if (err == ENOTSOCK && !_plainFd)
@@ -109,7 +112,10 @@ async::Task<IoResult> PosixSocket::read(std::span<std::byte> buffer)
             continue;
         }
         if (err == EIO && _plainFd)
+        {
+            _peerClosed = true;          // the child is gone: an EOF by another name
             co_return std::size_t { 0 }; // a PTY master reports child exit as EIO
+        }
         if (isWouldBlock(err))
         {
             // Park until the fd is readable, then retry. A cancelled wait throws
@@ -181,10 +187,14 @@ async::Task<std::expected<ReadWithFd, NetError>> PosixSocket::readWithFd(std::sp
                 if (fd >= 0 && MSG_CMSG_CLOEXEC == 0) // no atomic close-on-exec on this platform
                     ::fcntl(fd, F_SETFD, FD_CLOEXEC);
             }
-            if (n == 0 && fd >= 0)
+            if (n == 0)
             {
-                ::close(fd); // an fd on EOF has no message to belong to
-                fd = -1;
+                _peerClosed = true; // the same EOF latch read() keeps, on the fd-passing path
+                if (fd >= 0)
+                {
+                    ::close(fd); // an fd on EOF has no message to belong to
+                    fd = -1;
+                }
             }
             co_return ReadWithFd { .bytesRead = static_cast<std::size_t>(n), .fd = fd };
         }

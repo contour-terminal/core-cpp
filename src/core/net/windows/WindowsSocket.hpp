@@ -51,7 +51,11 @@ class WindowsSocket final: public ISocket
 
     void close() noexcept override;
 
-    [[nodiscard]] bool isClosed() const noexcept override { return _closed; }
+    /// @return True once @c close() was called, or a read observed the peer's EOF.
+    ///         The second half is what makes this answer the question callers ask —
+    ///         "is this connection still worth holding?" — rather than only "did I
+    ///         close it myself"; @see ISocket::isClosed.
+    [[nodiscard]] bool isClosed() const noexcept override { return _closed || _peerClosed; }
 
   private:
     /// Closes the socket and its event, telling the loop first so a flow parked on
@@ -100,6 +104,10 @@ class WindowsSocket final: public ISocket
     WSAEVENT _event;
     std::string _peerAddress;
     bool _closed = false;
+    /// Latched by a read that observed the peer's EOF. SEPARATE from @c _closed on purpose:
+    /// @c _closed gates read() and write(), and a peer that shut only its write side leaves
+    /// this end perfectly able to keep writing. Only @c isClosed() consults this.
+    bool _peerClosed = false;
     /// Latched readiness per direction, fed by @ref latchNetworkEvents. Sticky until the
     /// direction that wants it consumes it, so an indication raised for one direction can no
     /// longer be destroyed by the other's wait.

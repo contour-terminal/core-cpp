@@ -84,7 +84,9 @@ namespace
                     co_return static_cast<std::size_t>(n);
                 switch (SSL_get_error(_ssl, n))
                 {
-                    case SSL_ERROR_ZERO_RETURN: co_return std::size_t { 0 }; // peer sent close_notify
+                    case SSL_ERROR_ZERO_RETURN:
+                        _peerClosed = true; // a close_notify IS this layer's EOF
+                        co_return std::size_t { 0 };
                     case SSL_ERROR_WANT_WRITE:
                         if (auto const flushed = co_await flushOut(); !flushed)
                             co_return std::unexpected(flushed.error());
@@ -96,7 +98,10 @@ namespace
                         if (!fed)
                             co_return std::unexpected(fed.error());
                         if (*fed == 0)
+                        {
+                            _peerClosed = true;          // the inner transport ended under us
                             co_return std::size_t { 0 }; // inner EOF mid-stream
+                        }
                         break;
                     }
                     default:
@@ -150,7 +155,12 @@ namespace
 
         [[nodiscard]] std::string peerAddress() const override { return _inner->peerAddress(); }
         void close() noexcept override { _inner->close(); }
-        [[nodiscard]] bool isClosed() const noexcept override { return _inner->isClosed(); }
+
+        /// True once this end closed, or a read observed the peer's EOF — which for a TLS
+        /// layer arrives as a close_notify, possibly while the inner transport is still open.
+        /// Asking only the inner socket would therefore answer "open" for a session the peer
+        /// has already ended. @see ISocket::isClosed.
+        [[nodiscard]] bool isClosed() const noexcept override { return _peerClosed || _inner->isClosed(); }
 
       private:
         /// Suspends a caller until the in-flight handshake, driven by another
@@ -338,6 +348,7 @@ namespace
         BIO* _rbio; ///< Network → SSL (owned by _ssl).
         BIO* _wbio; ///< SSL → network (owned by _ssl).
         bool _handshakeDone = false;
+        bool _peerClosed = false;                ///< A read saw the peer's close_notify or inner EOF.
         bool _handshaking = false;               ///< A coroutine is currently driving the handshake.
         std::optional<NetError> _handshakeError; ///< Set once the handshake fails (sticky).
         std::vector<std::coroutine_handle<>> _handshakeWaiters; ///< Parked on the in-flight handshake.

@@ -40,7 +40,11 @@ class PosixSocket final: public ISocket
 
     void close() noexcept override;
 
-    [[nodiscard]] bool isClosed() const noexcept override { return _closed; }
+    /// @return True once @c close() was called, or a read observed the peer's EOF.
+    ///         The second half is what makes this answer the question callers ask —
+    ///         "is this connection still worth holding?" — rather than only "did I
+    ///         close it myself"; @see ISocket::isClosed.
+    [[nodiscard]] bool isClosed() const noexcept override { return _closed || _peerClosed; }
 
     /// @return The underlying fd (for diagnostics/tests).
     [[nodiscard]] int native() const noexcept { return _fd; }
@@ -60,6 +64,11 @@ class PosixSocket final: public ISocket
     bool _plainFd = false; ///< Set on first ENOTSOCK: a PTY/pipe fd, served via read/write.
     std::string _peerAddress;
     bool _closed = false;
+    /// Latched by a read that observed the peer's EOF. SEPARATE from @c _closed on purpose:
+    /// @c _closed gates read() and write(), and a peer that shut only its write side leaves
+    /// this end perfectly able to keep writing (the tmux half-close). Only @c isClosed()
+    /// consults this, so the answer changes without the half-close breaking.
+    bool _peerClosed = false;
 };
 
 } // namespace core::net

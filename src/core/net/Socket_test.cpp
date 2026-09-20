@@ -5,6 +5,7 @@
 #include <core/net/IListener.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/Sockets.hpp>
+#include <core/net/SplitSocket.hpp>
 #include <core/net/testing/EventSourceBackends.hpp>
 #include <core/net/testing/InMemoryTransport.hpp>
 
@@ -20,6 +21,7 @@
 #include <format>
 #include <memory>
 #include <random>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -129,6 +131,53 @@ Task<void> closeWhileParked(EventLoop* loop, ISocket* sock, bool* resumedWithErr
     co_await core::async::whenAll(parkThenObserveClose(sock, resumedWithError), closeAfterParked(loop, sock));
 }
 
+/// Accepts @p count connections in sequence on one listener, counting them.
+Task<void> acceptSequentially(core::net::IListener* listener, int count, int* accepted)
+{
+    while (*accepted < count)
+    {
+        auto conn = co_await listener->accept();
+        if (!conn.has_value())
+            co_return;
+        ++*accepted;
+        (*conn)->close();
+    }
+}
+
+/// Connects to @p listener @p count times, one connection at a time.
+Task<void> connectSequentially(EventLoop* loop, core::net::IListener* listener, int count, int* connected)
+{
+    for ([[maybe_unused]] auto const attempt: std::views::iota(0, count))
+    {
+        auto sock = co_await core::net::connect(loop, "127.0.0.1", listener->localPort());
+        if (!sock.has_value())
+        {
+            listener->close(); // release the accept parked behind us rather than hang
+            co_return;
+        }
+        ++*connected;
+        (*sock)->close();
+        co_await loop->delay(std::chrono::milliseconds { 20 }); // let the accept re-arm first
+    }
+}
+
+/// Reads @p sock until it reports a clean EOF, recording that it did.
+Task<void> readToEof(ISocket* sock, bool* sawEof)
+{
+    auto buffer = std::array<std::byte, 64> {};
+    while (true)
+    {
+        auto const result = co_await sock->read(buffer);
+        if (!result.has_value())
+            co_return;
+        if (*result == 0)
+        {
+            *sawEof = true;
+            co_return;
+        }
+    }
+}
+
 } // namespace
 
 TEST_CASE("InMemoryTransport round-trips bytes between connected endpoints", "[net]")
@@ -179,6 +228,94 @@ TEST_CASE("closing a socket resumes a reader parked on it instead of hanging", "
             CHECK(resumedWithError); // it resumed at all (no hang) AND saw the close as an error
         }
     }
+}
+
+TEST_CASE("a listener keeps accepting across sequential connections", "[net]")
+{
+    // One listener, several connections one after another — the shape a daemon actually runs,
+    // and the one every other case here stops short of: they accept once. On Windows the
+    // accept path has to take its readiness indication off the shared event without destroying
+    // it (@see core::net::consumeNetworkEvents and its own cases), and a listener that gets
+    // that wrong does not fail here, it goes SILENT: the second accept parks for ever and the
+    // suite's timeout is what reports it.
+    constexpr auto Connections = 3;
+    for (auto const& backend: AllBackends)
+    {
+        auto source = core::net::makeEventSource(backend.kind);
+        if (!source)
+            continue; // not available on this platform
+
+        DYNAMIC_SECTION("backend=" << backend.name)
+        {
+            auto loop = EventLoop { *source };
+            auto listener = core::net::listen(loop, "127.0.0.1", 0);
+            REQUIRE(listener.has_value());
+
+            auto accepted = 0;
+            auto connected = 0;
+            auto run = [](EventLoop* lp, core::net::IListener* l, int* a, int* c) -> Task<void> {
+                co_await core::async::whenAll(acceptSequentially(l, Connections, a),
+                                              connectSequentially(lp, l, Connections, c));
+            };
+            loop.blockOn(run(&loop, listener->get(), &accepted, &connected));
+
+            CHECK(connected == Connections);
+            CHECK(accepted == Connections);
+        }
+    }
+}
+
+TEST_CASE("a socket reports closed once a read observed the peer's EOF", "[net]")
+{
+    // ISocket::isClosed documents two halves — "close() was called" OR "the peer closed and a
+    // read observed EOF" — and the production sockets latched only the first. A consumer
+    // polling a connection whose peer hung up was therefore told it was still open, for ever.
+    for (auto const& backend: AllBackends)
+    {
+        auto source = core::net::makeEventSource(backend.kind);
+        if (!source)
+            continue; // not available on this platform
+
+        DYNAMIC_SECTION("backend=" << backend.name)
+        {
+            auto loop = EventLoop { *source };
+            auto pair = core::net::testing::makeSocketPair(loop);
+            REQUIRE(pair.has_value());
+
+            CHECK_FALSE(pair->first->isClosed()); // a live connection, and nobody closed this end
+
+            pair->second->close(); // the PEER hangs up; this end is untouched
+
+            auto sawEof = false;
+            loop.blockOn(readToEof(pair->first.get(), &sawEof));
+            REQUIRE(sawEof);
+            CHECK(pair->first->isClosed());
+        }
+    }
+}
+
+TEST_CASE("a split socket is closed once its read half observed EOF", "[net]")
+{
+    // SplitSocket::isClosed is "closed once either half is", built straight on the answer
+    // above — so a combined transport whose read half saw the peer hang up must report closed
+    // too, though nothing on either half was closed from this side.
+    auto source = core::net::makeDefaultEventSource();
+    REQUIRE(source != nullptr);
+    auto loop = EventLoop { *source };
+    auto readPair = core::net::testing::makeSocketPair(loop);
+    auto writePair = core::net::testing::makeSocketPair(loop);
+    REQUIRE(readPair.has_value());
+    REQUIRE(writePair.has_value());
+
+    auto split = core::net::combineHalves(std::move(readPair->first), std::move(writePair->first));
+    CHECK_FALSE(split->isClosed());
+
+    readPair->second->close(); // the read half's peer hangs up
+
+    auto sawEof = false;
+    loop.blockOn(readToEof(split.get(), &sawEof));
+    REQUIRE(sawEof);
+    CHECK(split->isClosed());
 }
 
 TEST_CASE("listen + connect + accept echo a request over loopback", "[net]")

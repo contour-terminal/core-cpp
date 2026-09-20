@@ -80,8 +80,15 @@ class ISocket
     /// with @c NetErrorCode::BadHandle.
     virtual void close() noexcept = 0;
 
-    /// @return True once @c close() has been called or the peer closed and a read
-    ///         observed EOF.
+    /// @return True once @c close() has been called, or a read observed the peer's
+    ///         EOF. The second half is what a consumer polls this for: a connection
+    ///         whose peer hung up is no longer worth holding, and a socket that
+    ///         reported it only for its OWN close left such a consumer polling a dead
+    ///         connection for ever.
+    ///
+    ///         The EOF latch is answered here and nowhere else: a peer that shut only
+    ///         its write side leaves this end able to keep writing, so @c write keeps
+    ///         working (and @c read keeps returning 0) after this turns true.
     [[nodiscard]] virtual bool isClosed() const noexcept = 0;
 };
 

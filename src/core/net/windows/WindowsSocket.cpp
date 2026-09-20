@@ -135,7 +135,10 @@ async::Task<IoResult> WindowsSocket::read(std::span<std::byte> buffer)
         if (n > 0)
             co_return static_cast<std::size_t>(n);
         if (n == 0)
+        {
+            _peerClosed = true;          // isClosed() now answers true, as ISocket documents
             co_return std::size_t { 0 }; // clean EOF
+        }
 
         auto const err = WSAGetLastError();
         if (err == WSAEWOULDBLOCK)
