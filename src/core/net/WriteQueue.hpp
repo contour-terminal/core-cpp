@@ -34,6 +34,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 
 namespace core::net
@@ -57,10 +58,12 @@ class WriteQueue
   public:
     /// @param loop The loop the drain coroutine runs on (not owned).
     /// @param socket The transport written to (not owned; see the lifetime note).
+    ///        Must not be null.
     /// @param maxQueuedBytes Enqueue fails once the queued-but-unwritten total
     ///        would exceed this bound.
+    /// @throws std::invalid_argument when @p socket is null.
     WriteQueue(EventLoop& loop, ISocket* socket, std::size_t maxQueuedBytes):
-        _loop(loop), _state(std::make_shared<State>(socket, maxQueuedBytes))
+        _loop(loop), _state(std::make_shared<State>(requireSocket(socket), maxQueuedBytes))
     {
     }
 
@@ -159,6 +162,24 @@ class WriteQueue
     [[nodiscard]] bool draining() const noexcept { return _state->draining; }
 
   private:
+    /// Validates the transport a queue is about to be built on.
+    ///
+    /// `ITlsContext::wrap` is documented to return null when it cannot allocate, and a queue
+    /// built on that null used to survive construction and crash later in `close()` — which
+    /// is `noexcept`, so the failure landed at teardown, far from the call that caused it,
+    /// and could not be reported. A constructed object is usable
+    /// (`.agent/rules/design-principles.md`), so the refusal happens here instead: the caller
+    /// checks `wrap()` and drops the connection rather than queueing onto nothing.
+    /// @param socket The transport handed to the constructor.
+    /// @return @p socket, once it is known to be non-null.
+    /// @throws std::invalid_argument when @p socket is null.
+    [[nodiscard]] static ISocket* requireSocket(ISocket* socket)
+    {
+        if (socket == nullptr)
+            throw std::invalid_argument("WriteQueue: socket must not be null");
+        return socket;
+    }
+
     /// The queue state, shared between the WriteQueue handle and the drain
     /// coroutine so neither dangles if the other finishes first.
     struct State

@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <expected>
 #include <span>
+#include <stdexcept>
 #include <string>
 
 using core::async::Task;
@@ -405,4 +406,16 @@ TEST_CASE("waitUntilBacklogBelow stops waiting when the caller says it is done",
     // Leave no coroutine parked on the socket at teardown.
     socket.release();
     REQUIRE(loop.blockOn(core::net::testing::waitUntil(&loop, [&] { return !queue.draining(); })));
+}
+
+TEST_CASE("A WriteQueue refuses a null socket at construction", "[net][writequeue]")
+{
+    // `ITlsContext::wrap` returns null when it cannot allocate. A queue built on that null
+    // used to construct cleanly and crash in `close()` — which is `noexcept`, so the failure
+    // surfaced at teardown rather than at the call that caused it. A constructed object is
+    // usable, so the refusal belongs at construction, where the caller can still act on it.
+    auto source = core::net::PollEventSource {};
+    auto loop = EventLoop { source };
+
+    REQUIRE_THROWS_AS((WriteQueue { loop, nullptr, 1024 }), std::invalid_argument);
 }
