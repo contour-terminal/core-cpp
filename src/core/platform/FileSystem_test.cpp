@@ -665,3 +665,105 @@ TEST_CASE("a recase whose rollback also fails says where the entry is", "[FileSy
     CHECK(listed->front().path.filename() == temporary.filename());
     CHECK(backend.readFile(temporary) == "content");
 }
+
+// ============================================================================
+// The model's key space, and the lifetime of its streams
+// ============================================================================
+
+TEST_CASE("the model's listings round-trip a name the narrow encoding cannot spell", "[FileSystem]")
+{
+    // Every key of this filesystem is UTF-8, but the way back *out* went through
+    // std::filesystem::path's narrow constructor, which on Windows reads the ANSI code page. So a
+    // name the code page cannot spell was stored intact and mangled on the way out:
+    // listDirectory(), walkDirectoryRecursive() and weaklyCanonical() handed back a path that no
+    // longer named the entry it came from. Invisible on POSIX, where the narrow encoding is UTF-8.
+    auto fs = InMemoryFileSystem {};
+    auto const root = std::filesystem::path { std::u8string { u8"/tmp/日本" } };
+    auto const file = root / std::filesystem::path { std::u8string { u8"ファイル.txt" } };
+    fs.addFile(file, "content");
+
+    auto const listed = fs.listDirectory(root);
+    REQUIRE(listed.has_value());
+    REQUIRE(listed->size() == 1);
+    CHECK(listed->front().path == file);
+    // The path handed back has to name the entry it came from, not merely look like it.
+    CHECK(fs.readFile(listed->front().path) == "content");
+
+    auto walked = std::vector<std::filesystem::path> {};
+    for (auto const& entry: fs.walkDirectoryRecursive(root))
+        walked.push_back(entry.path);
+    REQUIRE(walked.size() == 1);
+    CHECK(walked.front() == file);
+
+    CHECK(fs.weaklyCanonical(file) == file);
+
+    // The symlink store is the same key space: its target went in narrowed and came back out
+    // through the same constructor, so a link to a non-ASCII name resolved to nothing.
+    auto const link = root / "link";
+    fs.addSymlink(link, file);
+    CHECK(fs.isRegularFile(link));
+}
+
+TEST_CASE("a write through the model reaches a stream open on the same file", "[FileSystem]")
+{
+    // The streams held a raw pointer into the map's string. writeFile() reallocates that string,
+    // so a stream's cached get area named freed memory -- the read-write stream's own defect,
+    // reached through the filesystem instead of through the stream.
+    auto const fs = InMemoryFileSystem {};
+    REQUIRE(fs.writeFile("/root/data", std::string(64, 'a')).has_value());
+
+    auto stream = fs.openReadWrite("/root/data");
+    REQUIRE(stream.has_value());
+
+    // Behind the stream's back, and far enough past the old capacity to reallocate.
+    REQUIRE(fs.writeFile("/root/data", std::string(8192, 'b')).has_value());
+
+    auto byte = char {};
+    (*stream)->read(&byte, 1);
+    CHECK(byte == 'b'); // What the file holds now, read from where it lives now.
+}
+
+TEST_CASE("a stream outlives a remove of the file it was opened on", "[FileSystem]")
+{
+    // remove() takes the map entry away, and a stream pointing into it was left dangling.
+    // Sharing the content lets the file outlive the name, which is also what POSIX does for a
+    // file unlinked while it is still open.
+    auto const fs = InMemoryFileSystem {};
+    REQUIRE(fs.writeFile("/root/doomed", std::string(64, 'a')).has_value());
+
+    auto stream = fs.openReadWrite("/root/doomed");
+    REQUIRE(stream.has_value());
+    REQUIRE(fs.remove("/root/doomed") == true);
+    CHECK_FALSE(fs.exists("/root/doomed"));
+
+    auto byte = char {};
+    (*stream)->read(&byte, 1);
+    CHECK(byte == 'a');
+
+    (*stream)->clear();
+    (*stream)->seekp(0);
+    **stream << "z";
+    CHECK((*stream)->good());
+}
+
+TEST_CASE("a stream follows the file across a rename", "[FileSystem]")
+{
+    // rename() moves the entry to another key, which left a stream on the old one dangling. The
+    // stream must keep working and must be writing into the file that now carries the new name:
+    // a rename moves the name, not the contents.
+    auto const fs = InMemoryFileSystem {};
+    REQUIRE(fs.writeFile("/root/before", std::string(64, 'a')).has_value());
+
+    auto stream = fs.openReadWrite("/root/before");
+    REQUIRE(stream.has_value());
+    REQUIRE(fs.rename("/root/before", "/root/after").has_value());
+
+    **stream << "zz";
+    stream->reset();
+
+    auto const after = fs.readFile("/root/after");
+    REQUIRE(after.has_value());
+    CHECK(after->starts_with("zz"));
+    CHECK(after->size() == 64); // Overwritten in place, not appended.
+    CHECK_FALSE(fs.exists("/root/before"));
+}

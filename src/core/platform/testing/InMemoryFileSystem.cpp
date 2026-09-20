@@ -9,6 +9,7 @@
 #include <format>
 #include <ios>
 #include <map>
+#include <memory>
 #include <ranges>
 #include <set>
 #include <sstream>
@@ -19,11 +20,34 @@ namespace core::platform::testing
 
 namespace
 {
-    // Custom streambuf that syncs back to the InMemoryFileSystem's file map on flush/destruction.
+    /// @brief Turns a key of this filesystem back into a path.
+    ///
+    /// Every key is UTF-8: normalize() spells it through core::platform::normalizePath(), which
+    /// goes via generic_u8string() for exactly that reason. std::filesystem::path's narrow
+    /// constructor reads a char sequence in the platform's *native* narrow encoding, which on
+    /// Windows is the ANSI code page -- so building a path back from a key that way mangles or
+    /// throws on any name the code page cannot spell, which is the same defect that keying the
+    /// map through generic_string() was. A u8string_view is UTF-8 by definition, so this is the
+    /// one way back out of the key space, as normalizePath() is the one way in.
+    ///
+    /// @param key A normalized key of this filesystem.
+    /// @return The path it names.
+    [[nodiscard]] std::filesystem::path pathFromKey(std::string_view key)
+    {
+        return std::filesystem::path { std::u8string_view { reinterpret_cast<char8_t const*>(key.data()),
+                                                            key.size() } };
+    }
+
+    /// Streambuf that appends into the string an InMemoryFileSystem holds for a file.
+    ///
+    /// It shares ownership of that string rather than pointing at the map's: remove() and
+    /// rename() take the entry away while a stream may still be open on it, and a raw pointer
+    /// would dangle. Sharing also models what POSIX does, where an unlinked file stays alive for
+    /// whoever still holds it open, and a rename moves the name rather than the contents.
     class MemoryOutputBuf final: public std::streambuf
     {
       public:
-        MemoryOutputBuf(std::string* target, WriteMode mode): _target(target)
+        MemoryOutputBuf(std::shared_ptr<std::string> target, WriteMode mode): _target(std::move(target))
         {
             if (mode == WriteMode::Truncate)
                 _target->clear();
@@ -44,14 +68,17 @@ namespace
         }
 
       private:
-        std::string* _target;
+        std::shared_ptr<std::string> _target;
     };
 
     // Custom ostream that owns the streambuf.
     class MemoryOStream final: public std::ostream
     {
       public:
-        MemoryOStream(std::string* target, WriteMode mode): std::ostream(&_buf), _buf(target, mode) {}
+        MemoryOStream(std::shared_ptr<std::string> target, WriteMode mode):
+            std::ostream(&_buf), _buf(std::move(target), mode)
+        {
+        }
 
       private:
         MemoryOutputBuf _buf;
@@ -83,24 +110,53 @@ namespace
     /// Combined read-write stream backed by in-memory data.
     ///
     /// One position for reading and for writing, as std::filebuf has: a write overwrites from
-    /// wherever the stream stands and extends the file only past its end. The get area is
-    /// re-established after every write and every seek, because the pointers a streambuf hands
-    /// out name the inside of the std::string that holds the file and any write can reallocate
-    /// it -- pointers cached at construction are a use-after-free on the next read.
+    /// wherever the stream stands and extends the file only past its end.
+    ///
+    /// Two things keep it safe against a file that changes behind its back, which this one can:
+    /// writeFile() reallocates the string, and remove() and rename() take the map entry away.
+    /// It shares ownership of the string, so the string outlives the entry; and it caches no
+    /// pointer into that string at all -- the get area is left empty, so every read comes
+    /// through underflow(), uflow() or xsgetn() and re-reads where the data is now. A get area
+    /// spanning the string would be read directly by sgetc()/sbumpc() without entering this
+    /// class, so a reallocation between two reads could not be noticed.
     class MemoryIOBuf final: public std::streambuf
     {
       public:
-        explicit MemoryIOBuf(std::string* target): _target(target) { seekTo(0); }
+        explicit MemoryIOBuf(std::shared_ptr<std::string> target): _target(std::move(target)) {}
 
       protected:
+        std::streamsize xsgetn(char* s, std::streamsize n) override
+        {
+            auto const count = std::min(static_cast<std::size_t>(n), readable());
+            std::copy_n(_target->data() + _position, count, s);
+            _position += count;
+            return static_cast<std::streamsize>(count);
+        }
+
+        int_type underflow() override
+        {
+            if (readable() == 0)
+                return traits_type::eof();
+            return traits_type::to_int_type((*_target)[_position]);
+        }
+
+        int_type uflow() override
+        {
+            auto const ch = underflow();
+            if (!traits_type::eq_int_type(ch, traits_type::eof()))
+                ++_position;
+            return ch;
+        }
+
+        std::streamsize showmanyc() override { return static_cast<std::streamsize>(readable()); }
+
         std::streamsize xsputn(char const* s, std::streamsize n) override
         {
             auto const count = static_cast<std::size_t>(n);
-            auto const at = position();
-            if (at + count > _target->size())
-                _target->resize(at + count);
-            _target->replace(at, count, s, count);
-            seekTo(at + count);
+            if (_position + count > _target->size())
+                _target->resize(_position + count);
+            _target->replace(_position, count, s, count);
+            _position += count;
             return n;
         }
 
@@ -121,12 +177,12 @@ namespace
             if (dir == std::ios_base::end)
                 anchor = size;
             else if (dir == std::ios_base::cur)
-                anchor = static_cast<off_type>(position());
+                anchor = static_cast<off_type>(_position);
 
             auto const target = anchor + off;
             if (target < 0 || target > size)
                 return { Refused };
-            seekTo(static_cast<std::size_t>(target));
+            _position = static_cast<std::size_t>(target);
             return { target };
         }
 
@@ -136,23 +192,24 @@ namespace
         }
 
       private:
-        /// @return Where the stream stands, for reading as much as for writing.
-        [[nodiscard]] std::size_t position() const { return static_cast<std::size_t>(gptr() - eback()); }
-
-        /// Points the get area at the whole file again, standing at @p at.
-        void seekTo(std::size_t at)
+        /// @return How many bytes are left from where the stream stands. Recomputed every time,
+        ///         because the file can have grown or shrunk since the last call.
+        [[nodiscard]] std::size_t readable() const
         {
-            auto* const begin = _target->data();
-            setg(begin, begin + at, begin + _target->size());
+            return _target->size() > _position ? _target->size() - _position : 0;
         }
 
-        std::string* _target;
+        std::shared_ptr<std::string> _target;
+        std::size_t _position = 0;
     };
 
     class MemoryIOStream final: public std::iostream
     {
       public:
-        explicit MemoryIOStream(std::string* target): std::iostream(&_buf), _buf(target) {}
+        explicit MemoryIOStream(std::shared_ptr<std::string> target):
+            std::iostream(&_buf), _buf(std::move(target))
+        {
+        }
 
       private:
         MemoryIOBuf _buf;
@@ -173,7 +230,7 @@ InMemoryFileSystem::InMemoryFileSystem(std::initializer_list<FileEntry> entries)
         }
         else if (entry.isSymlink)
         {
-            addSymlink(entry.path, std::filesystem::path(entry.content));
+            addSymlink(entry.path, pathFromKey(entry.content));
         }
         else
         {
@@ -198,14 +255,24 @@ std::string InMemoryFileSystem::normalize(std::filesystem::path const& path) con
 
 void InMemoryFileSystem::ensureParentDirectories(std::filesystem::path const& path) const
 {
-    auto p = std::filesystem::path(normalize(path)).parent_path();
+    auto p = pathFromKey(normalize(path)).parent_path();
     while (!p.empty() && p != p.root_path())
     {
-        _directories.insert(p.string());
+        _directories.insert(normalizePath(p));
         p = p.parent_path();
     }
     if (!p.empty())
-        _directories.insert(p.string());
+        _directories.insert(normalizePath(p));
+}
+
+std::shared_ptr<std::string>& InMemoryFileSystem::fileAt(std::string const& key) const
+{
+    // Never replaces the string a key already has: a stream open on this file shares it, and a
+    // writer that swapped in a fresh one would leave that stream writing where nobody looks.
+    auto& file = _files[key];
+    if (!file)
+        file = std::make_shared<std::string>();
+    return file;
 }
 
 std::string InMemoryFileSystem::resolveSymlinks(std::string key) const
@@ -218,7 +285,7 @@ std::string InMemoryFileSystem::resolveSymlinks(std::string key) const
         auto const it = _symlinks.find(key);
         if (it == _symlinks.end())
             return key;
-        key = normalize(it->second);
+        key = normalize(pathFromKey(it->second));
     }
     return key;
 }
@@ -261,7 +328,7 @@ bool InMemoryFileSystem::isExecutableFile(std::filesystem::path const& path) con
 
 std::filesystem::path InMemoryFileSystem::weaklyCanonical(std::filesystem::path const& path) const
 {
-    return { normalize(path) };
+    return pathFromKey(normalize(path));
 }
 
 std::filesystem::path InMemoryFileSystem::currentPath() const
@@ -275,7 +342,7 @@ std::expected<std::string, std::string> InMemoryFileSystem::readFile(std::filesy
     if (_deniedPaths.contains(key))
         return std::unexpected(std::format("Permission denied: {}", key));
     if (auto const it = _files.find(key); it != _files.end())
-        return it->second;
+        return *it->second;
     return std::unexpected(std::format("File not found: {}", key));
 }
 
@@ -286,7 +353,7 @@ std::expected<void, std::string> InMemoryFileSystem::writeFile(std::filesystem::
     if (_deniedPaths.contains(key))
         return std::unexpected(std::format("Permission denied: {}", key));
     ensureParentDirectories(path);
-    _files[key] = std::string(content);
+    *fileAt(key) = std::string(content);
     return {};
 }
 
@@ -297,7 +364,7 @@ std::expected<void, std::string> InMemoryFileSystem::appendFile(std::filesystem:
     if (_deniedPaths.contains(key))
         return std::unexpected(std::format("Permission denied: {}", key));
     ensureParentDirectories(path);
-    _files[key].append(content);
+    fileAt(key)->append(content);
     return {};
 }
 
@@ -319,7 +386,7 @@ std::expected<std::unique_ptr<std::istream>, std::string> InMemoryFileSystem::op
     auto const it = _files.find(key);
     if (it == _files.end())
         return std::unexpected("No such file or directory");
-    return std::make_unique<MemoryIStream>(it->second);
+    return std::make_unique<MemoryIStream>(*it->second);
 }
 
 std::expected<std::unique_ptr<std::ostream>, std::string> InMemoryFileSystem::openWrite(
@@ -329,9 +396,7 @@ std::expected<std::unique_ptr<std::ostream>, std::string> InMemoryFileSystem::op
     if (auto refusal = refuseOpen(key))
         return std::unexpected(std::move(*refusal));
     ensureParentDirectories(path);
-    if (!_files.contains(key))
-        _files[key] = {};
-    return std::make_unique<MemoryOStream>(&_files[key], mode);
+    return std::make_unique<MemoryOStream>(fileAt(key), mode);
 }
 
 std::expected<std::unique_ptr<std::iostream>, std::string> InMemoryFileSystem::openReadWrite(
@@ -341,9 +406,7 @@ std::expected<std::unique_ptr<std::iostream>, std::string> InMemoryFileSystem::o
     if (auto refusal = refuseOpen(key))
         return std::unexpected(std::move(*refusal));
     ensureParentDirectories(path);
-    if (!_files.contains(key))
-        _files[key] = {};
-    return std::make_unique<MemoryIOStream>(&_files[key]);
+    return std::make_unique<MemoryIOStream>(fileAt(key));
 }
 
 std::expected<void, std::string> InMemoryFileSystem::createDirectory(std::filesystem::path const& path) const
@@ -352,7 +415,7 @@ std::expected<void, std::string> InMemoryFileSystem::createDirectory(std::filesy
     if (_deniedPaths.contains(key))
         return std::unexpected(std::format("Permission denied: {}", key));
     // Check that parent exists
-    auto const parent = std::filesystem::path(key).parent_path().string();
+    auto const parent = normalizePath(pathFromKey(key).parent_path());
     if (!parent.empty() && parent != "/" && !_directories.contains(parent))
         return std::unexpected(std::format("No such file or directory: {}", parent));
     _directories.insert(key);
@@ -362,14 +425,14 @@ std::expected<void, std::string> InMemoryFileSystem::createDirectory(std::filesy
 std::expected<void, std::string> InMemoryFileSystem::createDirectories(
     std::filesystem::path const& path) const
 {
-    auto p = std::filesystem::path(normalize(path));
+    auto p = pathFromKey(normalize(path));
     while (!p.empty() && p != p.root_path())
     {
-        _directories.insert(p.string());
+        _directories.insert(normalizePath(p));
         p = p.parent_path();
     }
     if (!p.empty())
-        _directories.insert(p.string());
+        _directories.insert(normalizePath(p));
     return {};
 }
 
@@ -421,7 +484,7 @@ std::expected<void, std::string> InMemoryFileSystem::copyFile(std::filesystem::p
         return std::unexpected(std::format("Destination already exists: {}", dstKey));
 
     ensureParentDirectories(to);
-    _files[dstKey] = it->second;
+    _files[dstKey] = std::make_shared<std::string>(*it->second);
     return {};
 }
 
@@ -499,7 +562,7 @@ std::expected<std::vector<FileSystem::DirectoryEntry>, std::string> InMemoryFile
         if (rest.contains('/'))
             continue; // deeper than one level
         entries.push_back(DirectoryEntry {
-            .path = std::filesystem::path(filePath),
+            .path = pathFromKey(filePath),
             .isDirectory = false,
             .isRegularFile = true,
             .isSymlink = _symlinks.contains(filePath),
@@ -515,7 +578,7 @@ std::expected<std::vector<FileSystem::DirectoryEntry>, std::string> InMemoryFile
         if (rest.empty() || rest.contains('/'))
             continue;
         entries.push_back(DirectoryEntry {
-            .path = std::filesystem::path(dirPath),
+            .path = pathFromKey(dirPath),
             .isDirectory = true,
             .isRegularFile = false,
             .isSymlink = _symlinks.contains(dirPath),
@@ -533,7 +596,7 @@ std::expected<std::vector<FileSystem::DirectoryEntry>, std::string> InMemoryFile
         if (!_files.contains(symlinkPath) && !_directories.contains(symlinkPath))
         {
             entries.push_back(DirectoryEntry {
-                .path = std::filesystem::path(symlinkPath),
+                .path = pathFromKey(symlinkPath),
                 .isDirectory = false,
                 .isRegularFile = false,
                 .isSymlink = true,
@@ -572,14 +635,14 @@ Generator<FileSystem::DirectoryEntry> InMemoryFileSystem::walkDirectoryRecursive
     auto entries = std::vector<DirectoryEntry> {};
     for (auto const& [filePath, _]: _files)
         if (filePath.starts_with(prefix))
-            entries.push_back({ .path = std::filesystem::path(filePath),
+            entries.push_back({ .path = pathFromKey(filePath),
                                 .isDirectory = false,
                                 .isRegularFile = true,
                                 .isSymlink = _symlinks.contains(filePath),
                                 .depth = depthOf(filePath) });
     for (auto const& dirPath: _directories)
         if (dirPath.starts_with(prefix))
-            entries.push_back({ .path = std::filesystem::path(dirPath),
+            entries.push_back({ .path = pathFromKey(dirPath),
                                 .isDirectory = true,
                                 .isRegularFile = false,
                                 .isSymlink = _symlinks.contains(dirPath),
@@ -587,7 +650,7 @@ Generator<FileSystem::DirectoryEntry> InMemoryFileSystem::walkDirectoryRecursive
     for (auto const& [symlinkPath, _]: _symlinks)
         if (symlinkPath.starts_with(prefix) && !_files.contains(symlinkPath)
             && !_directories.contains(symlinkPath))
-            entries.push_back({ .path = std::filesystem::path(symlinkPath),
+            entries.push_back({ .path = pathFromKey(symlinkPath),
                                 .isDirectory = false,
                                 .isRegularFile = false,
                                 .isSymlink = true,
@@ -607,7 +670,7 @@ std::expected<std::uintmax_t, std::string> InMemoryFileSystem::fileSize(
     auto const it = _files.find(key);
     if (it == _files.end())
         return std::unexpected(std::format("File not found: {}", key));
-    return static_cast<std::uintmax_t>(it->second.size());
+    return static_cast<std::uintmax_t>(it->second->size());
 }
 
 std::expected<std::filesystem::file_time_type, std::string> InMemoryFileSystem::lastWriteTime(
@@ -644,9 +707,9 @@ std::expected<std::filesystem::path, std::string> InMemoryFileSystem::createTemp
     std::string_view prefix) const
 {
     auto const name = std::format("/tmp/{}_{}", prefix, ++_tempCounter);
-    _files[name] = {};
-    ensureParentDirectories(std::filesystem::path(name));
-    return std::filesystem::path(name);
+    _files[name] = std::make_shared<std::string>();
+    ensureParentDirectories(pathFromKey(name));
+    return pathFromKey(name);
 }
 
 void InMemoryFileSystem::setCurrentPath(std::filesystem::path const& path)
@@ -656,7 +719,7 @@ void InMemoryFileSystem::setCurrentPath(std::filesystem::path const& path)
     // find, since every query spells its key through normalize(). Normalizing first also
     // resolves a relative path against the previous working directory, as chdir() does.
     auto key = normalize(path);
-    _currentPath = std::filesystem::path(key);
+    _currentPath = pathFromKey(key);
     _directories.insert(std::move(key));
 }
 
@@ -665,7 +728,7 @@ void InMemoryFileSystem::addFile(std::filesystem::path const& path,
                                  std::filesystem::perms perms)
 {
     auto const key = normalize(path);
-    _files[key] = std::move(content);
+    _files[key] = std::make_shared<std::string>(std::move(content));
     _permissions[key] = perms;
     ensureParentDirectories(path);
 }
@@ -680,20 +743,20 @@ void InMemoryFileSystem::addExecutable(std::filesystem::path const& path, std::s
 
 void InMemoryFileSystem::addDirectory(std::filesystem::path const& path)
 {
-    auto p = std::filesystem::path(normalize(path));
+    auto p = pathFromKey(normalize(path));
     while (!p.empty() && p != p.root_path())
     {
-        _directories.insert(p.string());
+        _directories.insert(normalizePath(p));
         p = p.parent_path();
     }
     if (!p.empty())
-        _directories.insert(p.string());
+        _directories.insert(normalizePath(p));
 }
 
 void InMemoryFileSystem::addSymlink(std::filesystem::path const& path, std::filesystem::path const& target)
 {
     auto const key = normalize(path);
-    _symlinks[key] = target.string();
+    _symlinks[key] = normalizePath(target);
     ensureParentDirectories(path);
 }
 

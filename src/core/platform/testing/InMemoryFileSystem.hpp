@@ -5,6 +5,7 @@
 
 #include <initializer_list>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -141,12 +142,25 @@ class InMemoryFileSystem final: public FileSystem
     [[nodiscard]] std::string normalize(std::filesystem::path const& path) const;
     void ensureParentDirectories(std::filesystem::path const& path) const;
 
+    /// @brief The string holding @p key's content, created empty if the file is not there yet.
+    ///
+    /// The one place a file's storage is made, so that a key always keeps the same string: a
+    /// writer that replaced it would detach any stream already open on that file.
+    ///
+    /// @param key A normalized path.
+    /// @return The shared content, never null.
+    [[nodiscard]] std::shared_ptr<std::string>& fileAt(std::string const& key) const;
+
     /// @brief Refuses an open the model can answer without looking at content.
     /// @param key A normalized path.
     /// @return The reason to refuse, or nullopt to proceed.
     [[nodiscard]] std::optional<std::string> refuseOpen(std::string const& key) const;
 
-    mutable std::map<std::string, std::string> _files;                  ///< path -> content
+    /// path -> content. The content is shared, not held by value: a stream handed out by
+    /// openWrite() or openReadWrite() keeps its own reference, so remove() and rename() cannot
+    /// leave it pointing at a string that is gone -- and a write through one is seen by the
+    /// other, as two handles on one file see each other on a real filesystem.
+    mutable std::map<std::string, std::shared_ptr<std::string>> _files;
     mutable std::set<std::string> _directories;                         ///< known directories
     mutable std::map<std::string, std::string> _symlinks;               ///< path -> target
     mutable std::map<std::string, std::filesystem::perms> _permissions; ///< path -> permissions
