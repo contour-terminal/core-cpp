@@ -50,8 +50,12 @@ cmake -DMODE=check -DDEST=<dir> -P <dir>/cmake/CoreCppVendor.cmake
   then record a ref that cannot restore the copy it describes.
 - **`sync` reads git blobs** with `git -c core.autocrlf=false -c core.eol=lf cat-file blob`, so no
   working tree's line-ending settings reach the copy, and it refuses a file containing a CR byte,
-  a symbolic link and a submodule. It writes nothing into `DEST` until the whole copy is legal, so
-  a refusal leaves the previous copy exactly as it was.
+  a symbolic link and a submodule.
+- **A refusal leaves the previous copy exactly as it was.** `sync` assembles the whole new copy in
+  `<dir>/.core-cpp-vendor-staging/` first and touches nothing else until it is complete and legal;
+  only then is the old copy removed and the staged one moved into place. Every refusal deletes that
+  staging directory on its way out, so a `DEST` that a refused `sync` found still passes its own
+  `check` afterwards.
 - **`sync` replaces the copy it finds.** A `DEST` holding a manifest is emptied first, so a file
   the new ref no longer has is gone rather than left behind; a `DEST` with files and no manifest
   is refused, because it is not a copy of ours to delete.
@@ -61,10 +65,13 @@ cmake -DMODE=check -DDEST=<dir> -P <dir>/cmake/CoreCppVendor.cmake
   with LF endings whatever the host ran `sync`, because you commit this file: two correct syncs of
   the same tag from a Windows and a Linux machine must not differ in every line. The copied files
   themselves are the commit's bytes whatever the host.
-- **`check` refuses** a hash mismatch, a file the manifest lists that is missing, a file the
-  manifest does not list, and a manifest that says nothing — no `# files` count, a count of zero or
-  a count that disagrees with the lines below it, so an emptied copy beside an emptied manifest
-  fails rather than passing with nothing to compare. It reports every refusal, not only the first.
+- **`check` refuses** a hash mismatch, a file the manifest lists that is missing, and a file the
+  manifest does not list. It also refuses a manifest that is not one, because an emptied copy
+  beside an emptied manifest would otherwise have nothing left to disagree about and would pass:
+  a line that is neither a `#` header nor `<sha256>  <path>`; a missing `# repository` or `# ref`
+  line; a `# commit` that is not 40 lowercase hex digits; and a `# files` count that is absent, is
+  not a number, is zero, or disagrees with the lines below it. It reports every refusal that
+  applies, not only the first.
 - **File modes are outside the contract.** The copy is bytes and paths; `sync` writes every blob as
   an ordinary file and `check` compares no mode, so a `100755` blob arrives without its execute
   bit and a `chmod` inside a copy is invisible. Nothing in the file set is executable today, and

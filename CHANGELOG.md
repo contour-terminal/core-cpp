@@ -177,21 +177,24 @@ workflow refuses one without a section here.
   copies the file set out of git's own blobs (`-c core.autocrlf=false -c core.eol=lf`), refusing a
   CR byte, a symbolic link and a submodule, and writes a `MANIFEST` of SHA-256 hashes with LF
   endings whatever the host, because the consumer commits that file; `MODE=check` re-hashes a copy
-  and refuses a hash mismatch, a missing file, an unlisted file and a manifest that says nothing
-  (no `# files` count, a count of zero, or one that disagrees with the lines below it), needing no
-  git, because a consumer runs it in its own CI. A sync writes into `DEST` only once the whole copy
-  is legal -- every refusal removes its staging directory first -- replaces the copy it finds, and
-  refuses a directory that is not one of ours. It also refuses what it cannot copy correctly: a
-  `REF` that is not a tag or a full 40-character SHA, a local `REPO` that is not the root of its
-  own repository, a ref whose tree is not core-cpp's, and a `MODULES` list that omits a module the
-  ref's own table builds unconditionally. The last three are one mistake seen from three sides --
-  running sync with a *vendored copy's* own script, where `REPO` defaults to the copy's directory
-  and git reads the consumer's repository instead.
+  and refuses a hash mismatch, a missing file, an unlisted file and a manifest that is not one --
+  an unparsable line, a missing `# repository` or `# ref` header, a `# commit` that is not 40
+  lowercase hex digits, and a `# files` count that is absent, is not a number, is zero or disagrees
+  with the lines below it -- needing no git, because a consumer runs it in its own CI. A sync
+  assembles the new copy in `DEST/.core-cpp-vendor-staging/` and replaces the old one only once the
+  whole copy is legal; every refusal deletes that staging directory on its way out, so a copy a
+  refused sync found still passes its own check. It refuses a `DEST` that is not one of ours, and
+  it refuses what it cannot copy correctly: a `REF` that is not a tag or a full 40-character SHA,
+  a local `REPO` that is not the root of its own repository, a ref whose tree is not core-cpp's,
+  and a `MODULES` list that omits a module the ref's own table builds unconditionally. The last
+  three are one mistake seen from three sides -- running sync with a *vendored copy's* own script,
+  where `REPO` defaults to the copy's directory and git reads the consumer's repository instead.
   `tests/cmake/check-vendor-selftest.cmake` (ctest `core-cpp.vendor-selftest`, label `hygiene`)
-  proves each refusal by name against repositories it builds for the purpose, and skips rather than
-  fails where git is absent. The file set is the spec's, plus everything else directly in
-  `src/core/` -- that module's `CMakeLists.txt` and `Config.hpp.in`, without which the copy does not
-  configure. File modes are outside the contract. `docs/vendoring.md` is the contract.
+  proves every one of those judgements by name against repositories it builds for the purpose, and
+  skips rather than fails where git is absent. The file set is the spec's, plus everything else
+  directly in `src/core/` -- that module's `CMakeLists.txt` and `Config.hpp.in`, without which the
+  copy does not configure. File modes are outside the contract. `docs/vendoring.md` is the
+  contract.
 - Consumer smoke tests, one project per way core-cpp is consumed, and the `consumer-smoke` CI job
   that runs all three (`ci-ok` requires it): `tests/consumer-cpm` adds core-cpp with CPM and
   asserts that doing so changed none of its own flags, launcher or include directories, that
