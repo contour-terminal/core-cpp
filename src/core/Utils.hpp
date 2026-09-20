@@ -10,6 +10,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <cwctype>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -22,6 +23,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -217,18 +219,22 @@ template <std::ranges::input_range Range>
 
 /// Joins a range's elements into one separator-delimited string, each element quoted and escaped.
 ///
+/// The separator is a plain `std::string_view`, not a deduced template parameter: deduced, it
+/// could never be left out, so the default it declared was unusable and `joinHumanReadableQuoted(xs)`
+/// did not compile.
+///
 /// @param list The elements to join, in order.
 /// @param sep Placed between consecutive elements.
 /// @return The joined text; empty when the range is.
-template <std::ranges::input_range Range, typename Separator>
-[[nodiscard]] std::string joinHumanReadableQuoted(Range&& list, Separator sep = ", ")
+template <std::ranges::input_range Range>
+[[nodiscard]] std::string joinHumanReadableQuoted(Range&& list, std::string_view sep = ", ")
 {
     auto result = std::string {};
     auto isFirst = true;
     for (auto const& element: std::forward<Range>(list))
     {
         if (!std::exchange(isFirst, false))
-            result += std::format("{}", sep);
+            result += sep;
         result += std::format("\"{}\"", core::escape(std::format("{}", element)));
     }
     return result;
@@ -546,19 +552,31 @@ std::basic_string<T> toHexString(std::basic_string_view<T> input)
 
 namespace detail
 {
-    /// Widens a character to what <cctype> accepts.
+    /// Lowercases one character with the function defined for its width.
     ///
-    /// tolower() and toupper() are defined for the values of `unsigned char` and for EOF, and
-    /// for nothing else. A plain `char` is signed on most platforms, so every byte with the high
-    /// bit set -- each continuation byte of a UTF-8 sequence among them -- would index the locale
-    /// table from a negative offset, which is undefined behaviour.
+    /// tolower() is defined for the values of `unsigned char` and for EOF, and for nothing else:
+    /// a plain `char` is signed on most platforms, so every byte with the high bit set -- each
+    /// continuation byte of a UTF-8 sequence among them -- would index the locale table from a
+    /// negative offset, which is undefined behaviour. A character wider than a byte is not an
+    /// `unsigned char` value at all, so it goes to towlower() instead of being truncated into
+    /// the narrow function's domain.
     template <typename T>
-    [[nodiscard]] constexpr int asCTypeArgument(T ch) noexcept
+    [[nodiscard]] inline T toLowerChar(T ch) noexcept
     {
         if constexpr (sizeof(T) == 1)
-            return static_cast<int>(static_cast<unsigned char>(ch));
+            return static_cast<T>(std::tolower(static_cast<unsigned char>(ch)));
         else
-            return static_cast<int>(ch);
+            return static_cast<T>(std::towlower(static_cast<std::wint_t>(ch)));
+    }
+
+    /// Uppercases one character with the function defined for its width. See toLowerChar().
+    template <typename T>
+    [[nodiscard]] inline T toUpperChar(T ch) noexcept
+    {
+        if constexpr (sizeof(T) == 1)
+            return static_cast<T>(std::toupper(static_cast<unsigned char>(ch)));
+        else
+            return static_cast<T>(std::towupper(static_cast<std::wint_t>(ch)));
     }
 } // namespace detail
 
@@ -567,9 +585,8 @@ inline std::basic_string<T> toLower(std::basic_string_view<T> value)
 {
     std::basic_string<T> result;
     result.reserve(value.size());
-    std::transform(begin(value), end(value), back_inserter(result), [](auto ch) {
-        return static_cast<T>(std::tolower(detail::asCTypeArgument(ch)));
-    });
+    std::transform(
+        begin(value), end(value), back_inserter(result), [](auto ch) { return detail::toLowerChar(ch); });
     return result;
 }
 
@@ -584,9 +601,8 @@ inline std::basic_string<T> toUpper(std::basic_string_view<T> value)
 {
     std::basic_string<T> result;
     result.reserve(value.size());
-    std::transform(begin(value), end(value), back_inserter(result), [](auto ch) {
-        return static_cast<T>(std::toupper(detail::asCTypeArgument(ch)));
-    });
+    std::transform(
+        begin(value), end(value), back_inserter(result), [](auto ch) { return detail::toUpperChar(ch); });
     return result;
 }
 
@@ -608,7 +624,15 @@ inline std::basic_string<T> toUpper(std::basic_string<T> const& value)
     // Binary, and truncated to what the read delivered: in text mode Windows translates each
     // CRLF to one byte, so the stream hands over fewer bytes than file_size() reported and the
     // shortfall stayed behind in the buffer as trailing NULs.
-    auto const fileSize = std::filesystem::file_size(path);
+    //
+    // The std::error_code overload, because a file that is not there is the ordinary failure a
+    // caller hits -- contour reads a CA certificate through this -- and the throwing overload
+    // made the documented "empty if it could not be read" a lie.
+    auto errorCode = std::error_code {};
+    auto const fileSize = std::filesystem::file_size(path, errorCode);
+    if (errorCode)
+        return {};
+
     auto text = std::string(static_cast<std::size_t>(fileSize), '\0');
     auto in = std::ifstream(path, std::ios::binary);
     in.read(text.data(), static_cast<std::streamsize>(fileSize));

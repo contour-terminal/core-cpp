@@ -413,6 +413,14 @@ TEST_CASE("utils.readFileAsString")
         CHECK(core::readFileAsString(path).empty());
     }
 
+    SECTION("a file that is not there reads as empty, as the contract says")
+    {
+        // file_size() throws for a missing path; contour reads a CA certificate through this,
+        // so a missing file is the ordinary failure and must be a value, not an exception.
+        CHECK(core::readFileAsString(tmp / "no-such-file.txt").empty());
+        CHECK_NOTHROW(core::readFileAsString(tmp / "nor" / "this" / "one.txt"));
+    }
+
     SECTION("a path that is not representable in the native narrow encoding still opens")
     {
         auto const path = tmp.path() / std::filesystem::path(u8"grüße-日本語.txt");
@@ -476,4 +484,19 @@ TEST_CASE("utils.threadName")
     // The Windows path resized by the conversion length minus one, which underflowed when the
     // conversion failed and threw before the buffer was freed.
     CHECK_NOTHROW(core::threadName());
+}
+
+// The separator was a deduced template parameter, so its default could never be taken and the
+// one-argument call did not compile.
+TEST_CASE("utils.joinHumanReadableQuoted")
+{
+    auto const words = std::vector<string_view> { "one"sv, "two"sv };
+
+    CHECK(core::joinHumanReadableQuoted(words) == "\"one\", \"two\"");
+    CHECK(core::joinHumanReadableQuoted(words, " | ") == "\"one\" | \"two\"");
+    CHECK(core::joinHumanReadableQuoted(std::vector<string_view> {}).empty());
+
+    // Each element is escaped, which is the whole point of the quoted form: the tab comes out
+    // as the two characters a backslash and a 't', not as a tab.
+    CHECK(core::joinHumanReadableQuoted(std::vector<string_view> { "a\tb"sv }) == R"("a\tb")");
 }
