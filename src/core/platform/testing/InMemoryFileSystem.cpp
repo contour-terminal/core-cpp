@@ -4,12 +4,15 @@
 #include <core/platform/PathUtils.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <format>
+#include <ios>
 #include <map>
 #include <ranges>
 #include <set>
 #include <sstream>
+#include <streambuf>
 
 namespace core::platform::testing
 {
@@ -24,30 +27,24 @@ namespace
         {
             if (mode == WriteMode::Truncate)
                 _target->clear();
-            _writePos = _target->size();
         }
 
       protected:
         std::streamsize xsputn(char const* s, std::streamsize n) override
         {
-            _target->append(s, static_cast<size_t>(n));
-            _writePos += static_cast<size_t>(n);
+            _target->append(s, static_cast<std::size_t>(n));
             return n;
         }
 
         int_type overflow(int_type ch) override
         {
-            if (ch != traits_type::eof())
-            {
-                _target->push_back(static_cast<char>(ch));
-                ++_writePos;
-            }
+            if (!traits_type::eq_int_type(ch, traits_type::eof()))
+                _target->push_back(traits_type::to_char_type(ch));
             return ch;
         }
 
       private:
         std::string* _target;
-        size_t _writePos = 0;
     };
 
     // Custom ostream that owns the streambuf.
@@ -83,31 +80,67 @@ namespace
         MemoryInputBuf _buf;
     };
 
-    // Combined read-write stream backed by in-memory data.
+    /// Combined read-write stream backed by in-memory data.
+    ///
+    /// One position for reading and for writing, as std::filebuf has: a write overwrites from
+    /// wherever the stream stands and extends the file only past its end. The get area is
+    /// re-established after every write and every seek, because the pointers a streambuf hands
+    /// out name the inside of the std::string that holds the file and any write can reallocate
+    /// it -- pointers cached at construction are a use-after-free on the next read.
     class MemoryIOBuf final: public std::streambuf
     {
       public:
-        explicit MemoryIOBuf(std::string* target): _target(target)
-        {
-            auto* begin = const_cast<char*>(_target->data());
-            setg(begin, begin, begin + _target->size());
-        }
+        explicit MemoryIOBuf(std::string* target): _target(target) { seekTo(0); }
 
       protected:
         std::streamsize xsputn(char const* s, std::streamsize n) override
         {
-            _target->append(s, static_cast<size_t>(n));
+            auto const count = static_cast<std::size_t>(n);
+            auto const at = position();
+            if (at + count > _target->size())
+                _target->resize(at + count);
+            _target->replace(at, count, s, count);
+            seekTo(at + count);
             return n;
         }
 
         int_type overflow(int_type ch) override
         {
-            if (ch != traits_type::eof())
-                _target->push_back(static_cast<char>(ch));
-            return ch;
+            if (traits_type::eq_int_type(ch, traits_type::eof()))
+                return traits_type::not_eof(ch);
+            auto const byte = traits_type::to_char_type(ch);
+            return xsputn(&byte, 1) == 1 ? ch : traits_type::eof();
+        }
+
+        pos_type seekoff(off_type off, std::ios_base::seekdir dir, std::ios_base::openmode) override
+        {
+            auto const size = static_cast<off_type>(_target->size());
+            auto const anchor = dir == std::ios_base::beg   ? off_type { 0 }
+                                : dir == std::ios_base::end ? size
+                                                            : static_cast<off_type>(position());
+            auto const target = anchor + off;
+            if (target < 0 || target > size)
+                return pos_type(off_type(-1));
+            seekTo(static_cast<std::size_t>(target));
+            return pos_type(target);
+        }
+
+        pos_type seekpos(pos_type pos, std::ios_base::openmode which) override
+        {
+            return seekoff(off_type(pos), std::ios_base::beg, which);
         }
 
       private:
+        /// @return Where the stream stands, for reading as much as for writing.
+        [[nodiscard]] std::size_t position() const { return static_cast<std::size_t>(gptr() - eback()); }
+
+        /// Points the get area at the whole file again, standing at @p at.
+        void seekTo(std::size_t at)
+        {
+            auto* const begin = _target->data();
+            setg(begin, begin + at, begin + _target->size());
+        }
+
         std::string* _target;
     };
 

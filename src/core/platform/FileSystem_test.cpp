@@ -6,7 +6,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -31,6 +33,63 @@ InMemoryFileSystem makeTree()
         { .path = "/root/b", .isDirectory = true },
         { .path = "/root/b/file3.txt", .content = "three" },
     };
+}
+
+/// @return What @p path holds, or the reason it could not be read (so a mismatch says which).
+[[nodiscard]] std::string contentsOf(FileSystem const& fs, std::filesystem::path const& path)
+{
+    auto const read = fs.readFile(path);
+    return read.has_value() ? *read : "<unreadable: " + read.error() + ">";
+}
+
+/// What one backend's write streams leave a file holding.
+struct StreamOutcome
+{
+    std::string afterTruncatingWrite;
+    std::string afterAppend;
+    std::string afterOverwriteInPlace;
+    std::string readAfterOverwrite;
+
+    bool operator==(StreamOutcome const&) const = default;
+};
+
+/// Runs one script of stream opens over @p fs, so the model and the real filesystem can be held
+/// to the same answers: code written against one is tested against the other.
+[[nodiscard]] StreamOutcome runStreamScript(FileSystem const& fs, std::filesystem::path const& path)
+{
+    auto outcome = StreamOutcome {};
+
+    // Truncate discards what the file held.
+    REQUIRE(fs.writeFile(path, "seed").has_value());
+    {
+        auto stream = fs.openWrite(path, core::platform::WriteMode::Truncate);
+        REQUIRE(stream.has_value());
+        **stream << "0123456789";
+    }
+    outcome.afterTruncatingWrite = contentsOf(fs, path);
+
+    // Append keeps it and writes after it.
+    {
+        auto stream = fs.openWrite(path, core::platform::WriteMode::Append);
+        REQUIRE(stream.has_value());
+        **stream << "ABC";
+    }
+    outcome.afterAppend = contentsOf(fs, path);
+
+    // A read-write stream starts at the beginning of the file and overwrites from there; it
+    // extends the file only past its end, and never appends.
+    {
+        auto stream = fs.openReadWrite(path);
+        REQUIRE(stream.has_value());
+        **stream << "xy";
+        (*stream)->seekg(4);
+        auto tail = std::array<char, 4> {};
+        (*stream)->read(tail.data(), static_cast<std::streamsize>(tail.size()));
+        outcome.readAfterOverwrite.assign(tail.data(), static_cast<std::size_t>((*stream)->gcount()));
+    }
+    outcome.afterOverwriteInPlace = contentsOf(fs, path);
+
+    return outcome;
 }
 } // namespace
 
@@ -257,4 +316,58 @@ TEST_CASE("the in-memory model classifies a symlink by its target", "[FileSystem
     fs.addSymlink("/root/loop-a", "/root/loop-b");
     fs.addSymlink("/root/loop-b", "/root/loop-a");
     CHECK_FALSE(fs.isRegularFile("/root/loop-a"));
+}
+
+// ============================================================================
+// Write streams
+// ============================================================================
+
+TEST_CASE("the write streams answer alike in the model and on the real filesystem", "[FileSystem]")
+{
+    // openWrite() and openReadWrite() had no test at all, which is how the model came to append
+    // on every write regardless of where the stream stood. A consumer is written against one
+    // backend and tested against the other, so the two have to agree.
+    auto const model = InMemoryFileSystem {};
+    auto const dir = core::testing::ScopedTempDir { "core_streams" };
+
+    auto const fromModel = runStreamScript(model, "/root/file.txt");
+    auto const fromNative = runStreamScript(core::platform::NativeFileSystem::instance(), dir / "file.txt");
+
+    CHECK(fromNative.afterTruncatingWrite == "0123456789");
+    CHECK(fromNative.afterAppend == "0123456789ABC");
+    CHECK(fromNative.afterOverwriteInPlace == "xy23456789ABC");
+    CHECK(fromNative.readAfterOverwrite == "4567");
+    CHECK(fromModel == fromNative);
+}
+
+TEST_CASE("the model's read-write stream survives a write that reallocates the file", "[FileSystem]")
+{
+    // The stream is handed get-area pointers into the std::string that holds the file. A write
+    // that grows the string past its capacity reallocates it, and every one of those pointers
+    // then names freed memory: a heap-use-after-free on the next read under AddressSanitizer,
+    // and whatever the allocator left behind without it.
+    // Long enough that the seed itself lives on the heap: a short string sits inside the
+    // std::string object, which the growing write moves off but never frees.
+    auto const fs = InMemoryFileSystem {};
+    REQUIRE(fs.writeFile("/root/data.bin", std::string(64, 's')).has_value());
+
+    auto stream = fs.openReadWrite("/root/data.bin");
+    REQUIRE(stream.has_value());
+
+    auto const payload = std::string(4096, 'x');
+    (*stream)->write(payload.data(), static_cast<std::streamsize>(payload.size()));
+
+    // The write started at the beginning and ran past the end, so there is nothing left to read.
+    // Reading anyway is what dereferences the stale get area.
+    auto byte = char {};
+    (*stream)->read(&byte, 1);
+    CHECK((*stream)->gcount() == 0);
+
+    (*stream)->clear();
+    (*stream)->seekg(0);
+    (*stream)->read(&byte, 1);
+    CHECK(byte == 'x');
+
+    stream->reset();
+    CHECK(fs.readFile("/root/data.bin") == payload);
 }
