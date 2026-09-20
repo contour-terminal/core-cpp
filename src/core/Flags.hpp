@@ -79,9 +79,19 @@ class Flags
         return *this;
     }
 
+    /// Intersects with @p flags, exactly as operator& does.
+    ///
+    /// This was disable(), which cleared the named flag instead: the complement of what the
+    /// binary operator answers.
+    constexpr Flags& operator&=(Flags<FlagType> flags) noexcept
+    {
+        _value &= flags._value;
+        return *this;
+    }
+
     constexpr Flags& operator&=(FlagType flag) noexcept
     {
-        disable(flag);
+        _value &= static_cast<value_type>(flag);
         return *this;
     }
 
