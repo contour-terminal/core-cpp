@@ -3,6 +3,7 @@
 #include <core/async/Task.hpp>
 #include <core/async/WhenAll.hpp>
 #include <core/net/EventLoop.hpp>
+#include <core/net/IListener.hpp>
 #include <core/net/PollEventSource.hpp>
 #include <core/net/Sockets.hpp>
 #include <core/net/posix/FdUtils.hpp>
@@ -100,18 +101,25 @@ Task<void> echoOnce(core::net::IListener* listener, bool* served)
 }
 
 /// The client flow: connect to @p path, send a probe, read the echo back.
-Task<void> connectAndProbe(EventLoop* loop, std::string path, bool* matched)
+///
+/// Closes @p listener when it cannot connect. An arm that simply returns leaves its whenAll
+/// sibling parked in accept() with nothing left to wake it, which turns the case's red into a
+/// hang just as surely as a REQUIRE here would (.agent/rules/testing.md).
+Task<void> connectAndProbe(EventLoop* loop, core::net::IListener* listener, std::string path, bool* matched)
 {
     auto connected = co_await core::net::connectUnix(loop, path);
     if (!connected.has_value())
+    {
+        listener->close();
         co_return;
+    }
     auto sock = std::move(*connected);
 
     auto const probe = std::string_view { "probe" };
     auto const bytes =
         std::span<std::byte const> { reinterpret_cast<std::byte const*>(probe.data()), probe.size() };
     if (auto const wrote = co_await sock->write(bytes); !wrote.has_value())
-        co_return;
+        co_return; // the server already accepted; its arm sees this socket close and finishes
 
     auto buffer = std::array<std::byte, 64> {};
     auto const got = co_await sock->read(buffer);
@@ -141,7 +149,7 @@ TEST_CASE("listenUnix + connectUnix echo over a socket file", "[net][unix]")
     auto served = false;
     auto matched = false;
     auto run = [](core::net::IListener* l, EventLoop* lp, std::string p, bool* s, bool* m) -> Task<void> {
-        co_await core::async::whenAll(echoOnce(l, s), connectAndProbe(lp, std::move(p), m));
+        co_await core::async::whenAll(echoOnce(l, s), connectAndProbe(lp, l, std::move(p), m));
     };
     loop.blockOn(run(listener->get(), &loop, socketPath, &served, &matched));
 
@@ -205,7 +213,7 @@ TEST_CASE("a live server on the path is not hijacked", "[net][unix]")
     auto served = false;
     auto matched = false;
     auto run = [](core::net::IListener* l, EventLoop* lp, std::string p, bool* s, bool* m) -> Task<void> {
-        co_await core::async::whenAll(echoOnce(l, s), connectAndProbe(lp, std::move(p), m));
+        co_await core::async::whenAll(echoOnce(l, s), connectAndProbe(lp, l, std::move(p), m));
     };
     loop.blockOn(run(first->get(), &loop, socketPath, &served, &matched));
 

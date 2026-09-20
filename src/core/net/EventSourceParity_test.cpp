@@ -95,17 +95,21 @@ Task<void> acceptAndEcho(core::net::IListener* listener, std::string* out)
 }
 
 /// Runs the accept and connect flows concurrently to completion.
-Task<void> echoOverListener(EventLoop* loop,
-                            core::net::IListener* listener,
-                            std::uint16_t port,
-                            std::string* out);
+Task<void> echoOverListener(EventLoop* loop, core::net::IListener* listener, std::string* out);
 
-/// The client flow: connect to @p port and send the message the server expects.
-Task<void> connectAndSend(EventLoop* loop, std::uint16_t port)
+/// The client flow: connect to @p listener's port and send the message the server expects.
+///
+/// Closes @p listener when it cannot connect. An arm that simply returns leaves its whenAll
+/// sibling parked in accept() with nothing left to wake it, which turns the case's red into a
+/// hang just as surely as a REQUIRE here would (.agent/rules/testing.md).
+Task<void> connectAndSend(EventLoop* loop, core::net::IListener* listener)
 {
-    auto connected = co_await core::net::connect(loop, "127.0.0.1", port);
+    auto connected = co_await core::net::connect(loop, "127.0.0.1", listener->localPort());
     if (!connected.has_value())
+    {
+        listener->close();
         co_return;
+    }
     auto socket = std::move(*connected);
     constexpr auto Message = std::string_view { "parity" };
     auto const bytes =
@@ -113,12 +117,9 @@ Task<void> connectAndSend(EventLoop* loop, std::uint16_t port)
     static_cast<void>(co_await socket->write(bytes));
 }
 
-Task<void> echoOverListener(EventLoop* loop,
-                            core::net::IListener* listener,
-                            std::uint16_t port,
-                            std::string* out)
+Task<void> echoOverListener(EventLoop* loop, core::net::IListener* listener, std::string* out)
 {
-    co_await core::async::whenAll(acceptAndEcho(listener, out), connectAndSend(loop, port));
+    co_await core::async::whenAll(acceptAndEcho(listener, out), connectAndSend(loop, listener));
 }
 
 /// Parks reading an idle socket and records whether the read resumed with an error
@@ -481,7 +482,7 @@ TEST_CASE("every available event source serves a loopback listener", "[net][even
             // is merely created (not awaited) never runs, and accept would wait for
             // a connection nobody initiated.
             auto got = std::string {};
-            loop.blockOn(echoOverListener(&loop, listener->get(), port, &got));
+            loop.blockOn(echoOverListener(&loop, listener->get(), &got));
             REQUIRE(got == "parity");
         }
     }
@@ -1161,7 +1162,7 @@ TEST_CASE("the default source drives the scenarios Socket_test pins to poll",
         REQUIRE(port != 0);
 
         auto got = std::string {};
-        loop.blockOn(echoOverListener(&loop, listener->get(), port, &got));
+        loop.blockOn(echoOverListener(&loop, listener->get(), &got));
         CHECK(got == "parity");
     }
 

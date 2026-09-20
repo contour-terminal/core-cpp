@@ -89,25 +89,32 @@ Task<void> echoServer(core::net::IListener* listener, bool* served)
 }
 
 /// The client flow: connect, send a request, read the echo, compare.
-Task<void> echoClient(EventLoop* loop, std::uint16_t port, bool* matched)
+///
+/// Closes @p listener when it cannot connect. An arm that simply returns leaves its whenAll
+/// sibling parked in accept() with nothing left to wake it, which turns the case's red into a
+/// hang just as surely as a REQUIRE here would — the second shape of the same rule
+/// (.agent/rules/testing.md).
+Task<void> echoClient(EventLoop* loop, core::net::IListener* listener, bool* matched)
 {
-    auto connected = co_await core::net::connect(loop, "127.0.0.1", port);
+    auto connected = co_await core::net::connect(loop, "127.0.0.1", listener->localPort());
     if (!connected.has_value())
+    {
+        listener->close();
         co_return;
+    }
     auto sock = std::move(*connected);
 
     bool wroteOk = false;
     co_await writeAll(sock.get(), "hello", &wroteOk);
     if (!wroteOk)
-        co_return;
+        co_return; // the server already accepted; its arm sees this socket close and finishes
     co_await expectRead(sock.get(), "hello", matched);
 }
 
 /// Runs the loopback echo: server and client flows concurrently on one loop.
 Task<void> loopbackEcho(EventLoop* loop, core::net::IListener* listener, bool* served, bool* matched)
 {
-    co_await core::async::whenAll(echoServer(listener, served),
-                                  echoClient(loop, listener->localPort(), matched));
+    co_await core::async::whenAll(echoServer(listener, served), echoClient(loop, listener, matched));
 }
 
 /// Parks reading an idle socket and records whether the read eventually resumed

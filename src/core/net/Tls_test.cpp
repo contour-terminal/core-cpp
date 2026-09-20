@@ -51,6 +51,19 @@ Task<void> sendAndVerify(core::net::ISocket* socket, std::string message, bool* 
         *matched = std::string { reinterpret_cast<char const*>(buffer.data()), *n } == message;
 }
 
+/// Releases a server flow parked in accept() on ANOTHER loop, so a client that cannot connect
+/// fails the case instead of hanging the join that follows it.
+///
+/// The close is POSTED rather than called: the listener belongs to that loop and must be closed on
+/// its own thread (.agent/rules/async-and-net.md), and EventLoop::post is the cross-thread marshal
+/// — it also breaks the wait the server is blocked in, which is what lets the accept resume.
+/// @param serverLoop The loop the listener belongs to (not owned).
+/// @param listener The listener to close on that loop's thread (not owned).
+void releaseServer(core::net::EventLoop* serverLoop, core::net::IListener* listener)
+{
+    serverLoop->post([listener] { listener->close(); });
+}
+
 } // namespace
 
 TEST_CASE("TLS handshakes and echoes application data over the reactor", "[net][tls]")
@@ -222,7 +235,6 @@ TEST_CASE("TLS completes a two-reactor handshake under concurrent client I/O", "
     auto serverLoop = core::net::EventLoop { serverSource };
     auto listener = core::net::listen(serverLoop, "127.0.0.1", 0);
     REQUIRE(listener.has_value());
-    auto const port = (*listener)->localPort();
     auto serverCtx = core::net::makeSelfSignedServerContext();
     REQUIRE(serverCtx.has_value());
     // Every REQUIRE comes before the server thread starts: one failing after it would unwind past a
@@ -246,15 +258,21 @@ TEST_CASE("TLS completes a two-reactor handshake under concurrent client I/O", "
     auto clientLoop = core::net::EventLoop { clientSource };
 
     auto matched = false;
-    clientLoop.blockOn(
-        [](core::net::EventLoop* loop, core::net::ITlsContext* ctx, std::uint16_t p, bool* ok) -> Task<void> {
-            auto connected = co_await core::net::connect(loop, "127.0.0.1", p);
-            if (!connected)
-                co_return;
-            auto tls = ctx->wrap(std::move(*connected));
-            co_await core::net::testing::allOf(justWrite(tls.get(), "two reactor tls"),
-                                               justReadMatch(tls.get(), "two reactor tls", ok));
-        }(&clientLoop, clientCtx->get(), port, &matched));
+    clientLoop.blockOn([](core::net::EventLoop* loop,
+                          core::net::EventLoop* remote,
+                          core::net::IListener* acceptor,
+                          core::net::ITlsContext* ctx,
+                          bool* ok) -> Task<void> {
+        auto connected = co_await core::net::connect(loop, "127.0.0.1", acceptor->localPort());
+        if (!connected)
+        {
+            releaseServer(remote, acceptor); // else the join below waits on a parked accept
+            co_return;
+        }
+        auto tls = ctx->wrap(std::move(*connected));
+        co_await core::net::testing::allOf(justWrite(tls.get(), "two reactor tls"),
+                                           justReadMatch(tls.get(), "two reactor tls", ok));
+    }(&clientLoop, &serverLoop, listener->get(), clientCtx->get(), &matched));
     serverThread.join();
 
     CHECK(received == "two reactor tls"); // the daemon-side handshake decrypted the record
@@ -298,7 +316,6 @@ TEST_CASE("a cancelled TLS handshake releases the coroutines parked on it", "[ne
     auto serverLoop = core::net::EventLoop { serverSource };
     auto listener = core::net::listen(serverLoop, "127.0.0.1", 0);
     REQUIRE(listener.has_value());
-    auto const port = (*listener)->localPort();
     // Before the server thread starts, like every REQUIRE of the case above.
     auto clientCtx = core::net::makeTlsClientContext();
     REQUIRE(clientCtx.has_value());
@@ -320,16 +337,22 @@ TEST_CASE("a cancelled TLS handshake releases the coroutines parked on it", "[ne
     auto clientLoop = core::net::EventLoop { clientSource };
 
     auto released = false;
-    clientLoop.blockOn(
-        [](core::net::EventLoop* loop, core::net::ITlsContext* ctx, std::uint16_t p, bool* ok) -> Task<void> {
-            auto connected = co_await core::net::connect(loop, "127.0.0.1", p);
-            if (!connected)
-                co_return;
-            auto tls = ctx->wrap(std::move(*connected));
-            // Order matters: the driver suspends INSIDE the handshake first, so the waiter that
-            // starts next finds `_handshaking` set and parks on the gate.
-            co_await core::net::testing::allOf(cancelledDriver(loop, tls.get()), gateWaiter(tls.get(), ok));
-        }(&clientLoop, clientCtx->get(), port, &released));
+    clientLoop.blockOn([](core::net::EventLoop* loop,
+                          core::net::EventLoop* remote,
+                          core::net::IListener* acceptor,
+                          core::net::ITlsContext* ctx,
+                          bool* ok) -> Task<void> {
+        auto connected = co_await core::net::connect(loop, "127.0.0.1", acceptor->localPort());
+        if (!connected)
+        {
+            releaseServer(remote, acceptor); // else the join below waits on a parked accept
+            co_return;
+        }
+        auto tls = ctx->wrap(std::move(*connected));
+        // Order matters: the driver suspends INSIDE the handshake first, so the waiter that
+        // starts next finds `_handshaking` set and parks on the gate.
+        co_await core::net::testing::allOf(cancelledDriver(loop, tls.get()), gateWaiter(tls.get(), ok));
+    }(&clientLoop, &serverLoop, listener->get(), clientCtx->get(), &released));
     serverThread.join();
 
     CHECK(released);
