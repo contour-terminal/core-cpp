@@ -72,8 +72,17 @@ namespace detail
 
         using iterator = TimesIterator<I, T>;
 
-        [[nodiscard]] constexpr std::size_t size() const noexcept { return count; }
-        constexpr T operator[](size_t i) const noexcept { return start + (i * step); }
+        [[nodiscard]] constexpr std::size_t size() const noexcept { return static_cast<std::size_t>(count); }
+
+        /// @param i A position below size().
+        /// @return The value at that position, `start + i * step`.
+        [[nodiscard]] constexpr T operator[](std::size_t i) const noexcept
+        {
+            // The casts are spelled out because the arithmetic mixes the index's type with the
+            // value's: neither of these members was ever instantiated before, so the conversions
+            // they imply had never been compiled.
+            return static_cast<T>(start + (static_cast<T>(i) * step));
+        }
 
         [[nodiscard]] constexpr iterator begin() const noexcept
         {
@@ -172,9 +181,21 @@ namespace detail
         Times<I, T2> second;
 
         using iterator = Times2DIterator<I, T1, T2>;
+        /// What one element of this range IS: both coordinates, as the iterator yields them.
+        using value_type = iterator::value_type;
 
         [[nodiscard]] constexpr std::size_t size() const noexcept { return first.size() * second.size(); }
-        constexpr auto operator[](std::size_t i) const noexcept { return second[i % second.size()]; }
+
+        /// The element at @p i in iteration order -- the inner range advances fastest.
+        ///
+        /// This answered the inner coordinate alone, so subscripting and iterating disagreed on
+        /// what an element of a Times2D even is.
+        /// @param i A position below size().
+        /// @return The outer and inner coordinates at that position.
+        [[nodiscard]] constexpr value_type operator[](std::size_t i) const noexcept
+        {
+            return { first[i / second.size()], second[i % second.size()] };
+        }
 
         [[nodiscard]] constexpr iterator begin() const noexcept { return iterator { first, second, true }; }
         [[nodiscard]] constexpr iterator end() const noexcept { return iterator { first, second, false }; }
