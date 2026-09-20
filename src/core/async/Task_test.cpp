@@ -5,7 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <coroutine>
-#include <string>
+#include <stdexcept>
 #include <vector>
 
 using core::async::Task;
@@ -141,16 +141,27 @@ TEST_CASE("Deep co_await chains keep the stack bounded (symmetric transfer)", "[
     // Without symmetric transfer this recursion would overflow the stack; with it
     // both the descent and the unwind are tail calls, where the compiler makes them so. Where it
     // does not, the case is skipped; core-cpp#15 tracks the fix.
+    //
+    // The teardown is not covered by that reasoning and does not need to be: each level destroys
+    // the child it awaited at the end of its own `co_return` expression, by which time that child
+    // has already destroyed ITS child, so the chain is released one frame at a time as it unwinds.
+    // A chain destroyed BEFORE it completes is the recursive case -- one `~Task` per level, all
+    // nested -- and this case never has one.
 #if defined(__EMSCRIPTEN__) && !defined(__wasm_tail_call__)
     // Measured with emsdk 3.1.56 under node: "RangeError: Maximum call stack size exceeded". Its
     // WebAssembly has no tail calls unless built with -mtail-call, so each transfer nests a call.
     SKIP("WebAssembly without -mtail-call has no tail call for symmetric transfer (core-cpp#15)");
-#elif defined(__GNUC__) && !defined(__clang__) && !defined(__OPTIMIZE__)
+#elif defined(__GNUC__) && !defined(__clang__) && !defined(CORE_ASYNC_SYMMETRIC_TRANSFER_IS_TAIL_CALL)
     // Measured with GCC 14.3 and 15: the recursion overflows an 8 MiB stack at -O0, -Og and -O1,
-    // and passes at -O2. GCC makes the transfer a tail call only when it optimises sibling calls.
-    // -Og and -O1 define __OPTIMIZE__, so this case is NOT skipped there and crashes the binary;
-    // no preset builds at those levels.
-    SKIP("GCC without optimisation does not make symmetric transfer a tail call (core-cpp#15)");
+    // and passes at -O2 and -O3. GCC makes the transfer a tail call only when it optimises sibling
+    // calls, and it exposes no macro for the level -- __OPTIMIZE__ is 1 at -Og and -O1 too, so
+    // keying on it left this case running there, where it crashes the process and takes every
+    // other case in the binary with it. Whoever builds decides: src/core/async/CMakeLists.txt
+    // reads the level off the build's own flags and defines the macro below only at -O2 or better,
+    // so a build outside core-cpp's presets -- a distro package, a bisect, -Og for a debugger --
+    // skips this case instead of losing the binary (core-cpp#15).
+    SKIP("this GCC build does not optimise sibling calls, so symmetric transfer is not a tail call "
+         "(core-cpp#15)");
 #endif
     constexpr auto Depth = 100000;
     auto task = sumDown(Depth);
