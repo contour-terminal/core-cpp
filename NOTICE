@@ -55,8 +55,6 @@ fastcached
   https://github.com/LASTRADA-Software/fastcached
   Copyright 2026 The fastcached Authors
   Imported at eb9c9c68da8fadfd43b0b36366919cb462689f48 (origin/master)
-  - cmake/portable/CompileCache.cmake (verbatim)
-  - cmake/FetchTransferBound.cmake (verbatim)
   - cmake/CPM.cmake (the bounded, status-checked bootstrap download)
   - src/core/testing/SuppressWindowsDialogs.{hpp,cpp} (merged from
     src/tests/WindowsErrorPopups.hpp)
@@ -71,6 +69,9 @@ fastcached
   - src/core/tui/runtime/TuiRuntime.hpp and TuiRuntime_test.cpp (from
     vendor/endo/tui/runtime/, adapted): endo f774a210 plus fastcached 6483abd8,
     which makes DelayAwaiter::await_ready() a constant
+  Imported at f6ec49f3446b8bc121eba82c64cde2de759e774a
+  - cmake/portable/CompileCache.cmake (verbatim)
+  - cmake/FetchTransferBound.cmake (verbatim)
   Imported at 0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21 (origin/master)
   - src/core/async/{ParkedWork,IExecutor,ResumeOn,ThreadPoolExecutor,AsyncQueue}.hpp
     and their tests (from src/FastCache/Async/, adapted; ThreadPoolExecutor.cpp

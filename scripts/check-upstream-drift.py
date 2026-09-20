@@ -19,6 +19,16 @@ import applied this repository's own rewrites, so overwriting a file with its up
 silently -- including the `NOLINT` and diagnostic pragmas the rules forbid. Re-syncing means merging
 the upstream delta into what is here.
 
+**What a clean run does NOT prove.** This compares HISTORY, not CONTENT: it asks whether upstream
+touched the path a row names since the SHA that row names. So it proves the upstreams have not
+moved -- never that the rows are RIGHT. A row naming the wrong upstream path reports clean for as
+long as that wrong path sits untouched, and so does a row whose local file has drifted from the
+upstream it claims, because nothing here reads either file's bytes. For the verbatim copies under
+`cmake/portable/` the content question is `downstream.yml`'s, which diffs them against upstream
+`master` nightly (`cmake/portable/README.md`). For the ported files under `src/core/` nothing
+answers it today, and a checker that did would have to compare against each row's recorded
+rewrites rather than against the upstream bytes, which is why it is not simply a `diff`.
+
 Exit status, which is the part that decides whether a nightly can run this:
 
     0   every row read, whatever it found. DRIFT IS NOT A FAILURE -- it is the answer to the

@@ -566,6 +566,15 @@ workflow refuses one without a section here.
   not only that `done()` is true.
 
 ### Changed
+- `cmake/portable/CompileCache.cmake` is re-synced from fastcached
+  `f6ec49f3446b8bc121eba82c64cde2de759e774a`, and `cmake/FetchTransferBound.cmake`'s pin moves to
+  the same commit, where its content is unchanged. The whole delta is one diagnostic: with
+  `FASTCACHE_AUTO_START=ON`, a daemon that exits immediately now has its first line of output
+  printed beside the exit status, so `(127)` reads as the missing shared library it is rather than
+  as "not found" for a binary this module has just staged and knows the path of
+  ([fastcached#1538](https://github.com/LASTRADA-Software/fastcached/issues/1538)). Launcher
+  selection is untouched: a fresh configure on Windows (clang-cl) and in WSL (clang) still
+  resolves to fastcache-cc, read off `build.ninja` rather than `CMakeCache.txt`.
 - `core::async::whenAll` and `whenAny` are one runner, one join state and one awaiter,
   parameterised by a policy (`<core/async/Join.hpp>`, all of it `core::async::detail`). The two
   combinators had ~200 lines of near-identical coroutine, latch and start-phase code, differing in

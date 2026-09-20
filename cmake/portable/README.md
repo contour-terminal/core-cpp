@@ -6,7 +6,12 @@ the provenance below in the same commit. A fix goes upstream first.
 
 | File | Upstream | Commit |
 | --- | --- | --- |
-| `CompileCache.cmake` | [fastcached](https://github.com/LASTRADA-Software/fastcached) `cmake/portable/CompileCache.cmake` | `5a9dca0498f4c37c63a17270550ee51ca87ae0a3` (`origin/master`, 2026-09-20) |
+| `CompileCache.cmake` | [fastcached](https://github.com/LASTRADA-Software/fastcached) `cmake/portable/CompileCache.cmake` | `f6ec49f3446b8bc121eba82c64cde2de759e774a` (2026-09-20) |
+
+A commit here is the one whose blob this file equals — the last upstream commit that
+touched it, which is not necessarily `origin/master`. When `f6ec49f3` was taken,
+fastcached's `origin/master` was `0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21` and
+carried the identical blob.
 
 `../FetchTransferBound.cmake` is a verbatim copy from the same commit
 (`cmake/FetchTransferBound.cmake`). It exports process-wide environment, so only
@@ -22,8 +27,13 @@ git -C <fastcached> -c core.autocrlf=false -c core.eol=lf \
     show origin/master:cmake/portable/CompileCache.cmake > cmake/portable/CompileCache.cmake
 ```
 
-The nightly `downstream.yml` workflow diffs `CompileCache.cmake` against
-fastcached `master` and fails on drift.
+Two gates watch this file, and they answer different questions. The nightly
+`downstream.yml` workflow diffs `CompileCache.cmake` against fastcached `master` and
+**fails** on drift: *is this copy byte-identical to upstream's current one?*
+`scripts/check-upstream-drift.py` walks `.agent/reference/provenance.md` and
+**reports** without failing: *has upstream touched this file since the commit the row
+pins?* The first is the one that must stay green; the second is what names the commits
+to read when it is not.
 
 ## `CompileCache.cmake`
 
