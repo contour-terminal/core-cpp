@@ -332,8 +332,12 @@ function(core_cpp_add_test module)
     # 300 seconds, measured rather than guessed: the slowest binary here is core-cpp.tui at 9.4s on
     # clang-debug, 11.1s under asan/ubsan and 9.7s on cl-debug, and every other one is under a
     # second. That is ~27x the slowest sanitizer run, so a 5x slowdown on a loaded runner still
-    # leaves 5x of headroom, while a hang is named in five minutes. (tests/ registers its own
-    # checks directly -- vendor-selftest takes 87s -- and this default does not reach them.)
+    # leaves 5x of headroom, while a hang is named in five minutes.
+    #
+    # It reaches only what THIS function registers. A bare add_test() elsewhere keeps ctest's
+    # default and has to bound itself: tests/ registers its checks directly (vendor-selftest takes
+    # 87s, so it wants a bound of its own rather than this one), and so does
+    # core-cpp.async-link-smoke in src/core/async/CMakeLists.txt, which is unbounded today.
     #
     # The bound on a WAIT still belongs in the case, which can say what it waited for
     # (.agent/rules/testing.md). This only stops a missed one from costing 25 minutes.
