@@ -5,24 +5,33 @@
 # that refusal and no other. A tool that refused everything would pass the refusing cases alone, so
 # the accepting cases are half of the proof.
 #
-# What is and is not covered, exactly. The script stops for two different kinds of reason, and this
-# file proves one of them:
+# What is and is not covered, exactly. The script stops for three different kinds of reason, and
+# this file proves one of them:
 #
-#   * A JUDGEMENT of its own -- a command line it cannot act on, a REPO or a REF it will not read, a
-#     tree that is not core-cpp's, a MODULES list that would not configure, a blob it cannot copy
-#     verbatim, a copy or a manifest that is not what the other says. Every one of these has a case
-#     here and a phrase in `refusalPhrases` below, bar the two named there that no case can reach
-#     portably.
+#   * A JUDGEMENT of its own -- a command line it cannot act on, a DEST that is not a copy of ours,
+#     a REPO or a REF it will not read, a tree that is not core-cpp's, a MODULES list that would
+#     not configure, a blob it cannot copy verbatim, a copy or a manifest that is not what the
+#     other says. Every one of these has a case here and a phrase in `refusalPhrases` below, bar
+#     the two named there that no case can reach portably.
 #   * A FAILURE OF GIT, reported rather than judged: `cloning <REPO> failed`, `listing the tree of
 #     <commit> failed`, `reading blob <blob> failed`, an `ls-tree` line that is not
 #     `<mode> <type> <sha><TAB><path>`, and the two `core_cpp_vendor_git()` wrappers (`finding the
 #     root of the repository at …`, `reading cmake/CoreCppModules.cmake of …`). No case provokes
 #     one, because provoking one means breaking git or its output format rather than handing the
 #     tool a tree or a copy, and a test that broke git would be testing git.
+#   * A RENAME THE OPERATING SYSTEM REFUSED, in cmake/CoreCppVendorReplace.cmake, which is the last
+#     thing a sync does. Its three messages are `could not move <DEST> aside to <backup>` (the
+#     first rename), `could not move the new copy … into <DEST>` (the second), and the pair of
+#     paths that says the restore failed too. Only the second has a case, and it is reached by
+#     calling the function rather than the script -- see `restores-the-copy-when-the-replacement-
+#     fails` below. The other two cannot be reached from a test: the first needs a DEST that will
+#     not move although the caller has just refused every reason it would not, and the third needs
+#     a rename to be unable to undo itself in the same directory it has just emptied.
 #
-# `resolving the commit <REF> in <REPO> failed` is the exception that proves the split: its message
-# comes from the same git wrapper, but what reaches it is a user's mistake -- a well-formed SHA that
-# resolves nowhere -- and not git misbehaving, so it has a case and a phrase like any judgement.
+# `resolving the commit <REF> in <REPO> failed` is the exception that proves the first split: its
+# message comes from the git wrapper, but what reaches it is a user's mistake -- a well-formed SHA
+# that resolves nowhere -- and not git misbehaving, so it has a case and a phrase like any
+# judgement.
 #
 # `refusalPhrases` is the script's judgements, not the cases' wishes, so a case that fires a refusal
 # it did not deserve is a failure too.
@@ -131,6 +140,7 @@ set(refusalPhrases
     "nor a tag of"
     "resolving the commit"
     "already exists"
+    "is a file, not a directory"
     "MODE must be sync or check"
     "DEST is not set"
     "REF is not set")
@@ -322,12 +332,13 @@ endfunction()
 ##   REF <ref>            the REF argument of the sync (default: the fixture's tag)
 ##   MODULES <list>       the MODULES argument of the sync (default: all of them)
 ##   OCCUPY <name>        a file of someone else's, placed in DEST before the sync
+##   DEST_IS_A_FILE       DEST is created as a regular file of someone else's, not a directory
 ##   MUTATE <what>        what happens to the copy between the sync and the check
 ##   WANT_SYNC  <ACCEPT or phrase>
 ##   WANT_CHECK <ACCEPT or phrase>   (omitted: the check is not run)
 ##   EXPECT_FILES <path>...   the exact set of paths the manifest must list
 function(core_cpp_vendor_case name)
-    cmake_parse_arguments(PARSE_ARGV 1 arg "" "MUTATE;OCCUPY;REF;WANT_SYNC;WANT_CHECK"
+    cmake_parse_arguments(PARSE_ARGV 1 arg "DEST_IS_A_FILE" "MUTATE;OCCUPY;REF;WANT_SYNC;WANT_CHECK"
                           "EXTRA;MODULES;EXPECT_FILES")
     if(arg_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "check-vendor-selftest: case ${name} has unexpected arguments: ${arg_UNPARSED_ARGUMENTS}")
@@ -350,6 +361,11 @@ function(core_cpp_vendor_case name)
     if(arg_OCCUPY)
         file(WRITE "${copy}/${arg_OCCUPY}" "someone else's work\n")
     endif()
+    if(arg_DEST_IS_A_FILE)
+        get_filename_component(copyParent "${copy}" DIRECTORY)
+        file(MAKE_DIRECTORY "${copyParent}")
+        file(WRITE "${copy}" "someone else's file, where DEST points\n")
+    endif()
 
     set(ref "${fixtureTag}")
     if(arg_REF)
@@ -366,6 +382,20 @@ function(core_cpp_vendor_case name)
     endif()
     core_cpp_selftest_run(syncArguments said rc)
     core_cpp_selftest_expect(sync "${arg_WANT_SYNC}" "${rc}" "${said}" problems)
+    if(arg_DEST_IS_A_FILE)
+        # Refusing is half of it: the file has to still be there, and still be a file.
+        if(IS_DIRECTORY "${copy}")
+            string(APPEND problems " the refused sync replaced the file at DEST with a directory")
+        elseif(NOT EXISTS "${copy}")
+            string(APPEND problems " the refused sync deleted the file at DEST")
+        else()
+            file(READ "${copy}" kept)
+            if(NOT kept MATCHES "someone else's file")
+                string(APPEND problems " the refused sync overwrote the file at DEST")
+            endif()
+        endif()
+    endif()
+    core_cpp_selftest_no_siblings("${copy}" "the sync" problems)
 
     if(rc EQUAL 0 AND arg_EXPECT_FILES)
         set(listed "")
@@ -530,6 +560,12 @@ core_cpp_vendor_case(ignores-what-is-outside-the-file-set
 core_cpp_vendor_case(refuses-a-destination-that-is-not-a-copy
     OCCUPY "important.txt"
     WANT_SYNC "delete someone's work")
+# Nor is a DEST that is not a directory at all touched. The occupant check above cannot see this
+# one, because a file holds no files; the replacement would rename it aside like any previous copy
+# and delete it after a successful swap, reporting success over someone's destroyed file.
+core_cpp_vendor_case(refuses-a-destination-that-is-a-file
+    DEST_IS_A_FILE
+    WANT_SYNC "is a file, not a directory")
 
 # --- re-syncing over an existing copy -------------------------------------------
 #

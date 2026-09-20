@@ -30,29 +30,20 @@
 ## rename that has just emptied @p dest would have to be unable to undo itself in the same
 ## directory, which nothing a test can set up will do.
 ##
-## A @p backup that already exists is refused before anything is touched. It is a previous run's
-## copy that was never put back, so it is the one thing here that must not be deleted to make room.
-##
 ## Each message is built with string(CONCAT) and not from several arguments to set(): set() would
 ## make a LIST of the fragments, and the caller would print them with a semicolon at every join.
 ##
-## @param newCopy The assembled new copy. It is consumed on success and left alone otherwise.
-## @param dest The directory to replace. It need not exist, and its parent is created if it does not.
-## @param backup Where the previous copy is moved to. It must not exist.
+## @param newCopy A COMPLETE vendored copy, its MANIFEST included. That is what lets a failure here
+##        name both trees and mean it: whichever of the two a human adopts passes MODE=check.
+##        cmake/CoreCppVendor.cmake writes the manifest into the staged tree before it calls this.
+## @param dest The directory to replace. It need not exist, and its parent is created if it does
+##        not. It must be a directory if it does exist; the caller refuses a file there.
+## @param backup Where the previous copy is moved to. It must not exist; the caller refuses a
+##        leftover one, early, because it holds the only copy of what a failed run moved aside.
 ## @param outState Receives OK, FAILED, or FAILED-KEEP-BOTH (both trees are still on disk).
 ## @param outMessage Receives what went wrong and what is where; empty when @p outState is OK.
 function(core_cpp_vendor_replace newCopy dest backup outState outMessage)
     set(${outState} FAILED PARENT_SCOPE)
-
-    if(EXISTS "${backup}")
-        string(CONCAT message
-            "${backup} already exists. That is where a run moves the previous copy aside, so a "
-            "previous run failed and never put it back. Nothing has been changed now. Move it "
-            "back to ${dest}, or delete it once you are sure ${dest} is the copy you want, and "
-            "run the sync again.")
-        set(${outMessage} "${message}" PARENT_SCOPE)
-        return()
-    endif()
 
     get_filename_component(destParent "${dest}" DIRECTORY)
     file(MAKE_DIRECTORY "${destParent}")
@@ -106,6 +97,9 @@ function(core_cpp_vendor_replace newCopy dest backup outState outMessage)
         "NOTHING HAS BEEN DELETED:\n"
         "  the previous copy is at ${backup}\n"
         "  the new copy is at ${newCopy}\n"
-        "Rename whichever of those two you want to ${dest} by hand, then delete the other.")
+        "Both are complete vendored copies, manifest included, so rename whichever of the two you "
+        "want to ${dest} by hand and then delete the other; the one you keep passes MODE=check as "
+        "it stands. Renaming the previous copy back is the state this sync promised, and leaves "
+        "the sync to run again.")
     set(${outMessage} "${message}" PARENT_SCOPE)
 endfunction()

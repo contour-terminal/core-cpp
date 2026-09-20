@@ -351,9 +351,33 @@ set(stagingDir "${DEST}${CORE_CPP_VENDOR_NEW_SUFFIX}")
 set(backupDir "${DEST}${CORE_CPP_VENDOR_OLD_SUFFIX}")
 file(REMOVE_RECURSE "${stagingDir}")
 
-# Before anything is written: an existing DEST is only ever emptied when it is a copy of ours, and
-# the manifest is what says so. Nothing else may live in a vendored copy anyway -- MODE=check
-# refuses an unlisted file -- so a directory with files and no manifest is someone else's work.
+# Before anything is written: three things about DEST and its two siblings, all of them visible in
+# a second, and all of them checked here rather than minutes later after a clone and a tree walk.
+#
+# DEST is a directory or it does not exist. A regular file there is someone's, and the replacement
+# would rename it aside and delete it after a successful swap, reporting success: the occupant
+# check below cannot see it, because a file holds no files.
+if(EXISTS "${DEST}" AND NOT IS_DIRECTORY "${DEST}")
+    message(FATAL_ERROR
+        "core-cpp-vendor: ${DEST} is a file, not a directory, so it is not a core-cpp vendored "
+        "copy and syncing would destroy it. Delete it, or point DEST at a directory.")
+endif()
+
+# A leftover backup is a previous run that failed between the two renames of the replacement, so it
+# holds the only copy of what was there. It is the one thing a sync must not delete to make room,
+# and the replacement refuses over it -- but it would refuse after every blob had been written, for
+# a condition that is true right now.
+if(EXISTS "${backupDir}")
+    message(FATAL_ERROR
+        "core-cpp-vendor: ${backupDir} already exists. That is where a run moves the previous copy "
+        "aside, so a previous run failed and never put it back. Nothing has been changed now. Move "
+        "it back to ${DEST}, or delete it once you are sure ${DEST} is the copy you want, and run "
+        "the sync again.")
+endif()
+
+# An existing DEST is only ever replaced when it is a copy of ours, and the manifest is what says
+# so. Nothing else may live in a vendored copy anyway -- MODE=check refuses an unlisted file -- so
+# a directory with files and no manifest is someone else's work.
 if(EXISTS "${DEST}" AND NOT EXISTS "${DEST}/${CORE_CPP_VENDOR_MANIFEST}")
     core_cpp_vendor_list_files("${DEST}" occupants)
     if(occupants)
@@ -601,8 +625,8 @@ if(refusals)
         "${DEST} is unchanged.")
 endif()
 
-# The copy is whole and legal; only now is the old one replaced -- a refusal above left the
-# previous copy exactly as it was.
+# The copy is whole and legal; what is left is to finish it and put it in place. A refusal above
+# left the previous copy exactly as it was.
 #
 # The two things this run made for itself, and that the copy must not carry, go first: git's
 # ls-tree output, and the bare clone of a remote REPO.
@@ -611,23 +635,17 @@ if(clonePath)
     file(REMOVE_RECURSE "${clonePath}")
 endif()
 
-# The replacement is the one part of a sync that can damage a copy that was already there, so it is
-# a module of its own, and a test calls it. Two directory renames with a restore between them: DEST
-# ends up holding the previous copy or this one, never a mixture of the two.
-include("${CORE_CPP_VENDOR_SCRIPT_DIR}/CoreCppVendorReplace.cmake")
-core_cpp_vendor_replace("${stagingDir}" "${DEST}" "${backupDir}" replaceState replaceMessage)
-if(NOT replaceState STREQUAL "OK")
-    # FAILED-KEEP-BOTH is the one refusal that keeps what it names: its message is a pair of paths
-    # for a human to finish by hand, and unstaging would delete one of them.
-    if(NOT replaceState STREQUAL "FAILED-KEEP-BOTH")
-        core_cpp_vendor_unstage()
-    endif()
-    message(FATAL_ERROR "core-cpp-vendor: ${replaceMessage}")
-endif()
-set(CORE_CPP_VENDOR_STAGING_DIR "")
-
-# The manifest, hashed from the files as they now lie in DEST, sorted by path so the same ref
-# always lists the same files in the same order.
+# The manifest goes into the STAGED copy, before the swap, hashed from the files as they lie there.
+# That is what makes the swap the last thing that happens: the staged tree is already a complete
+# vendored copy, manifest included, so whichever of the two directories exists when the process
+# stops is one that passes MODE=check. Written afterwards, as it was, there was a window in which a
+# kill stranded a manifest-less copy with the previous one already gone -- a copy that fails its
+# own check, and that the next sync then refuses to overwrite.
+#
+# The bytes do not depend on where it is written: nothing in the manifest names DEST, and MANIFEST
+# is not among the files it lists, so it never hashes itself.
+#
+# Sorted by path, so the same ref always lists the same files in the same order.
 #
 # It is written with LF endings whatever the host, because the consumer COMMITS this file: a
 # file(WRITE) opens the file in text mode, so a sync on Windows would write CRLF and two correct
@@ -646,13 +664,29 @@ string(APPEND manifest "# commit ${commit}\n")
 string(APPEND manifest "# modules ${MODULES}\n")
 string(APPEND manifest "# files ${fileCount}\n")
 foreach(path IN LISTS copied)
-    file(SHA256 "${DEST}/${path}" hash)
+    file(SHA256 "${stagingDir}/${path}" hash)
     string(APPEND manifest "${hash}  ${path}\n")
 endforeach()
 set(CORE_CPP_VENDOR_AT "@")
 string(REPLACE "@" "@CORE_CPP_VENDOR_AT@" manifest "${manifest}")
-file(CONFIGURE OUTPUT "${DEST}/${CORE_CPP_VENDOR_MANIFEST}" CONTENT "${manifest}"
+file(CONFIGURE OUTPUT "${stagingDir}/${CORE_CPP_VENDOR_MANIFEST}" CONTENT "${manifest}"
      @ONLY NEWLINE_STYLE UNIX)
+
+# The staged copy is complete. The replacement is the one part of a sync that can damage a copy
+# that was already there, so it is a module of its own, and a test calls it. Two directory renames
+# with a restore between them: DEST ends up holding the previous copy or this one, and both of
+# those are whole copies that pass their own check.
+include("${CORE_CPP_VENDOR_SCRIPT_DIR}/CoreCppVendorReplace.cmake")
+core_cpp_vendor_replace("${stagingDir}" "${DEST}" "${backupDir}" replaceState replaceMessage)
+if(NOT replaceState STREQUAL "OK")
+    # FAILED-KEEP-BOTH is the one refusal that keeps what it names: its message is a pair of paths
+    # for a human to choose between, and unstaging would delete one of them.
+    if(NOT replaceState STREQUAL "FAILED-KEEP-BOTH")
+        core_cpp_vendor_unstage()
+    endif()
+    message(FATAL_ERROR "core-cpp-vendor: ${replaceMessage}")
+endif()
+set(CORE_CPP_VENDOR_STAGING_DIR "")
 
 message(STATUS
     "core-cpp-vendor: ${REF} (${commit}) copied into ${DEST}: ${fileCount} file(s), "
