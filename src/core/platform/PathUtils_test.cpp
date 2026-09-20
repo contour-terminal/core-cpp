@@ -184,3 +184,33 @@ TEST_CASE("isCaseOnlyRename.rejects_non_recase", "[platform]")
     CHECK_FALSE(isCaseOnlyRename("", "Foo"));
     CHECK_FALSE(isCaseOnlyRename("foo", ""));
 }
+
+TEST_CASE("stripTrailingSeparator keeps a path the native narrow encoding cannot spell", "[platform]")
+{
+    // generic_string() narrows to the platform's native narrow encoding, which on Windows is the
+    // ANSI code page: a path it cannot represent comes back mangled, or throws -- the very reason
+    // normalizePath()'s own declaration rejects it. What this function returns keys
+    // InMemoryFileSystem's whole file map, so two paths collapsing onto one spelling is a fixture
+    // quietly answering with another file's content.
+    //
+    // The expected value is spelled as UTF-8 bytes rather than as a \u escape, so it does not
+    // depend on the compiler's execution character set.
+    auto const japanese = std::filesystem::path { std::u8string { u8"/tmp/\u65e5\u672c/" } };
+    CHECK(stripTrailingSeparator(japanese) == "/tmp/\xe6\x97\xa5\xe6\x9c\xac");
+
+    auto const windowsStyle = std::filesystem::path { std::u8string { u8"C:/tmp/\u65e5/" } };
+    CHECK(stripTrailingSeparator(windowsStyle) == "C:/tmp/\xe6\x97\xa5");
+}
+
+TEST_CASE("isCaseOnlyRename compares paths the native narrow encoding cannot spell", "[platform]")
+{
+    // Both sides used to be rebuilt as std::filesystem::path out of a narrow string, which on
+    // Windows is read back in the ANSI code page -- undoing the spelling and, where two distinct
+    // characters narrow to the same replacement, making unrelated parents compare equal.
+    auto const lower = std::filesystem::path { std::u8string { u8"/tmp/\u65e5/name" } };
+    auto const upper = std::filesystem::path { std::u8string { u8"/tmp/\u65e5/NAME" } };
+    CHECK(isCaseOnlyRename(lower, upper));
+
+    auto const otherParent = std::filesystem::path { std::u8string { u8"/tmp/\u672c/NAME" } };
+    CHECK_FALSE(isCaseOnlyRename(lower, otherParent));
+}

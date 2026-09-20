@@ -412,3 +412,19 @@ TEST_CASE("isExecutableFile classifies a symlink by what it points at", "[FileSy
     CHECK_FALSE(backend.isExecutableFile(dir / "dangling"));
 }
 #endif
+
+TEST_CASE("the model tells apart two paths the native narrow encoding cannot", "[FileSystem]")
+{
+    // Every key of this filesystem is a path run through stripTrailingSeparator(). While that
+    // went via generic_string(), two paths the platform's narrow encoding cannot spell -- which
+    // on Windows is anything outside the ANSI code page -- collapsed onto the same replacement
+    // spelling, and one file answered for the other.
+    auto fs = InMemoryFileSystem {};
+    auto const first = std::filesystem::path { std::u8string { u8"/tmp/\u65e5/data" } };
+    auto const second = std::filesystem::path { std::u8string { u8"/tmp/\u672c/data" } };
+    fs.addFile(first, "one");
+    fs.addFile(second, "two");
+
+    CHECK(fs.readFile(first) == "one");
+    CHECK(fs.readFile(second) == "two");
+}

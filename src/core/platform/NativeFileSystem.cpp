@@ -445,26 +445,34 @@ std::expected<void, std::string> NativeFileSystem::setPermissions(fs::path const
 
 std::expected<fs::path, std::string> NativeFileSystem::createTempFile(std::string_view prefix) const
 {
-    auto const tmpDir = fs::temp_directory_path();
-    auto const pattern = std::format("{}{}_XXXXXX", tmpDir.string() + "/", prefix);
-    auto templateStr = std::string(pattern);
+    // The template is built as a path, not by concatenating path::string(): that narrows to the
+    // platform's native narrow encoding, which on Windows is the ANSI code page, and MSVC throws
+    // on a temp directory it cannot spell -- a user name outside the code page is enough. The
+    // prefix goes in as UTF-8, which is what every path string in core-cpp is.
+    auto const leaf = std::u8string(prefix.begin(), prefix.end()) + u8"_XXXXXX";
+    auto const templatePath = fs::temp_directory_path() / fs::path(leaf);
 
 #ifdef _WIN32
-    if (_mktemp_s(templateStr.data(), templateStr.size() + 1) != 0)
+    // wchar_t end to end, for the same reason: a narrow template handed to _mktemp_s, or to
+    // std::ofstream, is read back in the ANSI code page too.
+    auto templateStr = templatePath.wstring();
+    if (_wmktemp_s(templateStr.data(), templateStr.size() + 1) != 0)
         return std::unexpected("Failed to create temporary file name");
-    // Create the file
-    auto ofs = std::ofstream(templateStr);
+    auto const created = fs::path(templateStr);
+    auto ofs = std::ofstream(created);
     if (!ofs)
         return std::unexpected("Failed to create temporary file");
     ofs.close();
+    return created;
 #else
+    auto templateStr = templatePath.string();
     auto const fd = mkstemp(templateStr.data());
     if (fd == -1)
         return std::unexpected(std::format("Failed to create temporary file: {}",
                                            std::error_code(errno, std::generic_category()).message()));
     ::close(fd);
-#endif
     return fs::path(templateStr);
+#endif
 }
 
 } // namespace core::platform

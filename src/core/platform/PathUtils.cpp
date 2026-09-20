@@ -2,12 +2,14 @@
 #include <core/platform/PathUtils.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <string>
+#include <string_view>
+#include <utility>
 
 #ifdef _WIN32
     #include <cwctype>
     #include <memory>
-    #include <string_view>
     #include <type_traits>
 
     #include <windows.h>
@@ -18,11 +20,20 @@ namespace core::platform
 
 std::string stripTrailingSeparator(std::filesystem::path const& path)
 {
-    auto text = path.lexically_normal().generic_string();
+    // normalizePath() rather than generic_string(): the latter narrows to the platform's native
+    // narrow encoding, which on Windows is the ANSI code page -- it mangles any path the code
+    // page cannot spell, and MSVC's implementation throws outright. normalizePath()'s own
+    // declaration says so. It matters more here than anywhere: this result keys
+    // InMemoryFileSystem's whole file map, so two paths collapsing onto one spelling is a
+    // fixture quietly answering with another file's content.
+    auto const normal = path.lexically_normal();
+    auto text = normalizePath(normal);
     // Never strip into the root itself: "/" stays "/" and, on Windows, "C:/" stays "C:/"
-    // (reducing it to "C:" would name the drive's current directory, not its root).
-    auto const rootLength = std::max<std::size_t>(
-        std::filesystem::path(text).root_path().generic_string().size(), std::size_t { 1 });
+    // (reducing it to "C:" would name the drive's current directory, not its root). Measured
+    // from the path, not from a path rebuilt out of `text`, which would narrow it right back:
+    // std::filesystem::path reads a narrow string in that same native encoding.
+    auto const rootLength =
+        std::max<std::size_t>(normalizePath(normal.root_path()).size(), std::size_t { 1 });
     while (text.size() > rootLength && text.back() == '/')
         text.pop_back();
     return text;
@@ -30,19 +41,29 @@ std::string stripTrailingSeparator(std::filesystem::path const& path)
 
 bool isCaseOnlyRename(std::filesystem::path const& from, std::filesystem::path const& to)
 {
-    // Reduce both paths to their canonical lexical spelling and drop any trailing
-    // separator so that `foo/` and `foo` are treated identically.
-    auto const source = std::filesystem::path(stripTrailingSeparator(from));
-    auto const dest = std::filesystem::path(stripTrailingSeparator(to));
+    // Both paths reduced to their canonical lexical spelling, with any trailing separator
+    // dropped, so that `foo/` and `foo` are treated identically. The spellings are then split
+    // as strings rather than rebuilt into a std::filesystem::path, which would read them back in
+    // the native narrow encoding and undo what stripTrailingSeparator() just spelled in UTF-8.
+    // The result is forward-slash normalized, so the last '/' separates parent from final
+    // component.
+    auto const source = stripTrailingSeparator(from);
+    auto const dest = stripTrailingSeparator(to);
 
-    auto const sourceName = source.filename().generic_string();
-    auto const destName = dest.filename().generic_string();
+    auto const split = [](std::string const& text) {
+        auto const view = std::string_view { text };
+        auto const slash = view.rfind('/');
+        return slash == std::string_view::npos ? std::pair { std::string_view {}, view }
+                                               : std::pair { view.substr(0, slash), view.substr(slash + 1) };
+    };
+    auto const [sourceParent, sourceName] = split(source);
+    auto const [destParent, destName] = split(dest);
 
     if (sourceName.empty() || destName.empty())
         return false;
     if (sourceName == destName)
         return false; // Identical spelling — a no-op, not a recase.
-    if (source.parent_path() != dest.parent_path())
+    if (sourceParent != destParent)
         return false;
 
     return equalsCaseInsensitive(sourceName, destName);
