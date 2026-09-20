@@ -220,6 +220,14 @@ workflow refuses one without a section here.
   core-cpp creates a target the parent scope cannot see. The loopback echo and the `core::log`
   line the CPM and vendored programs share are `tests/consumer-shared/ConsumerSmoke.hpp`; each
   program keeps only what is its own.
+- `cmake/portable/CompileCache.cmake` re-synced verbatim from fastcached
+  `5a9dca0498f4c37c63a17270550ee51ca87ae0a3` (`cmake/portable/README.md`), fixing the nightly
+  `downstream.yml` drift check. Upstream added `FASTCACHE_AUTO_INSTALL_HOST_SYSTEM` and
+  `FASTCACHE_AUTO_INSTALL_HOST_PROCESSOR`: empty by default, so `_fc_auto_install_select_row()`
+  still asks `CMAKE_HOST_SYSTEM_NAME`/`_PROCESSOR`, but a caller can state the host to fetch
+  `fastcache-cc` for instead, which lets `scripts/check-compile-cache-autoinstall.cmake` pin a
+  published platform per row rather than stopping at whichever host actually runs the check.
+  `cmake/FetchTransferBound.cmake` compared identical at the same commit; no change there.
 
 ### Fixed
 

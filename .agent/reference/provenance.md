@@ -36,8 +36,8 @@ others in notes.
 
 | core-cpp path | upstream repo | upstream path | synced SHA | notes |
 |---|---|---|---|---|
-| `cmake/FetchTransferBound.cmake` | LASTRADA-Software/fastcached | `cmake/FetchTransferBound.cmake` | `eb9c9c68da8fadfd43b0b36366919cb462689f48` | verbatim; re-synced together with `CompileCache.cmake` (`cmake/portable/README.md`) |
-| `cmake/portable/CompileCache.cmake` | LASTRADA-Software/fastcached | `cmake/portable/CompileCache.cmake` | `eb9c9c68da8fadfd43b0b36366919cb462689f48` | verbatim |
+| `cmake/FetchTransferBound.cmake` | LASTRADA-Software/fastcached | `cmake/FetchTransferBound.cmake` | `5a9dca0498f4c37c63a17270550ee51ca87ae0a3` | verbatim; re-synced together with `CompileCache.cmake` (`cmake/portable/README.md`) |
+| `cmake/portable/CompileCache.cmake` | LASTRADA-Software/fastcached | `cmake/portable/CompileCache.cmake` | `5a9dca0498f4c37c63a17270550ee51ca87ae0a3` | verbatim |
 | `cmake/portable/README.md` | origin: core-cpp | - | - | documents the two verbatim files above |
 | `src/core/Assert.hpp` | contour-terminal/contour | `src/crispy/Assert.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | `Require`/`Guarantee`/`todo`/`unreachable`/`setFailHandler`; `fatal`/`SoftRequire` split out to `src/core/log/Assert.hpp` to close a base→log layering cycle |
 | `src/core/Base64.hpp` | contour-terminal/contour | `src/crispy/Base64.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | - |

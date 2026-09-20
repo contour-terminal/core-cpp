@@ -6,7 +6,7 @@ the provenance below in the same commit. A fix goes upstream first.
 
 | File | Upstream | Commit |
 | --- | --- | --- |
-| `CompileCache.cmake` | [fastcached](https://github.com/LASTRADA-Software/fastcached) `cmake/portable/CompileCache.cmake` | `eb9c9c68da8fadfd43b0b36366919cb462689f48` (`origin/master`, 2026-09-18) |
+| `CompileCache.cmake` | [fastcached](https://github.com/LASTRADA-Software/fastcached) `cmake/portable/CompileCache.cmake` | `5a9dca0498f4c37c63a17270550ee51ca87ae0a3` (`origin/master`, 2026-09-20) |
 
 `../FetchTransferBound.cmake` is a verbatim copy from the same commit
 (`cmake/FetchTransferBound.cmake`). It exports process-wide environment, so only
