@@ -190,6 +190,11 @@ void SignalHandler::restore()
 #endif
 
     currentCallback = nullptr;
+    // The wakeup goes the way the callback does. It belongs to whoever called initialize(), and
+    // once this returns nothing may call signal() on it again: processSignalFd() on Linux, the
+    // SIGINT handler elsewhere and the Windows console handler all reach it through this
+    // pointer, and all of them outlive the Wakeup a teardown is about to destroy.
+    interruptWakeup.store(nullptr);
 }
 
 int SignalHandler::signalFd() noexcept
