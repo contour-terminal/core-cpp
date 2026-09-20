@@ -101,8 +101,9 @@ core_cpp_hygiene_rule(c-style-for KIND cpp
 # nested in it (core::base64).
 #
 # The platform and private-detail directories are layout rather than namespace, and are skipped
-# when the expected namespace is assembled: they are the directories core_cpp_add_module() holds
-# private headers in (cmake/CoreCppTargets.cmake), plus `backend`. src/core/net/posix/ is therefore
+# when the expected namespace is assembled: they are exactly the directories core_cpp_add_module()
+# holds private headers in (cmake/CoreCppTargets.cmake), and nothing else -- an entry for a
+# directory that does not exist reads later as permission to create one. src/core/net/posix/ is therefore
 # core::net, src/core/tui/runtime/posix/ is core::tui::runtime, and src/core/net/detail/ is
 # core::net or core::net::detail. Every other segment is a namespace of its own: testing/ is
 # ::testing, runtime/ is ::runtime. Taking only the FIRST segment, as this rule did, is how a file
@@ -124,7 +125,7 @@ set(CORE_CPP_HYGIENE_namespace-directory_REASON
     "a source's first namespace is the one its whole directory path names, in lowercase: src/core/<dir>/ is core::<dir> and src/core/<dir>/<sub>/ is core::<dir>::<sub>, bar the platform and detail directories, which are layout; src/core/ is core (Part I §1)")
 set(CORE_CPP_HYGIENE_NAMESPACE_REGEX "^[ \t]*(inline[ \t]+)?namespace[ \t]+([A-Za-z_][A-Za-z0-9_:]*)([ \t{/].*)?$")
 set(CORE_CPP_HYGIENE_NAMESPACE_ALIAS_REGEX "^[ \t]*namespace[ \t]+[A-Za-z0-9_:]+[ \t]*=")
-set(CORE_CPP_HYGIENE_PRIVATE_DIRECTORIES backend bsd darwin detail emscripten linux posix windows)
+set(CORE_CPP_HYGIENE_PRIVATE_DIRECTORIES bsd darwin detail emscripten linux posix windows)
 
 # The rule the allowlist itself answers to.
 set(CORE_CPP_HYGIENE_RULES ${CORE_CPP_HYGIENE_RULES} stale-allowlist)

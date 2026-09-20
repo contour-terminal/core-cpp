@@ -427,7 +427,8 @@ workflow refuses one without a section here.
   `src/core/platform/testing/` declaring `core::platform` passed although the rule is namespace =
   directory. The expected namespace now follows the whole path, with the platform and
   private-detail directories (`posix/`, `windows/`, `linux/`, `bsd/`, `darwin/`, `emscripten/`,
-  `detail/`, `backend/`) skipped as layout. The one thing in the tree the deeper rule found,
+  `detail/`) skipped as layout — exactly the ones `core_cpp_add_module()` holds private headers
+  in, and nothing else. The one thing in the tree the deeper rule found,
   `src/core/tui/completer/` declaring `core::tui`, is fixed rather than exempted: see **Breaking**
   ([core-cpp#30](https://github.com/contour-terminal/core-cpp/issues/30)).
 - `Task_test.cpp`'s deep-chain case skips on GCC unless the build's optimisation level is known to
