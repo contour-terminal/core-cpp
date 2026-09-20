@@ -86,6 +86,8 @@ tests/
     check-release-selftest.cmake    proves each refusal of check-release.cmake
     check-vendor-selftest.cmake     proves each refusal of cmake/CoreCppVendor.cmake, against git
                                     repositories it builds for the purpose
+  consumer-shared/          ConsumerSmoke.hpp: the loopback echo and the core::log line the CPM
+                            and vendored consumer programs both run, so neither carries a copy
   consumer-cpm/             a consumer's own project, added to core-cpp with CPM: asserts that
                             core-cpp changed none of its flags, launcher or targets
   consumer-vendored/        the same for a verbatim copy, built with nothing fetched; CI runs it

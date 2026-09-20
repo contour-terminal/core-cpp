@@ -173,26 +173,40 @@ workflow refuses one without a section here.
   keeps ThreadSanitizer from reporting races between instrumented and uninstrumented code.
   Header-only targets and test binaries are not in it.
 - `cmake/CoreCppVendor.cmake`, the vendoring tool of the design spec's Part I §5:
-  `cmake -DMODE=sync -DREF=<tag> -DDEST=<dir> [-DREPO=<url or path>] [-DMODULES=<a;b>] -P ...`
+  `cmake -DMODE=sync -DREF=<tag> -DDEST=<dir> [-DREPO=<url or path>] ["-DMODULES=<a;b>"] -P ...`
   copies the file set out of git's own blobs (`-c core.autocrlf=false -c core.eol=lf`), refusing a
-  CR byte, a symbolic link and a submodule, and writes a `MANIFEST` of SHA-256 hashes; `MODE=check`
-  re-hashes a copy and refuses a hash mismatch, a missing file and an unlisted file, needing no
-  git, because a consumer runs it in its own CI. A sync writes into `DEST` only once the whole
-  copy is legal, replaces the copy it finds, and refuses a directory that is not one of ours.
+  CR byte, a symbolic link and a submodule, and writes a `MANIFEST` of SHA-256 hashes with LF
+  endings whatever the host, because the consumer commits that file; `MODE=check` re-hashes a copy
+  and refuses a hash mismatch, a missing file, an unlisted file and a manifest that says nothing
+  (no `# files` count, a count of zero, or one that disagrees with the lines below it), needing no
+  git, because a consumer runs it in its own CI. A sync writes into `DEST` only once the whole copy
+  is legal -- every refusal removes its staging directory first -- replaces the copy it finds, and
+  refuses a directory that is not one of ours. It also refuses what it cannot copy correctly: a
+  `REF` that is not a tag or a full 40-character SHA, a local `REPO` that is not the root of its
+  own repository, a ref whose tree is not core-cpp's, and a `MODULES` list that omits a module the
+  ref's own table builds unconditionally. The last three are one mistake seen from three sides --
+  running sync with a *vendored copy's* own script, where `REPO` defaults to the copy's directory
+  and git reads the consumer's repository instead.
   `tests/cmake/check-vendor-selftest.cmake` (ctest `core-cpp.vendor-selftest`, label `hygiene`)
-  proves each refusal by name against repositories it builds for the purpose. The file set is the
-  spec's, plus everything else directly in `src/core/` -- that module's `CMakeLists.txt` and
-  `Config.hpp.in`, without which the copy does not configure. `docs/vendoring.md` is the contract.
+  proves each refusal by name against repositories it builds for the purpose, and skips rather than
+  fails where git is absent. The file set is the spec's, plus everything else directly in
+  `src/core/` -- that module's `CMakeLists.txt` and `Config.hpp.in`, without which the copy does not
+  configure. File modes are outside the contract. `docs/vendoring.md` is the contract.
 - Consumer smoke tests, one project per way core-cpp is consumed, and the `consumer-smoke` CI job
   that runs all three (`ci-ok` requires it): `tests/consumer-cpm` adds core-cpp with CPM and
   asserts that doing so changed none of its own flags, launcher or include directories, that
-  `CORE_CPP_TARGETS` names every compiled library and no test binary, that no core-cpp target
+  `CORE_CPP_TARGETS` names every compiled library and no test binary, that no core-cpp target --
+  the header-only ones included, which is where an interface-scoped usage requirement would show --
   carries a PUBLIC or INTERFACE flag, and that no test of core-cpp's was built;
   `tests/consumer-vendored` builds a vendored copy of the commit under test with
   `CORE_CPP_FETCH_DEPS=OFF`, `CORE_CPP_WITH_TUI=OFF` and `CORE_CPP_WITH_TLS=ON` inside a container
   with no network and no git, and registers the verbatim check as one of its own tests;
   `tests/consumer-wasm` builds the WebAssembly subset behind one INTERFACE library, as morph does,
-  and runs it under node with emsdk 3.1.56.
+  runs it under node with emsdk 3.1.56, and refuses a build in which any core-cpp target links
+  threads -- read off those targets' `LINK_LIBRARIES`, because `find_package(Threads)` inside
+  core-cpp creates a target the parent scope cannot see. The loopback echo and the `core::log`
+  line the CPM and vendored programs share are `tests/consumer-shared/ConsumerSmoke.hpp`; each
+  program keeps only what is its own.
 
 ### Fixed
 
@@ -246,10 +260,13 @@ workflow refuses one without a section here.
   nobody had drained stalled `::write()` inside a signal context; and a resize arriving between a
   failed syscall and the mainline's `errno` check overwrote the value that check was about to
   read.
-- `core::tui::SyncGuard` flushes before it ends the synchronized region, as it already did before
-  beginning one. Anything composed inside the region and still buffered was emitted after
-  `CSI ?2026l` and so applied outside it -- `Screen::flush()`'s `applyCursorShape()` is the live
-  case. Move-assignment, which ends a region the same way, flushes too.
+- `core::tui::SyncGuard` flushes at both ends of the region, whichever way the guard was made.
+  Anything composed inside the region and still buffered was emitted after `CSI ?2026l` and so
+  applied outside it -- `Screen::flush()`'s `applyCursorShape()` is the live case -- and
+  move-assignment, which ends a region the same way, flushes too. The flush on the way *in* is the
+  constructor's rather than `TerminalOutput::syncGuard()`'s, so the natural RAII spelling
+  `auto guard = SyncGuard { output };` no longer emits previously buffered bytes inside the
+  region it is opening.
 - `core::tui::SyncGuard` writes its begin and end sequences (DEC mode 2026) through the
   `TerminalOutput` it brackets, so they follow that output's `writeToDestination()` wherever its
   bytes go. endo's guard wrote them to the process's standard output whatever the output was
