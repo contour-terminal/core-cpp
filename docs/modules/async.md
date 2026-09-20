@@ -123,7 +123,8 @@ harness (an MSVC coroutine-unwind interaction that also affects `std::generator`
 
 From contour's `src/coro/README.md` at `6777ff05`, as far as it still holds:
 
-- `core::async` includes nothing but the standard library. `core::net` is the layer that knows
+- `core::async` includes nothing but the standard library (and links what that needs: Threads,
+  above). `core::net` is the layer that knows
   about sockets, and neither depends on anything above it in the
   [module table](index.md).
 - Coroutine parameters are values, never references: a reference dangles once the coroutine
@@ -146,7 +147,12 @@ From contour's `src/coro/README.md` at `6777ff05`, as far as it still holds:
   `ThreadPoolExecutor`, `AsyncQueue` with a stop-aware `pop`, and an awaiter that takes ownership
   of the task it awaits.
 
-Depends on the standard library only. Under WebAssembly everything builds except
+Depends on no other core-cpp module, and on Threads: the `StopToken` fallback synchronises its
+stop state with a `std::mutex`, a `std::condition_variable` and `std::this_thread::get_id()`, so
+`target_link_libraries(app PRIVATE core::async)` has to carry pthread wherever that is a library of
+its own. `core-cpp.async-link-smoke` is that link, made with the fallback forced and nothing else
+on the line. Under single-threaded Emscripten the fallback keeps plain state and the module links
+nothing. Under WebAssembly everything builds except
 `ThreadPoolExecutor.hpp` (Task B1), which refuses to compile without threads; where libc++ has no
 `<stop_token>` without its experimental library, `StopToken` is the fallback. See
 [Coroutines and lifetimes](../design/coroutines-and-lifetimes.md).

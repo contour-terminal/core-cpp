@@ -1,7 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
-# core::async: the coroutine vocabulary, header-only and needing nothing but the standard library.
+# core::async: the coroutine vocabulary, header-only, needing nothing of the standard library but
+# what a threaded standard library already links -- see Threads below.
 # Task A5 imports contour's Task, cancellation and combinators; Task B1 adds fastcached's executors.
+#
+# Threads, on the same condition core::base uses, which is off exactly under single-threaded
+# Emscripten (cmake/CoreCppDependencies.cmake). StopToken.hpp's fallback synchronises its stop
+# state with a std::mutex, a std::condition_variable and std::this_thread::get_id() wherever
+# CORE_CPP_USE_THREADS is on, and an INTERFACE target that declares none of that leaves
+# `target_link_libraries(app PRIVATE core::async)` -- what the consumer guide shows, and what morph
+# and tuidu will write -- failing to link wherever pthread is a library of its own and the fallback
+# branch is taken. PUBLIC because the headers are all there is of this module.
+set(_coreCppAsyncLibs "")
+if(CORE_CPP_USE_THREADS)
+    list(APPEND _coreCppAsyncLibs Threads::Threads)
+endif()
+
 core_cpp_add_module(async KIND INTERFACE
     HEADERS
         Awaitable.hpp
@@ -10,7 +24,19 @@ core_cpp_add_module(async KIND INTERFACE
         Task.hpp
         UniqueCoroHandle.hpp
         WhenAll.hpp
-        WhenAny.hpp)
+        WhenAny.hpp
+    PUBLIC_LIBS ${_coreCppAsyncLibs})
+
+# That the module carries the dependency, asserted here because a host whose pthread is part of
+# libc (glibc 2.34 and later, the Windows CRT, libSystem) links the program below either way and
+# would report nothing.
+get_target_property(_coreCppAsyncInterfaceLibs core-cpp-async INTERFACE_LINK_LIBRARIES)
+if(CORE_CPP_USE_THREADS AND NOT "${_coreCppAsyncInterfaceLibs}" MATCHES "Threads::Threads")
+    message(FATAL_ERROR
+        "[core-cpp] core::async does not link Threads, although <core/async/StopToken.hpp>'s "
+        "fallback uses std::mutex, std::condition_variable and std::this_thread. A consumer that "
+        "links core::async alone would fail to link wherever pthread is a library of its own.")
+endif()
 
 # The tests of everything that names a StopToken.
 set(_coreCppAsyncStopTokenTests
@@ -61,6 +87,19 @@ core_cpp_add_test(async
 core_cpp_add_test(async NAME async-fallback
     SOURCES ${_coreCppAsyncStopTokenTests}
     DEFINITIONS CORE_ASYNC_FORCE_STOP_TOKEN_FALLBACK ${_coreCppAsyncDefinitions})
+
+# The link a consumer makes: core::async alone, with the fallback forced, so that what the
+# fallback needs has to come from core::async's own usage requirements. It is not a
+# core_cpp_add_test(), because that links core::testing_main, which brings core::base, which links
+# Threads -- which is exactly what hid this.
+if(CORE_CPP_TESTING)
+    add_executable(core-cpp-async-link-smoke StopTokenLinkSmoke.cpp)
+    target_link_libraries(core-cpp-async-link-smoke PRIVATE core::async)
+    target_compile_definitions(core-cpp-async-link-smoke PRIVATE CORE_ASYNC_FORCE_STOP_TOKEN_FALLBACK)
+    core_cpp_apply_toolchain(core-cpp-async-link-smoke)
+    add_test(NAME core-cpp.async-link-smoke COMMAND core-cpp-async-link-smoke)
+    set_tests_properties(core-cpp.async-link-smoke PROPERTIES LABELS "core-cpp;async;hygiene")
+endif()
 
 # Which StopToken this toolchain gets, in the configure log: whether core-cpp.async tests
 # std::stop_token or the fallback differs between CI jobs, and nothing else shows it. Each probe

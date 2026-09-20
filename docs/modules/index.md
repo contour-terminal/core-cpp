@@ -11,7 +11,7 @@ namespace is its directory (`src/core/net/` is `core::net`; headers directly in 
 | [log](log.md) | `core::log` | `core::log` | static | base | available |
 | [cli](cli.md) | `core::cli` | `core::cli` | static | base, log | available |
 | [platform](platform.md) | `core::platform` | `core::platform` | static | base, log | available |
-| [async](async.md) | `core::async` | `core::async` | header-only | the standard library | `StopToken`, `Task`, `whenAll`, `whenAny` available; executors: Task B1 |
+| [async](async.md) | `core::async` | `core::async` | header-only | Threads | `StopToken`, `Task`, `whenAll`, `whenAny` available; executors: Task B1 |
 | [net](net.md) | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | header-only, static, static | async, platform; OpenSSL for `net_tls` | contour's event loop, sockets, TLS and HTTP server available; the merge with fastcached's: Tasks B2 to B11 |
 | [tui](tui.md) | `core::tui` | `core::tui_output`, `core::tui` | static | `tui_output`: base; `tui`: also platform, async, libunicode, stb (optional) | endo's terminal UI available, native only; its runtime moves onto `core::net::EventLoop` in Task B12 |
 | [testing](testing.md) | `core::testing` | `core::testing`, `core::testing_dialogs`, `core::testing_main` | static, object, static | base; log and Catch2 for `testing_main` | available |
@@ -50,8 +50,10 @@ graph BT
     testing --> log
 ```
 
-`async` depends on the standard library only, so it can be used without anything else from
-core-cpp. `tui_output` depends on `base` only, so a program can write styled terminal output
+`async` depends on no other core-cpp module, so it can be used without anything else from
+core-cpp. It does link Threads, because the `StopToken` fallback synchronises its stop state with
+a `std::mutex`, a `std::condition_variable` and `std::this_thread::get_id()`; a single-threaded
+Emscripten build takes neither, and links nothing at all. `tui_output` depends on `base` only, so a program can write styled terminal output
 without an event loop, coroutines or libunicode; Lightweight's `dbtool` uses it that way.
 
 ## Public and private headers
