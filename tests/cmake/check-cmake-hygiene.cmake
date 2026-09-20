@@ -101,6 +101,12 @@ core_cpp_hygiene_rule(c-style-for KIND cpp
 # (readability-identifier-naming.NamespaceCase in .clang-tidy says the same). A file that declares
 # no named namespace (a main(), a file of TU-local helpers, a header of macros) is not checked, and
 # neither is a namespace alias.
+#
+# Known limitation (core-cpp#23): "first" is taken literally, so a leading forward-declaration
+# block for another module's type -- `namespace core::platform { class Wakeup; }` at the top of a
+# `core::tui` header -- is refused, and the header carries a full include instead
+# (`src/core/tui/Terminal.hpp`, `src/core/tui/TerminalInput.hpp`). A forward declaration defines
+# no namespace, so the rule should skip such a block.
 set(CORE_CPP_HYGIENE_RULES ${CORE_CPP_HYGIENE_RULES} namespace-directory)
 set(CORE_CPP_HYGIENE_namespace-directory_REASON
     "a source's first namespace is the one its directory names, in lowercase: src/core/<dir>/ is core::<dir>, src/core/ is core (Part I §1)")
