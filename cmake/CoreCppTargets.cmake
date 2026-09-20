@@ -336,9 +336,9 @@ function(core_cpp_add_test module)
     #
     # It reaches only what THIS function registers. A bare add_test() elsewhere keeps ctest's
     # 1500-second default unless it sets a TIMEOUT of its own, and two places register that way:
-    # the checks in tests/ (vendor-selftest alone takes 87s, so they want a looser bound than this
-    # one) and core-cpp.async-link-smoke in src/core/async/CMakeLists.txt. Adding a bare add_test()
-    # means deciding its bound with it.
+    # the checks in tests/, which set theirs per check because their runtimes differ by three orders
+    # of magnitude (0.09s to 93s), and core-cpp.async-link-smoke in src/core/async/CMakeLists.txt.
+    # Adding a bare add_test() means deciding its bound with it.
     #
     # The bound on a WAIT still belongs in the case, which can say what it waited for
     # (.agent/rules/testing.md). This only stops a missed one from costing 25 minutes.

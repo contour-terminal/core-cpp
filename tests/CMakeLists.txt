@@ -1,5 +1,36 @@
 # SPDX-License-Identifier: Apache-2.0
 
+# Every check here carries its own TIMEOUT, and none of them inherits one.
+#
+# core_cpp_add_test() bounds what IT registers at 300 seconds, and cannot reach these: they are
+# registered with a bare add_test() because they are not test binaries -- they are cmake -P scripts
+# and Python runs over the tree. Left unbounded they keep ctest's own default, so a check that hangs
+# reports "Timeout" after 25 minutes and names neither itself nor what it was waiting for. Every one
+# of these is compute-bound -- it reads the tree, spawns cmake, or shells out to a LOCAL git -- so
+# none of them is legitimately slow for a reason a bound would cut short, and a number that is
+# generous against its own measurement can only ever fire on a defect.
+#
+# One number per check rather than one for the file, because their runtimes differ by three orders
+# of magnitude. Measured worst-of-two on clang-debug (WSL) and cl-debug, in seconds:
+#
+#   check                    linux   windows   bound   headroom
+#   exit-codes                0.09      0.09      60      600x
+#   platform-sources          0.35      0.42      60      140x
+#   check-release-selftest    0.47      1.16      60       50x
+#   layering                  3.32      1.36     120       36x
+#   cmake-hygiene             7.57     13.79     180       13x
+#   cmake-hygiene-selftest   13.71      1.04     180       13x
+#   vendor-selftest          92.80     30.73     600        6x
+#
+# The three cheapest share a floor of 60 rather than a multiple of their own runtime: at that scale
+# the cost is process startup on a loaded runner, not the work. layering gets more than its 3.3s
+# asks for because it configures real CMake projects, which is the part of this set most exposed to
+# a cold runner. vendor-selftest gets the most in absolute terms and the least in multiples: it
+# builds a git repository per case and hashes a tree, so it is both the slowest and the most
+# variable (84s and 93s across the two runs above).
+#
+# migrate-renames, migrate-codemods and the Windows dialog canaries already set their own below.
+
 # The exit-code contract of core::testing_main, asserted from outside the binary: the fixture has one
 # tag per outcome, and check-exit-codes.cmake runs it once per tag.
 add_executable(core-cpp-exit-code-fixture ExitCodeFixture.cpp)
@@ -10,7 +41,7 @@ add_test(NAME core-cpp.exit-codes
                  "-DFIXTURE=$<TARGET_FILE:core-cpp-exit-code-fixture>"
                  "-DEMULATOR=${CMAKE_CROSSCOMPILING_EMULATOR}"
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-exit-codes.cmake")
-set_tests_properties(core-cpp.exit-codes PROPERTIES LABELS "core-cpp;hygiene")
+set_tests_properties(core-cpp.exit-codes PROPERTIES LABELS "core-cpp;hygiene" TIMEOUT 60)
 
 # What Part I §3 and the Global Constraints forbid, refused in this tree; and the scanner's own proof
 # that it refuses each of those things by name.
@@ -23,14 +54,16 @@ add_test(NAME core-cpp.cmake-hygiene-selftest
                  "-DSCANNER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-cmake-hygiene.cmake"
                  "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/cmake-hygiene-selftest"
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-cmake-hygiene-selftest.cmake")
-set_tests_properties(core-cpp.cmake-hygiene core-cpp.cmake-hygiene-selftest PROPERTIES LABELS "core-cpp;hygiene")
+set_tests_properties(core-cpp.cmake-hygiene core-cpp.cmake-hygiene-selftest PROPERTIES
+    LABELS "core-cpp;hygiene"
+    TIMEOUT 180)
 
 # Which of a module's source lists each platform compiles, Emscripten included (Part I §1).
 add_test(NAME core-cpp.platform-sources
          COMMAND "${CMAKE_COMMAND}"
                  "-DTARGETS=${CORE_CPP_SOURCE_DIR}/cmake/CoreCppTargets.cmake"
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-platform-sources.cmake")
-set_tests_properties(core-cpp.platform-sources PROPERTIES LABELS "core-cpp;hygiene")
+set_tests_properties(core-cpp.platform-sources PROPERTIES LABELS "core-cpp;hygiene" TIMEOUT 60)
 
 # What each row of the module table lets its target link, and that a link or a row outside it is
 # refused by name. Each scenario configures a project of its own, with no language enabled.
@@ -41,7 +74,7 @@ add_test(NAME core-cpp.layering
                  "-DGENERATOR=${CMAKE_GENERATOR}"
                  "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-layering.cmake")
-set_tests_properties(core-cpp.layering PROPERTIES LABELS "core-cpp;hygiene")
+set_tests_properties(core-cpp.layering PROPERTIES LABELS "core-cpp;hygiene" TIMEOUT 120)
 
 # A release tag must name the tree it releases (Part I §4). The release workflow runs
 # check-release.cmake on the pushed tag; this proves that it accepts a matching tree and refuses
@@ -51,7 +84,7 @@ add_test(NAME core-cpp.check-release-selftest
                  "-DCHECKER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-release.cmake"
                  "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/check-release-selftest"
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-release-selftest.cmake")
-set_tests_properties(core-cpp.check-release-selftest PROPERTIES LABELS "core-cpp;hygiene")
+set_tests_properties(core-cpp.check-release-selftest PROPERTIES LABELS "core-cpp;hygiene" TIMEOUT 60)
 
 # The vendoring tool exports the file set of Part I §5 byte for byte, and refuses each way a copy
 # can stop being verbatim. Every case builds a git repository of its own; the tool's MODE=check
@@ -71,7 +104,8 @@ add_test(NAME core-cpp.vendor-selftest
 set_tests_properties(core-cpp.vendor-selftest PROPERTIES
     SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
     SKIP_REGULAR_EXPRESSION "check-vendor-selftest: SKIPPED"
-    LABELS "core-cpp;hygiene")
+    LABELS "core-cpp;hygiene"
+    TIMEOUT 600)
 
 # The migration tooling of tools/migrate/: the rename table every consumer pull request reads, the
 # codemod that applies it, and the drift gate that keeps the table and the delivered headers from
