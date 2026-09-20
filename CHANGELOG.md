@@ -537,6 +537,18 @@ workflow refuses one without a section here.
   not only that `done()` is true.
 
 ### Changed
+- `core::async::whenAll` and `whenAny` are one runner, one join state and one awaiter,
+  parameterised by a policy (`<core/async/Join.hpp>`, all of it `core::async::detail`). The two
+  combinators had ~200 lines of near-identical coroutine, latch and start-phase code, differing in
+  one step: what a child finishing does to the shared state. That step, the token each child
+  observes and what the awaiting coroutine resumes with are what `WhenAll.hpp` and `WhenAny.hpp`
+  still hold. No public name changes, and no behaviour does: `whenAll` still surfaces the first
+  escape from any child and cancels nobody, `whenAny` still latches the first child to *complete*
+  and unwinds the rest. Two things the collapse settled by making them one source: what escaped a
+  child's task is recorded once, in the runner promise, where `whenAll`'s wrapper used to catch it
+  a second time in its own body; and `whenAll`'s join state is reference-counted like `whenAny`'s,
+  so the lifetime rule that keeps a stop state alive across its own `request_stop()` has one
+  spelling rather than two.
 
 - `core::async::whenAny()` reports a child that completed even when the awaiting flow's own token
   is stopped afterwards. It threw `OperationCancelled` whenever that token was stopped, so

@@ -26,6 +26,7 @@ set(_coreCppAsyncHeaders
     Cancellation.hpp
     DetachedTask.hpp
     IExecutor.hpp
+    Join.hpp
     ParkedWork.hpp
     ResumeOn.hpp
     StopToken.hpp

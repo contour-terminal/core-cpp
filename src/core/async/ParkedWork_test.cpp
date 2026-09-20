@@ -121,32 +121,26 @@ class QueuedExecutor final: public IExecutor
     std::vector<core::async::detail::Parked> _parked;
 };
 
-/// A base with `IExecutor`'s two overloads, and nothing virtual.
+/// A type that offers both overloads of `submit`, and one that offers only the borrowing half.
 ///
-/// The hiding below is about name lookup rather than about virtual dispatch, and stating it on a
-/// non-virtual base is what lets the negative control exist at all: GCC's `-Woverloaded-virtual`
-/// -- part of core-cpp's warning set, and so a build break -- refuses the same shape written over
-/// `IExecutor`, which is a second line of defence worth keeping rather than muting.
-struct TwoSubmitOverloads
+/// The second is what a derived class that re-declares `submit(handle)` and inherits its sibling
+/// reduces to, by name lookup -- the shape of
+/// [fastcached#1041](https://github.com/LASTRADA-Software/fastcached/issues/1041), where every
+/// call through the derived type bound to the borrowing overload and nothing diagnosed it.
+///
+/// Written WITHOUT a base class, because the inheriting form no longer compiles here at all: GCC's
+/// `-Woverloaded-virtual` and clang-tidy's `bugprone-derived-method-shadowing-base-method` each
+/// refuse it, and both are errors under core-cpp's warning set. That is two lines of defence the
+/// check below does not have, and they are worth more than a faithful reproduction of the defect.
+struct BothSubmitOverloads
 {
     void submit(std::coroutine_handle<> /*handle*/) {}
     void submit(ParkedWork /*work*/) {}
 };
 
-/// A derived type that re-declares ONE overload of `submit` and inherits the other: the shape of
-/// [fastcached#1041](https://github.com/LASTRADA-Software/fastcached/issues/1041), where the
-/// re-declaration hid the owning overload and every call through the derived type bound to the
-/// borrowing one.
-struct HidesTheOwningOverload: TwoSubmitOverloads
+/// What the hiding leaves reachable.
+struct OnlyBorrowingSubmit
 {
-    void submit(std::coroutine_handle<> /*handle*/) {}
-};
-
-/// The same, with the one line that fixes it.
-struct DeclaresBothOverloads: TwoSubmitOverloads
-{
-    using TwoSubmitOverloads::submit;
-
     void submit(std::coroutine_handle<> /*handle*/) {}
 };
 
@@ -226,10 +220,12 @@ DetachedTask parkUnderWhenAny(IExecutor* executor, FrameSentinel sentinel, Count
 // hides nothing and prove no rule.
 static_assert(TakesOwnedWork<IExecutor>, "the interface offers the owning overload");
 static_assert(TakesBorrowedWork<IExecutor>, "and the borrowing one");
-static_assert(!TakesOwnedWork<HidesTheOwningOverload>,
-              "re-declaring submit(handle) hides submit(ParkedWork): this is the defect");
-static_assert(TakesBorrowedWork<HidesTheOwningOverload>, "while the one it re-declared stays reachable");
-static_assert(TakesOwnedWork<DeclaresBothOverloads>, "a `using` declaration of the base name brings it back");
+static_assert(TakesOwnedWork<BothSubmitOverloads>);
+static_assert(TakesBorrowedWork<BothSubmitOverloads>);
+static_assert(!TakesOwnedWork<OnlyBorrowingSubmit>,
+              "a type that offers only submit(handle) does not take owned work: this is what the "
+              "hiding in #1041 left every caller with");
+static_assert(TakesBorrowedWork<OnlyBorrowingSubmit>, "while the overload it did declare stays reachable");
 static_assert(TakesOwnedWork<QueuedExecutor>, "so every executor in this tree takes owned work");
 static_assert(TakesBorrowedWork<QueuedExecutor>);
 

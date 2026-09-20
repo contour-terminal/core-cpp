@@ -113,8 +113,8 @@ Imported from contour's `src/coro` at `6777ff05`, with `coro::` renamed `core::a
   module's own types and over the near misses.
 - `whenAll(tasks...)` (`<core/async/WhenAll.hpp>`) starts every `Task<void>` and resumes the
   awaiting coroutine once all have finished. Each child inherits the awaiting coroutine's token.
-  It does not cancel siblings when one throws: the first exception is rethrown once every child
-  has finished.
+  It does not cancel siblings when one throws: the first escape — a cancellation included — is
+  rethrown once every child has finished.
 - `whenAny(tasks...)` (`<core/async/WhenAny.hpp>`) resolves to
   `std::optional<std::size_t>`: the index of the first `Task<void>` to **complete**, or
   `std::nullopt` where none did (an empty input, or every child unwound cancelled). The winner
@@ -133,6 +133,14 @@ Imported from contour's `src/coro` at `6777ff05`, with `coro::` renamed `core::a
   `request_stop()` is still on the stack — is destroyed before that request returns. Keeping a
   stop state alive across one's own `request_stop()` is the caller's job, and neither
   `std::stop_source` nor the fallback promises to do it.
+- Both are written over one runner, one join state and one awaiter (`<core/async/Join.hpp>`, all of
+  it `core::async::detail`, and a public header for the same reason `UniqueCoroHandle.hpp` is). A
+  *policy* supplies the one step that differs — what a child finishing does to the shared state —
+  together with the token each child observes and the bridge, if any, from the awaiting flow's own
+  token. `whenAll` latches nothing and takes the parent's token; `whenAny` latches the first child
+  to **complete**, requests stop on its own child source and arms the parent bridge. What escaped
+  a child's task is recorded once, in the runner promise, which is also what tells a cancelled
+  child from a failed one.
 
 Changes from contour's copy, besides the namespace:
 
@@ -143,6 +151,9 @@ Changes from contour's copy, besides the namespace:
   (`cppcoreguidelines-pro-type-member-init`), and its two helpers that only a case compiled off
   Windows uses are compiled off Windows too (`-Wunused-function` on clang-cl). `Task_test.cpp`
   skips its deep-chain case under Emscripten without `-mtail-call` and on GCC below `-O2` (above).
+- Task B1 collapsed `whenAll`'s and `whenAny`'s ~200 lines of near-identical runner, state and
+  awaiter into `Join.hpp`, and with them `makeWhenAllRunner`'s try/catch, which recorded what
+  escaped a child a second time after the promise already had.
 - The Phase A gate's third pass (Task A11): `whenAny`'s race state is reference-counted rather
   than a member of the awaiter, a child that completed beats a cancellation that follows, the
   result is a `std::optional` rather than a `detail::` `SIZE_MAX` sentinel, the variadic overloads

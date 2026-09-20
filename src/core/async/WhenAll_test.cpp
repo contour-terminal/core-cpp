@@ -52,6 +52,14 @@ Task<void> throwImmediately(std::string message)
     co_return; // unreachable; makes this a coroutine
 }
 
+/// Unwinds cancelled the moment it is started, the way a child whose inherited token was already
+/// stopped does.
+Task<void> cancelImmediately()
+{
+    throw core::async::OperationCancelled {};
+    co_return; // unreachable; makes this a coroutine
+}
+
 /// Parks on a ManualEvent, then increments a counter once resumed.
 Task<void> waitThenIncrement(std::vector<std::coroutine_handle<>>* waiters, int* counter)
 {
@@ -99,6 +107,20 @@ Task<void> joinTwoThrowers(std::string* caught)
     }
 }
 
+/// Awaits a cancelled child joined with a parked one; records whether the join rethrew the
+/// cancellation.
+Task<void> joinCancelledAndWaiter(std::vector<std::coroutine_handle<>>* waiters, int* counter, bool* caught)
+{
+    try
+    {
+        co_await whenAll(cancelImmediately(), waitThenIncrement(waiters, counter));
+    }
+    catch (core::async::OperationCancelled const&)
+    {
+        *caught = true;
+    }
+}
+
 /// Awaits two parked children that observe their inherited cancellation token.
 Task<void> joinTwoStopObservers(std::vector<std::coroutine_handle<>>* waiters, std::vector<bool>* observed)
 {
@@ -138,6 +160,30 @@ TEST_CASE("whenAll surfaces the FIRST child exception when several throw", "[Whe
 
     REQUIRE(root.done());
     REQUIRE(caught == "first");
+}
+
+TEST_CASE("whenAll rethrows a child's cancellation like any other escape", "[WhenAll]")
+{
+    // `whenAny` tells a cancelled child from a failed one, because it decides a winner on the
+    // difference; `whenAll` does not, and must not start: a child whose inherited token was
+    // stopped unwinds into the join, and the awaiting coroutine sees it. One runner serves both
+    // combinators, so the case that says which of them classifies belongs here.
+    auto waiters = std::vector<std::coroutine_handle<>> {};
+    auto counter = 0;
+    auto caught = false;
+    auto root = joinCancelledAndWaiter(&waiters, &counter, &caught);
+
+    root.handle().resume();
+
+    REQUIRE(waiters.size() == 1);
+    REQUIRE_FALSE(root.done());
+    REQUIRE_FALSE(caught);
+
+    waiters[0].resume(); // the surviving sibling completes -> the join resumes the parent
+
+    REQUIRE(root.done());
+    CHECK(counter == 1);
+    CHECK(caught);
 }
 
 TEST_CASE("whenAll children inherit the awaiting coroutine's stop token", "[WhenAll]")

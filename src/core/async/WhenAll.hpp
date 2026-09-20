@@ -12,18 +12,23 @@
 ///
 /// Cancellation: each child inherits the awaiting coroutine's @c StopToken, so
 /// cancelling that token unwinds all children. `whenAll` does not itself cancel
-/// siblings when one throws; the first exception is captured and rethrown once
+/// siblings when one throws; the first escape is captured and rethrown once
 /// every child has finished. Pair it with a shared token when you need
 /// one-fails-all-stop semantics.
+///
+/// The runner, the counter and the start phase are
+/// [`Join.hpp`](Join.hpp)'s, shared with @c whenAny. What is here is the one step that differs:
+/// the latch (there is none — every escape is the join's), the token each child observes, and
+/// what the awaiting coroutine is resumed with.
 
 #include <core/async/Awaitable.hpp>
 #include <core/async/Cancellation.hpp>
+#include <core/async/Join.hpp>
+#include <core/async/StopToken.hpp>
 #include <core/async/Task.hpp>
-#include <core/async/UniqueCoroHandle.hpp>
 
-#include <coroutine>
-#include <cstddef>
 #include <exception>
+#include <memory>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -34,165 +39,57 @@ namespace core::async
 namespace detail
 {
 
-    /// Shared join state for a `whenAll`: how many children are still running,
-    /// the awaiting coroutine to resume when the count reaches zero, and the
-    /// first exception (if any) observed across the children.
-    struct WhenAllState
+    /// `whenAll`'s policy: wait for every child, latch nothing, cancel nobody.
+    struct WhenAllPolicy
     {
-        std::size_t remaining = 0;            ///< Live children plus one for the start phase.
-        std::coroutine_handle<> continuation; ///< The `whenAll` awaiter's coroutine.
-        std::exception_ptr exception;         ///< First child exception, rethrown to the awaiter.
-    };
-
-    /// A child wrapper coroutine. It awaits one task, records any exception, and
-    /// at its final suspension decrements the shared counter — the last child to
-    /// finish tail-transfers to the awaiting coroutine. Decrementing at
-    /// `final_suspend` (rather than calling `resume()` inline) means the child
-    /// that resumes the parent is already suspended, so the parent may safely
-    /// destroy the child frames when it resumes.
-    class WhenAllRunner
-    {
-      public:
-        struct PromiseType
+        /// The join needs nothing of its own: a `whenAll` has no winner and no child source.
+        struct State: JoinState
         {
-            WhenAllState* state = nullptr; ///< Borrowed; outlives every runner.
-            StopToken token;               ///< Inherited from the awaiting coroutine.
-
-            /// The root of the await chain, where that chain belongs to nobody; otherwise empty.
-            ///
-            /// Inherited from the awaiting coroutine like @c token, and for the same reason: a
-            /// task this runner awaits parks on an executor, and what that executor may free is
-            /// the chain's root, not a frame in the middle. A runner that did not carry the answer
-            /// would make every park under a `whenAll` read as "somebody owns this", and a
-            /// detached chain would leak whole (see [`ParkedWork`](ParkedWork.hpp)).
-            std::coroutine_handle<> unownedRoot;
-
-            WhenAllRunner get_return_object() noexcept
-            {
-                return WhenAllRunner { std::coroutine_handle<PromiseType>::from_promise(*this) };
-            }
-
-            [[nodiscard]] std::suspend_always initial_suspend() const noexcept { return {}; }
-
-            /// Final awaiter that decrements the join counter and tail-transfers
-            /// to the awaiting coroutine when this is the last child to finish.
-            struct FinalAwaiter
-            {
-                [[nodiscard]] bool await_ready() const noexcept { return false; }
-
-                [[nodiscard]] std::coroutine_handle<> await_suspend(
-                    std::coroutine_handle<PromiseType> self) const noexcept
-                {
-                    auto* const join = self.promise().state;
-                    if (--join->remaining == 0 && join->continuation)
-                        return join->continuation;
-                    return std::noop_coroutine();
-                }
-
-                void await_resume() const noexcept {}
-            };
-
-            [[nodiscard]] FinalAwaiter final_suspend() const noexcept { return {}; }
-
-            /// A runner body never lets an exception escape (it try/catches the
-            /// awaited task), so this is unreachable in practice; capture defensively.
-            void unhandled_exception() const noexcept
-            {
-                if (state && !state->exception)
-                    state->exception = std::current_exception();
-            }
-
-            void return_void() const noexcept {}
-
-            /// @return The cancellation token observed by this runner (and the task it awaits).
-            [[nodiscard]] StopToken const& stopToken() const noexcept { return token; }
         };
 
-        using promise_type = PromiseType;
-        using HandleType = std::coroutine_handle<PromiseType>;
+        using ParentRegistration = NoParentRegistration;
 
-        explicit WhenAllRunner(HandleType handle) noexcept: _handle(handle) {}
+        /// Nothing to arm: `whenAll` cancels no child of its own, and each child already observes
+        /// the awaiting coroutine's token directly.
+        static void armParentBridge(ParentRegistration& /*registration*/,
+                                    std::shared_ptr<State> const& /*state*/,
+                                    StopToken const& /*parent*/) noexcept
+        {
+        }
 
-        WhenAllRunner(WhenAllRunner&&) noexcept = default;
-        WhenAllRunner& operator=(WhenAllRunner&&) noexcept = default;
-        WhenAllRunner(WhenAllRunner const&) = delete;
-        WhenAllRunner& operator=(WhenAllRunner const&) = delete;
-        ~WhenAllRunner() = default;
+        /// @return The awaiting coroutine's own token, so cancelling that flow unwinds every child.
+        [[nodiscard]] static StopToken childToken(State& /*state*/, StopToken const& parent) noexcept
+        {
+            return parent;
+        }
 
-        [[nodiscard]] HandleType handle() const noexcept { return _handle.get(); }
-
-      private:
-        UniqueCoroHandle<PromiseType> _handle;
+        /// Records the FIRST escape, whatever it was.
+        ///
+        /// A cancellation counts: a child whose inherited token was stopped unwinds into the join
+        /// like any other failure, and the awaiting coroutine sees it rethrown. `whenAny` is the
+        /// one that has to tell the two apart, because it decides a winner on the difference.
+        /// @param state The shared join state.
+        /// @param outcome What the child left behind.
+        static void onChildFinished(State& state, ChildOutcome const& outcome) noexcept
+        {
+            if (!state.exception)
+                state.exception = outcome.escaped;
+        }
     };
 
-    /// Wraps one task so it participates in the join (records exceptions, does not
-    /// rethrow into the runner so the counter is always decremented).
-    /// @param task The work to run.
-    /// @param state The shared join state.
-    inline WhenAllRunner makeWhenAllRunner(Task<void> task, WhenAllState* state)
-    {
-        try
-        {
-            co_await std::move(task);
-        }
-        catch (...)
-        {
-            if (!state->exception)
-                state->exception = std::current_exception();
-        }
-    }
-
-    /// Awaitable that starts every runner and resumes the awaiting coroutine once
-    /// all of them complete.
-    class WhenAllAwaiter
+    /// Awaitable that starts every runner and resumes the awaiting coroutine once all of them
+    /// complete.
+    class WhenAllAwaiter final: public JoinAwaiter<WhenAllPolicy>
     {
       public:
-        explicit WhenAllAwaiter(std::vector<Task<void>> tasks): _tasks(std::move(tasks)) {}
+        using JoinAwaiter<WhenAllPolicy>::JoinAwaiter;
 
-        [[nodiscard]] bool await_ready() const noexcept { return _tasks.empty(); }
-
-        /// Builds and starts a runner per task; keeps the awaiting coroutine
-        /// suspended unless every child completes synchronously.
-        /// @param awaiting The coroutine performing the `co_await whenAll(...)`.
-        /// @return False if all children finished synchronously (resume immediately).
-        template <typename Promise>
-        [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting)
-        {
-            _state.continuation = awaiting;
-            _state.remaining = _tasks.size() + 1; // +1 guards the start phase.
-
-            _runners.reserve(_tasks.size());
-            for (auto& task: _tasks)
-                _runners.push_back(makeWhenAllRunner(std::move(task), &_state));
-
-            for (auto& runner: _runners)
-            {
-                // The runner body holds `state` for exception capture; its final
-                // awaiter reads it through the promise, so wire both to the same
-                // join state before starting the runner.
-                runner.handle().promise().state = &_state;
-                runner.handle().promise().unownedRoot = detail::unownedRootOf(awaiting);
-                if constexpr (HasStopToken<Promise>)
-                    runner.handle().promise().token = awaiting.promise().stopToken();
-                runner.handle().resume();
-            }
-
-            // Release the start-phase guard; if every child already finished, do
-            // not suspend (resume the awaiting coroutine immediately).
-            return --_state.remaining != 0;
-        }
-
-        /// Rethrows the first child exception, if any.
+        /// Rethrows the first child escape, if any.
         void await_resume() const
         {
-            if (_state.exception)
-                std::rethrow_exception(_state.exception);
+            if (state().exception)
+                std::rethrow_exception(state().exception);
         }
-
-      private:
-        std::vector<Task<void>> _tasks;      ///< Moved into runners on suspend.
-        std::vector<WhenAllRunner> _runners; ///< Kept alive until the join completes.
-        WhenAllState _state {};              ///< Shared with the runners.
     };
 
 } // namespace detail
