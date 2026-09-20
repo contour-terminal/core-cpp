@@ -191,7 +191,6 @@ CheckOptions:
   readability-identifier-naming.ClassCase: CamelCase
   readability-identifier-naming.ClassConstantCase: CamelCase
   readability-identifier-naming.ClassMemberCase: CamelCase
-  readability-identifier-naming.ClassMethodCase: camelBack
   readability-identifier-naming.ConstantCase: camelBack
   readability-identifier-naming.ConstantMemberCase: camelBack
   readability-identifier-naming.ConstantMemberPrefix: '_'
@@ -217,13 +216,22 @@ CheckOptions:
   readability-identifier-naming.GlobalVariableCase: camelBack
   # No Hungarian notation: no g/s_/k prefixes. Globals are plain camelBack.
   #
-  # The hook names, as fastcached's FunctionIgnoredRegexp lists them, for every kind of
-  # function and method this block checks, and the members of std::stop_token, stop_source and
-  # stop_callback, which core::async's fallback for them spells as the standard does
-  # (src/core/async/StopToken.hpp).
-  readability-identifier-naming.FunctionIgnoredRegexp: '^(main|begin|end|push_back|pop_back|data|str|get|size|length|resize|empty|clear|value|c_str|capacity|to_string|string_view|assign|at|reserve|substr|sv|await_ready|await_suspend|await_resume|initial_suspend|final_suspend|unhandled_exception|return_value|return_void|yield_value|get_return_object|get_return_object_on_allocation_failure|address|operator_new|operator_delete|from_promise|allocate|deallocate|request_stop|stop_requested|stop_possible|get_token)$'
+  # The hook names, as fastcached's FunctionIgnoredRegexp lists them: what the language and the
+  # standard library bind to by spelling, for a free function and for a member function alike.
+  #
+  # There is no ClassMethodCase or ClassMethodIgnoredRegexp, and that is how the list below is
+  # written once rather than twice: with no ClassMethod style configured at all, a static member
+  # function falls through to the Method style, which says the same thing. (Checked with the
+  # pinned clang-tidy: a static member named Static_Method is still refused, and one named `get`
+  # is still exempt.) The one duplicate that cannot go is TypeAlias/Typedef below, and the one
+  # thing that cannot express any of them once is YAML: an anchor and an alias make LLVM's parser
+  # answer "unknown node kind" and the whole configuration invalid.
+  readability-identifier-naming.FunctionIgnoredRegexp: '^(main|begin|end|push_back|pop_back|data|str|get|size|length|resize|empty|clear|value|c_str|capacity|to_string|string_view|assign|at|reserve|substr|sv|await_ready|await_suspend|await_resume|initial_suspend|final_suspend|unhandled_exception|return_value|return_void|yield_value|get_return_object|get_return_object_on_allocation_failure|address|operator_new|operator_delete|from_promise|allocate|deallocate)$'
+  # The same, plus the members of std::stop_token, stop_source and stop_callback, which
+  # core::async's fallback for them spells as the standard does (src/core/async/StopToken.hpp).
+  # Those four are members and nothing else: a FREE function of one of those names is not a
+  # standard-library hook, and is held to the naming rule like any other.
   readability-identifier-naming.MethodIgnoredRegexp: '^(main|begin|end|push_back|pop_back|data|str|get|size|length|resize|empty|clear|value|c_str|capacity|to_string|string_view|assign|at|reserve|substr|sv|await_ready|await_suspend|await_resume|initial_suspend|final_suspend|unhandled_exception|return_value|return_void|yield_value|get_return_object|get_return_object_on_allocation_failure|address|operator_new|operator_delete|from_promise|allocate|deallocate|request_stop|stop_requested|stop_possible|get_token)$'
-  readability-identifier-naming.ClassMethodIgnoredRegexp: '^(main|begin|end|push_back|pop_back|data|str|get|size|length|resize|empty|clear|value|c_str|capacity|to_string|string_view|assign|at|reserve|substr|sv|await_ready|await_suspend|await_resume|initial_suspend|final_suspend|unhandled_exception|return_value|return_void|yield_value|get_return_object|get_return_object_on_allocation_failure|address|operator_new|operator_delete|from_promise|allocate|deallocate|request_stop|stop_requested|stop_possible|get_token)$'
   # Member typedefs the standard library looks up by name, and std::stop_callback's callback_type.
   readability-identifier-naming.TypeAliasIgnoredRegexp: '^(value_type|size_type|difference_type|pointer|const_pointer|reference|const_reference|iterator|const_iterator|reverse_iterator|const_reverse_iterator|iterator_category|iterator_concept|element_type|allocator_type|char_type|traits_type|key_type|mapped_type|promise_type|is_transparent|callback_type)$'
   readability-identifier-naming.TypedefIgnoredRegexp: '^(value_type|size_type|difference_type|pointer|const_pointer|reference|const_reference|iterator|const_iterator|reverse_iterator|const_reverse_iterator|iterator_category|iterator_concept|element_type|allocator_type|char_type|traits_type|key_type|mapped_type|promise_type|is_transparent|callback_type)$'
