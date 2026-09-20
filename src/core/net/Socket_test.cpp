@@ -248,9 +248,10 @@ TEST_CASE("a listener keeps accepting across sequential connections", "[net]")
     //
     // Which is why the wait is BOUNDED here rather than left to the suite's timeout: a guard for a
     // hang that itself hangs reports "Timeout" after 1500 seconds and names nothing
-    // (.agent/rules/testing.md: every wait is bounded and says what it waited for). The budget
-    // loses the race to the work by three orders of magnitude — three loopback connections with a
-    // 20ms pause between them — so it can only expire on the defect, never on a slow machine.
+    // (.agent/rules/testing.md: every wait is bounded and says what it waited for). The work is
+    // three loopback connections with a 20ms pause between them, and both sections together
+    // measure 0.147s against this 10s budget — about 70x, so it can only expire on the defect and
+    // not on a slow machine.
     constexpr auto Connections = 3;
     constexpr auto Budget = std::chrono::milliseconds { 10000 };
     for (auto const& backend: AllBackends)
@@ -461,11 +462,19 @@ Task<void> unixEcho(
             co_return;
         }
         auto const request = std::string_view { "unix-ping" };
-        std::ignore = co_await (*socket)->write(std::as_bytes(std::span { request }));
+        // Not discarded: a failed write left this arm walking into read() and parking there, and
+        // its sibling parked in its own read() waiting for bytes that were never sent — two parked
+        // arms and no stop, the same hang by another route. Returning is enough HERE, unlike in
+        // connectAndProbe's twin: returning destroys this socket, and echoServer co_returns on the
+        // EOF that produces rather than looping back into accept(). The sibling's shape is what
+        // makes the difference.
+        if (auto const wrote = co_await (*socket)->write(std::as_bytes(std::span { request }));
+            !wrote.has_value())
+            co_return;
         auto buffer = std::array<std::byte, 32> {};
         auto const n = co_await (*socket)->read(buffer);
         if (!n.has_value())
-            co_return; // the server arm already accepted and finishes on its own
+            co_return; // same: the EOF this return produces is what ends echoServer
         *ok = std::string_view { reinterpret_cast<char const*>(buffer.data()), *n } == "unix-ping";
     };
     co_await core::async::whenAll(echoServer(listener, served), client(loop, listener, path, matched));

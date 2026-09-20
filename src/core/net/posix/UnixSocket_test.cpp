@@ -102,9 +102,11 @@ Task<void> echoOnce(core::net::IListener* listener, bool* served)
 
 /// The client flow: connect to @p path, send a probe, read the echo back.
 ///
-/// Closes @p listener when it cannot connect. An arm that simply returns leaves its whenAll
-/// sibling parked in accept() with nothing left to wake it, which turns the case's red into a
-/// hang just as surely as a REQUIRE here would (.agent/rules/testing.md).
+/// Closes @p listener on EVERY branch that gives up, because its whenAll sibling @c echoOnce is a
+/// draining loop: it returns only once it has served a request or the accept fails, so nothing this
+/// arm can do to its own socket ends it. An arm that returns without that close leaves the sibling
+/// parked in accept() for ever, which turns the case's red into a hang just as surely as a REQUIRE
+/// here would (.agent/rules/testing.md).
 Task<void> connectAndProbe(EventLoop* loop, core::net::IListener* listener, std::string path, bool* matched)
 {
     auto connected = co_await core::net::connectUnix(loop, path);
@@ -118,8 +120,17 @@ Task<void> connectAndProbe(EventLoop* loop, core::net::IListener* listener, std:
     auto const probe = std::string_view { "probe" };
     auto const bytes =
         std::span<std::byte const> { reinterpret_cast<std::byte const*>(probe.data()), probe.size() };
+    // Closes the listener here too, and the comment this replaces said why it thought it need not:
+    // "the server already accepted; its arm sees this socket close and finishes". It does see the
+    // close — and that is not the same as finishing. echoOnce is a DRAINING LOOP: a read of 0 takes
+    // its `continue`, not a `co_return`, so it goes straight back into accept() with *served still
+    // false and parks there for ever. A sibling's shape, not the peer's observation, is what
+    // decides whether an early return is safe.
     if (auto const wrote = co_await sock->write(bytes); !wrote.has_value())
-        co_return; // the server already accepted; its arm sees this socket close and finishes
+    {
+        listener->close();
+        co_return;
+    }
 
     auto buffer = std::array<std::byte, 64> {};
     auto const got = co_await sock->read(buffer);
