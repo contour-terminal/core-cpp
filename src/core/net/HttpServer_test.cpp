@@ -372,6 +372,65 @@ TEST_CASE("readRequest refuses a head whose blank line is a bare LF", "[net][htt
     REQUIRE(error->code == NetErrorCode::Other);
 }
 
+TEST_CASE("readRequest rejects whitespace between a field name and its colon", "[net][http]")
+{
+    // RFC 9112 §5.1 makes this a MUST reject, for the reason finding 1 above is about: a front-end
+    // that trims "Host :" back to "Host" and a server that rejects it (or the reverse) do not agree
+    // on what the message says. Trimming was the lenient half of that disagreement.
+    constexpr auto Spellings = std::array {
+        std::string_view { "Host : example" },    // SP before the colon
+        std::string_view { "Host\t: example" },   // HTAB before it
+        std::string_view { "Host \t : example" }, // both
+        std::string_view { ": headerless" },      // an empty field name is not a name
+    };
+
+    for (auto const spelling: Spellings)
+    {
+        DYNAMIC_SECTION("field line=" << spelling)
+        {
+            auto source = core::net::PollEventSource {};
+            auto loop = EventLoop { source };
+            auto pair = core::net::testing::makeSocketPair(loop);
+            REQUIRE(pair.has_value());
+
+            auto const wire = std::string { "GET / HTTP/1.1\r\n" } + std::string { spelling } + "\r\n\r\n";
+            auto const limits = HttpLimits {};
+            auto reply = std::string {};
+            auto seen = std::optional<HttpRequest> {};
+            auto error = std::optional<core::net::NetError> {};
+            loop.blockOn(
+                exchange(pair->first.get(), pair->second.get(), &wire, &reply, &limits, &seen, &error));
+
+            REQUIRE_FALSE(seen.has_value());
+            REQUIRE(error.has_value());
+            REQUIRE(error->code == NetErrorCode::Other);
+        }
+    }
+}
+
+TEST_CASE("readRequest keeps accepting whitespace AFTER the colon", "[net][http]")
+{
+    // The valid half of the rule the case above enforces: RFC 9112 §5 pads a field-value with
+    // optional whitespace on both sides, which a recipient removes. Rejecting the name's
+    // whitespace must not cost the ordinary "Host: example" spelling, nor an aligned one.
+    auto source = core::net::PollEventSource {};
+    auto loop = EventLoop { source };
+    auto pair = core::net::testing::makeSocketPair(loop);
+    REQUIRE(pair.has_value());
+
+    auto const wire = std::string { "GET / HTTP/1.1\r\nHost:  \texample \t\r\nX-Empty:\r\n\r\n" };
+    auto const limits = HttpLimits {};
+    auto reply = std::string {};
+    auto seen = std::optional<HttpRequest> {};
+    auto error = std::optional<core::net::NetError> {};
+    loop.blockOn(exchange(pair->first.get(), pair->second.get(), &wire, &reply, &limits, &seen, &error));
+
+    REQUIRE_FALSE(error.has_value());
+    REQUIRE(seen.has_value());
+    CHECK(seen->header("Host") == "example"); // padding on both sides removed
+    CHECK(seen->header("X-Empty").empty());   // an empty value is still a value
+}
+
 TEST_CASE("readRequest rejects an unparsable Content-Length", "[net][http]")
 {
     auto source = core::net::PollEventSource {};

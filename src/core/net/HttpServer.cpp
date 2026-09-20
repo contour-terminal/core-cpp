@@ -55,10 +55,13 @@ namespace
             a, b, [](unsigned char x, unsigned char y) { return std::tolower(x) == std::tolower(y); });
     }
 
+    /// The ASCII whitespace a field VALUE may be padded with — and which a field NAME, being a
+    /// token, may not contain anywhere.
+    constexpr auto Whitespace = std::string_view { " \t\r\n\f\v" };
+
     /// Trims leading and trailing ASCII whitespace from a view.
     [[nodiscard]] std::string_view trim(std::string_view s) noexcept
     {
-        constexpr auto Whitespace = std::string_view { " \t\r\n\f\v" };
         auto const first = s.find_first_not_of(Whitespace);
         if (first == std::string_view::npos)
             return {};
@@ -71,7 +74,8 @@ namespace
     /// @param request The request to populate (not owned).
     /// @return The advertised Content-Length, or std::nullopt when the head must be
     ///         refused: a malformed request line (fewer than three space-separated
-    ///         tokens), an obs-fold continuation, a header without a colon, an
+    ///         tokens), an obs-fold continuation, a header without a colon, a field
+    ///         name that is empty or carries whitespace before its colon, an
     ///         unparsable or conflicting Content-Length, a Transfer-Encoding, or a
     ///         blank line with bytes still behind it (see the empty-line case below).
     [[nodiscard]] std::optional<std::size_t> parseHead(std::string_view headerText, HttpRequest* request)
@@ -141,7 +145,20 @@ namespace
             auto const colon = line.find(':');
             if (colon == std::string_view::npos)
                 return std::nullopt; // a header line without a colon is not a header
-            auto const name = trim(line.substr(0, colon));
+
+            // RFC 9112 §5.1 makes this a MUST: a server rejects any request that carries
+            // whitespace between a field name and its colon. Trimming it instead is the same
+            // class of defect as the bare-LF blank line above — a front-end that trims and a
+            // server that rejects (or the reverse) disagree about where the field name ends, and
+            // so about what the message says. A field name is a token, so no whitespace belongs
+            // anywhere inside it, and an empty one is not a name at all. (A name whose whitespace
+            // LEADS the line is already refused as an obs-fold continuation above.)
+            auto const name = line.substr(0, colon);
+            if (name.empty() || name.find_first_of(Whitespace) != std::string_view::npos)
+                return std::nullopt;
+
+            // The VALUE keeps its trim: RFC 9112 §5 pads field-value with optional whitespace on
+            // both sides that a recipient removes, which is the ordinary "Host: example" spelling.
             auto const value = trim(line.substr(colon + 1));
             request->headers.emplace_back(std::string { name }, std::string { value });
 
