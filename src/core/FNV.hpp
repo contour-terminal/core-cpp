@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <array>
+#include <bit>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -45,20 +46,27 @@ class FNV
         return (*this)((*this)(memory, value), moreValues...);
     }
 
-    /// Incrementally hashes a trivially copyable value.
+    /// Incrementally hashes a value whose bytes are its value.
     ///
     /// The value is treated as a sequence of bytes and hashed byte-wise.
     /// This overload explicitly excludes std::string and std::string_view,
     /// which are handled by dedicated overloads.
+    ///
+    /// Only a type with unique object representations qualifies: a type with padding has bytes
+    /// that are not part of its value, and hashing them made two objects with equal members hash
+    /// differently depending on what their padding happened to hold.
     template <typename V>
     constexpr U operator()(U memory, V const& value) const noexcept
-        requires(std::is_trivially_copyable_v<V> && !std::same_as<V, std::string>
+        requires(std::has_unique_object_representations_v<V> && !std::same_as<V, std::string>
                  && !std::same_as<V, std::string_view>)
     {
         // The step is spelled out rather than delegated to (*this)(memory, byte): an unsigned char
         // byte binds `V const&` exactly, better than it converts to T, so the call would pick this
         // overload again and recurse forever for every T but unsigned char.
-        auto const bytes = std::span { reinterpret_cast<unsigned char const*>(&value), sizeof(V) };
+        //
+        // std::bit_cast rather than a reinterpret_cast through the object representation, which
+        // no constant evaluation may do -- so the constexpr above was unusable at compile time.
+        auto const bytes = std::bit_cast<std::array<unsigned char, sizeof(V)>>(value);
         for (auto const byte: bytes)
         {
             memory ^= static_cast<U>(byte);
