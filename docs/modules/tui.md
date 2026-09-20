@@ -120,11 +120,26 @@ auto const [map, next] = core::tui::highlightLine(line, language, state, &highli
 ```
 
 A registry answers for the built-in languages too — built-in rows are consulted first — so
-registering one costs an application nothing it already had. An id is meaningful only to the
-registry that handed it out: passing one to a different registry, or to a call with no registry,
-highlights the line as plain text rather than as some other language. Well-known *file names*
-(`CMakeLists.txt`, `.clang-format`, `.editorconfig`) stay built-in: an application knows what its
-own configuration file is called and names the language itself.
+registering one costs an application nothing it already had.
+
+!!! warning "A registered id belongs to the registry that issued it"
+    Registered ids are dense from `FirstRegisteredLanguageId` in registration order and carry
+    nothing that identifies their registry, so passing one to a *different* registry is a
+    precondition violation — the same contract a `std::vector::iterator` has with its container.
+    If that registry issued an id in the same position, the line is highlighted as **its**
+    language, silently and wrongly; only an id past the end of it gives plain text. A program that
+    holds one registry, which is the shape this is designed for, cannot hit this. One that holds
+    two keeps each id with its own registry.
+
+    Built-in ids — everything below `FirstRegisteredLanguageId` — are not issued by anybody and
+    *are* portable: they mean the same language in any registry and in none.
+
+The three built-in tables the module ships are `ExtensionLanguageTable`, `FenceTagLanguageTable`
+and `FilenameLanguageTable`, and a registered language claims extensions and fence tags but never
+a **file name**: `CMakeLists.txt`, `.clang-format` and `.editorconfig` are well known beyond any
+one project, whereas an application knows what its own configuration file is called and names the
+language for it itself, rather than asking `detectLanguageFromPath()` to guess. A registration
+whose extension would be shadowed by a file-name row is refused rather than left dead.
 
 ## Layout
 

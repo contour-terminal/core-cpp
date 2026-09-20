@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <ranges>
 #include <span>
 #include <string>
@@ -984,6 +985,35 @@ TEST_CASE("GenericSyntaxHighlighter.fence_tag_table_is_the_shipped_set", "[tui][
     checkTableMatchesGolden(FenceTagLanguageTable, ExpectedFenceTagTable);
 }
 
+TEST_CASE("GenericSyntaxHighlighter.filename_table_is_the_shipped_set", "[tui][highlight]")
+{
+    // The third table, and the one detectLanguageFromPath() consults first. It is also the table
+    // that carried a consumer's `-format` dotfile, and the one that had no golden copy until a
+    // review put `{ ".endo-format", Yaml }` back into it and the whole suite stayed green.
+    constexpr auto ExpectedFilenameTable = std::to_array<LanguageToken>({
+        { .token = "CMakeLists.txt", .language = LanguageId::CMake },
+        { .token = "Makefile", .language = LanguageId::Bash },
+        { .token = "makefile", .language = LanguageId::Bash },
+        { .token = "GNUmakefile", .language = LanguageId::Bash },
+        { .token = "Dockerfile", .language = LanguageId::Bash },
+        { .token = ".clang-format", .language = LanguageId::Yaml },
+        { .token = ".clang-tidy", .language = LanguageId::Yaml },
+        { .token = ".editorconfig", .language = LanguageId::Ini },
+    });
+
+    checkTableMatchesGolden(FilenameLanguageTable, ExpectedFilenameTable);
+
+    // Every row resolves through the entry point that reads it, so the golden copy pins behaviour
+    // and not just data.
+    for (auto const& row: FilenameLanguageTable)
+    {
+        INFO("file name " << row.token);
+        CHECK(detectLanguageFromPath(row.token) == row.language);
+        CHECK(detectLanguageFromPath(std::string("/home/user/project/") + std::string(row.token))
+              == row.language);
+    }
+}
+
 // =============================================================================
 // Registered languages
 // =============================================================================
@@ -1020,6 +1050,12 @@ constexpr auto BuiltinProbes = std::to_array<BuiltinProbe>({
 
 static_assert(BuiltinProbes.size() + 1 == BuiltinLanguageTable.size(),
               "Every built-in language except None needs a row in BuiltinProbes.");
+
+/// @brief The id a registry issues for its @p index-th registered language.
+constexpr auto registeredId(std::size_t index) -> LanguageId
+{
+    return static_cast<LanguageId>(static_cast<std::uint8_t>(FirstRegisteredLanguageId + index));
+}
 
 /// @brief A highlighter that paints every character of a line with one category.
 auto uniformHighlighter(Cat category) -> HighlightFunction
@@ -1224,6 +1260,94 @@ TEST_CASE("SyntaxHighlighterRegistry.a_claimed_token_is_refused", "[tui][highlig
     CHECK(registry.detectFromFenceTag("python") == LanguageId::Python);
 }
 
+TEST_CASE("SyntaxHighlighterRegistry.a_token_that_could_never_match_is_refused", "[tui][highlight]")
+{
+    auto registry = SyntaxHighlighterRegistry {};
+
+    SECTION("an extension without its leading dot")
+    {
+        // detectLanguageFromPath() looks up from the last dot onwards, so "toy" could never be
+        // found. Registering it would succeed and do nothing at all.
+        auto const dotless = registry.registerLanguage({ .name = "toy",
+                                                         .extensions = { "toy" },
+                                                         .fenceTags = { "toy" },
+                                                         .highlight = uniformHighlighter(Cat::Keyword) });
+        REQUIRE_FALSE(dotless.has_value());
+        CHECK(dotless.error().error == LanguageRegistrationError::MalformedToken);
+        CHECK(dotless.error().token == "toy");
+    }
+
+    SECTION("an extension that is only a dot")
+    {
+        auto const bare = registry.registerLanguage({ .name = "toy",
+                                                      .extensions = { "." },
+                                                      .fenceTags = {},
+                                                      .highlight = uniformHighlighter(Cat::Keyword) });
+        REQUIRE_FALSE(bare.has_value());
+        CHECK(bare.error().error == LanguageRegistrationError::MalformedToken);
+    }
+
+    SECTION("an empty fence tag, which is what a bare fence yields")
+    {
+        auto const blank = registry.registerLanguage({ .name = "toy",
+                                                       .extensions = { ".toy" },
+                                                       .fenceTags = { "" },
+                                                       .highlight = uniformHighlighter(Cat::Keyword) });
+        REQUIRE_FALSE(blank.has_value());
+        CHECK(blank.error().error == LanguageRegistrationError::MalformedToken);
+    }
+
+    SECTION("an extension a well-known file name would shadow")
+    {
+        // `.editorconfig` is matched as a whole file name, before any extension lookup, so this
+        // registration would be dead for the one path that spells it exactly.
+        auto const shadowed = registry.registerLanguage({ .name = "toy",
+                                                          .extensions = { ".editorconfig" },
+                                                          .fenceTags = { "toy" },
+                                                          .highlight = uniformHighlighter(Cat::Keyword) });
+        REQUIRE_FALSE(shadowed.has_value());
+        CHECK(shadowed.error().error == LanguageRegistrationError::TokenInUse);
+        CHECK(shadowed.error().token == ".editorconfig");
+        CHECK(detectLanguageFromPath(".editorconfig", &registry) == LanguageId::Ini);
+    }
+
+    CHECK(registry.registeredCount() == 0);
+}
+
+TEST_CASE("SyntaxHighlighterRegistry.the_reserved_id_range_runs_out", "[tui][highlight]")
+{
+    auto registry = SyntaxHighlighterRegistry {};
+
+    // The range is 128 ids wide; the last one issued is 255, and nothing wraps onto a built-in.
+    constexpr auto Capacity = std::size_t { 256 } - FirstRegisteredLanguageId;
+    for (auto const i: std::views::iota(std::size_t { 0 }, Capacity))
+    {
+        auto const name = "lang" + std::to_string(i);
+        auto const id = registry.registerLanguage({ .name = name,
+                                                    .extensions = { "." + name },
+                                                    .fenceTags = { name },
+                                                    .highlight = uniformHighlighter(Cat::Keyword) });
+        INFO("registration " << i);
+        REQUIRE(id.has_value());
+        CHECK(std::to_underlying(*id) == static_cast<std::uint8_t>(FirstRegisteredLanguageId + i));
+    }
+    REQUIRE(registry.registeredCount() == Capacity);
+
+    auto const overflow = registry.registerLanguage({ .name = "onetoomany",
+                                                      .extensions = { ".onetoomany" },
+                                                      .fenceTags = { "onetoomany" },
+                                                      .highlight = uniformHighlighter(Cat::Keyword) });
+    REQUIRE_FALSE(overflow.has_value());
+    CHECK(overflow.error().error == LanguageRegistrationError::CapacityReached);
+
+    // A full registry still answers, for its own languages and for the built-ins.
+    CHECK(registry.registeredCount() == Capacity);
+    CHECK(registry.detectFromExtension(".lang0") == registeredId(0));
+    CHECK(registry.detectFromExtension(".lang127") == registeredId(Capacity - 1));
+    CHECK(registry.detectFromExtension(".cpp") == LanguageId::Cpp);
+    CHECK(registry.detectFromExtension(".onetoomany") == LanguageId::None);
+}
+
 TEST_CASE("SyntaxHighlighterRegistry.a_nameless_or_mute_definition_is_refused", "[tui][highlight]")
 {
     auto registry = SyntaxHighlighterRegistry {};
@@ -1266,19 +1390,41 @@ TEST_CASE("SyntaxHighlighterRegistry.an_unregistered_token_falls_through_to_none
     CHECK(detectLanguageFromPath("/src/main.nope") == LanguageId::None);
 }
 
-TEST_CASE("SyntaxHighlighterRegistry.a_registered_id_without_its_registry_is_plain_text", "[tui][highlight]")
+TEST_CASE("SyntaxHighlighterRegistry.a_registered_id_belongs_to_the_registry_that_issued_it",
+          "[tui][highlight]")
 {
-    auto registry = SyntaxHighlighterRegistry {};
-    auto const toy = registry.registerLanguage({ .name = "toy",
-                                                 .extensions = { ".toy" },
-                                                 .fenceTags = { "toy" },
-                                                 .highlight = uniformHighlighter(Cat::Keyword) });
+    auto toys = SyntaxHighlighterRegistry {};
+    auto const toy = toys.registerLanguage({ .name = "toy",
+                                             .extensions = { ".toy" },
+                                             .fenceTags = { "toy" },
+                                             .highlight = uniformHighlighter(Cat::Keyword) });
     REQUIRE(toy.has_value());
 
-    // An id means something only to the registry that handed it out. Anywhere else it highlights
-    // as plain text rather than as some other language.
+    // An id this registry did not issue, and cannot resolve, is plain text rather than a guess.
+    auto const empty = SyntaxHighlighterRegistry {};
     CHECK(highlightLine("let x", *toy).first == HighlightMap(5, Cat::Default));
-    auto const other = SyntaxHighlighterRegistry {};
-    CHECK(highlightLine("let x", *toy, HighlightState::Normal, &other).first
+    CHECK(highlightLine("let x", *toy, HighlightState::Normal, &empty).first
           == HighlightMap(5, Cat::Default));
+
+    // But that is a consequence of the other registry being empty, not a guarantee. Ids are
+    // dense from FirstRegisteredLanguageId in registration order, so a registry that has issued
+    // as many ids resolves this one to whatever it registered in that position -- here, a
+    // different language, highlighted without complaint. Passing a registered id to a registry
+    // that did not issue it is a precondition violation, and this is what it costs.
+    auto others = SyntaxHighlighterRegistry {};
+    auto const doll = others.registerLanguage({ .name = "doll",
+                                                .extensions = { ".doll" },
+                                                .fenceTags = { "doll" },
+                                                .highlight = uniformHighlighter(Cat::String) });
+    REQUIRE(doll.has_value());
+    REQUIRE(*doll == *toy); // the first id of either registry, and nothing distinguishes them
+    CHECK(highlightLine("let x", *toy, HighlightState::Normal, &others).first
+          == HighlightMap(5, Cat::String)); // doll's category, from toy's id
+
+    // The built-in half of LanguageId is portable, because it is not issued by anybody: every
+    // registry answers for it identically, and a consumer may pass one anywhere.
+    CHECK(toys.detectFromExtension(".cpp") == others.detectFromExtension(".cpp"));
+    CHECK(empty.detectFromExtension(".cpp") == LanguageId::Cpp);
+    CHECK(toys.highlightLine("int x;", LanguageId::Cpp) == others.highlightLine("int x;", LanguageId::Cpp));
+    CHECK(toys.highlightLine("int x;", LanguageId::Cpp) == highlightLine("int x;", LanguageId::Cpp));
 }

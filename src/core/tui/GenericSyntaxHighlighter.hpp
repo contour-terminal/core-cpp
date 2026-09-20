@@ -58,20 +58,38 @@ enum class LanguageId : std::uint8_t
     Cmd,        ///< Windows CMD / batch scripts.
     Xml,        ///< XML and XML-based dialects (.props, .csproj, .xaml, .svg, …).
     Ini,        ///< INI / .editorconfig configuration files.
-    Last,       ///< Not a language: how many built-ins there are, which BuiltinLanguageTable uses.
+
+    Last, ///< Not a language: the number of languages above it, so a table or a test can cover
+          ///< every one of them without restating the list. Never detected, never highlighted,
+          ///< never returned by a registry. **A new language goes above it, never below**, and
+          ///< above it but below FirstRegisteredLanguageId, which is where registered ids start.
+          ///< One appended after `Last` still satisfies the switch in highlightLine() and still
+          ///< leaves `Last` looking like a count, and everything that walks `[0, Last)` —
+          ///< BuiltinLanguageTable, name() and the golden tests — would miss it;
+          ///< builtinLanguageTableIsIndexedByLanguageId() is what refuses that, at compile time.
 };
 
-/// @brief The first id SyntaxHighlighterRegistry::registerLanguage() hands out.
+/// @brief The first id SyntaxHighlighterRegistry::registerLanguage() issues.
 ///
 /// Values below it are the enumerators of LanguageId; values from here up are registered
-/// languages, numbered in registration order. The gap is deliberate: a built-in can be appended
-/// without renumbering anything a registry handed out.
+/// languages, numbered densely in registration order. The gap is deliberate: a built-in can be
+/// appended without renumbering anything a registry has issued.
 inline constexpr auto FirstRegisteredLanguageId = std::uint8_t { 128 };
 
-/// @brief Whether @p language was handed out by a SyntaxHighlighterRegistry.
+/// @brief Whether @p language was issued by a SyntaxHighlighterRegistry.
 ///
-/// A registered id only means something to the registry that produced it; passing one anywhere
-/// else highlights the line as plain text rather than as some other language.
+/// @warning **A registered id belongs to the registry that issued it.** Ids are dense from
+///          FirstRegisteredLanguageId in registration order and carry nothing that identifies
+///          their registry, so passing one to a different registry is a precondition violation:
+///          if that registry has issued an id in the same position, the line is highlighted as
+///          *its* language, silently and wrongly, and only if it has not is the result plain
+///          text. This is the contract `std::vector::iterator` has with its container, and it is
+///          the price of keeping LanguageId as one small trivially copyable type. A program that
+///          holds one registry — which is the shape this is designed for — cannot hit it.
+///
+/// @note The built-in half is not issued by anybody and *is* portable: an id below
+///       FirstRegisteredLanguageId means the same language everywhere, in any registry and in
+///       none, and may be passed freely.
 [[nodiscard]] constexpr auto isRegisteredLanguage(LanguageId language) noexcept -> bool
 {
     return std::to_underlying(language) >= FirstRegisteredLanguageId;
@@ -188,6 +206,7 @@ enum class LanguageRegistrationError : std::uint8_t
     NoHighlighter,   ///< The definition carried no highlight function.
     NameInUse,       ///< A built-in or already-registered language answers to that name.
     TokenInUse,      ///< A built-in or already-registered language claims that extension or tag.
+    MalformedToken,  ///< An extension without its leading dot, or an empty extension or fence tag.
     CapacityReached, ///< Every id in the registered range has been handed out.
 };
 
@@ -213,8 +232,9 @@ struct LanguageRegistrationFailure
 /// A registry answers for the built-in languages too, so registering one does not cost an
 /// application the ones core::tui ships.
 ///
-/// @note Copyable and movable. Ids are per registry: one handed out here means nothing to
-///       another registry, where it highlights as plain text.
+/// @note Copyable and movable. A registered id belongs to the registry that issued it and must
+///       not be passed to another one — see isRegisteredLanguage() for what that costs. Built-in
+///       ids are portable everywhere.
 class SyntaxHighlighterRegistry
 {
   public:
@@ -256,7 +276,10 @@ class SyntaxHighlighterRegistry
 
     /// @brief Highlights one line, through a registered highlighter or a built-in one.
     ///
-    /// An id this registry did not hand out and does not recognise yields plain text.
+    /// @p language must be a built-in id or one **this** registry issued. A registered id from
+    /// another registry resolves to whatever sits in the same position here, which is a different
+    /// language, and only an id past the end of this registry yields plain text; see
+    /// isRegisteredLanguage().
     ///
     /// @param line The source line to highlight.
     /// @param language The language to use for highlighting rules.
@@ -409,6 +432,33 @@ inline constexpr auto ExtensionLanguageTable = std::to_array<LanguageToken>({
     { .token = ".plist", .language = LanguageId::Xml },
     { .token = ".xsd", .language = LanguageId::Xml },
     { .token = ".wxs", .language = LanguageId::Xml },
+});
+
+/// @brief Well-known file name → language table (matched against the whole basename).
+///
+/// The third of the module's three built-in tables, and the one detectLanguageFromPath() consults
+/// first. These files carry no conventional extension yet have a well-defined format: the
+/// .clang-format and .clang-tidy tool configs are YAML, and .editorconfig is INI. Build files
+/// (Makefile, Dockerfile, …) are folded onto their closest existing highlighter.
+///
+/// A row belongs here only when the name is well known beyond any one project. An application's
+/// own dotfile is that application's business: it knows what its configuration file is called and
+/// passes the language to highlightLine() rather than asking this table to guess. One consumer's
+/// own `-format` dotfile was a row here and is not one any more, for that reason.
+///
+/// @note A registered language never claims a file name — only extensions and fence tags — so
+///       this table is exactly what core::tui ships and nothing else. It is public so that the
+///       same golden test that pins the other two pins this one: it was the table that carried a
+///       consumer's name, and it was the one nothing guarded.
+inline constexpr auto FilenameLanguageTable = std::to_array<LanguageToken>({
+    { .token = "CMakeLists.txt", .language = LanguageId::CMake },
+    { .token = "Makefile", .language = LanguageId::Bash },
+    { .token = "makefile", .language = LanguageId::Bash },
+    { .token = "GNUmakefile", .language = LanguageId::Bash },
+    { .token = "Dockerfile", .language = LanguageId::Bash },
+    { .token = ".clang-format", .language = LanguageId::Yaml },
+    { .token = ".clang-tidy", .language = LanguageId::Yaml },
+    { .token = ".editorconfig", .language = LanguageId::Ini },
 });
 
 /// @brief Markdown fence tag → language table (lowercase tags, without backticks).

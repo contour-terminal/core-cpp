@@ -5409,7 +5409,7 @@
       "profiles": [
         "endo"
       ],
-      "note": "core::tui ships no consumer's language (Task B13a, core-cpp#24). endo registers its own through core::tui::SyntaxHighlighterRegistry::registerLanguage({.name=\"endo\", .extensions={\".endo\"}, .fenceTags={\"endo\"}, .highlight=highlightEndoLine}), which returns the LanguageId to use in place of this one. No rewrite row: the call shape changes, so a compile error here is the better signal."
+      "note": "core::tui ships no consumer's language (Task B13a, core-cpp#24). endo registers its own through core::tui::SyntaxHighlighterRegistry::registerLanguage({.name=\"endo\", .extensions={\".endo\"}, .fenceTags={\"endo\"}, .highlight=highlightEndoLine}), which returns std::expected<LanguageId, LanguageRegistrationFailure>; *result is the id to use in place of this one, and it belongs to that registry -- hold one registry per program, or keep each id with the registry that issued it. No rewrite row: the call shape changes, so a compile error here is the better signal."
     },
     {
       "kind": "removed",

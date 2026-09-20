@@ -1567,3 +1567,60 @@ TEST_CASE("MarkdownRenderer.a_builtin_fence_tag_still_highlights_beside_a_regist
     // The C++ highlighter splits the line into more than one span; which spans is its business.
     CHECK(output.spans.size() > 1);
 }
+
+TEST_CASE("MarkdownRenderer.stream.a_registered_fence_tag_highlights_its_code_block")
+{
+    // processStreamBuffer() is a second copy of the fence handling, reached only through
+    // beginStream()/feedToken(), and render() never touches it.
+    auto registry = SyntaxHighlighterRegistry {};
+    REQUIRE(registry
+                .registerLanguage({ .name = "toy",
+                                    .extensions = { ".toy" },
+                                    .fenceTags = { "toy" },
+                                    .highlight = firstCharacterHighlighter() })
+                .has_value());
+
+    SpanRecordingOutput output;
+    MarkdownRenderer renderer(output, MarkdownRenderer::defaultTheme(), &registry);
+
+    renderer.beginStream();
+    renderer.feedToken("```toy\n");
+    renderer.feedToken("let x\n");
+    renderer.feedToken("```\n");
+    renderer.endStream();
+
+    CHECK(output.spans == std::vector<std::string> { "l", "et x" });
+}
+
+TEST_CASE("MarkdownRenderer.stream.an_unregistered_fence_tag_stays_plain_text")
+{
+    auto const registry = SyntaxHighlighterRegistry {};
+    SpanRecordingOutput output;
+    MarkdownRenderer renderer(output, MarkdownRenderer::defaultTheme(), &registry);
+
+    renderer.beginStream();
+    renderer.feedToken("```toy\nlet x\n```\n");
+    renderer.endStream();
+
+    CHECK(output.spans == std::vector<std::string> { "let x" });
+}
+
+TEST_CASE("MarkdownRenderer.stream.a_builtin_fence_tag_still_highlights_beside_a_registered_one")
+{
+    auto registry = SyntaxHighlighterRegistry {};
+    REQUIRE(registry
+                .registerLanguage({ .name = "toy",
+                                    .extensions = { ".toy" },
+                                    .fenceTags = { "toy" },
+                                    .highlight = firstCharacterHighlighter() })
+                .has_value());
+
+    SpanRecordingOutput output;
+    MarkdownRenderer renderer(output, MarkdownRenderer::defaultTheme(), &registry);
+
+    renderer.beginStream();
+    renderer.feedToken("```cpp\nint x;\n```\n");
+    renderer.endStream();
+
+    CHECK(output.spans.size() > 1);
+}

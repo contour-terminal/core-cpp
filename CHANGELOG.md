@@ -511,19 +511,30 @@ workflow refuses one without a section here.
   whatever renders the text, rather than a process-wide callback core-cpp holds on its behalf
   ([core-cpp#24](https://github.com/contour-terminal/core-cpp/issues/24)). Nothing about the
   built-in languages changed and a registry answers for them too, so a consumer that uses only
-  those edits nothing: every new parameter is trailing and defaults to "the built-ins alone".
+  those recompiles unchanged: every new parameter is trailing and defaults to "the built-ins
+  alone". Two exceptions to that, both narrow: code that takes the **address** of
+  `highlightLine`, `detectLanguageFromExtension`, `detectLanguageFromFenceTag` or
+  `detectLanguageFromPath` sees a changed function type, because a default argument is not part
+  of one; and a consumer that registers an extension or fence tag core-cpp later adds as a
+  **built-in** will find `registerLanguage()` refusing it with `TokenInUse` after that upgrade —
+  registering a token core-cpp might one day ship is a forward-compatibility risk the refusal
+  makes loud rather than silent.
   `LanguageId` gained a trailing `Last` — not a language, but how many there are, which anchors
-  the new `BuiltinLanguageTable` — and the ids a registry hands out begin at
-  `core::tui::FirstRegisteredLanguageId` (128) and mean nothing to another registry, where they
-  highlight as plain text rather than as some other language. Migration, for the one consumer
-  that registered a language:
+  the new `BuiltinLanguageTable` — and the ids a registry issues begin at
+  `core::tui::FirstRegisteredLanguageId` (128).
+  `FilenameLanguageTable`, the well-known-file-name table `detectLanguageFromPath()` consults
+  first, moves from an anonymous namespace in the `.cpp` into the header beside the other two, so
+  that all three of the module's built-in tables are public and pinned by the same golden test;
+  it is the table that carried a consumer's `-format` dotfile, and it was the one nothing guarded.
+  Migration, for the one consumer that registered a language:
 
   ```cpp
   // was: a process-wide callback, and a closed enumerator naming one application's language.
   core::tui::registerEndoHighlighter(highlightEndoLine);
   auto const language = core::tui::LanguageId::Endo;
 
-  // is: a registry the application owns, filled once at startup and injected.
+  // is: one registry the application owns, filled once at startup and injected. Hold exactly one
+  // per program unless you keep each id with the registry that issued it -- see below.
   auto highlighters = core::tui::SyntaxHighlighterRegistry {};
   auto const registered = highlighters.registerLanguage({
       .name = "endo",
@@ -540,13 +551,27 @@ workflow refuses one without a section here.
   auto const [map, next] = core::tui::highlightLine(line, detected, state, &highlighters);
   ```
 
-  `registerLanguage()` refuses a name, extension or fence tag another language already claims,
-  built-in or registered, instead of shadowing it: replacing would repoint an id already handed
-  out, and its holder would then get a wrong answer that looks right. A refused definition leaves
-  the registry exactly as it was, and `LanguageRegistrationFailure` names the token at fault.
-  There is no row for either removal in `tools/migrate/renames.json`: the call shape changes, so
-  a mechanical rewrite would produce code that compiles into the wrong thing, and a compile error
-  at `LanguageId::Endo` is the better signal.
+  `registerLanguage()` refuses a name, extension or fence tag another language already claims —
+  built-in or registered, including a well-known file name that would shadow the extension — and
+  refuses a token that could never match at all: an extension without its leading dot, or an
+  empty extension or fence tag (`LanguageRegistrationError::MalformedToken`). It refuses rather
+  than shadows, because replacing would repoint an id already issued and its holder would then
+  get a wrong answer that looks right. A refused definition leaves the registry exactly as it
+  was, and `LanguageRegistrationFailure` names the token at fault.
+
+  A registered `LanguageId` **belongs to the registry that issued it.** Ids are dense from
+  `FirstRegisteredLanguageId` in registration order and carry nothing that identifies their
+  registry, so passing one to a different registry is a precondition violation — the contract a
+  `std::vector::iterator` has with its container. If that registry issued an id in the same
+  position, the line is highlighted as *its* language, silently and wrongly; only an id past the
+  end of it gives plain text. A program that holds one registry, which is the shape this is
+  designed for, cannot hit it. Built-in ids are not issued by anybody and *are* portable: they
+  mean the same language in any registry and in none.
+
+  `tools/migrate/renames.json` carries both removals as `kind: "removed"` rows, which assert the
+  symbols stay absent rather than rewriting anything: the call shape changes, so a mechanical
+  rewrite would produce code that compiles into the wrong thing, and a compile error at
+  `LanguageId::Endo` is the better signal.
 - `core::async::Task<T>`'s awaiter OWNS the task it awaits. `operator co_await` is rvalue-qualified
   and now moves the frame out of the `Task` value into the awaiter, which holds it across the
   suspension and destroys it at the end of the `co_await` expression; the `Task` that produced it is

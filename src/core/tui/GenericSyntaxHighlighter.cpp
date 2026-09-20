@@ -2302,28 +2302,6 @@ namespace
 
 namespace
 {
-    /// @brief Well-known file names (matched against the full basename) → language.
-    ///
-    /// These files carry no conventional extension yet have a well-defined format: the
-    /// .clang-format and .clang-tidy tool configs are YAML, and .editorconfig is INI. Build
-    /// files (Makefile, Dockerfile, …) are folded onto their closest existing highlighter.
-    ///
-    /// A row belongs here only when the name is well known beyond any one project. An
-    /// application's own dotfile is that application's business: it knows what its configuration
-    /// file is called and passes the language to highlightLine() rather than asking this table to
-    /// guess. One consumer's own `-format` dotfile was a row here and is not one any more, for
-    /// that reason, and a registered language does not claim a file name either.
-    constexpr auto FilenameLanguageTable = std::to_array<LanguageToken>({
-        { .token = "CMakeLists.txt", .language = LanguageId::CMake },
-        { .token = "Makefile", .language = LanguageId::Bash },
-        { .token = "makefile", .language = LanguageId::Bash },
-        { .token = "GNUmakefile", .language = LanguageId::Bash },
-        { .token = "Dockerfile", .language = LanguageId::Bash },
-        { .token = ".clang-format", .language = LanguageId::Yaml },
-        { .token = ".clang-tidy", .language = LanguageId::Yaml },
-        { .token = ".editorconfig", .language = LanguageId::Ini },
-    });
-
     /// @brief How many languages one registry can hand ids out for.
     constexpr auto RegisteredLanguageCapacity =
         std::size_t { std::numeric_limits<std::uint8_t>::max() } + 1 - FirstRegisteredLanguageId;
@@ -2431,12 +2409,33 @@ auto SyntaxHighlighterRegistry::registerLanguage(LanguageDefinition definition)
         return refuse(NameInUse, definition.name);
 
     for (auto const& extension: definition.extensions)
+    {
+        // detectLanguageFromPath() only ever looks an extension up from the last dot of a
+        // basename onwards, so one that does not start with a dot could never match anything:
+        // it would register and sit dead. Refuse it where the mistake is visible.
+        if (extension.size() < 2 || !extension.starts_with('.'))
+            return refuse(MalformedToken, extension);
+
         if (detectFromExtension(extension) != LanguageId::None)
             return refuse(TokenInUse, extension);
 
+        // A file name is matched whole and before any extension, so registering `.editorconfig`
+        // as an extension would be shadowed for the one path that spells it exactly. That is the
+        // same collision as any other, and gets the same answer.
+        if (lookupLanguage(FilenameLanguageTable, extension) != LanguageId::None)
+            return refuse(TokenInUse, extension);
+    }
+
     for (auto const& fenceTag: definition.fenceTags)
+    {
+        // An empty tag is what a bare ``` fence yields, which means "no language"; a registered
+        // empty tag would capture every unlabelled code block in every document.
+        if (fenceTag.empty())
+            return refuse(MalformedToken, fenceTag);
+
         if (detectFromFenceTag(fenceTag) != LanguageId::None)
             return refuse(TokenInUse, fenceTag);
+    }
 
     auto const language = registeredLanguageId(_languages.size());
     _languages.push_back(std::move(definition));

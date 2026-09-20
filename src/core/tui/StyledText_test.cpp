@@ -1,8 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/tui/GenericSyntaxHighlighter.hpp>
 #include <core/tui/MarkdownRenderer.hpp>
 #include <core/tui/StyledText.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 using namespace core::tui;
 
@@ -126,4 +132,91 @@ TEST_CASE("StyledText.table.alignment_right")
 
     // "42" should be present with leading spaces (right-aligned)
     CHECK(allText.contains("42"));
+}
+
+// ============================================================================
+// Registered syntax highlighters
+// ============================================================================
+
+namespace
+{
+/// @brief A highlighter that marks the first character of a line and leaves the rest alone.
+///
+/// A highlighted code line then arrives as two spans where an unhighlighted one arrives whole,
+/// which is what tells the two apart without asserting on colours.
+auto firstCharacterHighlighter() -> HighlightFunction
+{
+    return [](std::string_view line, HighlightState state) {
+        auto map = HighlightMap(line.size(), HighlightCategory::Default);
+        if (!map.empty())
+            map[0] = HighlightCategory::Keyword;
+        return std::pair { std::move(map), state };
+    };
+}
+
+/// @brief The text of every span of the line that holds @p needle, in order.
+auto spansOfLineContaining(StyledText const& text, std::string_view needle) -> std::vector<std::string>
+{
+    for (auto const& line: text.lines())
+    {
+        auto whole = std::string {};
+        for (auto const& span: line)
+            whole += span.text;
+        if (whole.contains(needle))
+        {
+            auto spans = std::vector<std::string> {};
+            for (auto const& span: line)
+                spans.push_back(span.text);
+            return spans;
+        }
+    }
+    return {};
+}
+} // namespace
+
+TEST_CASE("StyledText.fromMarkdown.a_registered_fence_tag_highlights_its_code_block")
+{
+    // fromMarkdown() is the second line of the migration snippet a consumer pastes, so its
+    // registry argument is the first one they exercise.
+    auto registry = SyntaxHighlighterRegistry {};
+    REQUIRE(registry
+                .registerLanguage({ .name = "toy",
+                                    .extensions = { ".toy" },
+                                    .fenceTags = { "toy" },
+                                    .highlight = firstCharacterHighlighter() })
+                .has_value());
+
+    auto const text = StyledText::fromMarkdown("```toy\nlet x\n```\n", 0, nullptr, &registry);
+
+    CHECK(spansOfLineContaining(text, "let x") == std::vector<std::string> { "l", "et x" });
+}
+
+TEST_CASE("StyledText.fromMarkdown.an_unregistered_fence_tag_stays_plain_text")
+{
+    auto const registry = SyntaxHighlighterRegistry {};
+    auto const text = StyledText::fromMarkdown("```toy\nlet x\n```\n", 0, nullptr, &registry);
+
+    CHECK(spansOfLineContaining(text, "let x") == std::vector<std::string> { "let x" });
+}
+
+TEST_CASE("StyledText.fromMarkdown.without_a_registry_a_registered_fence_tag_is_plain_text")
+{
+    auto const text = StyledText::fromMarkdown("```toy\nlet x\n```\n");
+
+    CHECK(spansOfLineContaining(text, "let x") == std::vector<std::string> { "let x" });
+}
+
+TEST_CASE("StyledText.fromMarkdown.a_builtin_fence_tag_still_highlights_beside_a_registered_one")
+{
+    auto registry = SyntaxHighlighterRegistry {};
+    REQUIRE(registry
+                .registerLanguage({ .name = "toy",
+                                    .extensions = { ".toy" },
+                                    .fenceTags = { "toy" },
+                                    .highlight = firstCharacterHighlighter() })
+                .has_value());
+
+    auto const text = StyledText::fromMarkdown("```cpp\nint x;\n```\n", 0, nullptr, &registry);
+
+    CHECK(spansOfLineContaining(text, "int x;").size() > 1);
 }
