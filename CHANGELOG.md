@@ -337,6 +337,19 @@ workflow refuses one without a section here.
   `to`, a `target` or any `apply` but `none`, so no rewrite tool can be handed one. The first two
   rows are `core::tui::LanguageId::Endo` and `core::tui::registerEndoHighlighter()`.
 
+- The repository's Python is `snake_case` and is linted, not only formatted: `ruff.toml` states
+  ruff's default rule set (`E4`, `E7`, `E9`, `F` — undefined names, unused imports, import and
+  statement errors) rather than inheriting it, so a future ruff cannot widen or narrow the gate by
+  changing its mind about the default. Nothing stylistic is selected; layout is the formatter's job,
+  and the linter never rewrites. `scripts/ruff-format.py` is `scripts/python-style.py`, which runs
+  both halves and reports both before failing. The `# noqa` comments are gone with it: a
+  diagnostic-muting comment is the Python spelling of `NOLINT`.
+- `.agent/guides/consumer-migration.md` carries the byte-identity proof a consumer pull request runs
+  to show a mechanical pass was mechanical: re-derive each post-image from its pre-image by applying
+  only the rows the profile reported, and assert byte-identity. It catches an unintended rewrite and
+  a hand edit mixed into a codemod commit; it does not catch a correct rewrite to a wrong target,
+  which is what the drift gate is for.
+
 ### Breaking
 
 - `core::platform::testing::InMemoryFileSystem` models a file's lifetime the way POSIX does, where

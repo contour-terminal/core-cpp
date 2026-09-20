@@ -90,6 +90,46 @@ instruction lives, beside every other rename the same pull request applies. The 
 `removed` row that carries a `to`, a `target`, or any `apply` but `none`, so no rewrite tool is ever
 handed one.
 
+### Proving a mechanical pass was mechanical
+
+Six migrations are about to rewrite hundreds of files each. "I read the diff and it looked right"
+does not survive the first hundred, and the reviewer of a 53-call-site rename does not want to
+spot-check either. Prove the pass was **pure by construction** instead: for every file the codemod
+touched, take the pre-image, apply *only* the substitutions the profile reports, and assert
+byte-identity with the post-image.
+
+```sh
+# The pre-images, straight from the commit before the codemod ran.
+git worktree add ../before HEAD~1
+
+python /path/to/core-cpp/tools/migrate/rewrite.py --profile endo src | tee ../rewrite.log
+
+# For each file the tool reported, re-derive the post-image from the pre-image and compare.
+git diff --name-only HEAD~1 -- src | while read -r file; do
+    python /path/to/core-cpp/tools/migrate/rewrite.py --profile endo "../before/$file" >/dev/null
+    cmp -s "../before/$file" "$file" || echo "NOT PURE: $file"
+done
+```
+
+Anything the codemod did not do breaks byte-identity and is named by file. That catches the two
+failure modes a diff read does not:
+
+- **An unintended rewrite** — a call site that should have become something else being swept into a
+  catch-all row, or a stray reformat riding along.
+- **A hand edit smuggled into a mechanical commit** — the one that looks innocent in review and is
+  invisible six months later. Keep hand edits in their own commit; then this check stays meaningful.
+
+It covers files for platforms you cannot even compile, which is most of them for most consumers.
+
+What it does **not** catch is a *correct* rewrite to the *wrong target* — every byte as the table
+says, and the table wrong. That is what `check-renames.py` is for, and the two are complementary:
+this proves the tool did only what the table says, the gate proves the table says the right thing.
+It also pairs with the codemod's idempotence, which the tests assert: idempotence says running
+*twice* changes nothing, and this says running *once* changed nothing but what was intended.
+
+The check needs the substitution list to be exactly the rows the profile applied, which is why
+`rewrite.py` reports every row it fired and how often, per file — keep that log in the pull request.
+
 ### The table is checked against the delivered headers
 
 `tools/migrate/check-renames.py` runs in every build as ctest `core-cpp.migrate-renames`
@@ -158,7 +198,7 @@ target_link_libraries(myapp PRIVATE core::async core::net core::tui)
 | `net::ensureWinsockInitialized`, `<net/platform/WinsockInit.hpp>` | `core::platform::ensureWinsockInitialized`, `<core/platform/WinsockInit.hpp>` |
 | `net::createSystemPipe`, `net::SystemPipe`, `<net/platform/SystemPipe.hpp>` | `core::platform::createSystemPipe`, `core::platform::SystemPipe`, `<core/platform/SystemPipe.hpp>` (see the `read()` delta below) |
 | `net::testing::TempDir`, `<net/testing/TempDir.hpp>` (contour's `vthost` tests) | `core::testing::ScopedTempDir`, `<core/testing/ScopedTempDir.hpp>`: the prefix has no default, and a directory it cannot create throws rather than failing a `REQUIRE`; `path()` and `operator/` are the same |
-| `<net/platform/PeerAddress.hpp>`, `<net/platform/WindowsLoopback.hpp>`, `<net/WaitChunking.hpp>`, `<net/EpollEventSource.hpp>`, `<net/KqueueEventSource.hpp>` | private in core-cpp (`detail/PeerAddress.hpp`, `windows/WindowsLoopback.hpp`, `detail/WaitChunking.hpp`, `linux/EpollEventSource.hpp`, `bsd/KqueueEventSource.hpp`); nothing outside contour's `src/net` included them. A program gets an epoll or kqueue source from `core::net::makeEventSource(EventSourceKind)` or `makeDefaultEventSource()` |
+| `<net/platform/PeerAddress.hpp>`, `<net/platform/WindowsLoopback.hpp>`, `<net/WaitChunking.hpp>`, `<net/EpollEventSource.hpp>`, `<net/KqueueEventSource.hpp>` | private in core-cpp (`detail/PeerAddress.hpp`, `windows/WindowsLoopback.hpp`, `detail/WaitChunking.hpp`, `linux/EpollBackend.hpp`, `bsd/KqueueBackend.hpp`); nothing outside contour's `src/net` included them, and `<net/PollEventSource.hpp>` joined them in Task B3 (`posix/PollBackend.hpp`, `windows/WfmoBackend.hpp`). A program gets a backend from `core::net::makeBackend(BackendKind)` or `makeDefaultBackend()` |
 | `<crispy/X.hpp>` for Assert, Base64, Deferred, Defines, Environment, Escape, FNV, Flags, Overloaded, Times, UserInfo, Utils | `<core/X.hpp>` |
 | `<crispy/LogStore.hpp>`, `<crispy/LogSink.hpp>` | `<core/log/LogStore.hpp>`, `<core/log/LogSink.hpp>` |
 | `<crispy/CLI.hpp>`, `<crispy/App.hpp>` | `<core/cli/CLI.hpp>`, `<core/cli/App.hpp>` |
@@ -173,7 +213,7 @@ target_link_libraries(myapp PRIVATE core::async core::net core::tui)
 | contour's `net` target, which built `Tls.hpp`/`Tls.cpp` into itself and always required OpenSSL | `<core/net/Tls.hpp>` is `core::net_tls`, a target of its own that exists only with `CORE_CPP_WITH_TLS`: configure core-cpp with `CORE_CPP_WITH_TLS ON` (the CPM snippet above has it OFF) and link `core::net_tls`, which links `core::net`, and OpenSSL PRIVATE |
 | `IListener::localPort` | `boundPort` |
 | `NetErrorCode::Other` | `SystemError` |
-| `EventSource`, `makeDefaultEventSource`, `FdInterest` | `IoBackend`, `makeDefaultBackend`, `Interest` |
+| `EventSource`, `makeDefaultEventSource`, `FdInterest` | `IoBackend`, `makeDefaultBackend`, `Interest` (Task B3; the full table is in that release's CHANGELOG entry and every row is in `tools/migrate/renames.json`). A backend DISPATCHES: `attach(handler)` then `setInterest(handler, interest)`, and `wait()` calls back rather than answering a `WaitOutcome` of tokens |
 | `gsl::not_null<T*>` | a reference, or an asserted pointer |
 | `crispy::fatal(...)`, from `<crispy/Assert.hpp>` | `core::log::fatal(...)`, from `<core/log/Assert.hpp>` |
 | `SoftRequire(...)`, from `<crispy/Assert.hpp>` | the same macro, from `<core/log/Assert.hpp>`; `Require` and `Guarantee` stay in `<core/Assert.hpp>` |
