@@ -419,6 +419,20 @@ namespace
         return result;
     }
 
+    /// @brief The bracketed paste terminator.
+    constexpr auto PasteEnd = std::string_view { "\033[201~" };
+
+    /// @brief The ST (String Terminator) that ends a DCS string: ESC \.
+    constexpr auto StringTerminator = std::string_view { "\033\\" };
+
+    // How large each buffer may grow: the cap on what the sequence CARRIES, plus room for the
+    // terminator that is on its way in. Both terminators land in the same buffer as the payload,
+    // one byte at a time, and are taken off again once they are recognised -- so without the
+    // reservation a payload of exactly its cap would be cut mid-terminator, and the documented
+    // cap would be a few bytes larger than the longest sequence that actually works.
+    constexpr auto MaxPasteBuffer = VtParser::MaxPasteLength + PasteEnd.size();
+    constexpr auto MaxDcsBuffer = VtParser::MaxDcsLength + StringTerminator.size();
+
 } // namespace
 
 auto VtParser::feed(std::string_view data) -> std::vector<InputEvent>
@@ -636,7 +650,6 @@ void VtParser::processPaste(std::uint8_t byte, std::vector<InputEvent>& events)
     _pasteBuf += static_cast<char>(byte);
 
     // Check for bracketed paste end: ESC[201~
-    static constexpr auto PasteEnd = std::string_view { "\033[201~" };
     if (_pasteBuf.size() >= PasteEnd.size() && _pasteBuf.ends_with(PasteEnd))
     {
         // Remove the end sequence from the paste buffer
@@ -653,8 +666,10 @@ void VtParser::processPaste(std::uint8_t byte, std::vector<InputEvent>& events)
 
     // Past the cap the paste ends here. Unlike the other two buffers this one holds the user's
     // own text, so it is emitted rather than dropped; what follows is read as ordinary input,
-    // which is what happens anyway to a paste whose terminator is lost.
-    if (_pasteBuf.size() > MaxPasteLength)
+    // which is what happens anyway to a paste whose terminator is lost. The bound is the buffer's,
+    // not the paste's: a paste of exactly MaxPasteLength bytes is still ended by its terminator
+    // above, whose bytes pass through this buffer first.
+    if (_pasteBuf.size() > MaxPasteBuffer)
     {
         auto cleaned = sanitizeWin32PasteSequences(_pasteBuf);
         events.emplace_back(PasteEvent { .text = std::move(cleaned) });
@@ -1107,7 +1122,7 @@ void VtParser::processDcsEntry(std::uint8_t byte, std::vector<InputEvent>& event
     if (byte >= 0x20 && byte <= 0x3F)
     {
         _dcsBuf += static_cast<char>(byte);
-        std::ignore = abandonIfOverlong(_dcsBuf, MaxDcsLength);
+        std::ignore = abandonIfOverlong(_dcsBuf, MaxDcsBuffer);
         return;
     }
 
@@ -1116,7 +1131,7 @@ void VtParser::processDcsEntry(std::uint8_t byte, std::vector<InputEvent>& event
     {
         _dcsBuf += static_cast<char>(byte);
         _state = State::DcsBody;
-        std::ignore = abandonIfOverlong(_dcsBuf, MaxDcsLength);
+        std::ignore = abandonIfOverlong(_dcsBuf, MaxDcsBuffer);
         return;
     }
 
@@ -1140,17 +1155,17 @@ void VtParser::processDcsBody(std::uint8_t byte, std::vector<InputEvent>& events
     _dcsBuf += static_cast<char>(byte);
 
     // Check for ST (String Terminator): ESC \ (0x1B 0x5C)
-    if (_dcsBuf.size() >= 2 && _dcsBuf[_dcsBuf.size() - 2] == '\x1B' && _dcsBuf.back() == '\\')
+    if (_dcsBuf.ends_with(StringTerminator))
     {
         // Remove the trailing ESC \ from the payload.
-        _dcsBuf.resize(_dcsBuf.size() - 2);
+        _dcsBuf.resize(_dcsBuf.size() - StringTerminator.size());
         events.emplace_back(DcsResponse { .payload = std::move(_dcsBuf) });
         _dcsBuf.clear();
         _state = State::Ground;
         return;
     }
 
-    std::ignore = abandonIfOverlong(_dcsBuf, MaxDcsLength);
+    std::ignore = abandonIfOverlong(_dcsBuf, MaxDcsBuffer);
 }
 
 void VtParser::emitCodepoint(char32_t cp, std::vector<InputEvent>& events)

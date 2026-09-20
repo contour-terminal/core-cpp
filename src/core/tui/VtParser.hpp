@@ -21,26 +21,35 @@ namespace core::tui
 class VtParser
 {
   public:
-    /// @brief The largest bracketed paste assembled before the collected text is emitted.
+    /// @brief The largest bracketed paste delivered whole.
     ///
     /// The bytes come from stdin, which is untrusted: a `ESC[200~` whose `ESC[201~` never
     /// arrives would otherwise grow this parser for as long as bytes keep coming. Past the cap
     /// the parser emits what it has and returns to Ground, so the remainder of such a paste is
     /// read as ordinary input -- which is what happens anyway when the terminator is lost. No
     /// interactive paste reaches 4 MiB; a file that large is not typed into a prompt.
+    ///
+    /// A paste of exactly this many bytes still ends at its own `ESC[201~`: the buffer holds the
+    /// terminator too while it arrives, and that room is reserved ON TOP of the cap. Without the
+    /// reservation the last bytes a paste can carry cleanly would be the cap minus the length of
+    /// a terminator that is not part of the paste at all.
     static constexpr std::size_t MaxPasteLength = std::size_t { 4 } * 1024 * 1024;
 
     /// @brief The largest CSI parameter string assembled before the sequence is abandoned.
     ///
     /// DEC's own limit is 16 parameters, and the longest sequence core::tui answers
     /// (a DECRQM reply, a Kitty key) is a few dozen bytes. 256 leaves room for anything
-    /// well-formed, and a longer one is malformed with nothing worth emitting.
+    /// well-formed, and a longer one is malformed with nothing worth emitting. This cap needs no
+    /// room reserved above it: a CSI ends at its final byte, which is dispatched rather than
+    /// collected, so a parameter string of exactly this length still dispatches.
     static constexpr std::size_t MaxCsiParamLength = 256;
 
-    /// @brief The largest DCS payload assembled before the sequence is abandoned.
+    /// @brief The largest DCS payload delivered whole.
     ///
     /// A DCS here carries a terminal's answer -- XTGETTCAP, DECRQSS -- which is small. 64 KiB is
-    /// far above any of them, and a payload past it has lost its ST.
+    /// far above any of them, and a payload past it has lost its ST. As with the paste cap, the
+    /// room the ST (`ESC \`) needs while it arrives is reserved above this, so a payload of
+    /// exactly this length still ends at its own terminator.
     static constexpr std::size_t MaxDcsLength = std::size_t { 64 } * 1024;
 
     /// @brief Feeds raw bytes and produces zero or more parsed events.

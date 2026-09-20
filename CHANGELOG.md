@@ -234,7 +234,12 @@ workflow refuses one without a section here.
   `ESC[201~` never came grew the process without limit from untrusted bytes on stdin. The caps
   are the new public `VtParser::MaxPasteLength` (4 MiB), `MaxCsiParamLength` (256) and
   `MaxDcsLength` (64 KiB); past one, the parser returns to Ground, emitting the collected text
-  for a paste and dropping the other two, which are malformed at that length.
+  for a paste and dropping the other two, which are malformed at that length. Each cap bounds what
+  the sequence CARRIES: the terminator's own bytes (`ESC[201~`, `ESC \`) pass through the same
+  buffer on their way in, and their room is reserved above the cap, so a paste of exactly
+  `MaxPasteLength` bytes and a DCS payload of exactly `MaxDcsLength` bytes still end at their own
+  terminator instead of being cut a few bytes into it. `MaxCsiParamLength` needs no such
+  reservation: a CSI's final byte is dispatched, never collected.
 - `core::tui`'s POSIX SIGWINCH handler saves and restores `errno`, reaches its `TerminalInput`
   through a lock-free `std::atomic` rather than a plain pointer, and cannot block. The write end
   of the resize self-pipe was left blocking (only the read end was made non-blocking), so a pipe

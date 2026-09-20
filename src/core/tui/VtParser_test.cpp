@@ -814,18 +814,37 @@ TEST_CASE("VtParser.Paste.win32_printable_chars_replaced", "[tui,vtparser]")
 // so nothing else brought the parser back to Ground either.
 // ============================================================================
 
+TEST_CASE("VtParser.Paste.a_paste_of_exactly_the_cap_ends_at_its_terminator", "[tui,vtparser]")
+{
+    auto parser = VtParser {};
+    CHECK(parser.feed("\033[200~").empty());
+    CHECK(parser.feed(std::string(VtParser::MaxPasteLength, 'x')).empty());
+
+    // The terminator's own bytes pass through the same buffer as the paste, so the cap reserves
+    // room for them: the largest paste the cap names is delivered whole, not cut five bytes into
+    // the ESC[201~ that ends it.
+    auto const events = parser.feed("\033[201~");
+    REQUIRE(events.size() == 1);
+    auto const* paste = std::get_if<PasteEvent>(events.data());
+    REQUIRE(paste != nullptr);
+    CHECK(paste->text == std::string(VtParser::MaxPasteLength, 'x'));
+}
+
 TEST_CASE("VtParser.Paste.a_paste_past_the_cap_is_emitted_and_ends", "[tui,vtparser]")
 {
     auto parser = VtParser {};
     CHECK(parser.feed("\033[200~").empty());
 
-    // One byte past the cap. The collected text is emitted rather than dropped -- it is the
-    // user's own paste -- and the parser returns to Ground.
-    auto events = parser.feed(std::string(VtParser::MaxPasteLength + 1, 'x'));
+    // One byte past what the buffer may hold, which is the cap plus the terminator's room. The
+    // collected text is emitted rather than dropped -- it is the user's own paste -- and the
+    // parser returns to Ground.
+    static constexpr auto PastTheBuffer =
+        VtParser::MaxPasteLength + std::string_view { "\033[201~" }.size() + 1;
+    auto events = parser.feed(std::string(PastTheBuffer, 'x'));
     REQUIRE(events.size() == 1);
     auto const* paste = std::get_if<PasteEvent>(events.data());
     REQUIRE(paste != nullptr);
-    CHECK(paste->text.size() == VtParser::MaxPasteLength + 1);
+    CHECK(paste->text.size() == PastTheBuffer);
 
     // In Ground, so the next byte is a keystroke. Without the cap the parser was still in
     // PasteBody and this byte joined a buffer nothing would ever close.
@@ -851,13 +870,29 @@ TEST_CASE("VtParser.Csi.a_parameter_string_past_the_cap_is_abandoned", "[tui,vtp
     CHECK(key->codepoint == U'a');
 }
 
+TEST_CASE("VtParser.Dcs.a_payload_of_exactly_the_cap_ends_at_its_terminator", "[tui,vtparser]")
+{
+    auto parser = VtParser {};
+    CHECK(parser.feed("\033P" + std::string(VtParser::MaxDcsLength, 'x')).empty());
+
+    // As for a paste: the ST passes through the payload's buffer, and its room is reserved above
+    // the cap, so a payload of exactly the cap is answered rather than abandoned one byte into
+    // the ESC \ that ends it.
+    auto const events = parser.feed("\033\\");
+    REQUIRE(events.size() == 1);
+    auto const* dcs = std::get_if<DcsResponse>(events.data());
+    REQUIRE(dcs != nullptr);
+    CHECK(dcs->payload.size() == VtParser::MaxDcsLength);
+}
+
 TEST_CASE("VtParser.Dcs.a_payload_past_the_cap_is_abandoned", "[tui,vtparser]")
 {
     auto parser = VtParser {};
 
-    // ESC P, then a body whose ST never arrives. The first byte is the header's final byte and
-    // the rest is payload, all in the one buffer the cap bounds.
-    CHECK(parser.feed("\033P" + std::string(VtParser::MaxDcsLength + 1, 'x')).empty());
+    // ESC P, then a body whose ST never arrives, one byte past what the buffer may hold (the cap
+    // plus the ST's room). The first byte is the header's final byte and the rest is payload, all
+    // in the one buffer the cap bounds.
+    CHECK(parser.feed("\033P" + std::string(VtParser::MaxDcsLength + 3, 'x')).empty());
 
     auto const events = parser.feed("a");
     REQUIRE(events.size() == 1);
