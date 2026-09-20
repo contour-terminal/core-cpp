@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <ranges>
+#include <string>
 #include <string_view>
 
 using namespace core::tui;
@@ -580,6 +581,37 @@ TEST_CASE("GenericSyntaxHighlighter.asm_string_literal", "[tui][highlight]")
     auto const [map, state] = highlightLine(R"(.ascii "hello")", LanguageId::Assembly);
     CHECK(hasCategory(map, 0, 6, Cat::Preprocessor)); // .ascii
     CHECK(hasCategory(map, 7, 7, Cat::String));       // "hello"
+}
+
+TEST_CASE("GenericSyntaxHighlighter.asm_token_longer_than_the_lowercase_buffer", "[tui][highlight]")
+{
+    // The three assembly scanners lowercase an identifier into a 64-character buffer before
+    // looking it up. A longer token used to be copied past the end of that buffer, so any
+    // rendered ```asm fence could smash the caller's frame; the sanitizer presets are where
+    // this case fails without the bound. What it asserts is the visible half: an oversized
+    // token matches no keyword table, so it stays ordinary text, and the line around it still
+    // highlights.
+    auto const longName = std::string(100, 'a');
+
+    SECTION("GAS directive")
+    {
+        auto const [map, state] = highlightLine("." + longName, LanguageId::Assembly);
+        CHECK(hasCategory(map, 0, 101, Cat::Default));
+    }
+
+    SECTION("AT&T register")
+    {
+        auto const [map, state] = highlightLine("movl %" + longName, LanguageId::Assembly);
+        CHECK(hasCategory(map, 0, 4, Cat::Keyword)); // movl
+        CHECK(hasCategory(map, 5, 101, Cat::Default));
+    }
+
+    SECTION("bare identifier")
+    {
+        auto const [map, state] = highlightLine(longName + " rbp", LanguageId::Assembly);
+        CHECK(hasCategory(map, 0, 100, Cat::Default));
+        CHECK(hasCategory(map, 101, 3, Cat::Variable)); // rbp
+    }
 }
 
 TEST_CASE("GenericSyntaxHighlighter.asm_block_comment", "[tui][highlight]")

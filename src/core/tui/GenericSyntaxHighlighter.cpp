@@ -9,6 +9,7 @@
 #include <format>
 #include <functional>
 #include <ranges>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -401,15 +402,24 @@ namespace
         "setlocal", "shift",  "start", "time",  "title",  "type",     "ver",    "verify", "vol",
     });
 
-    /// @brief Converts an identifier to lowercase into a stack buffer and returns a string_view.
+    /// @brief Converts an identifier to lowercase into a caller-supplied buffer.
+    ///
+    /// An identifier longer than @p buf is returned unchanged rather than written past the end
+    /// of it. Every table this feeds holds short lowercase keywords, so an oversized token
+    /// matches nothing either way, and holding the bound here means a call site cannot forget
+    /// it — three of the seven did, and a 64-character token in a ```asm fence then overran a
+    /// stack buffer.
+    ///
     /// @param src The source identifier.
-    /// @param buf Buffer of at least src.size() characters.
-    /// @return A string_view over the lowercase copy.
-    auto toLowerInto(std::string_view src, char* buf) -> std::string_view
+    /// @param buf Destination buffer.
+    /// @return A view of the lowercase copy in @p buf, or @p src when it does not fit.
+    [[nodiscard]] auto toLowerInto(std::string_view src, std::span<char> buf) -> std::string_view
     {
+        if (src.size() > buf.size())
+            return src;
         for (auto const i: std::views::iota(std::size_t { 0 }, src.size()))
             buf[i] = static_cast<char>(src[i] >= 'A' && src[i] <= 'Z' ? src[i] + ('a' - 'A') : src[i]);
-        return { buf, src.size() };
+        return { buf.data(), src.size() };
     }
 
     /// @brief Binary search in a sorted array of string_views.
@@ -1575,7 +1585,7 @@ namespace
                 while (pos < len && isIdentChar(line[pos]))
                     ++pos;
                 auto const directive = line.substr(start + 1, pos - start - 1);
-                char lowerBuf[64];
+                std::array<char, 64> lowerBuf {};
                 auto const lowerDirective = toLowerInto(directive, lowerBuf);
                 if (isInSortedArray(AsmGasDirectives, lowerDirective))
                     fillRange(map, start, pos - start, HighlightCategory::Preprocessor);
@@ -1592,7 +1602,7 @@ namespace
                 while (pos < len && isIdentChar(line[pos]))
                     ++pos;
                 auto const regName = line.substr(start + 1, pos - start - 1);
-                char lowerBuf[64];
+                std::array<char, 64> lowerBuf {};
                 auto const lowerReg = toLowerInto(regName, lowerBuf);
                 if (isInSortedArray(AsmRegisters, lowerReg))
                     fillRange(map, start, pos - start, HighlightCategory::Variable);
@@ -1644,7 +1654,7 @@ namespace
                 }
 
                 // Case-insensitive matching
-                char lowerBuf[64];
+                std::array<char, 64> lowerBuf {};
                 auto const lower = toLowerInto(word, lowerBuf);
 
                 // Check instructions, including AT&T suffix stripping (b/w/l/q)
@@ -1783,7 +1793,7 @@ namespace
                     ++pos;
                 auto const word = line.substr(wordStart, pos - wordStart);
                 std::array<char, 64> buf {};
-                auto const lower = word.size() <= buf.size() ? toLowerInto(word, buf.data()) : word;
+                auto const lower = toLowerInto(word, buf);
                 if (isInSortedArray(PowershellOperators, lower))
                     fillRange(map, start, pos - start, HighlightCategory::Operator);
                 // Otherwise a parameter name like -Path — left as default text.
@@ -1854,7 +1864,7 @@ namespace
                     ++pos;
                 auto const word = line.substr(start, pos - start);
                 std::array<char, 64> buf {};
-                auto const lower = word.size() <= buf.size() ? toLowerInto(word, buf.data()) : word;
+                auto const lower = toLowerInto(word, buf);
                 if (isInSortedArray(PowershellKeywords, lower))
                     fillRange(map, start, pos - start, HighlightCategory::Keyword);
                 else if (word.contains('-'))
@@ -1921,7 +1931,7 @@ namespace
                 ++wordEnd;
             auto const first = line.substr(pos, wordEnd - pos);
             std::array<char, 4> rbuf {};
-            auto const lowerFirst = first.size() <= rbuf.size() ? toLowerInto(first, rbuf.data()) : first;
+            auto const lowerFirst = toLowerInto(first, rbuf);
             if (lowerFirst == "rem" && (wordEnd == len || line[wordEnd] == ' ' || line[wordEnd] == '\t'))
             {
                 fillRange(map, pos, len - pos, HighlightCategory::Comment);
@@ -2007,7 +2017,7 @@ namespace
                     ++pos;
                 auto const word = line.substr(start, pos - start);
                 std::array<char, 32> buf {};
-                auto const lower = word.size() <= buf.size() ? toLowerInto(word, buf.data()) : word;
+                auto const lower = toLowerInto(word, buf);
                 if (isInSortedArray(CmdKeywords, lower))
                     fillRange(map, start, pos - start, HighlightCategory::Keyword);
                 continue;

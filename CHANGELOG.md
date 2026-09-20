@@ -165,6 +165,12 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- `core::tui`'s assembly highlighter no longer overruns a stack buffer. Its three scanners
+  lowercased an identifier, a `%register` or a `.directive` into a 64-character array through a
+  helper that took a bare `char*` and wrote `src.size()` bytes; the four other call sites bounded
+  the copy themselves and these did not, so a token longer than 64 characters in any rendered
+  ```` ```asm ```` fence smashed the caller's frame. The helper now takes a `std::span<char>` and
+  returns an oversized identifier unchanged, so the bound is in one place.
 - `core::tui::SyncGuard` writes its begin and end sequences (DEC mode 2026) through the
   `TerminalOutput` it brackets, so they follow that output's `writeToDestination()` wherever its
   bytes go. endo's guard wrote them to the process's standard output whatever the output was
