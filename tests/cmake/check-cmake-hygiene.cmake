@@ -97,7 +97,8 @@ core_cpp_hygiene_rule(c-style-for KIND cpp
 # declares is the one its directory names. src/core/<dir>/... declares core::<dir>, or a namespace
 # nested in it (core::<dir>::detail), and spells it that way, not as `namespace core { namespace
 # <dir>`. A file directly in src/core/ declares core, or a namespace nested in it (core::base64).
-# Helper namespaces inside the first are free, but not from case: every segment is lowercase
+# Helper namespaces inside the first are free in their name, but not in their case: EVERY named
+# namespace the file declares, not only the first, has every segment lowercase
 # (readability-identifier-naming.NamespaceCase in .clang-tidy says the same). A file that declares
 # no named namespace (a main(), a file of TU-local helpers, a header of macros) is not checked, and
 # neither is a namespace alias.
@@ -250,12 +251,16 @@ foreach(path IN LISTS scanned)
     string(REPLACE "\n" ";" lines "${content}")
 
     # The namespace this file's first named namespace must be, or be nested in (namespace-directory).
+    # Empty where the rule does not reach this file at all, which is also what stops the case check
+    # below from running; `firstNamespaceSeen` is what limits the DIRECTORY half to the first
+    # declaration, while every later one is still held to lowercase.
     set(expectedNamespace "")
     if(kind STREQUAL "cpp" AND path MATCHES "^src/core/([^/]+)/")
         set(expectedNamespace "core::${CMAKE_MATCH_1}")
     elseif(kind STREQUAL "cpp" AND path MATCHES "^src/core/[^/]+$")
         set(expectedNamespace "core")
     endif()
+    set(firstNamespaceSeen OFF)
 
     set(lineNumber 0)
     foreach(encoded IN LISTS lines)
@@ -269,14 +274,15 @@ foreach(path IN LISTS scanned)
             string(REGEX MATCH "${CORE_CPP_HYGIENE_NAMESPACE_REGEX}" declaration "${line}")
             if(declaration)
                 set(declared "${CMAKE_MATCH_2}")
-                if(NOT declared STREQUAL expectedNamespace AND NOT declared MATCHES "^${expectedNamespace}::")
+                if(NOT firstNamespaceSeen AND NOT declared STREQUAL expectedNamespace
+                   AND NOT declared MATCHES "^${expectedNamespace}::")
                     core_cpp_hygiene_refuse(namespace-directory "${path}" ${lineNumber}
                         "${line}    (expected ${expectedNamespace})")
                 elseif(declared MATCHES "[A-Z]")
                     core_cpp_hygiene_refuse(namespace-directory "${path}" ${lineNumber}
                         "${line}    (namespaces are lowercase)")
                 endif()
-                set(expectedNamespace "")
+                set(firstNamespaceSeen ON)
             endif()
         endif()
 
