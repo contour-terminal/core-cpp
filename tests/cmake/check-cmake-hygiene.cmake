@@ -394,6 +394,10 @@ if(EXISTS "${ROOT}/${CORE_CPP_HYGIENE_PROVENANCE_TABLE}")
         if(NOT provenanceSha MATCHES "^[0-9a-f]+$" OR NOT provenanceShaLength EQUAL 40)
             core_cpp_hygiene_refuse(provenance "${CORE_CPP_HYGIENE_PROVENANCE_TABLE}" "-"
                 "'${provenanceCell}': synced SHA '${provenanceSha}' is not a full 40-character hash")
+        else()
+            # Keep the pin so NOTICE's copy of it can be held against this one below.
+            string(MAKE_C_IDENTIFIER "${provenanceCell}" provenanceKey)
+            set(provenancePin_${provenanceKey} "${provenanceSha}")
         endif()
     endforeach()
 endif()
@@ -413,6 +417,50 @@ foreach(named IN LISTS provenanceNamed)
             "names '${named}', which does not exist")
     endif()
 endforeach()
+
+# NOTICE records a pin too, and until now nothing read it: the re-sync of the two verbatim cmake
+# files to 5a9dca04 updated cmake/portable/README.md and the provenance table and left NOTICE
+# naming eb9c9c68, where it sat until someone read it by hand. Three documents carry pins and one
+# of them was checked. A correction is not finished until every document that carried the wrong
+# version carries the right one, so NOTICE's pins are held against the table's here.
+#
+# Only the bullets NOTICE itself marks "(verbatim)" are compared. A merged file is deliberately
+# listed under the commit of EACH upstream it took something from, while the table names its
+# primary upstream only -- so for those two the documents disagree by design, and comparing them
+# would be a false positive. "(verbatim)" means one upstream file and one commit, which is exactly
+# the case that can be checked and exactly the one that rotted.
+if(EXISTS "${ROOT}/NOTICE")
+    set(noticePin "")
+    file(STRINGS "${ROOT}/NOTICE" noticeLines)
+    foreach(noticeLine IN LISTS noticeLines)
+        # "Imported at <sha>", and the "<project>, at <sha>" form the documentation section uses.
+        if(noticeLine MATCHES "at ([0-9a-f]+)")
+            string(LENGTH "${CMAKE_MATCH_1}" noticeShaLength)
+            if(noticeShaLength EQUAL 40)
+                set(noticePin "${CMAKE_MATCH_1}")
+            endif()
+        endif()
+        if(NOT noticeLine MATCHES "^[ \t]*-[ \t]+([^ \t(]+)[ \t]+\\(verbatim\\)")
+            continue()
+        endif()
+        set(noticePath "${CMAKE_MATCH_1}")
+        if(NOT EXISTS "${ROOT}/${noticePath}")
+            core_cpp_hygiene_refuse(provenance "NOTICE" "-"
+                "names '${noticePath}' as a verbatim copy, and no such file exists")
+            continue()
+        endif()
+        # A verbatim file outside the provenance table's scope (.github/, say) has no row to be held
+        # against; that it exists is all this rule can say about it.
+        string(MAKE_C_IDENTIFIER "${noticePath}" noticeKey)
+        if(NOT DEFINED provenancePin_${noticeKey})
+            continue()
+        endif()
+        if(NOT noticePin STREQUAL "${provenancePin_${noticeKey}}")
+            core_cpp_hygiene_refuse(provenance "NOTICE" "-"
+                "records '${noticePath}' at ${noticePin}, but ${CORE_CPP_HYGIENE_PROVENANCE_TABLE} pins it at ${provenancePin_${noticeKey}}")
+        endif()
+    endforeach()
+endif()
 
 # An allowlist row that allows nothing in a file that exists has outlived its reason. A row whose file
 # is gone is left alone: whatever the file was renamed to is not allowlisted, so it is refused anyway.

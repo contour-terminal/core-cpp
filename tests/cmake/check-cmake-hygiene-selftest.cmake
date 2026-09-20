@@ -32,7 +32,13 @@ set(clean
     "src/core/foo/Main.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace\n{\n}\nint main() { return 0<semicolon> }\n"
     "src/core/Top.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core\n{\nnamespace views\n{\n}\n} // namespace core\n"
     "src/core/Base64.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core::base64\n{\n}\n"
-    ".agent/reference/provenance.md|# Provenance\n\n| core-cpp path | upstream repo | upstream path | synced SHA | notes |\n|---|---|---|---|---|\n| `src/core/foo/CMakeLists.txt` | origin: core-cpp | - | - | - |\n| `src/core/foo/Foo.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/detail/Bar.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/posix/Impl.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/testing/Fake.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/Main.cpp` | origin: core-cpp | - | - | - |\n| `src/core/Top.hpp` | origin: core-cpp | - | - | - |\n| `src/core/Base64.hpp` | origin: core-cpp | - | - | - |\n"
+    "NOTICE|core-cpp
+
+contour-terminal/contour
+  Imported at 1111111111111111111111111111111111111111
+  - src/core/Base64.hpp (verbatim)
+"
+    ".agent/reference/provenance.md|# Provenance\n\n| core-cpp path | upstream repo | upstream path | synced SHA | notes |\n|---|---|---|---|---|\n| `src/core/foo/CMakeLists.txt` | origin: core-cpp | - | - | - |\n| `src/core/foo/Foo.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/detail/Bar.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/posix/Impl.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/testing/Fake.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/Main.cpp` | origin: core-cpp | - | - | - |\n| `src/core/Top.hpp` | origin: core-cpp | - | - | - |\n| `src/core/Base64.hpp` | contour-terminal/contour | `src/crispy/Base64.hpp` | 1111111111111111111111111111111111111111 | verbatim |\n"
 )
 
 # At least one violating file per rule: "<rule>|<file>|<content>". The file replaces its clean
@@ -63,15 +69,30 @@ set(cases
     "namespace-directory|src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foo\n{\nnamespace Detail\n{\n}\n}\n"
     "namespace-directory|src/core/foo/testing/Fake.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core::foo\n{\n}\n"
     "provenance|src/core/foo/Extra.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foo {}\n"
-    "provenance|.agent/reference/provenance.md|# Provenance\n\n| core-cpp path | upstream repo | upstream path | synced SHA | notes |\n|---|---|---|---|---|\n| `src/core/foo/CMakeLists.txt` | origin: core-cpp | - | - | - |\n| `src/core/foo/Foo.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/detail/Bar.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/posix/Impl.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/testing/Fake.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/Main.cpp` | origin: core-cpp | - | - | - |\n| `src/core/Top.hpp` | origin: core-cpp | - | - | - |\n| `src/core/Base64.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/DoesNotExist.cpp` | origin: core-cpp | - | - | - |\n"
+    "provenance|.agent/reference/provenance.md|# Provenance\n\n| core-cpp path | upstream repo | upstream path | synced SHA | notes |\n|---|---|---|---|---|\n| `src/core/foo/CMakeLists.txt` | origin: core-cpp | - | - | - |\n| `src/core/foo/Foo.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/detail/Bar.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/posix/Impl.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/testing/Fake.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/Main.cpp` | origin: core-cpp | - | - | - |\n| `src/core/Top.hpp` | origin: core-cpp | - | - | - |\n| `src/core/Base64.hpp` | contour-terminal/contour | `src/crispy/Base64.hpp` | 1111111111111111111111111111111111111111 | verbatim |\n| `src/core/foo/DoesNotExist.cpp` | origin: core-cpp | - | - | - |\n"
     # The upstream half of a row. scripts/check-upstream-drift.py refuses both of these too, but it
     # needs the upstream checkouts to say anything at all and SKIPs (77) without them, which is every
     # CI runner -- so on its own it catches these two only on a developer's machine. Neither needs a
     # checkout or a network, so they are refused here, where the gate runs everywhere.
-    "provenance|.agent/reference/provenance.md|# Provenance\n\n| core-cpp path | upstream repo | upstream path | synced SHA | notes |\n|---|---|---|---|---|\n| `src/core/foo/CMakeLists.txt` | origin: core-cpp | - | - | - |\n| `src/core/foo/Foo.cpp` | contour-terminal/contour | `src/foo/Foo.{cpp,hpp}` | 6777ff05014f8ff163b071e8b0e942830119db80 | - |\n| `src/core/foo/detail/Bar.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/posix/Impl.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/testing/Fake.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/Main.cpp` | origin: core-cpp | - | - | - |\n| `src/core/Top.hpp` | origin: core-cpp | - | - | - |\n| `src/core/Base64.hpp` | origin: core-cpp | - | - | - |\n"
-    "provenance|.agent/reference/provenance.md|# Provenance\n\n| core-cpp path | upstream repo | upstream path | synced SHA | notes |\n|---|---|---|---|---|\n| `src/core/foo/CMakeLists.txt` | origin: core-cpp | - | - | - |\n| `src/core/foo/Foo.cpp` | contour-terminal/contour | `src/foo/Foo.cpp` | 6777ff05 | - |\n| `src/core/foo/detail/Bar.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/posix/Impl.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/testing/Fake.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/Main.cpp` | origin: core-cpp | - | - | - |\n| `src/core/Top.hpp` | origin: core-cpp | - | - | - |\n| `src/core/Base64.hpp` | origin: core-cpp | - | - | - |\n"
+    "provenance|.agent/reference/provenance.md|# Provenance\n\n| core-cpp path | upstream repo | upstream path | synced SHA | notes |\n|---|---|---|---|---|\n| `src/core/foo/CMakeLists.txt` | origin: core-cpp | - | - | - |\n| `src/core/foo/Foo.cpp` | contour-terminal/contour | `src/foo/Foo.{cpp,hpp}` | 6777ff05014f8ff163b071e8b0e942830119db80 | - |\n| `src/core/foo/detail/Bar.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/posix/Impl.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/testing/Fake.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/Main.cpp` | origin: core-cpp | - | - | - |\n| `src/core/Top.hpp` | origin: core-cpp | - | - | - |\n| `src/core/Base64.hpp` | contour-terminal/contour | `src/crispy/Base64.hpp` | 1111111111111111111111111111111111111111 | verbatim |\n"
+    "provenance|.agent/reference/provenance.md|# Provenance\n\n| core-cpp path | upstream repo | upstream path | synced SHA | notes |\n|---|---|---|---|---|\n| `src/core/foo/CMakeLists.txt` | origin: core-cpp | - | - | - |\n| `src/core/foo/Foo.cpp` | contour-terminal/contour | `src/foo/Foo.cpp` | 6777ff05 | - |\n| `src/core/foo/detail/Bar.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/posix/Impl.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/testing/Fake.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/Main.cpp` | origin: core-cpp | - | - | - |\n| `src/core/Top.hpp` | origin: core-cpp | - | - | - |\n| `src/core/Base64.hpp` | contour-terminal/contour | `src/crispy/Base64.hpp` | 1111111111111111111111111111111111111111 | verbatim |\n"
     # A row too short to hold the two cells above would otherwise skip both checks silently.
-    "provenance|.agent/reference/provenance.md|# Provenance\n\n| core-cpp path | upstream repo | upstream path | synced SHA | notes |\n|---|---|---|---|---|\n| `src/core/foo/CMakeLists.txt` | origin: core-cpp | - | - | - |\n| `src/core/foo/Foo.cpp` | origin: core-cpp | - |\n| `src/core/foo/detail/Bar.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/posix/Impl.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/testing/Fake.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/Main.cpp` | origin: core-cpp | - | - | - |\n| `src/core/Top.hpp` | origin: core-cpp | - | - | - |\n| `src/core/Base64.hpp` | origin: core-cpp | - | - | - |\n"
+    "provenance|.agent/reference/provenance.md|# Provenance\n\n| core-cpp path | upstream repo | upstream path | synced SHA | notes |\n|---|---|---|---|---|\n| `src/core/foo/CMakeLists.txt` | origin: core-cpp | - | - | - |\n| `src/core/foo/Foo.cpp` | origin: core-cpp | - |\n| `src/core/foo/detail/Bar.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/posix/Impl.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/testing/Fake.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/Main.cpp` | origin: core-cpp | - | - | - |\n| `src/core/Top.hpp` | origin: core-cpp | - | - | - |\n| `src/core/Base64.hpp` | contour-terminal/contour | `src/crispy/Base64.hpp` | 1111111111111111111111111111111111111111 | verbatim |\n"
+    # NOTICE carries pins too, and nothing read them until now: the re-sync of the two verbatim
+    # cmake files updated the README and the table and left NOTICE two commits behind, where it
+    # sat until someone read it by hand.
+    "provenance|NOTICE|core-cpp
+
+contour-terminal/contour
+  Imported at 2222222222222222222222222222222222222222
+  - src/core/Base64.hpp (verbatim)
+"
+    "provenance|NOTICE|core-cpp
+
+contour-terminal/contour
+  Imported at 1111111111111111111111111111111111111111
+  - src/core/Gone.hpp (verbatim)
+"
 )
 
 ## @brief Writes the "<file>|<content>" rows of the list named @p rowsVar under @p dir.
