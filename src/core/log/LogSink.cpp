@@ -7,7 +7,6 @@
 #include <array>
 #include <cerrno>
 #include <chrono>
-#include <cstdio>
 #include <ctime>
 #include <format>
 #include <functional>
@@ -19,7 +18,6 @@
 #ifndef _WIN32
     #include <unistd.h>
 #else
-    #include <io.h>
     #include <process.h>
 #endif
 
@@ -270,26 +268,6 @@ ScopedOutput::~ScopedOutput()
         point.target->setSink(*point.previousSink);
         point.target->setFormatter(point.previousFormatter);
     }
-}
-
-bool isStdOutTerminal() noexcept
-{
-#ifndef _WIN32
-    return ::isatty(STDOUT_FILENO) != 0;
-#else
-    return ::_isatty(::_fileno(stdout)) != 0;
-#endif
-}
-
-bool isStdErrTerminal() noexcept
-{
-#ifndef _WIN32
-    return ::isatty(STDERR_FILENO) != 0;
-#else
-    // This answered `true` unconditionally, so a redirected standard error received SGR escapes
-    // -- against this header's own contract.
-    return ::_isatty(::_fileno(stderr)) != 0;
-#endif
 }
 
 ScopedCapture::ScopedCapture(std::string_view categoryName):
