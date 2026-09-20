@@ -94,49 +94,91 @@ handed one.
 
 Six migrations are about to rewrite hundreds of files each. "I read the diff and it looked right"
 does not survive the first hundred, and the reviewer of a 53-call-site rename does not want to
-spot-check either. Prove the pass was **pure by construction** instead: for every file the codemod
-touched, take the pre-image, apply *only* the substitutions the profile reports, and assert
-byte-identity with the post-image.
+spot-check either. Prove the pass was **pure by construction** instead: for every file the commit
+touched, take the pre-image, apply the substitutions *you* assert the pass should have made, and
+compare with the post-image.
 
 ```sh
-# The pre-images, straight from the commit before the codemod ran.
-git worktree add ../before HEAD~1
+# The substitutions you assert this pass made. Written out here, by hand, from the rename rows the
+# pull request applies -- see below for why they are not read back from the tool.
+substitutions() {
+    sed -e 's/NetErrorCode::Other/NetErrorCode::SystemError/g' \
+        -e 's/@c Other/@c SystemError/g'
+}
 
-python /path/to/core-cpp/tools/migrate/rewrite.py --profile endo src | tee ../rewrite.log
-
-# For each file the tool reported, re-derive the post-image from the pre-image and compare.
-git diff --name-only HEAD~1 -- src | while read -r file; do
-    python /path/to/core-cpp/tools/migrate/rewrite.py --profile endo "../before/$file" >/dev/null
-    cmp -s "../before/$file" "$file" || echo "NOT PURE: $file"
+# For each file the commit touched, derive the post-image yourself and compare, whitespace stripped.
+for file in $(git diff --name-only HEAD~1 HEAD -- src); do
+    git show "HEAD~1:$file" | substitutions | tr -d '[:space:]' > /tmp/expected
+    git show "HEAD:$file"                   | tr -d '[:space:]' > /tmp/actual
+    cmp -s /tmp/expected /tmp/actual || echo "NOT PURE: $file"
 done
 ```
 
-Anything the codemod did not do breaks byte-identity and is named by file. That catches the two
-failure modes a diff read does not:
+Run against core-cpp's own `Other` -> `SystemError` rename (`8a88ce0`, 53 call sites) this answers
+`pure: 16   not pure: 2`, and names the two files as the ones carrying work that was not the
+rename -- which is the method doing both of its jobs at once: proving purity where purity is
+claimed, and refusing it where hand work happened.
 
-- **An unintended rewrite** — a call site that should have become something else being swept into a
+Anything the pass did that the substitutions do not account for breaks the comparison and is named
+by file. That catches the two failure modes a diff read does not:
+
+- **An unintended rewrite** -- a call site that should have become something else being swept into a
   catch-all row, or a stray reformat riding along.
-- **A hand edit smuggled into a mechanical commit** — the one that looks innocent in review and is
+- **A hand edit smuggled into a mechanical commit** -- the one that looks innocent in review and is
   invisible six months later. Keep hand edits in their own commit; then this check stays meaningful.
 
-It covers files for platforms you cannot even compile, which is most of them for most consumers.
+**Write the substitution list yourself; do not derive it from the codemod's report, and do not
+re-run the codemod to produce the expected side.** Both are the same mistake and it is an easy one,
+because the automatic version cannot drift and looks like an improvement: you would be using the
+tool's account of what it did -- or the tool itself -- to verify what it did, so a tool that is
+wrong about a row is wrong identically on both sides and proves itself correct. The entire value of
+this method is that it is **independent of the tool**. Assert what should have changed, derive the
+post-image from that assertion, and compare. `rewrite.py`'s per-row report is still worth keeping in
+the pull request -- as the thing being checked, not as the check.
 
-It also defends against the failure class that produced most of the near-misses in building these
-tools: **a mechanical check believed from its summary rather than its output.** A rename that
-reported 59 replacements had silently skipped every attribute access; an `awk` that reported no
-over-long lines had been truncated by a `head`; a `git diff` warning about CRLF was read as a
-present fact when it described a past one. Each looked like a clean result and was a clean result
-*of the wrong question*. A codemod's replacement count is a summary in exactly that sense — this
-check reads the output instead.
+**Strip whitespace before comparing.** This is not a convenience; it is what makes the proof usable
+at all. A rename changes identifier lengths, clang-format re-wraps the lines it lands in, and that
+reflow is the *one legitimate difference* a mechanical pass produces. Measured on `8a88ce0`: across
+the sixteen purely mechanical files, **34 changed lines do not contain the renamed token at all** --
+they moved because clang-format re-wrapped around an identifier six characters longer. Without the
+strip the proof reports a false difference on every one of them, and is abandoned the first time it
+is used in anger, which is worse than never having had it.
 
-What it does **not** catch is a *correct* rewrite to the *wrong target* — every byte as the table
+**And write its cost down, because a proof with an undocumented blind spot is one people
+over-trust:** a stripped comparison cannot see a whitespace-only change. `auto const x = 1;` and
+`auto  const   x=1;` are the same string to it. What covers exactly that gap is the pinned
+`clang-format --check` over the same commit, which sees nothing but whitespace. The two together
+are complete; neither is complete alone, so run both and say in the pull request that you did.
+
+**Its real value is the files you cannot compile**, which is most of them for most consumers: the
+Windows paths from a Linux machine, the BSD and Apple ones from anywhere, the Emscripten-only ones.
+There a spot-check is a sample and CI is a round trip measured in tens of minutes -- this is a
+complete answer in seconds, before the push.
+
+What it does **not** catch is a *correct* rewrite to the *wrong target* -- every byte as the table
 says, and the table wrong. That is what `check-renames.py` is for, and the two are complementary:
-this proves the tool did only what the table says, the gate proves the table says the right thing.
-It also pairs with the codemod's idempotence, which the tests assert: idempotence says running
+this proves the pass did only what you assert, the gate proves the assertion matches the delivered
+API. It also pairs with the codemod's idempotence, which the tests assert: idempotence says running
 *twice* changes nothing, and this says running *once* changed nothing but what was intended.
 
-The check needs the substitution list to be exactly the rows the profile applied, which is why
-`rewrite.py` reports every row it fired and how often, per file — keep that log in the pull request.
+### Read the output, never the summary
+
+The failure this whole section defends against has a name, and it is not "the tool has a bug": it is
+**a mechanical check believed from its summary rather than its output.** Three instances from
+building these tools, each a different mechanism:
+
+- **The summary hid a gap in scope.** A rename reported 59 replacements -- a plausible number, and
+  correct -- while silently skipping every attribute access.
+- **The tool answered a smaller question than it was asked.** An `awk` reported no over-long lines;
+  its input had been truncated by a `head` further up the pipe.
+- **The answer was true, and then stopped being true.** A `git diff` CRLF warning described a past
+  state and was read as a present one; a set of mutation transcripts cited line numbers from a
+  working copy that had since been reformatted.
+
+In each the number was real and the thing it was taken to mean was not. A codemod's replacement
+count is a summary in exactly that sense, which is why this check reads the output instead: read
+what the check printed, against the tree as it is *now*, and re-run it after anything reformats the
+code it cites. A count, a percentage or a green tick is a claim about output nobody has looked at.
 
 ### The table is checked against the delivered headers
 
