@@ -231,6 +231,23 @@ workflow refuses one without a section here.
   published platform per row rather than stopping at whichever host actually runs the check.
   `cmake/FetchTransferBound.cmake` compared identical at the same commit; no change there.
 
+### Breaking
+
+- `core::platform::FileSystem::openWrite()` takes a `core::platform::WriteMode` and `copyFile()` a
+  `core::platform::OverwritePolicy`, in place of the `bool` each took before. A `bool` in an API is
+  an anonymous enum whose two values are named after their representation rather than their meaning
+  (`.agent/rules/design-principles.md`), and `FileSystem.hpp` is public API for every consumer, so
+  this costs nothing now and would be a break once one of them passes `true`. Migration:
+  `openWrite(p, true)` becomes `openWrite(p, WriteMode::Append)` and `openWrite(p, false)` becomes
+  `openWrite(p, WriteMode::Truncate)`; `copyFile(a, b, true)` becomes
+  `copyFile(a, b, OverwritePolicy::Replace)` and `copyFile(a, b, false)` becomes
+  `copyFile(a, b, OverwritePolicy::Refuse)`. The defaults are unchanged, so a call that took the
+  default needs no edit; an implementation of the interface outside core-cpp mirrors the two
+  signatures.
+- `core::platform::testing::TestEnvironmentProvider` opens the namespace its directory names,
+  alongside its neighbours `InMemoryFileSystem` and `MockFileInfoProvider`; it used to open
+  `core::platform`. Migration: spell it `core::platform::testing::TestEnvironmentProvider`.
+
 ### Fixed
 
 - `core::cli`'s `--help` no longer reads past the text it is laying out. `wordWrapped()` computed
@@ -378,6 +395,61 @@ workflow refuses one without a section here.
   empty channel and the end of the stream apart; only a failed read is a `PlatformError`. endo's
   and contour's copies returned a count, 0 for the end of the stream, and failed a read of an
   empty non-blocking channel with the same error as a broken one.
+
+- `core::platform::testing::InMemoryFileSystem`'s read-write stream stops handing out stale
+  pointers. It cached the get-area pointers into the `std::string` that holds the file and then
+  appended to that same string on every write, so a write that grew it past its capacity left every
+  one of those pointers naming freed memory -- a heap-use-after-free on the next read. The same
+  append also ignored where the stream stood, so `openReadWrite()` could never overwrite in place
+  the way the `std::fstream` behind `NativeFileSystem` does; it now carries one position for reading
+  and writing, as `std::filebuf` has, and implements `seekoff()`/`seekpos()`.
+- `core::platform::MessageQueue` guards its wakeup pointer like every other member. `setWakeup()`
+  wrote it with no lock while `push()` and `shutdown()` read and dereferenced it from another
+  thread, so a teardown that cleared the pointer could be missed and leave `push()` signalling a
+  destroyed `Wakeup`. Registration takes the queue's mutex now, and the signalling happens under it,
+  so once `setWakeup(nullptr)` returns nothing is still inside `signal()`.
+- `core::platform::SignalHandler::restore()` deregisters the interrupt wakeup as well as the
+  callback. It left `interruptWakeup` pointing at the `Wakeup` the caller was about to destroy, and
+  Linux's `processSignalFd()`, the SIGINT handler elsewhere and the Windows console control handler
+  all reach it through that pointer.
+- `core::platform`'s Windows `EnvironmentProvider` reads the environment through
+  `core::LiveEnvironment`, and writes it through `core::setProcessEnvironmentVariable()` and
+  `core::unsetProcessEnvironmentVariable()`, as the POSIX one already did. Its own
+  `GetEnvironmentVariableA()` call could not tell an empty value from a missing name, so it reported
+  a variable set to `""` as unset while the other reader of the same Win32 block reported `""`; it
+  also ignored the buffer-too-small return and allocated 32 KiB per lookup.
+- `core::testing::setTestEnv()` sets an empty value instead of removing the variable. On Windows
+  `_putenv_s(name, "")` removes it, so `setTestEnv(name, "")` and `unsetTestEnv(name)` were the same
+  call and `ScopedEnv` could not put back a variable whose previous value was empty -- and the
+  environment is process-global, so the loss crossed into every later test.
+- `core::platform::SystemPipe`'s never-stall guarantee holds on Windows too. Only the read socket
+  was made non-blocking, so a producer that outran the loop parked in `send()` indefinitely; the
+  write socket is non-blocking now and `write()` answers `WSAEWOULDBLOCK` as done, the way the POSIX
+  branch answers `EAGAIN`. `write()` also clamps the byte count to `INT_MAX`, as `read()` already
+  did, so a count past it can no longer go negative or wrap into a short write reported as a full
+  one. And `makeLoopbackPair()` compares the two ends' addresses and retries: `accept()` returns
+  whoever connected, and between the `listen()` and the `accept()` any local process can take the
+  ephemeral port, leaving a "pair" whose ends are not each other's.
+- `core::platform::FileSystem::isExecutableFile()` classifies a symlink by what it points at. On
+  POSIX it accepted any symlink and then read the followed target's permissions, so a symlink to a
+  directory was reported as executable on the directory's own search bit -- against the
+  declaration's "Directories always return false". A PATH lookup that trusted it ran the directory
+  and failed with `EACCES` instead of trying the next entry.
+- `core::platform::globMatchFilename()` reaches its bracket arm for the character it exists to
+  match. The literal arm was tested first, so `globMatchFilename("[", "[[]")` -- POSIX's own way to
+  spell a literal bracket -- answered false. A `[` that no `]` closes stays the literal `[` that
+  `fnmatch(3)` reads it as.
+- `core::platform::stripTrailingSeparator()` and `isCaseOnlyRename()` keep a spelling the platform's
+  native narrow encoding cannot hold. Both went through `path::generic_string()`, which on Windows
+  narrows to the ANSI code page: MSVC throws on a path it cannot spell, and where it does not throw
+  it substitutes, so two distinct paths come back as one. `InMemoryFileSystem` keys its whole file
+  map on the first of them, so one file answered for another.
+  `NativeFileSystem::createTempFile()` had the same problem twice, and is `wchar_t` end to end on
+  Windows now.
+- `core::platform::NativeFileSystem::createDirectory()` names an existing directory rather than
+  reporting "No such file or directory", the diagnosis for the other way it fails; and `rename()`
+  reports the two-hop recase's own error instead of the first attempt's, and says where a failed
+  rollback left the entry.
 
 ### Imported
 
