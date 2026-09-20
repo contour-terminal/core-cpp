@@ -314,7 +314,7 @@ SyncGuard::~SyncGuard()
     {
         // Flush first: anything composed inside the region and still buffered would otherwise be
         // emitted after the end sequence, landing outside the very region it was composed in.
-        // syncGuard() flushes on the way in, so the two ends match.
+        // The constructor flushes on the way in for the same reason, so the two ends match.
         _output->flush();
         _output->writeToDestination(EndSynchronizedOutput);
     }
