@@ -3,6 +3,7 @@
 
 #include <core/tui/InputEvent.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -20,6 +21,28 @@ namespace core::tui
 class VtParser
 {
   public:
+    /// @brief The largest bracketed paste assembled before the collected text is emitted.
+    ///
+    /// The bytes come from stdin, which is untrusted: a `ESC[200~` whose `ESC[201~` never
+    /// arrives would otherwise grow this parser for as long as bytes keep coming. Past the cap
+    /// the parser emits what it has and returns to Ground, so the remainder of such a paste is
+    /// read as ordinary input -- which is what happens anyway when the terminator is lost. No
+    /// interactive paste reaches 4 MiB; a file that large is not typed into a prompt.
+    static constexpr std::size_t MaxPasteLength = std::size_t { 4 } * 1024 * 1024;
+
+    /// @brief The largest CSI parameter string assembled before the sequence is abandoned.
+    ///
+    /// DEC's own limit is 16 parameters, and the longest sequence core::tui answers
+    /// (a DECRQM reply, a Kitty key) is a few dozen bytes. 256 leaves room for anything
+    /// well-formed, and a longer one is malformed with nothing worth emitting.
+    static constexpr std::size_t MaxCsiParamLength = 256;
+
+    /// @brief The largest DCS payload assembled before the sequence is abandoned.
+    ///
+    /// A DCS here carries a terminal's answer -- XTGETTCAP, DECRQSS -- which is small. 64 KiB is
+    /// far above any of them, and a payload past it has lost its ST.
+    static constexpr std::size_t MaxDcsLength = std::size_t { 64 } * 1024;
+
     /// @brief Feeds raw bytes and produces zero or more parsed events.
     /// @param data Raw bytes from stdin.
     /// @return Vector of parsed input events.
@@ -53,6 +76,17 @@ class VtParser
     std::string _pasteBuf;  ///< Buffer for bracketed paste content.
     std::string _dcsBuf;    ///< Buffer for DCS (Device Control String) payload.
     int _utf8Remaining = 0; ///< Expected remaining UTF-8 continuation bytes.
+
+    /// @brief Abandons a sequence whose buffer has grown past its cap.
+    ///
+    /// Clears @p buffer, gives its storage back and returns the parser to Ground, so a sequence
+    /// whose terminator never arrives costs a bounded amount of memory rather than an unbounded
+    /// one. The bytes collected so far are dropped: a sequence this long is malformed.
+    ///
+    /// @param buffer The buffer to test and, when it is over the cap, clear.
+    /// @param cap The largest size @p buffer may reach.
+    /// @return true when the parser was reset, so the caller must stop processing this byte.
+    [[nodiscard]] auto abandonIfOverlong(std::string& buffer, std::size_t cap) -> bool;
 
     /// @brief Processes a single byte in the Ground state.
     void processGround(std::uint8_t byte, std::vector<InputEvent>& events);

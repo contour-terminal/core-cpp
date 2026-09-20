@@ -180,6 +180,13 @@ workflow refuses one without a section here.
   `dialogWidth = min(config.width, termCols - 4)` and `inputWidth = dialogWidth - 4` had no floor,
   and the negative width reached `substr()` as a huge `std::size_t`, throwing `std::out_of_range`
   out of a `render()` no caller expects to throw. All three dialogs clamp both to zero.
+- `core::tui::VtParser`'s three sequence buffers are bounded. A bracketed paste, a CSI parameter
+  string and a DCS payload each grew for as long as bytes kept arriving without the terminator
+  that ends the sequence, and `timeout()` resolves only a bare Escape, so a `ESC[200~` whose
+  `ESC[201~` never came grew the process without limit from untrusted bytes on stdin. The caps
+  are the new public `VtParser::MaxPasteLength` (4 MiB), `MaxCsiParamLength` (256) and
+  `MaxDcsLength` (64 KiB); past one, the parser returns to Ground, emitting the collected text
+  for a paste and dropping the other two, which are malformed at that length.
 - `core::tui`'s POSIX SIGWINCH handler saves and restores `errno`, reaches its `TerminalInput`
   through a lock-free `std::atomic` rather than a plain pointer, and cannot block. The write end
   of the resize self-pipe was left blocking (only the read end was made non-blocking), so a pipe

@@ -5,7 +5,9 @@
 #include <cstdint>
 #include <optional>
 #include <ranges>
+#include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace core::tui
@@ -453,6 +455,17 @@ auto VtParser::timeout() -> std::vector<InputEvent>
     return events;
 }
 
+auto VtParser::abandonIfOverlong(std::string& buffer, std::size_t cap) -> bool
+{
+    if (buffer.size() <= cap)
+        return false;
+
+    buffer.clear();
+    buffer.shrink_to_fit(); // The point of the cap is the memory, so give it back.
+    _state = State::Ground;
+    return true;
+}
+
 void VtParser::processGround(std::uint8_t byte, std::vector<InputEvent>& events)
 {
     if (byte == 0x1B)
@@ -573,6 +586,7 @@ void VtParser::processCsi(std::uint8_t byte, std::vector<InputEvent>& events)
     {
         _paramBuf += static_cast<char>(byte);
         _state = State::CsiParam;
+        std::ignore = abandonIfOverlong(_paramBuf, MaxCsiParamLength);
         return;
     }
 
@@ -590,6 +604,7 @@ void VtParser::processCsi(std::uint8_t byte, std::vector<InputEvent>& events)
     if (byte >= 0x20 && byte <= 0x2F)
     {
         _paramBuf += static_cast<char>(byte);
+        std::ignore = abandonIfOverlong(_paramBuf, MaxCsiParamLength);
         return;
     }
 
@@ -631,6 +646,20 @@ void VtParser::processPaste(std::uint8_t byte, std::vector<InputEvent>& events)
         auto cleaned = sanitizeWin32PasteSequences(_pasteBuf);
         events.emplace_back(PasteEvent { .text = std::move(cleaned) });
         _pasteBuf.clear();
+        _pasteBuf.shrink_to_fit();
+        _state = State::Ground;
+        return;
+    }
+
+    // Past the cap the paste ends here. Unlike the other two buffers this one holds the user's
+    // own text, so it is emitted rather than dropped; what follows is read as ordinary input,
+    // which is what happens anyway to a paste whose terminator is lost.
+    if (_pasteBuf.size() > MaxPasteLength)
+    {
+        auto cleaned = sanitizeWin32PasteSequences(_pasteBuf);
+        events.emplace_back(PasteEvent { .text = std::move(cleaned) });
+        _pasteBuf.clear();
+        _pasteBuf.shrink_to_fit();
         _state = State::Ground;
     }
 }
@@ -1078,6 +1107,7 @@ void VtParser::processDcsEntry(std::uint8_t byte, std::vector<InputEvent>& event
     if (byte >= 0x20 && byte <= 0x3F)
     {
         _dcsBuf += static_cast<char>(byte);
+        std::ignore = abandonIfOverlong(_dcsBuf, MaxDcsLength);
         return;
     }
 
@@ -1086,6 +1116,7 @@ void VtParser::processDcsEntry(std::uint8_t byte, std::vector<InputEvent>& event
     {
         _dcsBuf += static_cast<char>(byte);
         _state = State::DcsBody;
+        std::ignore = abandonIfOverlong(_dcsBuf, MaxDcsLength);
         return;
     }
 
@@ -1118,6 +1149,8 @@ void VtParser::processDcsBody(std::uint8_t byte, std::vector<InputEvent>& events
         _state = State::Ground;
         return;
     }
+
+    std::ignore = abandonIfOverlong(_dcsBuf, MaxDcsLength);
 }
 
 void VtParser::emitCodepoint(char32_t cp, std::vector<InputEvent>& events)

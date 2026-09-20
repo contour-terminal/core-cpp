@@ -3,6 +3,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <optional>
+#include <string>
+#include <string_view>
+#include <variant>
+
 using namespace core::tui;
 
 namespace
@@ -798,4 +803,65 @@ TEST_CASE("VtParser.Paste.win32_printable_chars_replaced", "[tui,vtparser]")
     auto const* paste = std::get_if<PasteEvent>(events.data());
     REQUIRE(paste != nullptr);
     CHECK(paste->text == "before\tafter");
+}
+
+// ============================================================================
+// Bounded buffers
+//
+// Every byte here comes from stdin, which is untrusted. Each of the three
+// sequence buffers used to grow for as long as bytes arrived without the
+// terminator that ends the sequence, and timeout() resolves only a bare Escape,
+// so nothing else brought the parser back to Ground either.
+// ============================================================================
+
+TEST_CASE("VtParser.Paste.a_paste_past_the_cap_is_emitted_and_ends", "[tui,vtparser]")
+{
+    auto parser = VtParser {};
+    CHECK(parser.feed("\033[200~").empty());
+
+    // One byte past the cap. The collected text is emitted rather than dropped -- it is the
+    // user's own paste -- and the parser returns to Ground.
+    auto events = parser.feed(std::string(VtParser::MaxPasteLength + 1, 'x'));
+    REQUIRE(events.size() == 1);
+    auto const* paste = std::get_if<PasteEvent>(events.data());
+    REQUIRE(paste != nullptr);
+    CHECK(paste->text.size() == VtParser::MaxPasteLength + 1);
+
+    // In Ground, so the next byte is a keystroke. Without the cap the parser was still in
+    // PasteBody and this byte joined a buffer nothing would ever close.
+    events = parser.feed("a");
+    REQUIRE(events.size() == 1);
+    auto const* key = std::get_if<KeyEvent>(events.data());
+    REQUIRE(key != nullptr);
+    CHECK(key->codepoint == U'a');
+}
+
+TEST_CASE("VtParser.Csi.a_parameter_string_past_the_cap_is_abandoned", "[tui,vtparser]")
+{
+    auto parser = VtParser {};
+
+    // A CSI whose final byte never arrives: digits accumulate until the cap, and the sequence is
+    // then dropped -- a parameter list this long is malformed and has nothing worth emitting.
+    CHECK(parser.feed("\033[" + std::string(VtParser::MaxCsiParamLength + 1, '1')).empty());
+
+    auto const events = parser.feed("a");
+    REQUIRE(events.size() == 1);
+    auto const* key = std::get_if<KeyEvent>(events.data());
+    REQUIRE(key != nullptr);
+    CHECK(key->codepoint == U'a');
+}
+
+TEST_CASE("VtParser.Dcs.a_payload_past_the_cap_is_abandoned", "[tui,vtparser]")
+{
+    auto parser = VtParser {};
+
+    // ESC P, then a body whose ST never arrives. The first byte is the header's final byte and
+    // the rest is payload, all in the one buffer the cap bounds.
+    CHECK(parser.feed("\033P" + std::string(VtParser::MaxDcsLength + 1, 'x')).empty());
+
+    auto const events = parser.feed("a");
+    REQUIRE(events.size() == 1);
+    auto const* key = std::get_if<KeyEvent>(events.data());
+    REQUIRE(key != nullptr);
+    CHECK(key->codepoint == U'a');
 }
