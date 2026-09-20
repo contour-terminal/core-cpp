@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/async/Awaitable.hpp>
 #include <core/async/Cancellation.hpp>
 #include <core/async/Task.hpp>
 #include <core/async/WhenAny.hpp>
@@ -6,10 +7,14 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <coroutine>
+#include <optional>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
+using core::async::HasStopToken;
 using core::async::OperationCancelled;
+using core::async::StopCallback;
 using core::async::StopToken;
 using core::async::Task;
 using core::async::whenAny;
@@ -58,6 +63,109 @@ Task<void> racer(std::vector<std::coroutine_handle<>>* waiters, bool* completed,
     catch (OperationCancelled const&)
     {
         *cancelled = true;
+    }
+}
+
+/// Resumes a parked coroutine, from wherever it is invoked. @c StopCallbackEvent registers one on
+/// its token, so a stop request runs it and the coroutine is resumed from inside that request.
+struct ResumeOnStop
+{
+    std::coroutine_handle<>* parked = nullptr;
+
+    void operator()() const
+    {
+        if (auto const handle = std::exchange(*parked, {}))
+            handle.resume();
+    }
+};
+
+/// An awaitable that parks and delivers cancellation the way the runtime awaitables do: through a
+/// @c StopCallback that resumes the parked coroutine then and there, rather than on a later manual
+/// resume. The awaiter is a temporary in the parked coroutine's frame, so unwinding that frame
+/// destroys the registration from inside its own callback — again what the real ones do.
+///
+/// @c ManualEvent above cannot stand in for this: it registers no callback, so every cancellation
+/// it delivers is observed on a resume the test makes itself, with no callback on the stack.
+struct StopCallbackEvent
+{
+    std::vector<std::coroutine_handle<>>* waiters = nullptr;
+    StopToken token {};                // filled in await_suspend
+    std::coroutine_handle<> parked {}; // the coroutine this awaitable holds, while it holds it
+    std::optional<StopCallback<ResumeOnStop>> registration {};
+
+    [[nodiscard]] bool await_ready() const noexcept { return false; }
+
+    template <typename Promise>
+    [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting)
+    {
+        if constexpr (HasStopToken<Promise>)
+            token = awaiting.promise().stopToken();
+        // A token already stopped resolves inline: registering would run the callback here, which
+        // would resume a coroutine that has not finished suspending.
+        if (token.stop_requested())
+            return false;
+        parked = awaiting;
+        waiters->push_back(awaiting);
+        registration.emplace(token, ResumeOnStop { .parked = &parked });
+        return true;
+    }
+
+    void await_resume() const
+    {
+        if (token.stop_requested())
+            throw OperationCancelled {};
+    }
+};
+
+/// Records that the flow it is registered on was asked to stop.
+struct NoteStop
+{
+    bool* ran = nullptr;
+
+    void operator()() const noexcept { *ran = true; }
+};
+
+/// Parks on a StopCallbackEvent while holding a registration of its own on its token — the shape
+/// of a cancellable operation that has cleanup to run when asked to stop.
+///
+/// That guard is what makes this a regression case rather than a re-run of the one above. It is a
+/// local of the body and is registered BEFORE the event's, so it sits behind the event's in the
+/// source's callback list: when the stop request takes the event's callback, the guard's is still
+/// registered, and the request therefore comes back to its own state after that callback instead
+/// of stopping at its last one. The guard itself never runs — the event's callback, registered
+/// later and so run first, unwinds this body, which deregisters the guard on its way out.
+Task<void> stopCallbackRacer(std::vector<std::coroutine_handle<>>* waiters, bool* cancelled, bool* guardRan)
+{
+    auto const token = co_await core::async::thisCoroStopToken();
+    auto const guard = StopCallback<NoteStop> { token, NoteStop { .ran = guardRan } };
+    try
+    {
+        co_await StopCallbackEvent { .waiters = waiters };
+    }
+    catch (OperationCancelled const&)
+    {
+        *cancelled = true;
+    }
+}
+
+/// Races two children that each deliver their cancellation from inside a stop callback, and
+/// catches the whenAny cancellation in its own frame (so nothing is thrown through a coroutine
+/// frame, which the Catch2 harness cannot take on Windows).
+Task<void> raceTwoStopCallbackRacers(std::vector<std::coroutine_handle<>>* waiters,
+                                     bool* aCancelled,
+                                     bool* aGuardRan,
+                                     bool* bCancelled,
+                                     bool* bGuardRan,
+                                     bool* parentCancelled)
+{
+    try
+    {
+        static_cast<void>(co_await whenAny(stopCallbackRacer(waiters, aCancelled, aGuardRan),
+                                           stopCallbackRacer(waiters, bCancelled, bGuardRan)));
+    }
+    catch (OperationCancelled const&)
+    {
+        *parentCancelled = true;
     }
 }
 
@@ -145,6 +253,43 @@ TEST_CASE("whenAny completes synchronously when a child wins during start", "[wh
     REQUIRE(waiters.empty());
     REQUIRE(parkedCancelled);
     REQUIRE_FALSE(parkedDone);
+}
+
+TEST_CASE("whenAny survives children resumed from inside the cancel bridge's own callback", "[whenAny]")
+{
+    auto waiters = std::vector<std::coroutine_handle<>> {};
+    auto aCancelled = false;
+    auto aGuardRan = false;
+    auto bCancelled = false;
+    auto bGuardRan = false;
+    auto parentCancelled = false;
+
+    auto root = raceTwoStopCallbackRacers(
+        &waiters, &aCancelled, &aGuardRan, &bCancelled, &bGuardRan, &parentCancelled);
+    auto source = core::async::StopSource {};
+    root.handle().promise().setStopToken(source.get_token());
+    root.handle().resume();
+
+    REQUIRE(waiters.size() == 2);
+    REQUIRE_FALSE(root.done());
+
+    // Cancelling the awaiting flow runs whenAny's parent→child bridge, which requests stop on the
+    // shared child source. Each child is resumed from inside THAT request's own callback and
+    // unwinds; the last one transfers to the awaiting coroutine, whose await_resume() throws, so
+    // the awaiter is destroyed — the bridge registration, the child frames and the child stop
+    // source whose request_stop() is still on the stack — before the request returns. The race
+    // state is reference-counted so that it outlives the call; with it a plain member, the rest of
+    // request_stop() ran on freed memory (heap-use-after-free under AddressSanitizer wherever
+    // StopToken is std::stop_token, whose state a raw pointer reaches).
+    source.request_stop();
+
+    // Each child's own registration was deregistered by its unwinding body, never run.
+    REQUIRE_FALSE(aGuardRan);
+    REQUIRE_FALSE(bGuardRan);
+    REQUIRE(aCancelled);
+    REQUIRE(bCancelled);
+    REQUIRE(parentCancelled);
+    REQUIRE(root.done());
 }
 
 TEST_CASE("whenAny over no tasks resolves to the no-winner sentinel", "[whenAny]")

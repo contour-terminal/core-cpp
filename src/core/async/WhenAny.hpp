@@ -18,6 +18,19 @@
 /// cancels every child). The first child to reach its final suspension latches the
 /// result and tail-transfers to the awaiting coroutine; later finishers are
 /// no-ops, so the parent is resumed exactly once.
+///
+/// **The race state is reference-counted, and every call into it that can run
+/// foreign code holds a reference for the duration of that call.** Requesting stop
+/// on the child source runs the children's stop callbacks, and a runtime awaitable
+/// resumes its coroutine from inside one: the losers then unwind inline, the last
+/// of them transfers to the awaiting coroutine, @c await_resume() throws, and the
+/// awaiting frame unwinds — destroying the @c WhenAnyAwaiter, and with it the
+/// child source whose @c request_stop() is still on the stack. A state the awaiter
+/// merely held as a member would be freed there, and the rest of that
+/// @c request_stop() would run on freed memory. Holding it by @c shared_ptr makes
+/// that impossible whichever @c StopToken this build takes: it is the caller's job
+/// to keep a stop state alive across its own @c request_stop(), and neither
+/// `std::stop_source` nor the fallback promises to do it for us.
 
 #include <core/async/Cancellation.hpp>
 #include <core/async/Task.hpp>
@@ -26,8 +39,8 @@
 #include <coroutine>
 #include <cstddef>
 #include <exception>
-#include <functional>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <ranges>
 #include <type_traits>
@@ -48,6 +61,10 @@ namespace detail
     /// is resumed only once EVERY child has finished (winner completed + losers
     /// unwound), so the awaiter — which owns the child frames — outlives them all.
     /// @c remaining counts live children plus one start-phase guard.
+    ///
+    /// It is held by @c shared_ptr — by the awaiter, by every runner promise and by
+    /// the parent→child cancel bridge — so that it outlives the awaiter wherever a
+    /// stop callback of its own brings the race to an end (see the file comment).
     struct WhenAnyState
     {
         std::size_t remaining = 0;            ///< Live children plus the start-phase guard.
@@ -66,10 +83,10 @@ namespace detail
       public:
         struct PromiseType
         {
-            WhenAnyState* state = nullptr; ///< Borrowed; outlives every runner.
-            std::size_t index = 0;         ///< This runner's position in the input list.
-            StopToken token;               ///< The shared child token (cancels losers).
-            std::exception_ptr failure;    ///< This child's failure, if its task threw.
+            std::shared_ptr<WhenAnyState> state; ///< Shared, so the state outlives every call on it.
+            std::size_t index = 0;               ///< This runner's position in the input list.
+            StopToken token;                     ///< The shared child token (cancels losers).
+            std::exception_ptr failure;          ///< This child's failure, if its task threw.
 
             WhenAnyRunner get_return_object() noexcept
             {
@@ -91,7 +108,10 @@ namespace detail
                     std::coroutine_handle<PromiseType> self) const noexcept
                 {
                     auto& promise = self.promise();
-                    auto* const race = promise.state;
+                    // A copy, not a reference to the promise's: request_stop() below can unwind
+                    // this whole race and destroy this frame's owner, and the state has to outlive
+                    // the rest of this function.
+                    auto const race = promise.state;
                     if (!race->decided)
                     {
                         race->decided = true;
@@ -157,12 +177,43 @@ namespace detail
         }
     }
 
+    /// The parent→child cancellation bridge: the callback registered on the awaiting coroutine's
+    /// own token, which requests stop on the shared child source.
+    ///
+    /// A named functor rather than a lambda in a `StopCallback<std::function<void()>>`: one
+    /// pointer of state needs neither an allocation nor an indirect call. It holds the race state
+    /// by @c shared_ptr and takes a copy of that pointer before it requests stop, because the very
+    /// request can end the race, unwind the awaiting coroutine and destroy this callback — the
+    /// copy on this stack frame is then all that keeps the child source alive until
+    /// @c request_stop() returns.
+    class WhenAnyCancelBridge
+    {
+      public:
+        /// @param state The race state to request stop on.
+        explicit WhenAnyCancelBridge(std::shared_ptr<WhenAnyState> state) noexcept: _state(std::move(state))
+        {
+        }
+
+        /// Requests stop on the child source, holding the state alive across the call.
+        void operator()() const noexcept
+        {
+            auto const held = _state;
+            held->childStop.request_stop();
+        }
+
+      private:
+        std::shared_ptr<WhenAnyState> _state;
+    };
+
     /// Awaitable that starts every runner and resumes the awaiting coroutine once
     /// the first child completes, returning that child's index.
     class WhenAnyAwaiter
     {
       public:
-        explicit WhenAnyAwaiter(std::vector<Task<void>> tasks): _tasks(std::move(tasks)) {}
+        explicit WhenAnyAwaiter(std::vector<Task<void>> tasks):
+            _tasks(std::move(tasks)), _state(std::make_shared<WhenAnyState>())
+        {
+        }
 
         [[nodiscard]] bool await_ready() const noexcept { return _tasks.empty(); }
 
@@ -173,26 +224,26 @@ namespace detail
         template <typename Promise>
         [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting)
         {
-            _state.continuation = awaiting;
-            _state.remaining = _tasks.size() + 1; // +1 start-phase guard
+            _state->continuation = awaiting;
+            _state->remaining = _tasks.size() + 1; // +1 start-phase guard
 
             // Chain parent cancellation into the child source so cancelling the
             // awaiting flow cancels every child.
             if constexpr (requires { awaiting.promise().stopToken(); })
             {
                 _parentToken = awaiting.promise().stopToken();
-                _parentReg.emplace(_parentToken, [state = &_state] { state->childStop.request_stop(); });
+                _parentReg.emplace(_parentToken, WhenAnyCancelBridge { _state });
             }
 
             _runners.reserve(_tasks.size());
             for (auto& task: _tasks)
                 _runners.push_back(makeWhenAnyRunner(std::move(task)));
 
-            auto const childToken = _state.childStop.get_token();
+            auto const childToken = _state->childStop.get_token();
             for (auto const i: std::views::iota(std::size_t { 0 }, _runners.size()))
             {
                 auto& promise = _runners[i].handle().promise();
-                promise.state = &_state;
+                promise.state = _state;
                 promise.index = i;
                 promise.token = childToken;
                 _runners[i].handle().resume();
@@ -201,7 +252,7 @@ namespace detail
             // Release the start-phase guard. If every child already finished
             // synchronously (the winner ran and the losers saw the stop and unwound
             // immediately), remaining hits zero here and we resume the parent inline.
-            return --_state.remaining != 0;
+            return --_state->remaining != 0;
         }
 
         /// @return The index of the first task to finish.
@@ -216,17 +267,17 @@ namespace detail
             // success path. Cancellation dominates even a latched winner.
             if (_parentToken.stop_requested())
                 throw OperationCancelled {};
-            if (_state.exception)
-                std::rethrow_exception(_state.exception);
-            return _state.winner;
+            if (_state->exception)
+                std::rethrow_exception(_state->exception);
+            return _state->winner;
         }
 
       private:
-        std::vector<Task<void>> _tasks;      ///< Moved into runners on suspend.
-        std::vector<WhenAnyRunner> _runners; ///< Kept alive until the race completes.
-        WhenAnyState _state {};              ///< Shared with the runners.
-        StopToken _parentToken;              ///< The awaiting flow's own token (empty when it has none).
-        std::optional<StopCallback<std::function<void()>>> _parentReg; ///< Parent→child cancel bridge.
+        std::vector<Task<void>> _tasks;       ///< Moved into runners on suspend.
+        std::vector<WhenAnyRunner> _runners;  ///< Kept alive until the race completes.
+        std::shared_ptr<WhenAnyState> _state; ///< Shared with the runners and the cancel bridge.
+        StopToken _parentToken;               ///< The awaiting flow's own token (empty when it has none).
+        std::optional<StopCallback<WhenAnyCancelBridge>> _parentReg; ///< Parent→child cancel bridge.
     };
 
 } // namespace detail
