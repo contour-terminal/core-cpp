@@ -5,9 +5,27 @@
 # that refusal and no other. A tool that refused everything would pass the refusing cases alone, so
 # the accepting cases are half of the proof.
 #
-# Every refusal the script implements has a case here, bar the two named at `refusalPhrases` below
-# that no case can reach portably. That list is the script's refusals, not the cases' wishes, so a
-# case that fires a refusal it did not deserve is a failure too.
+# What is and is not covered, exactly. The script stops for two different kinds of reason, and this
+# file proves one of them:
+#
+#   * A JUDGEMENT of its own -- a command line it cannot act on, a REPO or a REF it will not read, a
+#     tree that is not core-cpp's, a MODULES list that would not configure, a blob it cannot copy
+#     verbatim, a copy or a manifest that is not what the other says. Every one of these has a case
+#     here and a phrase in `refusalPhrases` below, bar the two named there that no case can reach
+#     portably.
+#   * A FAILURE OF GIT, reported rather than judged: `cloning <REPO> failed`, `listing the tree of
+#     <commit> failed`, `reading blob <blob> failed`, an `ls-tree` line that is not
+#     `<mode> <type> <sha><TAB><path>`, and the two `core_cpp_vendor_git()` wrappers (`finding the
+#     root of the repository at …`, `reading cmake/CoreCppModules.cmake of …`). No case provokes
+#     one, because provoking one means breaking git or its output format rather than handing the
+#     tool a tree or a copy, and a test that broke git would be testing git.
+#
+# `resolving the commit <REF> in <REPO> failed` is the exception that proves the split: its message
+# comes from the same git wrapper, but what reaches it is a user's mistake -- a well-formed SHA that
+# resolves nowhere -- and not git misbehaving, so it has a case and a phrase like any judgement.
+#
+# `refusalPhrases` is the script's judgements, not the cases' wishes, so a case that fires a refusal
+# it did not deserve is a failure too.
 #
 # Most cases build a git repository of their own in WORK_DIR: five files of the vendored set and
 # two outside it (the brief's three files plus a dot-file, the module table, a module directory and
@@ -58,14 +76,16 @@ set(absentCommit "0123456789abcdef0123456789abcdef01234567")
 # The staging directory the tool assembles a new copy in, which no refusal may leave behind.
 set(stagingName ".core-cpp-vendor-staging")
 
-# Every phrase the tool refuses with, so a case can assert that no other refusal fired. A refusal
-# missing from this list is one a case could fire by accident without anyone noticing, so the list
-# is the tool's refusals read off the script, not the ones the cases happen to want.
+# Every judgement the tool refuses with, so a case can assert that no OTHER refusal fired. A
+# judgement missing from this list is one a case could fire by accident without anyone noticing, so
+# the list is read off the script rather than assembled from what the cases happen to want. The
+# git-failure reports named in the file header are not judgements and are not here.
 #
-# Two of the script's refusals are deliberately absent, because no case can produce them portably:
-# "is in no git repository" (WORK_DIR is inside a build tree, which is inside core-cpp's own
-# repository, so git ascends to it and the repository-root refusal fires instead) and "needs git"
-# (find_program() searches the platform's default directories, not only PATH).
+# Two judgements are deliberately absent, because no case can produce them portably: "is in no git
+# repository" (WORK_DIR is inside a build tree, which is inside core-cpp's own repository, so git
+# ascends to it and the repository-root refusal fires instead) and "needs git" (find_program()
+# searches the platform's default directories, not only PATH). Every other judgement below has a
+# case, and every case below wants one of these.
 set(refusalPhrases
     "is a symbolic link"
     "is a submodule"
@@ -211,17 +231,6 @@ function(core_cpp_selftest_has_cr path outVar)
         set(found ON)
     endif()
     set(${outVar} ${found} PARENT_SCOPE)
-endfunction()
-
-## @brief Removes everything in @p dir except its MANIFEST.
-function(core_cpp_selftest_empty dir)
-    file(GLOB entries LIST_DIRECTORIES true "${dir}/*")
-    foreach(entry IN LISTS entries)
-        get_filename_component(name "${entry}" NAME)
-        if(NOT name STREQUAL "MANIFEST")
-            file(REMOVE_RECURSE "${entry}")
-        endif()
-    endforeach()
 endfunction()
 
 ## @brief Sets @p outVar to what a run of @p tool said, with its line breaks flattened.
@@ -389,12 +398,14 @@ function(core_cpp_vendor_case name)
         file(WRITE "${copy}/MANIFEST" "${text}")
     elseif(arg_MUTATE STREQUAL "EMPTY_ALL")
         # A copy that is gone beside a manifest that is gone: nothing is listed, so no hash
-        # disagrees, nothing is missing and nothing is unlisted.
-        core_cpp_selftest_empty("${copy}")
+        # disagrees, nothing is missing and nothing is unlisted. The whole directory goes, manifest
+        # included, and the file(WRITE) below puts the manifest back -- so no enumeration of what
+        # to keep is needed.
+        file(REMOVE_RECURSE "${copy}")
         file(WRITE "${copy}/MANIFEST" "")
     elseif(arg_MUTATE STREQUAL "EMPTY_HEADERS")
         # The same, with a well-formed header that admits to listing nothing.
-        core_cpp_selftest_empty("${copy}")
+        file(REMOVE_RECURSE "${copy}")
         file(WRITE "${copy}/MANIFEST"
              "# repository ${repository}\n# ref ${fixtureTag}\n# commit ${absentCommit}\n"
              "# modules base\n# files 0\n")

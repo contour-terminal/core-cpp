@@ -574,10 +574,9 @@ foreach(entry IN LISTS entries)
     list(APPEND copied "${path}")
 endforeach()
 
-if(NOT copied AND NOT refusals)
-    list(JOIN MODULES ", " requested)
-    string(APPEND refusals "\n  ${REF} has no file of the vendored set for modules ${requested}")
-endif()
+# There is no "the ref selected no file" refusal here, because there is no way to reach one: the
+# tree guard above has already refused a ref without cmake/CoreCppModules.cmake, and that file is
+# in the set for every MODULES list, so `copied` is never empty by the time this is read.
 if(refusals)
     core_cpp_vendor_unstage()
     message(FATAL_ERROR
