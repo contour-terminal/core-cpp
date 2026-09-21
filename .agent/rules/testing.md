@@ -42,8 +42,11 @@ Most of these rules were paid for in fastcached; the full measurements are in
   `CORE_CPP_WITH_TLS`.
 - **Labels:** `core-cpp` (everything), the module's name, `hygiene` (checks over the tree and
   the build contract), `canary` (a program that must fail), `loopback` (needs a loopback
-  socket), `no-tsan` (excluded from the ThreadSanitizer job), `tree-level` (its input is the
-  source tree, so its answer cannot differ between platforms).
+  socket), `tree-level` (its input is the source tree, so its answer cannot differ between
+  platforms). There is no ThreadSanitizer exclusion: every test in the suite runs under TSan, and
+  the `no-tsan` label that once promised one was carried by nothing (core-cpp#32). Do not
+  reintroduce it for a test that is merely slow or flaky under TSan — that removes coverage from
+  the tool which has already caught a real data race in this repository.
 - **`tree-level` decides where a check runs, so it carries an obligation.** CI's per-job `ctest`
   excludes it and the `style` job runs exactly those, once — one violated provenance row used to
   report as 22 failed jobs out of 24, which is correct behaviour and unusable triage. A labelled
@@ -235,15 +238,3 @@ to be recompiled, and nothing tells you when one was not.
   directory under `out/build/<preset>/` is enough; `--clean-first` is the blunt version.
 - The tell is a failure that only one toolchain sees, in code the diff did not touch, and that
   moves or vanishes when tests are run individually. Suspect the build before the code.
-
-## Open work
-
-- **[core-cpp#32](https://github.com/contour-terminal/core-cpp/issues/32)** — the `no-tsan` label
-  is excluded by CI and carried by no test, so the exclusion is a no-op. `build.yml`'s TSan leg
-  passes `-LE no-tsan`, and `no-tsan` appears nowhere else in the tree: not on a test, not in a
-  `set_tests_properties()` call. Two different wrongs hide behind that one symptom, and the label
-  cannot tell you which — if a test genuinely cannot run under ThreadSanitizer then it is running
-  there now, and if none needs excluding then the label reads as coverage to the next person who
-  reaches for it. Decide which, then either label the tests or delete the exclusion and the label
-  from this list and from `AGENT.md`. This is the mirror of *a gate that does not report reads as
-  passed*: an exclusion that excludes nothing reads as care that was taken.

@@ -483,8 +483,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { preset: clang-asan-ubsan, ctest_args: "" }
-          - { preset: clang-tsan, ctest_args: "-LE no-tsan" }
+          - { preset: clang-asan-ubsan }
+          - { preset: clang-tsan }
     env:
       TSAN_OPTIONS: halt_on_error=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
@@ -523,8 +523,12 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
 
+      # ONE -LE, and it must stay one. ctest ANDs repeated -LE options: a test is excluded only if
+      # it matches EVERY one of them, so `-LE tree-level -LE no-tsan` excluded nothing at all and
+      # this leg silently ran the whole suite (core-cpp#32). To exclude another label here, extend
+      # this regex -- `-LE 'tree-level|other'` -- never add a second flag.
       - name: Test
-        run: ctest --preset ${{ matrix.preset }} -LE tree-level ${{ matrix.ctest_args }}
+        run: ctest --preset ${{ matrix.preset }} -LE tree-level
 
   # ---------------------------------------------------------------------------------------------
   clang-tidy:
