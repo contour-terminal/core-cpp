@@ -239,7 +239,12 @@ core_cpp_add_test(net NAME net_tls SOURCES Tls_test.cpp LABELS loopback TIMEOUT 
 # both), and driving it under node is what Task B5's wasm smoke leg adds.
 if(NOT EMSCRIPTEN)
     add_executable(core-cpp-hostdriven-canary HostDrivenCanary.cpp)
-    target_link_libraries(core-cpp-hostdriven-canary PRIVATE core::net)
+    # core::testing_dialogs, and it is load-bearing rather than tidiness: a failed assert() in an
+    # MSVC Debug build opens a message box and WAITS, so the canary times out instead of failing,
+    # which reads as a hang rather than as the refusal firing. Linking this installs the
+    # suppression at startup, the same way tests/WindowsDialogCanary.cpp does. It is an object
+    # library on every platform and a no-op off Windows.
+    target_link_libraries(core-cpp-hostdriven-canary PRIVATE core::net core::testing_dialogs)
     core_cpp_apply_toolchain(core-cpp-hostdriven-canary)
     foreach(mode IN ITEMS run blockOn)
         add_test(NAME core-cpp.hostdriven-canary.${mode}
