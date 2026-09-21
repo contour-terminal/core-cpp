@@ -229,12 +229,84 @@ review and not by reading:
 - `EventLoop::addTimer` neither woke nor armed a host-driven backend, in the function immediately
   after the one whose comment explains why a host-driven backend needs `wake()`.
 
-The second has the more mechanical form, and it is the one to look for: **`post`, `submit`,
-`schedule`, `spawn`, `requestCancel` and `stop` all wake the backend. `addTimer` was the sixth
-member of that family and the only one that did not.** An invariant visible in five sibling
-implementations and absent in the sixth needs no comment to state and can be checked by reading
-the family. **When a function joins a family that all do X, "why does this one not do X" is
-answered out loud or it is not answered.**
+The second has the more mechanical form, and it is the one to look for: **a member that files work
+asks the backend for the turn that will run it, or says in the file why it does not. `addTimer` did
+neither.** An invariant visible in sibling implementations and absent in one of them needs no
+comment to state and can be checked by reading the family. **When a function joins a family that all
+do X, "why does this one not do X" is answered out loud or it is not answered.**
+
+**There is exactly one member that files work and does not ask, and it is named here because a
+universal is worth only as much as its exceptions.** `notifyHandleClosing` appends to
+`_closedParks` and neither wakes nor arms. It is sound because the turn takes `_closedParks` with
+`std::exchange` *before* the wait, and a non-empty batch both forces the timeout to zero and forces
+the wait to be entered at all -- the batch is a disjunct of the wait-skip predicate.
+
+**And there is no path that strands a close behind an exchange, which is the thing a reader will
+doubt.** Firing an expired deadline only *queues* a ready entry; the callback itself runs in the
+drain, and **the drain precedes the exchange within the same turn.** So a close performed by a
+timer callback is caught by the turn that ran it, not by a later one. An earlier version of this
+paragraph claimed the opposite -- that such a close landed after the exchange and was rescued by
+the next turn staying non-idle -- which is an argument where the truth is an ordering, and it was
+wrong because I read the sequence of the turn's steps as the sequence in which its work executes.
+
+**An earlier draft of this paragraph said "every member ... asks", which a reader falsifies with one
+grep and then distrusts the whole section for.** A rule stated as a universal invites exactly that;
+state the exception, or state the property instead of the quantifier. **The same draft cited
+`hasPendingWork()` as a second, independent reason -- and that function was deleted from
+`EventLoop.cpp` the same day, by the commit landing beneath it.** No line number or function name
+appears in this section any more, because both are what decayed: the argument above is stated over
+the *order of the steps in a turn*, which is a property a reader can re-derive from the code in
+front of them rather than a coordinate that goes stale while nothing fails.
+
+### Ready work wakes; a park arms
+
+**Which primitive a member calls is decided by what it filed, not by which idiom the neighbours
+use.** `HostDrivenBackend::wake()` is `scheduleAt(_clock.now())` and `armWakeAt(d)` is
+`scheduleAt(*d)`, so the two are not interchangeable: asking for a pump *now* on behalf of a park
+due in fifty milliseconds spends a turn finding nothing due and re-arms, and the deadline the
+caller supplied is simply discarded.
+
+- **Filed work that is ready now and carries no time** -- `post`, `submit`, `spawn`, `stop`,
+  `requestStop`, `requestCancel`, `resumeSoon` -- calls **`_backend.wake()`**.
+- **A park filed with a time** -- `registerPark`, and therefore `addTimer`, `delay`, `sleepUntil`
+  and every deadline park -- calls **`armHostWake()`**, which arms at `_parks.nextDeadline()`.
+- **`schedule` off the loop's thread wakes, and that is the rule rather than an exception to it.**
+  What it filed is an entry on the *inbound queue*; the park does not exist yet, and the turn that
+  drains the inbound queue is ready to run now. `registerPark` arms for the deadline when the drain
+  reaches it. On the loop's own thread `schedule` calls `registerPark` directly and arms.
+
+**This ruling was made the other way first and a measurement overturned it.** Told to use `wake()`
+at all three sites, the lane switched two, flagged the third rather than doing it quietly, and
+measured the version it had been told to write: `CHECK( soonestDelayMs(host) == 50 )` expanding to
+`0 == 50`, twice. **A lane that measures an instruction instead of arguing with it settles the
+question in one round**; the instruction had been reasoned from the idiom the neighbours used, and
+the neighbours had not filed a deadline.
+
+**The first version of this rule got its own enumeration wrong, and that is the rule underneath the
+rule.** It said `addTimer` "was the sixth member of that family and the only one that did not". It
+was not the only one -- `registerPark`, `resumeSoon` and `requestStop` did not either, and
+`registerPark` is `addTimer`'s own implementation path, so the fix this rule was written to record
+sat one level *above* the primitive and covered one of its six call sites. The comment in the code
+made the same claim in the same words. A re-review found it by enumerating every member that
+mutates `_ready` or `_parks`; re-reading this file could not have found it, because this file was
+where the wrong list lived. So:
+
+- **Derive the family from the code every time, including from this page.** Enumerate the
+  definitions that touch the shared structure and answer the question for each one. A list written
+  into a comment or a rule is the record of an audit somebody once did; it is not an audit, and it
+  reads exactly like one.
+- **Put the behaviour in the primitive, not in the caller that exposed the gap.** `addTimer`
+  received the arming first; `registerPark` is where it belongs. Six call sites reach it, and a
+  copy per caller is the next defect along -- two members computing the same answer from the same
+  deadline heap.
+- **A member that legitimately does not join the family says so where the reader is, and asserts
+  what it is relying on.** `armHostWake` does not count `_closedParks`, because `HostDrivenBackend` refuses every handle and so can hold no closed park at all.
+  That is unreachable rather than wrong, **no case can turn it red**, and a defensive `|| ...`
+  would be worse than the gap: it would let a future backend that *does* gain readiness **work**
+  rather than announce itself, which is the opposite of what writing the rule down was for. The
+  instrument is `assert(_closedParks.empty())` inside the host-driven branch. **An assert is not
+  inert code with no case**; it is an executable statement of the invariant the comment describes,
+  and it fires exactly when the premise stops holding.
 
 - **G1: exactly one thread dequeues a loop.** `run()`, `runOnce()` and `blockOn()` each claim the
   worker identity, and `runOnce` asserts that no OTHER thread already holds it. `run()` is not

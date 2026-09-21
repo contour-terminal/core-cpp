@@ -71,8 +71,15 @@ presets, scripts and paths.
   Ninja recorded no header dependencies for it without a warning. A later header edit then left
   that object stale: an incremental build that is wrong, found in core-cpp only because it
   became a duplicate-symbol link error. `cl` (`deps = msvc`, `/showIncludes`) and GCC and Clang
-  hits were unaffected, and a clean build is always correct, because the cache key covers the
-  preprocessed input; CI builds from clean trees. The fix is in the fastcache-cc binary alone,
+  hits were unaffected — **`cl` goes through the same launcher, so "unaffected" is about the
+  dependency mechanism and not about caching.** Measured in
+  `out/build/<preset>/CMakeFiles/rules.ninja` on 2026-09-21: `cl-debug` has `deps = msvc` ×87,
+  `/showIncludes` ×88 and `-clang:-MF` ×**0**; `clangcl-release` has `deps = gcc` ×29 and
+  `-clang:-MF` ×29. Both trees carry 314 `fastcache-cc` lines in `build.ninja`. **The rule
+  definitions are in `rules.ninja`, not `build.ninja`** — grep the wrong one and `deps =` returns
+  zero matches, which reads exactly like a tree that has no dependency mode at all. A clean build
+  is always correct, because the cache key covers the preprocessed input; CI builds from clean
+  trees. The fix is in the fastcache-cc binary alone,
   so the vendored `CompileCache.cmake` needs nothing, and entries cached without a depfile heal
   themselves: the fixed launcher does not serve them to a compile that names a depfile, but
   recompiles and stores again. With an older launcher:
