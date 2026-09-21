@@ -101,6 +101,26 @@ Task<int> awaitReadableOrCancel(EventLoop* loop, core::platform::NativeHandle fd
     }
 }
 
+/// Waits for @p fd to become readable, distinguishing a refused registration from a
+/// cancellation: the first is a plumbing failure the caller can report, the second is a
+/// deliberate stop, and a flow that cannot tell them apart logs the wrong one.
+Task<int> awaitReadableOrRefusal(EventLoop* loop, core::platform::NativeHandle fd)
+{
+    try
+    {
+        co_await loop->waitReadable(fd);
+        co_return 1;
+    }
+    catch (core::net::FdRegistrationFailed const&)
+    {
+        co_return -2;
+    }
+    catch (OperationCancelled const&)
+    {
+        co_return -1;
+    }
+}
+
 /// A value-producing task that completes synchronously — the "work wins" arm.
 Task<int> produceValue(int value)
 {
@@ -463,6 +483,66 @@ TEST_CASE("a recorded close is delivered without blocking the pump", "[EventLoop
     // Zero, not -1: an indefinite wait would never return on the closed fd's account.
     REQUIRE(timeoutMs(source.recordedTimeouts().back()) == 0);
     REQUIRE(destroyed); // the parked flow resumed and unwound
+}
+
+TEST_CASE("a registration the backend refuses fails the await rather than parking it", "[EventLoop][fd]")
+{
+    // The whole reason IoBackend::attach answers an expected. A flow parked on a
+    // registration the backend never made has nothing left to resume it: no message,
+    // no stack, just a hang. So the awaiter resumes at once and throws
+    // FdRegistrationFailed, which is distinct from OperationCancelled because a
+    // plumbing failure and a deliberate stop are different things to report.
+    auto pipe = core::platform::createSystemPipe();
+    REQUIRE(pipe.has_value());
+
+    auto source = ScriptedBackend {};
+    source.refuseNextAttach();
+    auto loop = EventLoop { source };
+
+    REQUIRE(loop.blockOn(awaitReadableOrRefusal(&loop, (*pipe)->readFd())) == -2);
+    CHECK(source.attachedCount() == 0);
+    CHECK(loop.parkedWaiterCount() == 0);
+    CHECK(source.waitCount() == 0); // it never parked, so the loop never waited
+}
+
+TEST_CASE("a kernel that refuses the interest leaves no registration behind", "[EventLoop][fd]")
+{
+    // fastcached#1054's shape as the loop meets it: `attach` succeeded and
+    // `setInterest` did not, which on kqueue is the ordinary way a refusal arrives
+    // because only the filter reaches the kernel at all. The park must not survive
+    // that, or the backend keeps a registration for a flow that has already unwound —
+    // and on a real backend that registration names a descriptor the caller is about
+    // to close.
+    auto pipe = core::platform::createSystemPipe();
+    REQUIRE(pipe.has_value());
+
+    auto source = ScriptedBackend {};
+    source.refuseNextSetInterest();
+    auto loop = EventLoop { source };
+
+    REQUIRE(loop.blockOn(awaitReadableOrRefusal(&loop, (*pipe)->readFd())) == -2);
+    CHECK(source.attachedCount() == 0); // the attach was undone, not left dangling
+    CHECK(loop.parkedWaiterCount() == 0);
+    CHECK(source.waitCount() == 0);
+}
+
+TEST_CASE("a hangup resumes a parked reader, because a park watches one direction", "[EventLoop][fd]")
+{
+    // A park registers one direction and NO onError, so a failure the kernel
+    // volunteers — a hangup, a peer's reset — reaches the direction it does watch.
+    // That is what lets the flow resume, look, and report EOF; routing it nowhere
+    // would leave it parked on a descriptor that is level-triggered and reported
+    // again on every wait, which is a loop at 100% CPU telling nobody.
+    auto pipe = core::platform::createSystemPipe();
+    REQUIRE(pipe.has_value());
+
+    auto source = ScriptedBackend {};
+    source.pushFailure(HandlerId { 1 });
+    auto loop = EventLoop { source };
+
+    constexpr auto Cancelled = -1;
+    REQUIRE(loop.blockOn(awaitReadableOrCancel(&loop, (*pipe)->readFd(), Cancelled)) == 1);
+    CHECK(loop.parkedWaiterCount() == 0);
 }
 
 TEST_CASE("waitReadable on an invalid fd resolves immediately as cancelled", "[EventLoop][fd]")
