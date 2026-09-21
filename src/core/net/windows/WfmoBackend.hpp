@@ -16,7 +16,19 @@
 ///
 /// `WaitForMultipleObjects` rejects a set larger than `MAXIMUM_WAIT_OBJECTS` (64), so
 /// a larger set is swept in chunks with a rotating start, which @c detail::WaitChunk
-/// computes free of `windows.h` and every platform tests.
+/// computes free of `windows.h` and every platform tests. `WfmoBackend_test` covers
+/// this backend's USE of that arithmetic, which is the half a unit test of the
+/// arithmetic cannot reach.
+///
+/// **Every registered handle must be LEVEL-triggered — manual-reset, in Win32's
+/// terms.** A wait here is a detector followed by a rescan: `WaitForMultipleObjects`
+/// says that *something* in a chunk fired, and `WaitForSingleObject(h, 0)` on each
+/// registration then says *which*. `WaitForMultipleObjects` CONSUMES an auto-reset
+/// event when it returns it, so an auto-reset handle is eaten by the detector and
+/// invisible to the rescan: its readiness is dispatched to nobody and the flow parked
+/// on it hangs. Nothing enforces this, because nothing can — a HANDLE does not say
+/// which it is. It holds for the handles the backend actually gets: a WSAEVENT from
+/// `WSAEventSelect` is manual-reset, and so is the wakeup channel's.
 
 #include <core/net/IoBackend.hpp>
 #include <core/net/detail/ReadyBatch.hpp>

@@ -11,8 +11,10 @@
 /// decisions involved — how many chunks, each chunk's span, and which chunk to
 /// start the next sweep on (so high-index handles are not starved) — are pure
 /// integer arithmetic and are extracted here, free of @c windows.h, so they can
-/// be unit-tested on any platform. @c PollEventSource's Windows path interprets
-/// these spans against the real handle array.
+/// be unit-tested on any platform. @c WfmoBackend interprets these spans against
+/// the real handle array, and `WfmoBackend_test` is where that interpretation is
+/// tested — the half a unit test of the arithmetic cannot reach, and the half that
+/// fails in the field.
 
 #include <cstddef>
 
