@@ -319,6 +319,11 @@ class EventLoop: public async::IExecutor
     /// Requests cancellation of every flow and moves all parked waiters to the ready queue so
     /// they unwind promptly via @c async::OperationCancelled. Must be called on the loop thread —
     /// from a signal handler or another thread, `post()` a call to it.
+    ///
+    /// Called outside a turn, it asks the backend for one. A flow that registered a cancellation
+    /// on this loop's token has already reached @c requestCancel by then, which wakes; a park
+    /// filed through @c registerPark with nothing watching the token has not, and on a host-driven
+    /// loop its unwind would wait for a turn that never comes.
     void requestStop();
 
     /// @return The root cancellation source; `request_stop()` cancels every flow (but does not
@@ -399,13 +404,14 @@ class EventLoop: public async::IExecutor
     /// loop). A deadline already in the past therefore fires on a turn rather than from this call,
     /// so a caller is never re-entered from its own arming.
     ///
-    /// **Arming outside a turn asks the backend for one.** On a host-driven loop that is the only
-    /// thing that will: the host is armed at the end of a turn, and a quiescent host-driven loop
-    /// has nothing scheduled that would start one — so without it the park would be filed and
-    /// silently never fired. Inside a turn it is skipped, because the turn arms the host itself.
+    /// **Arming outside a turn asks the backend for one**, inherited from @c registerPark rather
+    /// than computed here. On a host-driven loop that is the only thing that will: the host is
+    /// armed at the end of a turn, and a quiescent host-driven loop has nothing scheduled that
+    /// would start one — so without it the park would be filed and silently never fired. Inside a
+    /// turn it is skipped, because the turn arms the host itself.
     ///
-    /// Loop thread only, like @c registerPark and @c resumeSoon. From another thread,
-    /// `post()` a call to it.
+    /// Loop thread only, like @c registerPark and @c resumeSoon — and all three ask for that turn.
+    /// From another thread, `post()` a call to it.
     /// @param deadline When to run @p onExpired, on this loop's clock.
     /// @param onExpired What to run; must not be null.
     /// @param state An opaque pointer handed to @p onExpired. Borrowed: it must outlive the timer,
@@ -544,11 +550,21 @@ class EventLoop: public async::IExecutor
     /// advertising the laxer one's callers on the stricter one is how the next off-thread caller
     /// gets written. What legitimately reaches this is the loop's own awaiters, a backend's
     /// readiness dispatch and a stop callback resolved on the loop thread.
+    ///
+    /// Called outside a turn, it asks the backend for one, for @c registerPark's reason: queued
+    /// work on a quiescent host-driven loop has nothing coming that would drain it.
     /// @param work The coroutine to resume, and the chain root to free if it is not.
     void resumeSoon(async::ParkedWork work);
 
     /// Parks @p entry: registers its handle with the backend if it names one, arms its deadline if
     /// it has one, and files it so a cancel can find it by id.
+    ///
+    /// **Called outside a turn, it also asks the backend for the turn that will reach the park.**
+    /// This is where that arming lives for every park — @c addTimer, @c schedule, `delay()` and
+    /// `interruptibleSleepUntil()` all inherit it from here rather than each computing it — and on
+    /// a host-driven loop it is the only thing that will supply one: the host is armed at the END
+    /// of a turn, so a park filed while the loop is quiescent would otherwise be correct, filed
+    /// and silently never fired. A backend that is not host-driven is unaffected.
     /// @param entry What to park; see @c ParkEntry.
     /// @param refusal Where the backend's reason is written when the registration is refused, or
     ///        null where the caller has nowhere to report it.

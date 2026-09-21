@@ -21,9 +21,11 @@
 #include <memory>
 #include <optional>
 #include <tuple>
+#include <type_traits>
 
 using core::net::DeadlineTimer;
 using core::net::EventLoop;
+using core::net::TimerId;
 using core::net::testing::ScriptedBackend;
 using core::net::testing::TestLoop;
 using core::platform::ManualClock;
@@ -31,6 +33,39 @@ using namespace std::chrono_literals;
 
 namespace
 {
+
+/// The members @c DeadlineTimer holds, in declaration order, as a plain aggregate.
+///
+/// **This is what makes "allocates nothing and holds no coroutine frame" a checked claim rather
+/// than a sentence in a report.** The report called a `sizeof` assertion fragile, and for an
+/// EQUALITY it is: padding, member reordering and a platform with a different pointer size each
+/// break it without anything being wrong. An upper bound against a struct with the SAME members
+/// has none of those failure modes -- both types get the same layout rules on every target, so
+/// the bound holds on 32- and 64-bit alike -- and it breaks on exactly one thing, a sixth member
+/// appearing. A coroutine frame could only arrive as a `unique_ptr`, a `shared_ptr` or a
+/// `std::function`, and every one of those is at least a pointer wide, so none of them fits.
+///
+/// It also pins the count. The report's prose said "four members, none owning" while the header
+/// declared five, which is the failure the claims table exists to catch: this struct cannot
+/// disagree with the header without the assertion below going red.
+struct DeadlineTimerShape
+{
+    EventLoop* loop = nullptr;                   ///< @c _loop
+    DeadlineTimer::Callback onExpired = nullptr; ///< @c _onExpired
+    void* state = nullptr;                       ///< @c _state
+    TimerId timer {};                            ///< @c _timer
+    bool settled = false;                        ///< @c _settled
+};
+
+static_assert(sizeof(DeadlineTimer) <= sizeof(DeadlineTimerShape),
+              "DeadlineTimer has grown state beyond the five members it documents. It is "
+              "specified to allocate nothing and to hold no coroutine frame, and every way of "
+              "holding one is at least a pointer wide.");
+static_assert(alignof(DeadlineTimer) <= alignof(DeadlineTimerShape),
+              "DeadlineTimer gained a member with a stricter alignment than any it documents.");
+static_assert(!std::is_polymorphic_v<DeadlineTimer>,
+              "a vtable pointer is per-object state the type does not declare, and it would make "
+              "a DeadlineTimer neither trivially relocatable nor free to construct.");
 
 /// A @c DeadlineTimer::Callback that counts its calls.
 /// @param state A @c std::size_t counter, which must outlive the timer.

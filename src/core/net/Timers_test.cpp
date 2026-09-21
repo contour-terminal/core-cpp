@@ -309,6 +309,37 @@ TEST_CASE("cancelTimer refuses a TimerId that names a coroutine park", "[EventLo
     CHECK(ran); // and the flow the id named still resumed
 }
 
+TEST_CASE("requestCancel handed a timer's park leaves the timer armed", "[EventLoop][timer]")
+{
+    // **The mirror of the case above, in the direction the fix round did not go.** The three
+    // `static_assert`s at the top of this file prove the two id types do not CONVERT, which is
+    // what stops `cancelTimer(somePark)` and `requestCancel(someTimer)` compiling. They say
+    // nothing about `requestCancel(timer.park)`: `TimerId::park` is a public member of an
+    // aggregate, so that form compiles and no compile-time check can refuse it.
+    //
+    // **This case does not turn red on any single mutation, and that is stated rather than
+    // discovered.** The behaviour is defended twice: `resolveCancel` returns early on
+    // `!entry->parked`, and `queueParkedWaiter` would in any case short-circuit on the empty
+    // waiter a callback park has. Removing either alone leaves this green. It is here because
+    // nothing exercised the path at all, so a later change that removed BOTH -- or that gave a
+    // callback park a waiter -- would have had nothing to answer to.
+    auto clock = ManualClock {};
+    auto loop = TestLoop { clock };
+
+    auto calls = std::size_t { 0 };
+    auto const timer = loop.addTimer(clock.now() + 10ms, &countCall, &calls);
+    REQUIRE(loop.pendingTimerCount() == 1);
+
+    loop.requestCancel(timer.park); // compiles, and must do nothing
+
+    CHECK(loop.pendingTimerCount() == 1); // not taken
+    CHECK(loop.readyCount() == 0);        // and nothing queued for a drain to run
+
+    clock.advance(10ms);
+    std::ignore = loop.drain();
+    CHECK(calls == 1); // the timer the cancel named still fired
+}
+
 TEST_CASE("cancelTimer still prevents a callback whose deadline has fired but not yet run",
           "[EventLoop][timer]")
 {

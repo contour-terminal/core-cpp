@@ -426,6 +426,13 @@ workflow refuses one without a section here.
   behaviour observable only in a node run is one nobody reads;
   `core::net::EmscriptenHostScheduler` (`emscripten_async_call`, which is the browser's
   `setTimeout`) is what `makeDefaultBackend()` uses there.
+  **Filing work from outside a turn is safe on such a loop**, which is the position a DOM event
+  handler, a frame callback or a TUI input path is in: `EventLoop::registerPark` asks the host for
+  the turn that will reach the park — and so `addTimer`, `schedule`, `co_await loop->delay()` and
+  `interruptibleSleepUntil()` all do, including from an eagerly-started `core::async::DetachedTask`
+  — as do `resumeSoon` and `requestStop`. Without it the work is filed, correct, and never run: the
+  host is armed at the END of a turn, so a quiescent host-driven loop has nothing coming that would
+  arm it. Backends that are not host-driven are unaffected.
 - `core::net` has a WebAssembly subset: its module row is `wasm-subset`, and under single-threaded
   Emscripten it builds the `IoBackend` contract, `HostDrivenBackend`, the pure logic behind them
   and the test doubles — and links no `Threads::Threads`, which would force `-pthread` and
@@ -442,14 +449,14 @@ workflow refuses one without a section here.
   resumes a coroutine also the one place that calls out to a timer callback. `cancelTimer`
   answering `true` means *this call prevented the callback*, which includes the window between a
   deadline firing and its callback running: an owner destroyed in that window would otherwise have
-  its callback run against storage that is gone. `RunOnceResult::resumed` (and so
+  its callback run against storage that is gone. `RunOnceResult::drained` (and so
   `testing::TestLoop::tick()`) counts what step 2 took off the ready queue — coroutines resumed
   plus timer callbacks run — because a turn that ran a callback and resumed nothing is not an idle
-  turn, and `runUntilIdle()` would otherwise stop on one. **That field is renamed `resumed` →
-  `drained`** while `RunOnceResult` is still unreleased: the old name is a verb that is false for
-  half of what it counts, since a timer callback is called rather than resumed. `TimerCallback`,
-  `ParkEntry::onCallback` and the diagnostic `EventLoop::pendingTimerSlotCount()` — the size of the
-  deadline heap including the stale slots lazy pruning is carrying — are public with it.
+  turn, and `runUntilIdle()` would otherwise stop on one. It is named for what it counts rather
+  than for what happens to only half of that: a timer callback is called, not resumed.
+  `TimerCallback`, `ParkEntry::onCallback` and the diagnostic
+  `EventLoop::pendingTimerSlotCount()` — the size of the deadline heap including the stale slots
+  lazy pruning is carrying — are public with it.
 
 - `core::net::DeadlineTimer` (`<core/net/DeadlineTimer.hpp>`): a deadline as an object, disarmed
   by `disarm()` or by destruction, and **destroyable from inside its own callback**. For a timeout

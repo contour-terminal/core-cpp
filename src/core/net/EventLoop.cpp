@@ -489,6 +489,42 @@ void EventLoop::armHostWake()
 {
     if (!_backend.isHostDriven())
         return;
+
+    // **`_closedParks` is not in the test below, and this asserts the reason rather than trusting
+    // it.** This function is the ONLY place that decides what counts as work for a host-driven
+    // loop, so an omission here has nothing left in the tree to contradict it.
+    //
+    // It is empty at this point for two independent reasons, which is why the assertion survives
+    // either of them changing alone:
+    //
+    //  1. A closed park can only exist where a park is on a handle, and
+    //     `HostDrivenBackend::attach` refuses every handle (`NetErrorCode::Unsupported`, "this
+    //     backend has no readiness"), so `registerPark` never files one and
+    //     `notifyHandleClosing` finds nothing to record.
+    //  2. The turn takes `_closedParks` with `std::exchange` before the wait, and nothing
+    //     between there and this call runs code that could refill it. **Including a timer
+    //     callback**, which is the path worth checking rather than assuming:
+    //     `fireExpiredTimers` only QUEUES a due callback, and `runDueCallback` runs it from
+    //     `drainReadyQueue` -- step 2 of the NEXT turn, which is ahead of that turn's own
+    //     exchange. A close performed by a timer callback is therefore caught by the turn that
+    //     ran it, never stranded behind one.
+    //
+    // Counting it in the condition instead would be worse than useless: a closed park would then
+    // be handled SILENTLY, so the day the premise stops holding is the day nothing says so. An
+    // assertion has no behaviour to inherit -- it is the invariant the paragraph above describes,
+    // made to fail loudly. **If a host-driven backend ever gains readiness, this fires, and
+    // `notifyHandleClosing` needs the arming too, or a flow parked on a descriptor that closes is
+    // never resumed** -- the one failure a readiness poller cannot report for itself, which is why
+    // `notifyHandleClosing` exists at all.
+    //
+    // It has **no case**, and for the reason every assertion in this file has none: observing one
+    // from inside a Catch case aborts the binary. The tree's shape for that is a `WILL_FAIL` canary
+    // process, and a third canary mode for an invariant that is unreachable today is more than it
+    // is worth -- recorded here so it is a decision rather than an omission.
+    assert(_closedParks.empty()
+           && "armHostWake with a closed park pending: a host-driven backend has gained readiness, "
+              "so this condition and notifyHandleClosing both need to arm the host");
+
     // Work already queued means "as soon as you can", which is a deadline of now rather than no
     // deadline at all: a host-driven loop has no other way of getting another turn.
     if (!_ready.empty() || hasInbound())
@@ -651,6 +687,18 @@ void EventLoop::requestStop()
               "post() a call to it instead");
     _rootStop.request_stop();
     unparkEverything();
+
+    // **Not redundant with the stop above, and the narrow case is why.** A flow that registered a
+    // cancellation on this token -- every `spawn`ed one parked through `DelayAwaiter` -- has already
+    // reached `requestCancel` by now, and that wakes. What has not is a park filed through the
+    // public `registerPark` with no stop registration behind it: `unparkEverything` queues its
+    // waiter and nothing tells the host, so the unwind this call exists to perform waits for a
+    // turn that never comes.
+    //
+    // `wake()` rather than `armHostWake()`: the unparked waiters are ready NOW and carry no
+    // deadline of their own, which is exactly what `wake()` says.
+    if (!isOnWorkerThread())
+        _backend.wake();
 }
 
 void EventLoop::spawn(async::Task<void> task)
@@ -691,25 +739,12 @@ TimerId EventLoop::addTimer(platform::SteadyTimePoint deadline, TimerCallback on
               "run would be filed and fired into nothing");
     if (onExpired == nullptr)
         return TimerId::invalid();
-    auto const timer = TimerId { registerPark(ParkEntry::onCallback(onExpired, state, deadline)) };
-
-    // **A timer armed outside a turn has to ask for one**, and on a host-driven backend that is
-    // the ONLY thing that will: `armHostWake` runs at the end of a turn, and a quiescent
-    // host-driven loop has nothing scheduled that would ever start one. The park would be filed,
-    // correct, and silently never fired -- which is how a browser event handler, a frame callback
-    // or a TUI input path arms one. Every other member that files work a turn must reach --
-    // `post`, `submit`, `schedule`, `spawn`, `requestCancel`, `stop` -- wakes for this reason;
-    // this one was the exception until it was not.
-    //
-    // `armHostWake()` rather than `wake()`, which is what `spawn` uses: a spawned flow means "as
-    // soon as you can" and has no deadline, while this one does, so the host is told WHEN instead
-    // of being asked for a pump it would spend finding nothing due. Inside a turn it is skipped,
-    // because the turn arms the host itself on its way out. A backend that is not host-driven
-    // ignores it, and correctly: nothing is driving such a loop off-turn (the assertion above says
-    // so), and the next turn computes its timeout from the same deadline heap in step 3.
-    if (!isOnWorkerThread())
-        armHostWake();
-    return timer;
+    // **A timer armed outside a turn has to ask for one, and that arming lives in `registerPark`**
+    // -- the call below -- rather than here, where it first landed. `registerPark` is the
+    // primitive every park goes through, so an arming placed one level above it covered this
+    // caller and left the other five without it. Two members computing the same answer from the
+    // same deadline heap is what this must not become.
+    return TimerId { registerPark(ParkEntry::onCallback(onExpired, state, deadline)) };
 }
 
 bool EventLoop::cancelTimer(TimerId timer) noexcept
@@ -748,6 +783,13 @@ void EventLoop::resumeSoon(async::ParkedWork work)
     if (!work.resume)
         return;
     queueReady(std::move(work));
+
+    // Ready work filed outside a turn asks for one, for `registerPark`'s reason. `wake()` and not
+    // `armHostWake()` because this work has no deadline: "as soon as you can" is precisely what
+    // `wake()` means, and it is what `post`, `submit`, `spawn` and `stop` already use for the same
+    // kind of work. `wake()` is also the one member the backend contract declares thread-safe.
+    if (!isOnWorkerThread())
+        _backend.wake();
 }
 
 void EventLoop::queueReady(async::ParkedWork work)
@@ -814,7 +856,45 @@ ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
         park->attached = true;
     }
 
-    return _parks.add(std::move(park));
+    auto const id = _parks.add(std::move(park));
+
+    // **A park filed outside a turn has to ask for the turn that will reach it**, and on a
+    // host-driven backend nothing else ever will: `armHostWake` runs at the END of a turn, and a
+    // quiescent host-driven loop has nothing scheduled that would start one. The park would be
+    // filed, correct, and silently never fired or resumed -- which is precisely how a browser event
+    // handler, a frame callback or a TUI input path files one. It needs no test double to reach:
+    // `core::async::DetachedTask` is eagerly started, so `co_await loop->delay()` inside such a
+    // handler arrives here off-turn.
+    //
+    // **It belongs here rather than in `addTimer`, where it first landed.** Six call sites in this
+    // module reach this function -- `runInbound`, `schedule`, `addTimer`, `DelayAwaiter`,
+    // `WaitHandleAwaiter` and `TokenDelayAwaiter` -- plus whatever a consumer files through the
+    // public overload, and an arming placed in `addTimer` covered exactly one of them.
+    //
+    // **`armHostWake()` and not `wake()`, which is the opposite choice from `resumeSoon` and
+    // `requestStop`, and the difference is the deadline rather than a preference.** Those two file
+    // work that is ready NOW, which is what `wake()` means. A park has a time attached, and
+    // `HostDrivenBackend::wake()` is `scheduleAt(now)` -- so asking for a wake here would tell the
+    // host to pump immediately for a deadline fifty milliseconds out, spend a turn finding nothing
+    // due, and re-arm from the same heap. `HostDrivenLoop_test.cpp` measures exactly that: the
+    // deadline cases assert `soonestDelayMs(host) == 50`, and both expand to 0 against a `wake()`.
+    // So the rule is one rule, not two idioms: **ready work wakes, a park arms.**
+    //
+    // The thread-safety question this raises is real and does not bite here. `wake()` is the only
+    // member of the backend contract declared thread-safe, and `armHostWake` reads `_ready`,
+    // `hasInbound()` and `_parks.nextDeadline()` on the way to `armWakeAt`. But this function
+    // already mutates `_parks` with no synchronisation of its own, so two threads calling it
+    // concurrently is a data race with or without the arming -- which is what the assertion above
+    // forbids. The arming cannot make a single-threaded-by-contract function less safe.
+    //
+    // On a backend that is not host-driven `armHostWake` returns immediately, and correctly so:
+    // `!isOnWorkerThread()` together with that assertion means nothing is driving this loop, so
+    // there is no blocking wait to break and the next turn computes its own timeout. Inside a turn
+    // it is skipped, because the turn arms the host itself on its way out, and `scheduleAt`
+    // coalesces whatever repetition is left.
+    if (!isOnWorkerThread())
+        armHostWake();
+    return id;
 }
 
 void EventLoop::unregisterPark(ParkId park) noexcept
@@ -919,12 +999,23 @@ void EventLoop::notifyHandleClosing(platform::NativeHandle handle, FdWakePolicy 
 {
     // Reached from every socket and listener `close()` and destructor in the tree, which is
     // why it is worth asserting rather than trusting: a socket is destroyed in more places
-    // than a timer is, and a destructor runs wherever its owner happens to die.
-    // The same predicate the turn and the destructor use: this loop's own thread, or nobody
-    // driving it. Anywhere else, this writes scheduler state beside a turn that is reading it.
+    // than a timer is, and a destructor runs wherever its owner happens to die. Until this
+    // landed it was the one public member mutating loop-owned state -- `_closedParks`,
+    // `_abandoned`, and `_parks` through `parksOn` -- with neither this assertion nor the
+    // `_inbound`-under-`_inboundMutex` route that `post`, `submit`, `schedule`, `stop` and
+    // `requestCancel` take, so its requirement lived only in prose, under a rulebook section
+    // headed "Thread affinity, asserted rather than documented".
+    //
+    // **The advice differs from its siblings on purpose, and that is not an inconsistency.**
+    // `post()`-ing this call is NOT the fix, because it cannot be separated from the `close()`
+    // that must follow it: the handle has to still be open when the backend drops its
+    // registration, or the removal lands on a descriptor number the kernel may already have
+    // reassigned. The whole close moves to the loop thread instead. A diagnostic copied from a
+    // sibling that tells its reader to do something impossible here is worse than none.
     assert(teardownIsSerialisedWithDispatch()
-           && "EventLoop::notifyHandleClosing from a second thread while another is driving this loop: "
-              "post() a call to it instead");
+           && "EventLoop::notifyHandleClosing from a second thread while another is driving this "
+              "loop: move the close itself to the loop thread -- this call and the close() that "
+              "follows it cannot be separated, so post()ing this one alone does not help");
     if (handle == platform::InvalidHandle)
         return;
 

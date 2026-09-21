@@ -12,6 +12,8 @@
 // repository can hold still rather than something only a node run can observe. What a node run
 // adds is that the same code compiles and links under Emscripten, which this file's membership of
 // the WebAssembly test binary is what proves.
+#include <core/async/DetachedTask.hpp>
+#include <core/async/ParkedWork.hpp>
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/HostDrivenBackend.hpp>
@@ -41,6 +43,35 @@ Task<void> delayThenFlag(EventLoop* loop, core::platform::SteadyDuration duratio
 {
     co_await loop->delay(duration);
     *fired = true;
+}
+
+/// Parks on a delay and records that it came back, from a flow NOBODY owns.
+///
+/// @c core::async::DetachedTask has @c std::suspend_never for its initial suspension, so calling
+/// this runs the body -- and reaches the @c co_await -- INLINE, on whatever thread called it and
+/// outside any turn. That is what makes it the reachable form of the defect the case below is
+/// about: no test double, no new API, just a flow started from a host callback.
+/// @param loop The loop to park on.
+/// @param duration How long to wait.
+/// @param fired Set once it resumes; must outlive the loop.
+core::async::DetachedTask delayThenFlagDetached(EventLoop* loop,
+                                                core::platform::SteadyDuration duration,
+                                                bool* fired)
+{
+    co_await loop->delay(duration);
+    *fired = true;
+}
+
+/// A lazy flow that records that it ran.
+///
+/// @c Task suspends at its initial suspension, so the frame exists and has not run: its handle is
+/// something a caller can hand to @c resumeSoon, and the @c Task value owns it until then.
+/// @param ran Set when the body runs.
+/// @return The suspended flow.
+Task<void> markRan(bool* ran)
+{
+    *ran = true;
+    co_return;
 }
 
 /// A @c core::net::TimerCallback that counts its calls.
@@ -136,7 +167,12 @@ TEST_CASE("A timer armed on a quiescent host-driven loop asks the host for the t
     // will ever start one.** `armHostWake()` runs at the END of a turn, and a quiescent
     // host-driven loop has nothing scheduled with the host, so there is no turn coming to arm the
     // deadline this call just filed: the timer would be correct, filed, and silently never fired.
-    // `post`, `submit`, `schedule`, `spawn`, `requestCancel` and `stop` all wake for this reason.
+    //
+    // This comment used to list the members that wake and call the list complete. It was not:
+    // `registerPark`, `resumeSoon` and `requestStop` did not, and the three cases below are theirs.
+    // `addTimer` now inherits its arming from `registerPark` rather than computing its own, so
+    // this case also covers the path the next three are about -- which is why it is still here
+    // rather than folded into them: it is the one that pins the DEADLINE, 50ms and not now.
     //
     // Armed from the loop's own thread but OUTSIDE a turn, which is legal by the documented
     // contract -- `teardownIsSerialisedWithDispatch()` is true when nothing is driving -- and is
@@ -165,6 +201,119 @@ TEST_CASE("A timer armed on a quiescent host-driven loop asks the host for the t
 
     host.pump(); // the next turn's step 2 runs it
     CHECK(calls == 1);
+}
+
+TEST_CASE("A coroutine parking on a delay outside a turn asks a quiescent host-driven loop for one",
+          "[EventLoop][hostdriven][timer]")
+{
+    // **The same defect as the case above, one level down, and the case above cannot see it.**
+    // `addTimer` was given its arming directly, so the fix sits ABOVE `registerPark` -- and
+    // `registerPark` is what every other park goes through. `DelayAwaiter::await_suspend` calls it
+    // and nothing else asks the host for anything.
+    //
+    // Reachable today with no new API: a `DetachedTask` is eagerly started, so its body and its
+    // `co_await` run inline at the call. A browser event handler that paces a redraw with
+    // `co_await loop->delay(16ms)` parks off-turn on a quiescent loop, and the park is filed,
+    // correct, and silently never resumed.
+    //
+    // Declared before the loop: this flow is owned by the loop, and a case that left it parked
+    // would have `~EventLoop` free a frame whose body writes here.
+    auto fired = false;
+    auto clock = ManualClock {};
+    auto host = ManualHostScheduler {};
+    auto backend = HostDrivenBackend { host, clock };
+    auto loop = EventLoop { backend, clock };
+
+    // Quiescent, asserted rather than assumed -- a pump pending from anything else buys a turn
+    // whose `armHostWake()` picks the deadline up, which is exactly what masks this.
+    REQUIRE(host.pendingCount() == 0);
+
+    delayThenFlagDetached(&loop, 50ms, &fired); // runs inline, parks, returns
+
+    // THE assertion, and the deadline with it: a loop that asked for "as soon as you can" would
+    // spin the host's timer for fifty milliseconds.
+    REQUIRE(host.pendingCount() == 1);
+    CHECK(soonestDelayMs(host) == 50);
+
+    clock.advance(50ms);
+    host.pump(); // step 5 finds the deadline due and queues the waiter
+    host.pump(); // the next turn's step 2 resumes it
+    CHECK(fired);
+}
+
+TEST_CASE("resumeSoon outside a turn asks a quiescent host-driven loop for the turn that runs it",
+          "[EventLoop][hostdriven]")
+{
+    // `resumeSoon` files ready work and asks for nothing. `spawn` and `submit`, which queue the
+    // same way, both wake; this one is public, documented loop-thread-only like the two of them,
+    // and is what an awaitable outside this module resumes through.
+    // **Both declared before the loop, and the failing path is why.** The loop BORROWS this
+    // frame: it holds the handle in `_ready` and does not own it. Declared after the loop, `flow`
+    // would be destroyed first, and `~EventLoop` would then reach a frame that is already gone --
+    // which is not hypothetical, it is what the first run of this case did, turning the red below
+    // into a SIGSEGV that also stopped the two cases after it from running at all.
+    auto ran = false;
+    auto flow = markRan(&ran);
+    auto clock = ManualClock {};
+    auto host = ManualHostScheduler {};
+    auto backend = HostDrivenBackend { host, clock };
+    auto loop = EventLoop { backend, clock };
+
+    REQUIRE(host.pendingCount() == 0);
+
+    loop.resumeSoon(core::async::ParkedWork { .resume = flow.handle() });
+
+    // Ready work means "as soon as you can", which on a host-driven loop is a deadline of now --
+    // not no deadline at all, which is what it asks for today.
+    REQUIRE(host.pendingCount() == 1);
+    CHECK(soonestDelayMs(host) == 0);
+
+    host.pump();
+    CHECK(ran);
+}
+
+TEST_CASE("requestStop outside a turn asks a host-driven loop for the turn that unwinds a park "
+          "nothing cancelled",
+          "[EventLoop][hostdriven]")
+{
+    // **The narrow form, and the wording is the finding.** A `spawn`ed flow parked on `delay()`
+    // does NOT need this: `spawn` gives the flow `_rootStop`'s token (`EventLoop.cpp:644`) and
+    // `DelayAwaiter::await_suspend` registers a cancel on it (`EventLoop.hpp:812`), so
+    // `_rootStop.request_stop()` reaches `requestCancel`, which wakes off-turn -- before
+    // `unparkEverything()` runs at all. I wrote that case first and it passed; the wake was coming
+    // from the cancellation, not from `requestStop`.
+    //
+    // What has no stop registration is a park filed through the public `registerPark` by hand,
+    // which is what an awaitable outside this module does. `unparkEverything()` queues its waiter
+    // into `_ready` and nothing tells the host, so the unwind waits for a turn that never comes.
+    auto ran = false;
+    auto flow = markRan(&ran); // borrowed by the loop, so declared before it
+    auto clock = ManualClock {};
+    auto host = ManualHostScheduler {};
+    auto backend = HostDrivenBackend { host, clock };
+    auto loop = EventLoop { backend, clock };
+
+    auto const park = loop.registerPark(core::net::ParkEntry::onDeadline(
+        core::async::ParkedWork { .resume = flow.handle() }, clock.now() + 1000ms));
+    REQUIRE(static_cast<bool>(park));
+
+    // **Isolated by pumping, not by `host.clear()`, and the first version got that wrong.**
+    // Clearing drops the host's queue while leaving the BACKEND believing a pump is still
+    // outstanding, so its coalescing then swallows the next request and the case measured the
+    // desync rather than `requestStop`. A pump consumes the request on both sides, which is what
+    // a real host does. After it, the loop is armed for the park's own deadline and nothing else.
+    host.pump();
+    REQUIRE(host.pendingCount() == 1);
+    REQUIRE(soonestDelayMs(host) == 1000);
+
+    loop.requestStop();
+
+    // THE assertion. The unparked waiter is ready NOW, so the host must be asked for a turn now --
+    // not left holding the one-second pump the park armed, which is what it would wait for.
+    CHECK(soonestDelayMs(host) == 0);
+
+    host.pump();
+    CHECK(ran);
 }
 
 TEST_CASE("A host-driven loop asks for one pump however many wakes it takes", "[EventLoop][hostdriven]")
