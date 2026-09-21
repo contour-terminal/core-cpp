@@ -22,7 +22,21 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # A pull request groups by ref, so pushing to one supersedes its own earlier run. Anything else
+  # -- a push to master above all -- groups by SHA, which means it shares a group with nothing and
+  # is never superseded.
+  #
+  # `cancel-in-progress: false` was not enough and the comment below used to claim it was.
+  # It stops GitHub cancelling a RUNNING run; a run still QUEUED in the same group is superseded
+  # regardless. Every master push shared one group, so each push destroyed its predecessor's
+  # pending run, and a fast lane could land several heads for which no job ever executed. That is
+  # not hypothetical: five consecutive heads reported `cancelled` with ZERO jobs on the night this
+  # was written, one of them the commit that BROKE the POSIX build and one of them the commit that
+  # FIXED it -- so the break shipped unverified and so did its repair (Ruling R105).
+  #
+  # The cost is a full matrix per master push, accepted deliberately: coverage not taken is not
+  # cheaper than minutes not spent, least of all in a library one task from a tag.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   # Only a pull request's superseded run is worth cancelling; a push to master is a record.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
