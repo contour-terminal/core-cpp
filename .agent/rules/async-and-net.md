@@ -9,7 +9,9 @@ imported as they are (Tasks A5 and A6: `core::async`, and `core::net` with its `
 API), then fastcached's async and networking layer is merged into them (Phase B). Task B1 has
 landed the first half of that merge — the ownership rules under "Task ownership" below are live
 code, not a forecast — and Task B3 has landed `IoBackend`, so `EventSource` is gone and the
-backend rules below are live code too. The rules are
+backend rules below are live code too. Task B7a has landed `IocpBackend` and its readiness bridges:
+it is reachable as `makeBackend(BackendKind::Iocp)` and is NOT yet the Windows default, which Task
+B7b changes once the sockets that issue overlapped operations on its port exist. The rules are
 written against the merged design's names, from the design spec,
 [Part I §2](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/specs/2026-09-18-core-cpp-design.md),
 so the tasks that implement it inherit them; each Phase B task extends this file with the rules
@@ -241,9 +243,32 @@ answered out loud or it is not answered.**
   loop asserting its own invariant would pass on a backend that never resumed anything at all:
   `EventLoop_test.cpp` has a flow that records whether the backend was inside `wait()` at the
   instant it resumed.
+- **G1 again, for the completion PORT, and it needs saying twice.** A loop is a thing one thread
+  drives by construction; a completion port is a thing the operating system INVITES many threads to
+  drain, and doing so is its selling point everywhere but here. Nothing about the violation fails:
+  the second thread simply takes half the completions, and the defect surfaces as a coroutine whose
+  reads sometimes run on the wrong thread, weeks later. So `IocpBackend::wait()` claims a
+  `detail::WorkerIdentity` of its OWN -- not the loop's, because a backend is drivable without one
+  -- and asserts that no other thread holds it. `core-cpp.iocp-canary.g1` is a program that violates
+  it and must die. Origin:
+  [fastcached#668](https://github.com/LASTRADA-Software/fastcached/issues/668).
 - **G3: helper threads only post.** `post`, `submit`, `schedule`, `requestCancel` and `stop` hand
   work to the inbound queue and wake the backend; step 1 is what runs it, on the loop's thread.
-  The work itself records which thread it ran on.
+  The work itself records which thread it ran on. A thread-pool wait's callback is a helper thread by
+  this rule: `IocpBackend`'s calls `PostQueuedCompletionStatus` and returns, and that is the whole
+  body -- no resume, no member of a handler, no allocation. Where the kernel exposes
+  `NtAssociateWaitCompletionPacket` the rule is satisfied by there being no helper thread at all.
+- **G4: a SOCKET is associated with exactly one completion port, and `ICompletionPort::associate`
+  is the only place it happens.** Not because centralising is tidy, but because the kernel's own
+  refusal cannot be read: `CreateIoCompletionPort` on an already-associated handle answers
+  `ERROR_INVALID_PARAMETER`, which is also what it answers for a closed handle and for half a dozen
+  ordinary mistakes, so a caller taking it at face value would condemn a working connection. The
+  port keeps the record itself, refuses the second association by name and asserts on it
+  (`core-cpp.iocp-canary.g4`). **The other half is the owner's:** an association ends when the
+  HANDLE is closed, the kernel says nothing about it, and Windows reuses handle values freely -- so
+  a socket being closed calls `ICompletionPort::forget`, or the next socket handed that value looks
+  already associated, is therefore associated with nothing, and every operation issued on it
+  completes nowhere. That is a hang with no error and no log line.
 - **A host-driven loop refuses `run()` and `blockOn()`**, and the refusal is COMPILED under
   WebAssembly rather than removed: a consumer reaches it by mistake, not by design, and a symbol
   simply absent there fails at link time in somebody else's build with nothing to say why.
@@ -488,6 +513,49 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
 - **A loopback connect usually completes inline**, which skips the whole readiness path, so a
   dial test that stops at "connected" exercises none of it. Connector tests move bytes and
   arrange the read to park; only a parked read proves the registration exists.
+- **A completion port has no readiness, so a backend over one SYNTHESISES it, and each kind of
+  handle needs its own source.** A waitable HANDLE -- console input, an event,
+  `platform::SystemPipe`'s wakeup -- gets a thread-pool wait whose callback only posts; socket
+  readability is a zero-byte `WSARecv`, which completes for data, for EOF and for an error alike and
+  is `Readiness::Readable` for all three, because this layer wakes the reader and the reader's own
+  `recv` is what says which; socket writability has no completion at all, so it goes through
+  `WSAEventSelect` for `FD_WRITE` and then through the first bridge. **This is the whole of the
+  merge:** contour could wait on a console handle and capped at 64 of them, fastcached could scale
+  and express a completion and kept a second coroutine runtime because its port could not park on a
+  console. `BackendParity_test` registers `CONIN$` on every Windows backend, so one wait serving a
+  console and a socket is a checked property rather than a claim.
+  `NtAssociateWaitCompletionPacket` is an optimisation taken only when a startup `GetProcAddress`
+  probe finds it -- never a link against `ntdll`, which would put an undocumented import into every
+  consumer's executable -- and the probe failing is an ordinary answer. Origin: the design spec,
+  [Part I](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/specs/2026-09-18-core-cpp-design.md),
+  "IOCP readiness bridging".
+- **`lpOverlapped` points at a backend-owned refcounted slot, never into the handler.** On a
+  readiness backend nothing of the caller's travels into the kernel; on a completion port a pointer
+  does, and it comes back on a later turn -- after a cancel, after a detach, after the handler's
+  owner has been freed. So it points into a `detail::ReadinessSlot` the BACKEND owns: the handler
+  holds one share for the length of its registration (`ReadinessHandler::slot`), each armed
+  operation holds another, and a packet arriving after the detach finds the slot `retired()` and
+  drops **without reading the handler pointer at all**. Measured: dropping the two retirement checks
+  reports `heap-use-after-free` in `selectReadinessCallback`, reading the freed `ReadinessHandler`.
+  The same hazard one layer up is what forced fastcached's operation to hold the socket's `Impl` by
+  `shared_ptr` rather than reaching back through the socket. Origin:
+  [fastcached#465](https://github.com/LASTRADA-Software/fastcached/issues/465).
+- **One operation node per ARM, stood down rather than reused.** A retracted operation's
+  `OVERLAPPED` belongs to the kernel until a later turn delivers its abort completion, so the next
+  arm gets a fresh node and the retired one lives until its packet is reconciled. `CancelIoEx` does
+  not take an operation back, it ASKS for it back. Reusing the node turned an abort into a spurious
+  EOF on a healthy socket upstream, which is that ticket's other half -- bytes already received beat
+  a later stop -- seen from the node's side. Origin:
+  [fastcached#710](https://github.com/LASTRADA-Software/fastcached/issues/710),
+  [fastcached#884](https://github.com/LASTRADA-Software/fastcached/issues/884).
+- **On a completion port, level-triggering is BUILT rather than inherited.** An overlapped operation
+  is one-shot: it completes once and the kernel forgets it, where poll, epoll, kqueue and
+  `WaitForMultipleObjects` re-report a condition nobody consumed. So `IocpBackend` re-arms every
+  watched registration at the top of every `wait()` -- before the block, never after the dispatch,
+  because a callback may detach its own registration and an arm issued for that one is an operation
+  nobody will ever collect. Worth knowing that this was invisible: deleting the re-arm left all 166
+  cases in the suite green, because every other registration is armed by `setInterest` and
+  dispatched exactly once.
 - **IOCP specifics:** an accept must be awaited while it is outstanding, or an early completion
   is dropped; `ConnectEx` needs a `bind` to the family's wildcard first and
   `SO_UPDATE_CONNECT_CONTEXT` after; and `OVERLAPPED::Internal` is an `NTSTATUS`, not a Winsock

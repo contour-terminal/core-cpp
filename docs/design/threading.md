@@ -1,9 +1,9 @@
 # Threading
 
 !!! note "Status"
-    The turn, the teardown and guarantees G1 to G3 and G5 are implemented (Task B4). G4 arrives
-    with the IOCP backend (Task B7), and the socket-side half of G5 with the socket contract
-    (Task B6). This is Part I §2 of the
+    The turn, the teardown and guarantees G1 to G3 and G5 are implemented (Task B4), and G4
+    with the IOCP backend (Task B7a), which also asserts G1 for the completion port itself. The
+    socket-side half of G5 arrives with the socket contract (Task B6). This is Part I §2 of the
     [design spec](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/specs/2026-09-18-core-cpp-design.md).
 
 ## One loop, one thread

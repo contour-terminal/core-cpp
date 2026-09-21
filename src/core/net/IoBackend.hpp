@@ -21,8 +21,10 @@
 /// platform provides them. `BackendParity_test` holds them to that, and
 /// @c testing::ScriptedBackend lets a loop be driven with no kernel at all.
 
+#include <core/net/ICompletionPort.hpp>
 #include <core/net/IHostScheduler.hpp>
 #include <core/net/NetError.hpp>
+#include <core/net/detail/ReadinessSlot.hpp>
 #include <core/platform/Clock.hpp>
 #include <core/platform/Types.hpp>
 
@@ -175,6 +177,32 @@ struct ReadinessHandler
     /// that leaves it null has such a failure delivered to whichever direction it does
     /// watch, which is what a parked read and a parked accept both want anyway.
     ReadinessCallback onError = nullptr;
+
+    /// This registration's share of the backend-owned object a completion names.
+    ///
+    /// **The ownership rule, which is the whole of what this field means. The slot
+    /// belongs to the BACKEND. The handler holds one refcounted share of it, taken in
+    /// `attach` and given back in `detach`, and it never points into the handler.**
+    /// A completion-based backend hands the kernel a pointer and gets it back on a
+    /// later turn; an operation the caller has since cancelled still delivers, so a
+    /// pointer that aimed into this struct would be read after its owner was destroyed,
+    /// with a kernel on the other end of it. The slot outlives the handler by exactly
+    /// as long as the kernel still holds a share, and a packet that arrives then finds
+    /// it @c detail::ReadinessSlot::retired() and drops without reading anything of the
+    /// handler's. See that type's comment for why the refcount and the generation are
+    /// two answers to two questions rather than one belt with one brace.
+    ///
+    /// **A readiness backend leaves it empty and nothing notices.** poll, epoll, kqueue
+    /// and Wfmo hand the kernel a descriptor and get a descriptor back, so they have
+    /// nothing to protect and write nothing here. The field is not a contract between
+    /// the handler's owner and the backend: an owner NEVER reads it, sets it, or copies
+    /// a handler expecting it to mean anything. It is the backend's, on the handler,
+    /// because the handler is what a registration IS.
+    ///
+    /// Added by Task B7 with its first writer rather than ahead of one: the design spec
+    /// declared it, Task B3 left it out because a public field with no reader has no
+    /// defined meaning, and IOCP is what defines it.
+    detail::ReadinessSlotRef slot {};
 };
 
 /// Which of @p handler's callbacks services @p observed, or nullptr when none does.
@@ -235,11 +263,14 @@ struct ReadinessHandler
 /// per platform is @c preferredBackendKind().
 enum class BackendKind : std::uint8_t
 {
-    Poll = 0,   ///< poll(2), POSIX. Portable; a wait is O(registered).
-    Epoll,      ///< epoll(7), Linux only. A wait is O(ready).
-    Kqueue,     ///< kqueue(2), macOS and the BSDs. A wait is O(ready).
-    Iocp,       ///< I/O completion ports, Windows. Arrives in Task B7; @c makeBackend answers null.
-    Wfmo,       ///< WSAEventSelect + WaitForMultipleObjects, Windows. IOCP's fallback for one release.
+    Poll = 0, ///< poll(2), POSIX. Portable; a wait is O(registered).
+    Epoll,    ///< epoll(7), Linux only. A wait is O(ready).
+    Kqueue,   ///< kqueue(2), macOS and the BSDs. A wait is O(ready).
+    /// I/O completion ports, Windows. A wait is O(ready), and it is the only backend here that
+    /// can serve a console handle and a socket from one wait. Available by name; Task B7b makes
+    /// it the Windows default, once the sockets that issue overlapped operations on it exist.
+    Iocp,
+    Wfmo, ///< WSAEventSelect + WaitForMultipleObjects, Windows. Still the default; IOCP's fallback after.
     HostDriven, ///< No wait of its own: a host (a browser's event loop, a Qt one) pumps the loop.
     Scripted,   ///< The test double whose readiness a case writes out in advance.
     Null,       ///< Reports nothing, ever. What a loop with no I/O at all is driven by.
@@ -393,6 +424,24 @@ class IoBackend
     /// call off the wait's thread; a wake with no wait in flight makes the next wait
     /// return at once rather than being lost.
     virtual void wake() noexcept = 0;
+
+    /// The completion port behind this backend, for the sockets whose operations
+    /// complete on it, or nullptr on a backend that has none.
+    ///
+    /// A readiness backend answers nullptr and that is not a shortfall: there is
+    /// nothing to lend, because the kernel is handed a descriptor and answers with a
+    /// descriptor. A socket asks this and writes its own transport accordingly — the
+    /// non-null answer is what distinguishes "issue an overlapped `WSARecv` and be
+    /// completed" from "park on readiness and then call `recv`".
+    ///
+    /// Declared on every platform although only @c IocpBackend answers non-null: a
+    /// member only one platform uses is still declared on all of them
+    /// (`.agent/rules/platform.md`), so a consumer's translation unit sees one shape of
+    /// this class wherever it is compiled. The design spec sketched it behind
+    /// `#if defined(_WIN32)`; that would make the vtable's layout platform-dependent
+    /// inside a header consumers include, which is the hazard that rule exists for.
+    /// @return The port, owned by this backend and valid for its lifetime, or nullptr.
+    [[nodiscard]] virtual ICompletionPort* completionPort() noexcept { return nullptr; }
 
     /// @return True if this backend has no wait of its own and is pumped by a host
     ///         (a browser's event loop, a Qt one). A host-driven loop must not be

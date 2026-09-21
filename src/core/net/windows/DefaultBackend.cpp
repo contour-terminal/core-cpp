@@ -1,12 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
-/// Which backend Windows builds: `WSAEventSelect` + `WaitForMultipleObjects`, and
-/// nothing else yet. Task B7 adds IOCP and makes it the default, keeping Wfmo as its
-/// fallback for one release. poll(2) is not built here: Winsock's `WSAPoll` is not
-/// poll(2) — it cannot wait on a console handle or an event, which is most of what a
-/// loop on this platform watches. CMake compiles exactly one DefaultBackend.cpp —
-/// this one here — which is how no `#ifdef` chooses a backend (Ruling R40).
+/// Which backends Windows builds: `WSAEventSelect` + `WaitForMultipleObjects`, and —
+/// since Task B7a — an I/O completion port. poll(2) is not built here: Winsock's
+/// `WSAPoll` is not poll(2), and cannot wait on a console handle or an event, which is
+/// most of what a loop on this platform watches. CMake compiles exactly one
+/// DefaultBackend.cpp — this one — which is how no `#ifdef` chooses a backend
+/// (Ruling R40).
+///
+/// **The preferred kind is still `Wfmo`, deliberately.** `IocpBackend` is complete and
+/// reachable by name, but the sockets that issue overlapped operations on its port are
+/// Task B7b's; Windows' sockets today are `WindowsSocket`, which parks on a WSAEVENT.
+/// Both backends serve that (a WSAEVENT is a waitable HANDLE and IOCP bridges those), so
+/// the parity matrix covers IOCP either way — but making it the DEFAULT before its
+/// sockets exist would move every Windows consumer onto a completion port that nothing
+/// completes on, for no gain. Task B7b flips this line and keeps Wfmo one release as the
+/// fallback ([core-cpp#6](https://github.com/contour-terminal/core-cpp/issues/6)).
 #include <core/net/IoBackend.hpp>
+#include <core/net/windows/IocpBackend.hpp>
 #include <core/net/windows/WfmoBackend.hpp>
 
 #include <memory>
@@ -23,11 +33,10 @@ std::unique_ptr<IoBackend> makeBackend(BackendKind kind)
 {
     switch (kind)
     {
+        case BackendKind::Iocp: return std::make_unique<IocpBackend>();
         case BackendKind::Wfmo: return std::make_unique<WfmoBackend>();
 
-        // Not built here. Iocp arrives in Task B7; poll(2), epoll and kqueue are the
-        // POSIX platforms'.
-        case BackendKind::Iocp:
+        // Not built here: poll(2), epoll and kqueue are the POSIX platforms'.
         case BackendKind::Poll:
         case BackendKind::Epoll:
         case BackendKind::Kqueue: return nullptr;
@@ -45,9 +54,8 @@ std::unique_ptr<IoBackend> makeBackend(BackendKind kind)
 std::unique_ptr<IoBackend> makeDefaultBackend()
 {
     // Through makeBackend rather than straight to the constructor, so that this file is
-    // the same shape as the other four. It matters most here: Task B7 adds IOCP beside
-    // Wfmo and makes it the preferred kind, and the difference between the two shapes is
-    // precisely the `good()` check and the fallback that a second backend needs.
+    // the same shape as the other four, and so that the fallback is one line when Task
+    // B7b makes IOCP the preferred kind.
     if (auto native = makeBackend(preferredBackendKind()))
         return native;
     return std::make_unique<WfmoBackend>();

@@ -13,6 +13,16 @@
 /// resumed at all, and the cases below hung rather than failed. They are named for
 /// that symptom because it is what a regression looks like: `net_test [closehang]`
 /// runs the lot. See @c EventLoop::notifyHandleClosing for the mechanism.
+#ifdef _WIN32
+    // winsock2.h MUST precede windows.h, and this is the only part of the parity suite
+    // that needs either: the console-input case below is the one property here that has
+    // no portable spelling at all.
+    // clang-format off
+    #include <winsock2.h>
+    #include <windows.h>
+// clang-format on
+#endif
+
 #include <core/async/Task.hpp>
 #include <core/async/WhenAll.hpp>
 #include <core/async/WhenAny.hpp>
@@ -1655,6 +1665,196 @@ TEST_CASE("closing a listener resumes a parked accept on every backend", "[net][
     }
 }
 
+#ifdef _WIN32
+namespace
+{
+
+/// This process's console input, held for the length of one case.
+///
+/// `CONIN$` names the console the process is attached to whatever its standard handles were
+/// redirected to — a test runner hands a test pipes. A process attached to no console cannot open
+/// it, and the case SKIPs rather than passing.
+///
+/// A console is shared by every process attached to it, and a runner that gives each case its own
+/// process runs them side by side on ONE console: this case writes a record into the input buffer,
+/// and another case's flush would discard it. So the handle is taken under a named mutex — the
+/// SAME name `src/core/tui/windows/TerminalInput_test.cpp` uses, deliberately, because the
+/// resource is the process's console and not this binary's: two suites serialising on two
+/// different names would not serialise at all.
+class ConsoleInput
+{
+  public:
+    ConsoleInput():
+        _lock { CreateMutexW(nullptr, FALSE, L"Local\\core-cpp-tui-console-input-test") },
+        _locked { _lock != nullptr && isAcquired(WaitForSingleObject(_lock, LockBoundMs)) },
+        _handle { CreateFileW(L"CONIN$",
+                              GENERIC_READ | GENERIC_WRITE,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              nullptr,
+                              OPEN_EXISTING,
+                              0,
+                              nullptr) }
+    {
+    }
+
+    ~ConsoleInput()
+    {
+        if (_handle != INVALID_HANDLE_VALUE)
+            CloseHandle(_handle);
+        if (_locked)
+            ReleaseMutex(_lock);
+        if (_lock != nullptr)
+            CloseHandle(_lock);
+    }
+
+    ConsoleInput(ConsoleInput const&) = delete;
+    ConsoleInput& operator=(ConsoleInput const&) = delete;
+    ConsoleInput(ConsoleInput&&) = delete;
+    ConsoleInput& operator=(ConsoleInput&&) = delete;
+
+    /// @return Whether this case holds the console for itself.
+    [[nodiscard]] bool locked() const noexcept { return _locked; }
+
+    /// @return Whether this process has a console to hold at all.
+    [[nodiscard]] bool available() const noexcept { return _handle != INVALID_HANDLE_VALUE; }
+
+    /// @return The console input handle.
+    [[nodiscard]] HANDLE get() const noexcept { return _handle; }
+
+  private:
+    /// How long a case waits for another to finish with the console. Each is well under a second,
+    /// so this bound is for a wedged holder rather than for a queue.
+    static constexpr DWORD LockBoundMs = 30000;
+
+    /// An abandoned mutex — its holder died mid-case — is still acquired, and the flush each case
+    /// opens with is what makes whatever that holder left harmless.
+    [[nodiscard]] static bool isAcquired(DWORD waited) noexcept
+    {
+        return waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED;
+    }
+
+    HANDLE _lock;
+    bool _locked;
+    HANDLE _handle;
+};
+
+/// One console-input registration and the callbacks it counts.
+struct ConsoleProbe
+{
+    core::net::ReadinessHandler handler {};
+    int readable = 0;
+    int other = 0;
+
+    /// @param handle The console input handle to watch.
+    explicit ConsoleProbe(HANDLE handle) noexcept
+    {
+        handler = core::net::ReadinessHandler { .handle = handle,
+                                                .kind = core::net::HandleKind::Waitable,
+                                                .owner = this,
+                                                .onReadable = &ConsoleProbe::readableCallback,
+                                                .onWritable = &ConsoleProbe::otherCallback,
+                                                .onError = &ConsoleProbe::otherCallback };
+    }
+
+    ConsoleProbe(ConsoleProbe const&) = delete;
+    ConsoleProbe& operator=(ConsoleProbe const&) = delete;
+    ConsoleProbe(ConsoleProbe&&) = delete;
+    ConsoleProbe& operator=(ConsoleProbe&&) = delete;
+    ~ConsoleProbe() = default;
+
+    /// @return How many callbacks of any kind this probe has had.
+    [[nodiscard]] int total() const noexcept { return readable + other; }
+
+    static void readableCallback(core::net::ReadinessHandler& handler) noexcept
+    {
+        ++static_cast<ConsoleProbe*>(handler.owner)->readable;
+    }
+
+    static void otherCallback(core::net::ReadinessHandler& handler) noexcept
+    {
+        ++static_cast<ConsoleProbe*>(handler.owner)->other;
+    }
+};
+
+/// A key-down record, which is what a keystroke puts in the input buffer.
+/// @return The record to write.
+[[nodiscard]] INPUT_RECORD keyRecord() noexcept
+{
+    auto record = INPUT_RECORD {};
+    record.EventType = KEY_EVENT;
+    record.Event.KeyEvent.bKeyDown = TRUE;
+    record.Event.KeyEvent.wRepeatCount = 1;
+    record.Event.KeyEvent.wVirtualKeyCode = 'A';
+    record.Event.KeyEvent.uChar.UnicodeChar = L'A';
+    return record;
+}
+
+} // namespace
+
+TEST_CASE("every backend reports console input readiness", "[net][backend][parity][windows]")
+{
+    // **This is the case Task B7 exists for.** A completion port cannot wait on a console handle;
+    // fastcached kept a whole second coroutine runtime because of it, and contour's
+    // `WaitForMultipleObjects` could do it but caps at 64 handles and cannot express a completion.
+    // One backend serving both a server's sockets and a TUI's console input is the merge, and this
+    // is where it is checked — on every Windows backend, so the property is the interface's rather
+    // than IOCP's.
+    //
+    // Windows-only and it has no portable sibling: a console input handle is a waitable object,
+    // which POSIX has no analogue of at all (there stdin is a descriptor like any other and the
+    // parity cases over pipes already cover it).
+    auto const console = ConsoleInput {};
+    if (!console.locked())
+        SKIP("could not take the console lock within its bound: another suite is wedged holding it");
+    if (!console.available())
+        SKIP("this process is attached to no console, so CONIN$ cannot be opened and no console "
+             "input handle exists to register");
+
+    for (auto const& entry: BackendMatrix)
+    {
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
+            continue; // not built on this platform
+
+        DYNAMIC_SECTION("backend=" << entry.name)
+        {
+            // Whatever the console already holds — keys typed at it, a record another case left —
+            // is not this case's input, and it would make the registration signalled before
+            // anything was written.
+            REQUIRE(FlushConsoleInputBuffer(console.get()) != 0);
+
+            auto probe = ConsoleProbe { console.get() };
+            REQUIRE(backend->attach(probe.handler).has_value());
+            REQUIRE(backend->setInterest(probe.handler, core::net::Interest::Read).has_value());
+
+            // An empty input buffer is not readable, and a backend that reported every
+            // registration on every wait would pass the assertion below for the wrong reason.
+            CHECK(backend->wait(std::chrono::milliseconds { 20 }).dispatched == 0);
+            CHECK(probe.total() == 0);
+
+            auto record = keyRecord();
+            auto written = DWORD { 0 };
+            REQUIRE(WriteConsoleInputW(console.get(), &record, 1, &written) != 0);
+            REQUIRE(written == 1);
+
+            // Bounded, and the bound is what it waits FOR: one dispatch of a readiness that has
+            // already been raised, which is microseconds. Two seconds is four orders of magnitude
+            // of slack on a cold runner, and a regression exhausts it and fails rather than
+            // hanging the binary.
+            auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds { 2 };
+            while (probe.total() == 0 && std::chrono::steady_clock::now() < deadline)
+                std::ignore = backend->wait(std::chrono::milliseconds { 20 });
+
+            CHECK(probe.readable >= 1);
+            CHECK(probe.other == 0);
+
+            backend->detach(probe.handler);
+            std::ignore = FlushConsoleInputBuffer(console.get());
+        }
+    }
+}
+#endif
+
 TEST_CASE("makeDefaultBackend yields a usable backend", "[net][backend]")
 {
     auto const backend = core::net::makeDefaultBackend();
@@ -1714,10 +1914,14 @@ TEST_CASE("this platform builds every backend the parity matrix expects of it", 
     };
 
 #ifdef _WIN32
-    // Task B7 makes IOCP the Windows default and keeps Wfmo as its fallback, so this
-    // row is EXPECTED to change then -- see the message below.
-    auto const expected = std::array<Expected, 1> { {
+    // Task B7a added IOCP, which is why this row is 2 and not 1. Task B7b makes it the
+    // DEFAULT and keeps Wfmo as its fallback for one release, which changes
+    // `preferredBackendKind` and not this table -- see the message below.
+    auto const expected = std::array<Expected, 2> { {
         { BackendKind::Wfmo, "Windows' readiness backend: WSAEventSelect + WaitForMultipleObjects" },
+        { BackendKind::Iocp,
+          "the completion port, and the only backend here that can serve a console handle "
+          "and a socket from one wait -- a run without it covers neither bridge" },
     } };
 #elifdef __linux__
     auto const expected = std::array<Expected, 2> { {
@@ -1770,8 +1974,14 @@ TEST_CASE("makeBackend answers null for a kind this platform does not build", "[
     CHECK(core::net::makeBackend(BackendKind::Wfmo) == nullptr);
 #endif
 
-    // IOCP arrives in Task B7; until then it is named and not built, on every platform.
+    // IOCP arrived with Task B7a, on Windows and nowhere else. Asked in both directions
+    // on purpose: "not built here" and "built here" are the same green when the kind is
+    // only ever checked against null on the platforms that never had it.
+#ifdef _WIN32
+    CHECK(core::net::makeBackend(BackendKind::Iocp) != nullptr);
+#else
     CHECK(core::net::makeBackend(BackendKind::Iocp) == nullptr);
+#endif
 
     // The test doubles and the host-driven backend are reachable, and not through here:
     // a production factory is the wrong way to get a test double, and HostDrivenBackend

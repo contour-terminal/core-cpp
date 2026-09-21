@@ -113,6 +113,7 @@ core_cpp_add_module(net KIND STATIC
         EventLoop.hpp
         HostDrivenBackend.hpp
         HttpServer.hpp
+        ICompletionPort.hpp
         IHostScheduler.hpp
         IListener.hpp
         InterruptibleSleep.hpp
@@ -125,6 +126,7 @@ core_cpp_add_module(net KIND STATIC
         WithTimeout.hpp
         WriteQueue.hpp
         detail/ParkTable.hpp
+        detail/ReadinessSlot.hpp
         detail/WorkerIdentity.hpp
         testing/BackendMatrix.hpp
         testing/CoroTestSupport.hpp
@@ -166,9 +168,13 @@ core_cpp_add_module(net KIND STATIC
         bsd/KqueueBackend.hpp
     SOURCES_WINDOWS
         testing/windows/InMemoryTransport.cpp
+        windows/IocpBackend.cpp
+        windows/IocpBackend.hpp
         windows/NetworkEvents.cpp
         windows/NetworkEvents.hpp
         windows/SocketsWin32.cpp
+        windows/WaitCompletionPacket.cpp
+        windows/WaitCompletionPacket.hpp
         windows/WfmoBackend.cpp
         windows/WfmoBackend.hpp
         windows/WindowsListener.cpp
@@ -228,6 +234,7 @@ core_cpp_add_test(net
         posix/FdPassing_test.cpp
         posix/UnixSocket_test.cpp
     SOURCES_WINDOWS
+        windows/IocpBackend_test.cpp
         windows/NetworkEvents_test.cpp
         windows/WfmoBackend_test.cpp
     LABELS loopback
@@ -269,6 +276,33 @@ if(CORE_CPP_TESTING AND NOT EMSCRIPTEN)
         # SKIP_RETURN_CODE takes precedence over WILL_FAIL, so a build with assertions compiled out
         # reports a skip rather than the defect the canary exists to catch.
         set_tests_properties(core-cpp.hostdriven-canary.${mode} PROPERTIES
+            WILL_FAIL TRUE
+            TIMEOUT 60
+            SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
+            LABELS "core-cpp;net;canary")
+    endforeach()
+endif()
+
+# The IOCP backend's two refusals, each its own process for the reason above: an
+# assertion aborts, which ends the binary rather than the case. G1 (a second thread
+# dequeuing the port) and G4 (a handle associated with one port twice) are the two a
+# completion port would otherwise let you commit silently -- IOCP is DESIGNED to be
+# drained by many threads, and the kernel's refusal of a second association is
+# indistinguishable from six ordinary mistakes.
+if(CORE_CPP_TESTING AND WIN32)
+    add_executable(core-cpp-iocp-canary windows/IocpCanary.cpp)
+    # core::testing_dialogs for the same load-bearing reason the host-driven canary
+    # links it: a failed assert() in an MSVC Debug build opens a message box and WAITS,
+    # so the canary times out instead of failing, which reads as a hang rather than as
+    # the refusal firing.
+    target_link_libraries(core-cpp-iocp-canary PRIVATE core::net core::testing_dialogs)
+    core_cpp_apply_toolchain(core-cpp-iocp-canary)
+    foreach(guarantee IN ITEMS g1 g4)
+        add_test(NAME core-cpp.iocp-canary.${guarantee}
+                 COMMAND core-cpp-iocp-canary ${guarantee})
+        # SKIP_RETURN_CODE takes precedence over WILL_FAIL, so a build with assertions
+        # compiled out reports a skip rather than the defect the canary exists to catch.
+        set_tests_properties(core-cpp.iocp-canary.${guarantee} PROPERTIES
             WILL_FAIL TRUE
             TIMEOUT 60
             SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}

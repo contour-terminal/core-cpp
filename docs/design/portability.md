@@ -6,7 +6,7 @@ core-cpp's CI builds and tests it on:
 |---|---|---|
 | Linux, x86-64 and arm64 | clang 22, GCC 14 and 15 | epoll; poll |
 | macOS | AppleClang (Xcode 16), Homebrew LLVM 22 | kqueue; poll |
-| Windows | MSVC, clang-cl | IOCP; the event-select backend as a fallback |
+| Windows | MSVC, clang-cl | the event-select backend; IOCP built and reachable by name, and the default from Task B7b |
 | FreeBSD (nightly) | the system clang | kqueue; poll |
 | WebAssembly, single-threaded | Emscripten 3.1.56 and the latest release | host-driven |
 

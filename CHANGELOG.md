@@ -479,6 +479,57 @@ workflow refuses one without a section here.
   `emscripten_async_call` behind — which an armed deadline always does — exits 0 whatever `main`
   returned; the reasoning, and the two fixes that do not work, are in `tests/wasm/CMakeLists.txt`.
 
+- **`core::net::IocpBackend`, the Windows completion-port backend, and the readiness bridge that
+  lets one wait serve a server's sockets and a TUI's console input.** Reachable as
+  `makeBackend(BackendKind::Iocp)`; **available by name, not yet the default** — `WfmoBackend`
+  stays what `preferredBackendKind()` answers until the sockets that issue overlapped operations
+  on a port arrive, because moving every Windows consumer onto a completion port that nothing
+  completes on buys nothing. The header is private, like every other backend's.
+
+  A completion port reports *completions* and has no notion of "this handle is readable", so
+  readiness is synthesised, and each kind of handle needs its own source: a **waitable HANDLE**
+  (console input, an event, `platform::SystemPipe`'s wakeup) gets a thread-pool wait whose
+  callback does nothing but `PostQueuedCompletionStatus`; **socket readability** is a zero-byte
+  `WSARecv`, the Winsock idiom for "complete when data is pending, consuming nothing"; **socket
+  writability** goes through `WSAEventSelect` for `FD_WRITE` and then through the first bridge.
+  Where the kernel exports `NtAssociateWaitCompletionPacket` — a `GetProcAddress` probe at
+  startup, never a link against `ntdll`, and its absence is an ordinary answer — the first bridge
+  needs no helper thread at all. `BackendParity_test` runs the whole shared matrix against it, and
+  gains a Windows case that registers `CONIN$` on **every** backend: that one wait serving both a
+  console handle and a socket is the thing neither upstream had, and it is why fastcached kept a
+  second coroutine runtime.
+
+- **`ReadinessHandler::slot`** (`core::net::detail::ReadinessSlotRef`, `<core/net/detail/ReadinessSlot.hpp>`),
+  and the ownership rule written beside it. A completion-based backend hands the kernel a pointer
+  and gets it back on a later turn — an operation the caller has since cancelled still completes —
+  so `lpOverlapped` points at a **backend-owned, refcounted** slot and never into the handler,
+  which by then may be freed. The handler holds one share for the length of its registration; each
+  in-flight operation holds another; a packet arriving after `detach` finds the slot retired and
+  drops without reading anything of the handler's. A readiness backend leaves the field empty and
+  nothing notices; an owner never reads it. The design spec declared it and Task B3 left it out,
+  because a public field with no reader has no defined meaning — it **arrives with its first
+  writer** rather than ahead of one.
+
+- **`core::net::ICompletionPort`** (`<core/net/ICompletionPort.hpp>`), what a completion-based
+  backend lends the sockets that sit on it, and the one place a handle is associated with a port —
+  which is what makes guarantee **G4** (a SOCKET is associated with exactly one port) assertable.
+  `CreateIoCompletionPort` refuses a second association with `ERROR_INVALID_PARAMETER`, which is
+  also what it answers for a closed handle and half a dozen ordinary mistakes, so a caller reading
+  that back would condemn a working connection; the port keeps the record itself and refuses by
+  name. An owner that CLOSES a handle must call `forget()`, or the next socket handed that value
+  looks already associated and is then associated with nothing. `IoBackend` gains
+  `completionPort()`, defaulted to `nullptr`; it is declared on **every** platform rather than
+  behind `#if defined(_WIN32)`, because a public header that changes shape per platform is one a
+  consumer's build can disagree with this one about.
+
+- **Guarantees G1 and G4 are asserted on the Windows port, and each has a canary.**
+  `core-cpp.iocp-canary.g1` calls `wait()` from a second thread while another is dequeuing;
+  `core-cpp.iocp-canary.g4` associates one handle with one port twice. Both are `WILL_FAIL`
+  programs, because an assertion aborts the process and so cannot be provoked from inside a test
+  case, and both SKIP where assertions are compiled out. They exist because neither violation fails
+  on its own: IOCP is *designed* to be drained by many threads, and a lost association is a socket
+  awaiting completions that are delivered elsewhere — a hang with nothing in any log.
+
 ### Deprecated
 
 - `core::net::interruptibleSleepUntil(loop, token, deadline, wakeBound)`, the four-argument form,
