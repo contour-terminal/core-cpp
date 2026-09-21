@@ -44,6 +44,36 @@
 
 include_guard(GLOBAL)
 
+## @brief Refuses a row whose WHEN @p when names a variable nothing has declared, for @p where.
+##
+## A misspelled WHEN does not fail: it disappears. `core_cpp_row_builds()` evaluates
+## `if(when AND NOT ${when})`, so `WHEN CORE_CPP_WITH_TSL` expands to `NOT` an undefined variable,
+## which is true, and the row stops building. The target goes, every test `core_cpp_add_test()`
+## registers against it goes with it, and nothing says so: it configures clean, it builds clean,
+## and a module is simply not there. A guard whose misspelling passes is worse than one that is
+## wrong out loud, because it is indistinguishable from a working one and nobody looks at it again.
+##
+## The test is DEFINED rather than "is an `option()`", and that is a decision rather than laziness.
+## `CORE_CPP_USE_THREADS` is a plain `set()` in CoreCppDependencies.cmake and is already used as a
+## WHEN there, so an option()-only rule would refuse a condition this build uses today -- a rule
+## born needing a workaround, which is a rule people route around and then stop reading. What is
+## being closed is a typo, and a typo is undefined by construction: DEFINED refuses exactly that
+## and nothing else. A row may legitimately be OFF; it may not be conditional on nothing.
+##
+## Declaration time is the right moment because CoreCppOptions.cmake and CoreCppDependencies.cmake
+## are both included before this file, so every name a row may reasonably use already exists, and
+## the error can point at the row rather than at the first target that consulted it.
+function(core_cpp_check_when where when)
+    if(when AND NOT DEFINED ${when})
+        message(FATAL_ERROR
+            "${where}: WHEN names '${when}', which no option, cache entry or variable declares. "
+            "A row whose WHEN is undefined does not fail -- it silently stops building, taking "
+            "its target and every test registered against it with it. Declare the option, or fix "
+            "the spelling.")
+    endif()
+endfunction()
+
+
 function(core_cpp_module)
     cmake_parse_arguments(PARSE_ARGV 0 arg "" "NAME;DIR;KIND;PLATFORMS;WHEN" "DEPS")
     if(arg_UNPARSED_ARGUMENTS)
@@ -55,6 +85,7 @@ function(core_cpp_module)
     if(NOT arg_KIND MATCHES "^(STATIC|INTERFACE)$")
         message(FATAL_ERROR "core_cpp_module(${arg_NAME}): KIND must be STATIC or INTERFACE, not '${arg_KIND}'.")
     endif()
+    core_cpp_check_when("core_cpp_module(${arg_NAME})" "${arg_WHEN}")
     if(NOT arg_PLATFORMS MATCHES "^(any|native|wasm-subset)$")
         message(FATAL_ERROR
             "core_cpp_module(${arg_NAME}): PLATFORMS must be any, native or wasm-subset, not '${arg_PLATFORMS}'.")
@@ -94,6 +125,7 @@ function(core_cpp_module_target)
     if(arg_NAME IN_LIST CORE_CPP_MODULES OR DEFINED CORE_CPP_TARGET_${arg_NAME}_MODULE)
         message(FATAL_ERROR "core_cpp_module_target(${arg_NAME}): declared twice.")
     endif()
+    core_cpp_check_when("core_cpp_module_target(${arg_NAME})" "${arg_WHEN}")
     if(NOT arg_KIND MATCHES "^(STATIC|INTERFACE|OBJECT)$")
         message(FATAL_ERROR
             "core_cpp_module_target(${arg_NAME}): KIND must be STATIC, INTERFACE or OBJECT, not '${arg_KIND}'.")

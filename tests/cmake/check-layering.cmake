@@ -33,6 +33,11 @@ project(core-cpp-layering-scenario LANGUAGES NONE)
 set(CORE_CPP_SOURCE_DIR "${ROOT}")
 set(CORE_CPP_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 set(CORE_CPP_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/include")
+# In the order the real build includes them. Options first is not cosmetic: the table's rows carry
+# WHEN conditions naming those options, and a scenario that reads the table without them declares
+# rows whose condition cannot be evaluated. That was invisible until core_cpp_check_when() started
+# refusing an undefined WHEN, at which point every scenario here failed on the real net_tls row.
+include("${ROOT}/cmake/CoreCppOptions.cmake")
 include("${ROOT}/cmake/CoreCppTargets.cmake")
 include("${ROOT}/cmake/CoreCppModules.cmake")
 
@@ -72,6 +77,23 @@ set(scenarios
     "row-deps-outside-its-module|core_cpp_module_target\\(net_x\\): DEPS names 'base'|core_cpp_module_target(NAME net_x MODULE net KIND INTERFACE PLATFORMS any DEPS async base)"
     "row-deps-an-undeclared-sibling|core_cpp_module_target\\(net_x\\): DEPS names 'net_y'|core_cpp_module_target(NAME net_x MODULE net KIND INTERFACE PLATFORMS any DEPS net_y)\ncore_cpp_module_target(NAME net_y MODULE net KIND INTERFACE PLATFORMS any)"
     "row-deps-itself|core_cpp_module_target\\(net_x\\): DEPS names 'net_x'|core_cpp_module_target(NAME net_x MODULE net KIND INTERFACE PLATFORMS any DEPS net_x)"
+
+    # A row's WHEN names a variable that exists. A misspelled one expands, in core_cpp_row_builds(),
+    # to `NOT <undefined>` -- which is true -- so the target and every test registered against it
+    # disappear from the build with no diagnostic at all: it configures clean, it builds clean, and
+    # a module is simply not there. That is a guard whose misspelling passes, which is the failure
+    # this repository has removed three times tonight in other files.
+    #
+    # The test is DEFINED, not "is an option()", and the middle two scenarios are what makes that a
+    # decision rather than a preference: CORE_CPP_USE_THREADS is a plain set() in
+    # CoreCppDependencies.cmake and is already used as a WHEN there, so an option()-only rule would
+    # refuse a condition this codebase uses today -- born needing the workaround that stops a rule
+    # being read. A typo is undefined by construction, which is exactly and only what is refused.
+    "when-names-an-undeclared-option|core_cpp_module_target\\(net_x\\): WHEN names 'CORE_CPP_WITH_TSL'|core_cpp_module_target(NAME net_x MODULE net KIND INTERFACE PLATFORMS any WHEN CORE_CPP_WITH_TSL)"
+    "when-names-a-declared-option|configures|option(CORE_CPP_SCENARIO_OPT \"\" OFF)\ncore_cpp_module_target(NAME net_x MODULE net KIND INTERFACE PLATFORMS any WHEN CORE_CPP_SCENARIO_OPT)"
+    "when-names-a-plain-variable|configures|set(CORE_CPP_SCENARIO_FLAG ON)\ncore_cpp_module_target(NAME net_x MODULE net KIND INTERFACE PLATFORMS any WHEN CORE_CPP_SCENARIO_FLAG)"
+    "when-names-a-variable-set-off|configures|set(CORE_CPP_SCENARIO_FLAG OFF)\ncore_cpp_module_target(NAME net_x MODULE net KIND INTERFACE PLATFORMS any WHEN CORE_CPP_SCENARIO_FLAG)"
+    "module-when-names-an-undeclared-option|core_cpp_module\\(demo\\): WHEN names 'CORE_CPP_WITH_DEMO'|core_cpp_module(NAME demo KIND INTERFACE DEPS base PLATFORMS any WHEN CORE_CPP_WITH_DEMO)"
 
     # A module's own target follows the module's row: its DEPS, and the module's targets.
     "module-links-its-targets|configures|core_cpp_module(NAME demo KIND INTERFACE DEPS base PLATFORMS any)\ncore_cpp_module_target(NAME demo_types MODULE demo KIND INTERFACE PLATFORMS any)\ncore_cpp_layering_stand_in(base demo_types)\ncore_cpp_layering_add(demo demo core::base core::demo_types)"

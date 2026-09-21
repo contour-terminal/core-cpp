@@ -816,6 +816,23 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- A module-table row whose `WHEN` names an undeclared variable is refused where it is declared,
+  instead of silently removing its target. `core_cpp_row_builds()` evaluates
+  `if(when AND NOT ${when})`, so `WHEN CORE_CPP_WITH_TSL` expanded to `NOT` an undefined variable —
+  true — and the row stopped building: the target went, every test `core_cpp_add_test()` registers
+  against it went with it, and nothing said so. It configured clean, built clean, and a module was
+  simply not there. The check is `DEFINED` rather than "is an `option()`", because
+  `CORE_CPP_USE_THREADS` is a plain `set()` and is already used as a `WHEN`, so an `option()`-only
+  rule would refuse a condition this build uses today; a typo is undefined by construction, which is
+  exactly what is now refused. Five scenarios in `core-cpp.layering` cover it, including the two that
+  must still configure — a declared option and a plain variable — because a check that refused every
+  `WHEN` would also "catch" the misspelling.
+
+- `tests/cmake/check-layering.cmake` includes `CoreCppOptions.cmake` before the module table, in the
+  order the real build uses. Its scenarios read a table whose rows carry `WHEN` conditions naming
+  those options while never declaring them; that was invisible until the check above started
+  refusing an undefined `WHEN`, at which point every scenario failed on the real `net_tls` row.
+
 - `core::platform::testing::InMemoryFileSystem` keeps a name the platform's narrow encoding
   cannot spell in *both* directions. The keys were made UTF-8 earlier in this release, but twelve
   sites turned a key back into a path through `std::filesystem::path`'s narrow constructor -- the
