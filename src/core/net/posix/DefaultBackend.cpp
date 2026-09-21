@@ -47,6 +47,13 @@ std::unique_ptr<IoBackend> makeBackend(BackendKind kind)
 
 std::unique_ptr<IoBackend> makeDefaultBackend()
 {
+    // Through makeBackend rather than straight to the constructor, although poll(2) is
+    // the only backend here and has no `good()` to fail: it keeps the five
+    // DefaultBackend.cpp files one shape instead of two, so a platform that later gains
+    // a second backend gains the `good()` check and the fallback with it rather than
+    // having to remember them. Task B7 does exactly that to the Windows file.
+    if (auto native = makeBackend(preferredBackendKind()))
+        return native;
     return std::make_unique<PollBackend>();
 }
 

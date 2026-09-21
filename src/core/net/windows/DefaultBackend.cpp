@@ -44,6 +44,12 @@ std::unique_ptr<IoBackend> makeBackend(BackendKind kind)
 
 std::unique_ptr<IoBackend> makeDefaultBackend()
 {
+    // Through makeBackend rather than straight to the constructor, so that this file is
+    // the same shape as the other four. It matters most here: Task B7 adds IOCP beside
+    // Wfmo and makes it the preferred kind, and the difference between the two shapes is
+    // precisely the `good()` check and the fallback that a second backend needs.
+    if (auto native = makeBackend(preferredBackendKind()))
+        return native;
     return std::make_unique<WfmoBackend>();
 }
 

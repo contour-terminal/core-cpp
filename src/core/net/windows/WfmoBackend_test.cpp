@@ -30,15 +30,13 @@ namespace
 /// to make and one to signal, and lets a case build a set larger than
 /// `MAXIMUM_WAIT_OBJECTS` without eighty loopback connections to pay for it.
 ///
-/// Manual-reset is not a detail. `WaitForMultipleObjects` CONSUMES an auto-reset
-/// event when it returns it, and the backend's wait is a detector followed by a rescan
-/// — `collectSignalled()` probes each handle with `WaitForSingleObject(h, 0)` to find
-/// out WHICH one fired. An auto-reset event is therefore eaten by the detector and
-/// invisible to the rescan, so its readiness is dispatched to nobody. That is a
-/// precondition of the backend, which @c WfmoBackend.hpp now states; a WSAEVENT from
-/// `WSAEventSelect` is manual-reset, which is why the backend is correct for the
-/// handles it actually gets. Writing this fixture with auto-reset events is how the
-/// precondition was found.
+/// Manual-reset is not a detail. The backend's wait is a detector followed by a
+/// rescan, and `WaitForSingleObject(h, 0)` probes EVERY non-muted registration, so a
+/// handle a wait consumes is drained by dispatches that have nothing to do with it and
+/// its readiness reaches nobody. `WfmoBackend.hpp` states that as a property rather
+/// than a list; manual-reset is one of the two ways to satisfy it. Writing this fixture
+/// with auto-reset events, and watching all four indices fail including the control, is
+/// how the property was found.
 class OwnedEvent
 {
   public:

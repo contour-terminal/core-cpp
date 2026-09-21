@@ -30,7 +30,7 @@ using DiagnosticSink = std::function<void(std::string_view message)>;
 ///
 /// A process-wide setter rather than a constructor parameter is a deliberate
 /// exception to the configuration-at-construction rule: the reporting sites are
-/// deep inside platform code reached through the @c EventSource interface, and
+/// deep inside platform code reached through the @c IoBackend interface, and
 /// threading a sink through every one of them would put an observability concern
 /// into signatures that have nothing else to do with it.
 ///

@@ -20,15 +20,28 @@
 /// this backend's USE of that arithmetic, which is the half a unit test of the
 /// arithmetic cannot reach.
 ///
-/// **Every registered handle must be LEVEL-triggered — manual-reset, in Win32's
-/// terms.** A wait here is a detector followed by a rescan: `WaitForMultipleObjects`
-/// says that *something* in a chunk fired, and `WaitForSingleObject(h, 0)` on each
-/// registration then says *which*. `WaitForMultipleObjects` CONSUMES an auto-reset
-/// event when it returns it, so an auto-reset handle is eaten by the detector and
-/// invisible to the rescan: its readiness is dispatched to nobody and the flow parked
-/// on it hangs. Nothing enforces this, because nothing can — a HANDLE does not say
-/// which it is. It holds for the handles the backend actually gets: a WSAEVENT from
-/// `WSAEventSelect` is manual-reset, and so is the wakeup channel's.
+/// **Waiting on a registered handle must not change it.** A wait here is a detector
+/// followed by a rescan: `WaitForMultipleObjects` says that *something* in a chunk
+/// fired, and `WaitForSingleObject(h, 0)` on EVERY non-muted registration then says
+/// *which*. So each registered handle is waited on repeatedly, by dispatches that have
+/// nothing to do with it. A handle a wait CONSUMES is therefore drained by a rescan it
+/// was not the subject of: its readiness is dispatched to nobody and the flow parked on
+/// it hangs.
+///
+/// Handles satisfy this for different reasons; the two that arise here are a
+/// MANUAL-RESET object, which stays signalled until something resets it —
+/// `WaitForMultipleObjects` consumes an AUTO-reset event, which is the case that fails
+/// — and a handle whose signal a wait does not consume: console input stays signalled
+/// while its buffer holds records, and reading them, not waiting on them, is what
+/// clears it. An auto-reset event, a semaphore, a mutex and a synchronization waitable
+/// timer are each consumed by a wait, and none of them may be registered here.
+///
+/// Nothing enforces this, because nothing can: a HANDLE does not say which it is. **When
+/// you register a new class of handle here, check it against the property above** — not
+/// against the examples, which are only the handles that exist today: `WSACreateEvent`
+/// (sockets and listeners), `platform::SystemPipe`'s wakeup event and
+/// `platform::Wakeup`, all manual-reset; Task B12 adds `platform::standardInput()`,
+/// which is the second kind.
 
 #include <core/net/IoBackend.hpp>
 #include <core/net/detail/ReadyBatch.hpp>

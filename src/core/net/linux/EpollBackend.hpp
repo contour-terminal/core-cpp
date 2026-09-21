@@ -96,8 +96,16 @@ class EpollBackend final: public IoBackend
     /// duplicate, so re-arming the same handler costs no second descriptor.
     void disarm(Registration& registration) const noexcept;
 
-    int _epollFd = -1;             ///< The epoll instance (owned).
+    /// The wakeup channel is declared BEFORE the kernel descriptor, and the order is
+    /// load-bearing rather than tidy: @c detail::WakeupChannel's constructor throws
+    /// under descriptor exhaustion, a constructor that throws from its mem-init list
+    /// does not run the class destructor, and an `int` has none of its own. Built the
+    /// other way round, the epoll instance was created first and leaked on exactly the pressure
+    /// that makes a descriptor worth having -- which also made
+    /// @c makeDefaultBackend()'s documented fallback to @c PollBackend less likely to
+    /// succeed. Declared first, it is constructed first and `epoll_create1` is never reached.
     detail::WakeupChannel _wakeup; ///< How another thread breaks a wait in flight.
+    int _epollFd = -1;             ///< The epoll instance (owned).
     detail::ReadyBatch _batch;     ///< What this wait found ready, and what `detach` withdraws from.
 
     /// The live registrations, keyed by the handler's address — which is the
