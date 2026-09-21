@@ -3471,3 +3471,39 @@ they were in the code.
 failure one level up, in the medium of a status report. Its own fix is the right one and applies to
 every lane including me: **quote the artifact, do not describe it.** Three pasted lines would have
 cost less than the exchange did.
+
+### A rule written ahead of the code is unfalsifiable at the time it is written
+
+B12's answer to "is my corrected rulebook text still wrong" is the sharpest epistemic point of
+the session:
+
+> *"The same words were false and then true without changing. The rulebook cannot be checked
+> against itself, only against the tree at a stated commit."*
+
+The paragraph was written while `29e9b24` was in flight. At `5d7a5ae` it was false in four
+specific ways -- `requestStop` and `resumeSoon` did not wake, `registerPark` did not arm (so
+`delay`/`sleepUntil`, which reach it rather than `addTimer`, armed nothing), and `schedule` woke
+while the text named it nowhere. `29e9b24` made the identical sentences true. **Nothing about the
+document changed; the tree moved underneath it.**
+
+So a rule states the commit it was derived at, or it is a prediction wearing the grammar of an
+observation. This is the same finding as *"a coordinate goes stale while nothing fails"* from the
+other side: there, the document decayed against a moving tree; here, it **improved** against one,
+which is worse, because a rule that becomes true by luck teaches nobody to check it.
+
+### The brief was a partial copy of the rule, and that is what got measured
+
+B12 did not read the rulebook. It read the **brief**, which carried **two** of the rulebook's four
+bullets -- no `schedule` bullet, no `notifyHandleClosing` bullet -- because I wrote the brief
+paragraph and the rulebook paragraph separately and only kept one of them complete. Measured:
+`grep -c` for either name in the brief returned **0**, against **2** in the rulebook.
+
+So the lane measured a two-bullet subset against the tree, found it wrong in four ways, and
+reported **the rulebook** as broken. The rulebook was right.
+
+**Rule: a brief names the rule and points at it; it never restates it.** A rule copied into a
+second document is a second thing to keep true, and this project has now paid for exactly that
+with one wrong enumeration propagating through a rulebook, a code comment and two briefs. It is
+the same discipline B7a applied when it declined to write a rule to memory *because the repository
+already records it and a memory would be a second copy that can drift*. **One authority per fact**,
+and the brief's job is to say which authority.

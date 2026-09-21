@@ -79,13 +79,15 @@ so say which configuration covered which file.
 - **B4's loop asserts `teardownIsSerialisedWithDispatch()`** on `spawn`, `resumeSoon`,
   `requestStop`, `registerPark`, `unregisterPark` and `wakeReasonOf`. An input pump resuming from a
   reader thread trips these rather than misbehaving quietly.
-- **Every entry point that files work asks the loop for the turn that will run it — but with one of
-  two primitives, and which one is decided by what was filed.** *Ready work wakes; a park arms.*
-  `post`, `submit`, `spawn`, `stop`, `requestStop`, `requestCancel` and `resumeSoon` file work that
-  is ready now and carries no time, so they call `_backend.wake()`. `registerPark` files a park
-  **with a time**, so it calls `armHostWake()`, and `addTimer`, `delay` and `sleepUntil` inherit
-  that through it. `HostDrivenBackend::wake()` is `scheduleAt(now())`, so waking for a park destroys
-  its deadline — which is why the two are not interchangeable.
+- **Ready work wakes; a park arms.** The rule and its full member list live in **one place** —
+  `.agent/rules/async-and-net.md`, section *"Ready work wakes; a park arms"*. **Read it there;
+  this brief deliberately does not restate it.**
+
+  An earlier draft of this bullet did restate it, and carried **two** of the rulebook's four
+  bullets — no `schedule`, no `notifyHandleClosing`. A lane measured the partial copy against the
+  tree, found it wrong in four ways, and reported the rulebook as broken when the rulebook was
+  right. **A rule copied into a second document is a second thing to keep true**, and this project
+  has now paid for that four times over with one wrong enumeration. One authority per fact.
 
   **An earlier version of this bullet said "the six loop entry points that wake the backend" and
   named a list.** The list was wrong in `.agent/rules/async-and-net.md` first, wrong in a code
