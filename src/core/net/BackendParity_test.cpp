@@ -1020,12 +1020,20 @@ TEST_CASE("a muted registration is dispatched to by no backend", "[net][backend]
             CHECK(muted.total() == 0);
 
             // And muting is not a one-way door: the registration that was silent arms
-            // and is reached without ever having been detached and re-attached.
+            // and is reached, without ever having been detached and re-attached.
+            //
+            // The control is detached FIRST, and that is not tidying. Whether a
+            // duplicated descriptor yields one ready entry or two is the multiplexer's
+            // own business -- Linux's and FreeBSD's poll(2) fill in every matching
+            // pollfd, macOS's reports the descriptor once -- and IoBackend promises
+            // neither. Asking about the second registration while the first is still
+            // armed asks a question with no portable answer, and macOS's poll(2) is
+            // where it is answered differently.
+            backend->detach(watched.handler);
             REQUIRE(backend->setInterest(muted.handler, Interest::Read).has_value());
             std::ignore = backend->wait(std::chrono::milliseconds { 200 });
             CHECK(muted.readable >= 1);
 
-            backend->detach(watched.handler);
             backend->detach(muted.handler);
         }
     }
