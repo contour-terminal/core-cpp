@@ -31,6 +31,7 @@
 #include <core/async/Task.hpp>
 #include <core/async/UniqueCoroHandle.hpp>
 
+#include <atomic>
 #include <coroutine>
 #include <cstddef>
 #include <exception>
@@ -43,11 +44,34 @@ namespace core::async::detail
 {
 
 /// What every join counts, whatever its policy latches on top.
+///
+/// **A join may span threads**, because this module ships what makes one: a child that awaits
+/// `ResumeOn { pool }` finishes on a pool thread, so `remaining` is decremented from whichever
+/// thread resumed that child. `IExecutor` says as much at its declaration, and a precondition
+/// contradicted by the header beside it is one nobody keeps (controller ruling R98).
+///
+/// The memory ordering, which is what makes the two plain members below safe:
+///
+/// - `remaining` is `acq_rel` on every decrement, so the thread whose decrement returns 1 — the
+///   last child to finish — acquires everything every other child released before its own.
+/// - `continuation` is written once, before any child starts, and read only by that last thread.
+///   It cannot be read early: the start phase holds a `+1` of its own, so no child's decrement can
+///   reach zero until the starting thread has released it.
+/// - `exception` is written only by whichever finisher claims `latched`, and read by the awaiting
+///   coroutine, which the last decrement resumes.
 struct JoinState
 {
-    std::size_t remaining = 0;            ///< Live children plus one for the start phase.
-    std::coroutine_handle<> continuation; ///< The join awaiter's coroutine.
-    std::exception_ptr exception;         ///< Rethrown to the awaiting coroutine.
+    std::atomic<std::size_t> remaining { 0 }; ///< Live children plus one for the start phase.
+    std::coroutine_handle<> continuation;     ///< The join awaiter's coroutine.
+    std::exception_ptr exception;             ///< Rethrown to the awaiting coroutine.
+
+    /// Claimed once, by the first finisher whose policy has one-time work to do: `whenAll`'s first
+    /// escape, `whenAny`'s first child to complete. Two children finishing on two threads would
+    /// otherwise both read "nothing latched yet" and both write.
+    std::atomic<bool> latched { false };
+
+    /// @return Whether this call is the one that claimed the latch.
+    [[nodiscard]] bool claimLatch() noexcept { return !latched.exchange(true, std::memory_order_acq_rel); }
 };
 
 /// What one child leaves behind for the policy to act on.
@@ -141,7 +165,7 @@ class JoinRunner
                                         ChildOutcome { .index = promise.index,
                                                        .escaped = promise.escaped,
                                                        .cancelled = promise.cancelled });
-                if (--join->remaining == 0 && join->continuation)
+                if (join->remaining.fetch_sub(1, std::memory_order_acq_rel) == 1 && join->continuation)
                     return join->continuation;
                 return std::noop_coroutine();
             }
@@ -220,10 +244,18 @@ class JoinAwaiter
     {
     }
 
+    /// Movable, not copyable — the join state and the runners' frames have one owner.
+    ///
+    /// A move is only expressible *before* the awaiter suspends, because from `await_suspend` on
+    /// it is a temporary of one `co_await` expression that nothing else can name. Nothing points
+    /// back at it either: the runners hold the shared state, and the state holds the awaiting
+    /// coroutine, so no member is an address of `*this`. Deleting the move made
+    /// `auto helper(...) { return whenAll(...); }` ill-formed for no benefit, and guaranteed
+    /// copy-elision hid it from every call this repository writes.
+    JoinAwaiter(JoinAwaiter&&) noexcept = default;
+    JoinAwaiter& operator=(JoinAwaiter&&) noexcept = default;
     JoinAwaiter(JoinAwaiter const&) = delete;
-    JoinAwaiter(JoinAwaiter&&) = delete;
     JoinAwaiter& operator=(JoinAwaiter const&) = delete;
-    JoinAwaiter& operator=(JoinAwaiter&&) = delete;
     ~JoinAwaiter() = default;
 
     /// @return True where there is nothing to wait for.
@@ -239,7 +271,9 @@ class JoinAwaiter
     [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting)
     {
         _state->continuation = awaiting;
-        _state->remaining = _tasks.size() + 1; // +1 guards the start phase.
+        // Relaxed: no child has started, so no other thread can see this yet, and the guard's own
+        // release below is what publishes it.
+        _state->remaining.store(_tasks.size() + 1, std::memory_order_relaxed); // +1 guards the start
 
         if constexpr (HasStopToken<Promise>)
             _parentToken = awaiting.promise().stopToken();
@@ -263,7 +297,7 @@ class JoinAwaiter
 
         // Release the start-phase guard. Where every child already finished, this is what reaches
         // zero, and the awaiting coroutine resumes inline rather than being transferred to.
-        return --_state->remaining != 0;
+        return _state->remaining.fetch_sub(1, std::memory_order_acq_rel) != 1;
     }
 
   protected:

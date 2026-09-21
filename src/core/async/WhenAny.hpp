@@ -114,9 +114,12 @@ namespace detail
         /// that ran to completion.
         /// @param state The shared race state.
         /// @param outcome What the child left behind.
+        /// "First" is the first to CLAIM the latch rather than the first to find `winner` empty:
+        /// two children completing on two threads would otherwise both read it empty, both write
+        /// it, and both request stop.
         static void onChildFinished(State& state, ChildOutcome const& outcome) noexcept
         {
-            if (state.winner.has_value() || outcome.cancelled)
+            if (outcome.cancelled || !state.claimLatch())
                 return;
             state.winner = outcome.index;
             state.exception = outcome.escaped; // surface the winner's failure, if any

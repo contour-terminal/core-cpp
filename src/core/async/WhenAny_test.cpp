@@ -9,6 +9,7 @@
 #include <coroutine>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -33,6 +34,17 @@ static_assert(!WhenAnyTakes<Task<void>&>,
               "an lvalue Task is not a whenAny argument: whenAny moves its tasks in");
 static_assert(!WhenAnyTakes<Task<void> const>,
               "a const Task is not a whenAny argument: it cannot be moved from");
+
+// whenAny's awaiter is pinned where whenAll's moves, and the asymmetry is a property of the
+// standard rather than a choice: this one owns a live `StopCallback` bridging the parent's
+// cancellation into the children, and a registered stop callback is neither movable nor copyable
+// -- the stop state holds its address. The shared base defaults its move, so each awaiter gets
+// exactly what its own members allow; asserted here so that the day a bridge is redesigned, the
+// question "may this move now?" is asked rather than answered by silence.
+static_assert(!std::is_move_constructible_v<decltype(whenAny(std::vector<Task<void>> {}))>,
+              "the whenAny awaiter is pinned by its registered StopCallback");
+static_assert(!std::is_copy_constructible_v<decltype(whenAny(std::vector<Task<void>> {}))>,
+              "and not copyable: the join state and the runners' frames have one owner");
 
 namespace
 {

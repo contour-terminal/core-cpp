@@ -8,6 +8,7 @@
 #include <coroutine>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -29,6 +30,15 @@ static_assert(!WhenAllTakes<Task<void>&>,
               "an lvalue Task is not a whenAll argument: whenAll moves its tasks in");
 static_assert(!WhenAllTakes<Task<void> const>,
               "a const Task is not a whenAll argument: it cannot be moved from");
+
+// The awaiter moves. Upstream's did, `whenAll()` returns one by value, and only guaranteed
+// copy-elision hid the loss -- `auto const a = whenAll(...)` compiles against an immovable type,
+// so nothing in the suite noticed. What does not compile is passing one on, which is what a
+// consumer wrapping whenAll() in a helper of its own writes first.
+static_assert(std::is_move_constructible_v<decltype(whenAll(std::vector<Task<void>> {}))>,
+              "the whenAll awaiter is movable");
+static_assert(!std::is_copy_constructible_v<decltype(whenAll(std::vector<Task<void>> {}))>,
+              "and not copyable: the join state and the runners' frames have one owner");
 
 namespace
 {

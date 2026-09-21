@@ -68,11 +68,18 @@ namespace detail
         /// A cancellation counts: a child whose inherited token was stopped unwinds into the join
         /// like any other failure, and the awaiting coroutine sees it rethrown. `whenAny` is the
         /// one that has to tell the two apart, because it decides a winner on the difference.
+        ///
+        /// "First" is the first to CLAIM the latch, not the first in finish order, because two
+        /// children can escape on two threads at once — `if (!state.exception)` on both of them
+        /// reads "nothing yet" twice and writes twice. A child that escaped nothing claims
+        /// nothing, or the first child to succeed would keep a later failure out.
         /// @param state The shared join state.
         /// @param outcome What the child left behind.
         static void onChildFinished(State& state, ChildOutcome const& outcome) noexcept
         {
-            if (!state.exception)
+            if (!outcome.escaped)
+                return;
+            if (state.claimLatch())
                 state.exception = outcome.escaped;
         }
     };

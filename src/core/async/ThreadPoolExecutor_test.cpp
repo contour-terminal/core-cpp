@@ -2,7 +2,9 @@
 #include <core/async/DetachedTask.hpp>
 #include <core/async/ParkedWork.hpp>
 #include <core/async/ResumeOn.hpp>
+#include <core/async/Task.hpp>
 #include <core/async/ThreadPoolExecutor.hpp>
+#include <core/async/WhenAll.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -14,10 +16,13 @@
 #include <ranges>
 #include <thread>
 #include <tuple>
+#include <vector>
 
 using core::async::DetachedTask;
 using core::async::ResumeOn;
+using core::async::Task;
 using core::async::ThreadPoolExecutor;
+using core::async::whenAll;
 using namespace std::chrono_literals;
 
 namespace
@@ -138,10 +143,44 @@ DetachedTask runOn(Job job)
         job.hold->wait();
 }
 
+/// One child of a join that hops onto the pool: it therefore FINISHES on a pool thread, which is
+/// the thread that then decrements the join's counter.
+/// @param pool Where to run.
+/// @param arrived Counted once the child is on the pool.
+Task<void> joinedJob(ThreadPoolExecutor* pool, Arrivals* arrived)
+{
+    co_await ResumeOn { *pool };
+    arrived->arrive();
+}
+
+/// Joins @p children of them, detached so that nothing owns the chain and every park carries a
+/// claim on its root.
+/// @param pool Where the children run.
+/// @param children How many to join.
+/// @param arrived Counted per child.
+/// @param joined Counted once the join completes.
+DetachedTask joinOnPool(ThreadPoolExecutor* pool, std::size_t children, Arrivals* arrived, Arrivals* joined)
+{
+    auto tasks = std::vector<Task<void>> {};
+    tasks.reserve(children);
+    for ([[maybe_unused]] auto const index: std::views::iota(std::size_t { 0 }, children))
+        tasks.push_back(joinedJob(pool, arrived));
+
+    co_await whenAll(std::move(tasks));
+    joined->arrive();
+}
+
 } // namespace
 
-// #1041 over the real pool: `ParkedWork_test.cpp` proves the check distinguishes, with the hiding
-// interface as its negative control; this is the one line that holds this executor to it.
+// #1041 over the real pool. What genuinely closes the hazard is stronger than this line: both
+// `IExecutor::submit` overloads are PURE virtual (`IExecutor.hpp:43,56`), so a concrete executor
+// that declared only the borrowing half would hide the owning one, fail to override it, and stay
+// abstract -- unusable rather than silently leaky. The residual shape is an intermediate abstract
+// class declaring one half, which `-Woverloaded-virtual` (on GCC *and* clang, gated by
+// `CORE_CPP_GCC_OR_CLANG` at `cmake/CoreCppToolchain.cmake:84`) and clang-tidy's
+// `bugprone-derived-method-shadowing-base-method` both refuse. So this assertion is a reachability
+// check over the real pool, not the guard; `ParkedWork_test.cpp` proves the concept discriminates,
+// with a plain non-inheriting type offering only `submit(handle)` as its negative control.
 static_assert(
     requires(ThreadPoolExecutor& pool) { pool.submit(core::async::ParkedWork {}); },
     "ThreadPoolExecutor::submit(ParkedWork) must be reachable through the derived type");
@@ -222,4 +261,28 @@ TEST_CASE("A pool asked for no threads still runs its work", "[ThreadPoolExecuto
     auto const settled = ran.waitFor(1);
     INFO("arrivals: " << ran.count() << " of 1");
     CHECK(settled);
+}
+
+TEST_CASE("A join whose children finish on a pool completes exactly once", "[ThreadPoolExecutor][WhenAll]")
+{
+    // The join's counter is decremented by whichever thread resumed each child, and this module is
+    // the one that makes such a child expressible: `ResumeOn` and this pool are its own vocabulary.
+    // A plain `--remaining` here is a data race on the join state -- ThreadSanitizer says so, and a
+    // variant of this case hung with every child finished and nobody resumed. The suite passed
+    // before only by never joining anything on a pool.
+    constexpr auto Children = std::size_t { 8 };
+
+    auto arrived = Arrivals {};
+    auto joined = Arrivals {};
+    auto pool = ThreadPoolExecutor { 4 }; // last, so it is joined first -- see the case above
+
+    joinOnPool(&pool, Children, &arrived, &joined);
+
+    auto const settled = joined.waitFor(1);
+    INFO("children on the pool: " << arrived.count() << " of " << Children
+                                  << "; joins completed: " << joined.count());
+    REQUIRE(settled);
+    CHECK(arrived.count() == Children);
+    // Exactly once: a lost decrement completes the join twice and resumes the root twice.
+    CHECK(joined.count() == 1);
 }
