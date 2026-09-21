@@ -492,3 +492,23 @@ correlates with it. A classification by correlate is the same defect one level d
   and TSan for a pure function's branch reorder -- neither can speak to it -- and ran the pinned
   clang-tidy directly instead, which was the gate that had caught it before. The same lane's
   earlier skip, under time pressure, could not be justified that way and put a defect on master.
+
+- **A general justification applied to one instance is the narrowest form of this session's
+  defect.** `d44e2d6` carved `global-constraints.md` out of the SDD `.gitignore` with a comment
+  whose every clause applied equally to 131 other files. **When you write a reason, check what else
+  it covers** -- and if the answer is "most of the directory", you have written a rule and applied
+  it as an exception. `8c7daa5` extended it by pattern, not by listing the three filename shapes
+  that existed that day.
+- **"Regenerable" means the SOURCE does not move.** `review-*.diff` stays ignored because
+  `git diff A..B` reproduces it exactly from two immutable commits. Task briefs look equally
+  derivable -- `scripts/task-brief` extracts them from the plan -- but **the plan moves**, so a
+  brief regenerated today is not the text the agent actually received. A derivation from a moving
+  source is a record, not an artifact.
+- **An audit that reads current text can find a claim that disagrees with the tree; it cannot find
+  a claim that was deleted.** A12, bounding its own five dispatch audits: every "wrong when
+  written" versus "drifted since" dating was inference from surrounding evidence, because the
+  documents had no history to verify against. **Say what your method could not have detected** --
+  it is a stronger result than the findings.
+- **With per-SHA CI runs, a red leg is more often an older SHA than a new defect.** That is R105's
+  cost side and it is the right trade. `git merge-base --is-ancestor <fix> <run SHA>` settles it in
+  one command -- check that before spending an hour on a failure someone already fixed.

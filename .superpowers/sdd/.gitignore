@@ -16,6 +16,8 @@
 #
 # `review-*.diff` stays ignored deliberately: it is the larger half of this directory
 # by bytes and the only regenerable one (`git diff A..B`).
-!global-constraints.md
-!progress.md
-!task-*.md
+# By KIND, not by naming convention: `!task-*.md` was itself an enumeration -- of the
+# one convention that existed the day it was written -- and it left three files behind,
+# including the generator that makes the tracked briefs auditable at all.
+!*.md
+!*.sh
