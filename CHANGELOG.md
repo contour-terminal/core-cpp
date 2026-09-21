@@ -356,6 +356,22 @@ workflow refuses one without a section here.
   `to`, a `target` or any `apply` but `none`, so no rewrite tool can be handed one. The first two
   rows are `core::tui::LanguageId::Endo` and `core::tui::registerEndoHighlighter()`.
 
+- A `removed` row's `from` must be the fully qualified **core-cpp** name, and the schema now refuses
+  anything else. It is the one kind whose `from` is a core-cpp name — every other kind's is the
+  consumer's spelling — so `net::FdToken`, the form the neighbouring rows teach, was the natural
+  mistake, and its failure was *silence*: the gate reads a bare name as a macro and a two-component
+  name as a namespace nothing opens, finds neither, and reports the symbol absent. The row then
+  passed for ever while naming a type sitting in the tree. `core::tui::runtime` still declares
+  `FdInterest`, `FdToken`, `WaitOutcome`, `FdRegistration` and `FdRegistry` until Task B12, so the
+  guard has live work to do, and all eight rows were qualified by discipline rather than by
+  construction.
+
+- A `macro` row that names only a `target.header` is checked against it: the header must still
+  **name** the macro, by defining it or by testing it. Two rows are of that shape
+  (`CORE_GENERATOR_FORCE_FALLBACK`, `CORE_RANGES_FORCE_FALLBACK`) and they are deliberate — the
+  macro is one a *consumer* defines and core-cpp only asks about — so the assertion is "consults",
+  not "defines", and a mention in a comment does not count.
+
 - `core::net::IoBackend` (`<core/net/IoBackend.hpp>`), the readiness seam the event loop drives,
   with `makeDefaultBackend()`, `makeBackend(BackendKind)` and `preferredBackendKind()`. A backend
   DISPATCHES: `wait()` invokes the callbacks on the `ReadinessHandler`s registered with it, and

@@ -154,6 +154,19 @@ def _row(raw: object, index: int, profiles: dict[str, str]) -> Row:
             raise TableError(f"{where}: '{name}' must be a non-empty string")
     if kind == "removed" and target:
         raise TableError(f"{where}: a removed row has no 'to': core-cpp has no such symbol to rename to")
+    # `removed` is the ONLY kind whose `from` is a core-cpp name; every other kind's is the
+    # consumer's spelling. So `net::FdToken` -- the form every neighbouring row uses, and the form
+    # pattern-matching produces -- is the natural mistake, and its failure is SILENCE: the gate
+    # looks up a bare name as a macro and a two-component name as a namespace nothing opens, finds
+    # neither, and reports the symbol absent. The row then passes for ever while naming a type that
+    # is sitting right there. A false positive gets fixed; a false negative that reads as success
+    # never gets looked at again, so the spelling is enforced here rather than left to discipline.
+    if kind == "removed" and source.split("::")[0] != "core":
+        raise TableError(
+            f"{where}: a removed row names the fully qualified CORE-CPP symbol that is gone "
+            f"('core::net::FdToken'), not the consumer's spelling and not a bare name; "
+            f"'{source}' would never match anything and the row would guard nothing"
+        )
     target = target or ""
 
     row_profiles = raw.get("profiles")

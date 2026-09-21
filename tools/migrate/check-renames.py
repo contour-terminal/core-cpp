@@ -170,6 +170,23 @@ def defines_macro(text: str, name: str) -> bool:
     return re.search(pattern, _stripped(text), re.MULTILINE) is not None
 
 
+def consults_macro(text: str, name: str) -> bool:
+    """Whether the header defines @p name **or tests it**, which for this repository is the usual case.
+
+    `CORE_GENERATOR_FORCE_FALLBACK` and `CORE_RANGES_FORCE_FALLBACK` are defined by a *consumer* and
+    only asked about here (`#if ... && !defined(...)`), so those rows carry no `target.symbol` and
+    say so in their `note`. Asking whether the header *defines* them calls two correct rows drift.
+    What a row of this shape actually asserts is that the header still **names** the macro, which is
+    what goes stale when somebody renames it. A mention in a comment is not a use: `_stripped()`
+    blanks comments first, so the prose above a guard cannot stand in for the guard.
+    """
+    escaped = re.escape(name)
+    if defines_macro(text, name):
+        return True
+    pattern = rf"\bdefined[ \t]*\([ \t]*{escaped}[ \t]*\)|^[ \t]*#[ \t]*(?:ifdef|ifndef)[ \t]+{escaped}\b"
+    return re.search(pattern, _stripped(text), re.MULTILINE) is not None
+
+
 def public_headers(root: Path) -> tuple[set[str], list[str]]:
     """Every include path a module's `FILE_SET HEADERS` publishes, and every list it could not read.
 
@@ -312,6 +329,12 @@ def _check_delivered(root: Path, row: renames.Row, public: set[str], where: str)
             f"{where}: the row rewrites to <{row.target}> but names src/{target.header} as its target"
         )
     if not target.symbol:
+        # A macro row's `to` IS the macro's name, so there is nothing to look up and no reason to
+        # have asked for it twice. Returning here asserted the header and assumed the macro, which
+        # is a header that still exists while the macro inside it was renamed -- the same inert
+        # shape one level down, and one `defines_macro()` away from being checked.
+        if row.kind == "macro" and not consults_macro(text, row.target):
+            failures.append(f"{where}: src/{target.header} names no macro {row.target}")
         return failures
 
     # The same walk the pending and removed arms use, not a copy of it (controller ruling R93).

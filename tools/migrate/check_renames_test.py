@@ -304,6 +304,95 @@ class ARemovedRowIsAnInverseGate(unittest.TestCase):
             if row.kind == "removed":
                 self.assertTrue(row.note, f"{row.source} is removed with no note saying what replaces it")
 
+    def test_every_removed_row_names_a_core_cpp_symbol(self) -> None:
+        for row in renames.load(TABLE).rows:
+            if row.kind == "removed":
+                self.assertEqual(
+                    row.source.split("::")[0],
+                    "core",
+                    f"{row.source} is not a core-cpp name, so the gate can never find it",
+                )
+
+    def test_an_unqualified_name_is_inert_rather_than_wrong(self) -> None:
+        """Why the schema refuses one: the failure is silence, and silence reads as a passing gate.
+
+        A single component reaches `qualified_failure()` as a macro lookup, and two components need
+        a namespace nothing opens. Neither reports the symbol present, so a row spelled either way
+        passes the gate for ever while naming a type that is sitting right there. This case pins
+        the mechanism, so that the schema rule above cannot be "simplified" back out later.
+        """
+        text = "#pragma once\nnamespace core::tui::runtime\n{\nstruct FdToken\n{\n};\n}\n"
+        self.assertTrue(check.declares_qualified(text, ["core", "tui", "runtime", "FdToken"]))
+        self.assertFalse(check.declares_qualified(text, ["FdToken"]), "a bare name is a macro lookup")
+        self.assertFalse(check.declares_qualified(text, ["net", "FdToken"]), "nothing opens `net`")
+
+
+class AMacroRowIsCheckedEvenWithoutATargetSymbol(unittest.TestCase):
+    """A header that still exists while the macro it names was renamed is the inert shape again.
+
+    `_check_delivered` returned as soon as `target.symbol` was absent, so a macro row naming only a
+    `target.header` had its header asserted and its macro assumed. `to` IS the macro's name for this
+    kind, so there is nothing to look up.
+
+    The check is **consults**, not **defines**, and that distinction is the whole of it: the two
+    real rows of this shape (`CORE_GENERATOR_FORCE_FALLBACK`, `CORE_RANGES_FORCE_FALLBACK`) name
+    macros a *consumer* defines and core-cpp only *tests* -- which is why they carry no
+    `target.symbol`, and their `note` says so. A `defines_macro()` check reads that considered
+    decision as drift and fails two correct rows.
+    """
+
+    ROW = {
+        "kind": "macro",
+        "from": "CRISPY_FORCE_FALLBACK",
+        "to": "CORE_RANGES_FORCE_FALLBACK",
+        "profiles": ["contour"],
+        "target": {"header": "core/net/Ranges.hpp"},
+    }
+
+    def gate(self, header_text: str) -> str:
+        with TemporaryDirectory() as directory:
+            sandbox = ASandbox(directory)
+            module = sandbox.root / "src" / "core" / "net"
+            (module / "Ranges.hpp").write_text(header_text, encoding="utf-8")
+            # Published, so the FILE_SET arm passes and the only thing under test is the macro.
+            (module / "CMakeLists.txt").write_text(
+                "core_cpp_add_module(net KIND STATIC\n    HEADERS\n        EventLoop.hpp\n"
+                "        Ranges.hpp\n    PUBLIC_LIBS core::async)\n",
+                encoding="utf-8",
+            )
+            return "\n".join(check.validate(sandbox.root, sandbox.write([self.ROW])))
+
+    def test_a_macro_the_header_still_defines_is_accepted(self) -> None:
+        self.assertEqual(self.gate("#pragma once\n#define CORE_RANGES_FORCE_FALLBACK 1\n"), "")
+
+    def test_a_macro_the_header_only_tests_is_accepted(self) -> None:
+        # The shape of both real rows: the CONSUMER defines it, core-cpp only asks whether it is
+        # set. A `defines_macro()` check calls this drift and is wrong; their `note` says as much.
+        text = "#pragma once\n#if defined(__cpp_lib_ranges_fold) \\\n    && !defined(CORE_RANGES_FORCE_FALLBACK)\n#endif\n"
+        self.assertEqual(self.gate(text), "")
+
+    def test_a_macro_the_header_guards_with_ifndef_is_accepted(self) -> None:
+        self.assertEqual(self.gate("#pragma once\n#ifndef CORE_RANGES_FORCE_FALLBACK\n#endif\n"), "")
+
+    def test_a_macro_the_header_no_longer_names_is_refused(self) -> None:
+        failures = self.gate("#pragma once\n#if !defined(CORE_RANGES_USE_FALLBACK)\n#endif\n")
+        self.assertIn("CORE_RANGES_FORCE_FALLBACK", failures)
+        self.assertIn("names no macro", failures)
+
+    def test_a_mention_in_a_comment_is_not_a_use(self) -> None:
+        failures = self.gate("#pragma once\n// Define CORE_RANGES_FORCE_FALLBACK to force it.\n")
+        self.assertIn("names no macro", failures)
+
+    def test_a_cmakedefine_counts(self) -> None:
+        self.assertEqual(self.gate("#pragma once\n#cmakedefine01 CORE_RANGES_FORCE_FALLBACK\n"), "")
+
+    def test_the_two_real_rows_of_this_shape_pass(self) -> None:
+        # The regression that matters: these are correct rows and the first version of this check
+        # failed both of them.
+        failures = "\n".join(check.validate(REPOSITORY_ROOT, TABLE))
+        self.assertNotIn("CORE_GENERATOR_FORCE_FALLBACK", failures)
+        self.assertNotIn("CORE_RANGES_FORCE_FALLBACK", failures)
+
 
 class TheGateSaysWhenItCouldNotLook(unittest.TestCase):
     """A header list the resolver cannot read must fail, never read as 'this module is private'.
@@ -473,6 +562,25 @@ class TheSchemaIsChecked(unittest.TestCase):
     def test_a_removed_row_without_a_note_is_refused(self) -> None:
         with self.assertRaisesRegex(renames.TableError, "note"):
             self.load_one({"kind": "removed", "from": "core::tui::LanguageId::Endo", "profiles": ["contour"]})
+
+    def removed_spelled(self, source: str) -> dict:
+        return {"kind": "removed", "from": source, "profiles": ["contour"], "note": "gone"}
+
+    def test_a_removed_row_that_is_not_qualified_is_refused(self) -> None:
+        # A bare name reaches qualified_failure() as a single component, which only looks for a
+        # #define. It reports absent, the row passes, and the guard is inert forever.
+        with self.assertRaisesRegex(renames.TableError, "qualified"):
+            self.load_one(self.removed_spelled("FdToken"))
+
+    def test_a_removed_row_in_the_consumers_spelling_is_refused(self) -> None:
+        # The trap: `removed` is the ONLY kind whose `from` is a core-cpp name. Every neighbouring
+        # row's `from` is the consumer's spelling, so this is the form pattern-matching produces --
+        # and nothing opens a namespace called `net`, so the row is inert exactly like a bare one.
+        with self.assertRaisesRegex(renames.TableError, "core"):
+            self.load_one(self.removed_spelled("net::FdToken"))
+
+    def test_a_removed_row_naming_a_core_symbol_is_accepted(self) -> None:
+        self.load_one(self.removed_spelled("core::net::FdToken"))
 
     def test_a_pending_row_without_a_target_is_refused(self) -> None:
         # R92: a pending row with no target is asserted by nothing in either direction -- a comment
