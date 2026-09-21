@@ -63,6 +63,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
@@ -78,6 +79,11 @@ namespace core::net
 /// cancellation.
 struct FdRegistrationFailed
 {
+    /// What the backend refused with. @c IoBackend::attach and @c IoBackend::setInterest both
+    /// return the kernel's reason precisely so it is never swallowed, and a consumer debugging
+    /// descriptor exhaustion needs to tell that apart from a filter the kernel would not arm.
+    /// Default-constructed where the refusal carried none.
+    NetError reason {};
 };
 
 /// How a flow parked on a handle is resumed when that handle closes.
@@ -220,13 +226,23 @@ class EventLoop: public async::IExecutor
 
     /// Drives turns until @p task completes, then returns its result.
     ///
+    /// On an @c IdlePolicy::Return loop this POLLS. Such a loop is one somebody else drives a turn
+    /// at a time, so step 4 never blocks (see @c computeTimeout) — and a `blockOn` on it therefore
+    /// turns at full speed for as long as anything is parked. @c testing::TestLoop forces that
+    /// policy, so a case that blocks on a flow parked on a deadline no test advances the clock
+    /// past burns a core until ctest's backstop. Drive such a loop with @c runOnce or
+    /// @c runUntilIdle instead, and let the case decide when time passes.
+    ///
     /// @pre The backend is not host-driven, for @c run()'s reason.
     /// @param task The root flow to run (its frame is kept alive for the call).
     /// @return The value produced by @p task (or void).
     /// @throws std::logic_error if @p task can no longer be advanced — nothing is queued, nothing
     ///         is parked, and it has not finished. That is a deadlocked flow, and answering with
     ///         a value it never produced would hide it; a loop that kept turning would spin at
-    ///         full CPU instead, which is what this replaces.
+    ///         full CPU instead, which is what this replaces. The frame is destroyed as this
+    ///         unwinds, so anything still holding a handle to it — a queue's waiter slot, a
+    ///         sibling in a join — holds a dangling one: the throw reports a program that was
+    ///         already broken, it does not repair it.
     template <typename T>
     T blockOn(async::Task<T> task)
     {
@@ -235,13 +251,30 @@ class EventLoop: public async::IExecutor
                   "host pumps, so blocking on it can never complete");
         auto const onWorker = detail::WorkerIdentity::Scope { _worker };
         task.handle().promise().setStopToken(_rootStop.get_token());
-        _ready.push_back(
-            ReadyEntry { .parked = async::detail::Parked { async::ParkedWork { .resume = task.handle() } },
-                         .ownedByLoop = false });
+        // Through `queueReady` like every other queueing, rather than a `ReadyEntry` built here:
+        // that function's claim to be the one place the ownership flag is decided is what the next
+        // person will trust, and a second site writing the same value by hand is how the two
+        // answers start to differ.
+        queueReady(async::ParkedWork { .resume = task.handle() });
         while (!task.done())
         {
+            // Refused HERE, because this is the only place both facts exist. `hasPendingWork()`
+            // answers whether THIS LOOP can advance anything; `task.done()` answers whether the
+            // root has finished. `Task` knows nothing about executors and cannot tell "not
+            // finished because something is still running it" from "not finished and nothing ever
+            // will", so a check pushed down there would be a branch on every result path in six
+            // consumers to catch one caller's bug.
+            //
+            // Returning instead would read `Task<T>`'s result optional while it is still
+            // disengaged: an indeterminate value for a non-void T, and a silent success for void.
+            // Before this loop existed the same program hung, which was loud and attributable;
+            // answering with a value the flow never produced would be strictly worse.
             if (!hasPendingWork())
-                break;
+                throw std::logic_error {
+                    "core::net::EventLoop::blockOn: the task can no longer be advanced -- nothing "
+                    "is queued, nothing is parked, and it has not finished. A flow suspended on "
+                    "something this loop does not drive cannot be completed by driving this loop."
+                };
             std::ignore = turn(std::nullopt, task.handle());
         }
         return task.result();
@@ -309,6 +342,13 @@ class EventLoop: public async::IExecutor
     /// Starts a background flow that runs alongside the root flow. Its frame is kept alive by the
     /// loop and released the instant the flow completes — the turn that resumes it to completion
     /// unlinks it, in O(1), rather than a later sweep over every spawned flow.
+    ///
+    /// **Loop thread only**, or before anything drives the loop. Unlike @c submit, this writes the
+    /// loop's own containers directly and there is no inbound queue to hand it to: a spawn from an
+    /// acceptor thread while a turn is running splices a `std::list` and rehashes an
+    /// `unordered_map` underneath that turn. `post()` a call to it instead. It is the one
+    /// difference from @c submit that migrating a flow to `spawn` — for the frame lifetime, which
+    /// is why anyone does — does not otherwise announce.
     /// @param task The flow to run.
     void spawn(async::Task<void> task);
 
@@ -463,10 +503,14 @@ class EventLoop: public async::IExecutor
     /// Parks @p entry: registers its handle with the backend if it names one, arms its deadline if
     /// it has one, and files it so a cancel can find it by id.
     /// @param entry What to park; see @c ParkEntry.
+    /// @param refusal Where the backend's reason is written when the registration is refused, or
+    ///        null where the caller has nowhere to report it. An out-parameter rather than an
+    ///        `expected` return so that the callers who only want a @c ParkId — a timer has no
+    ///        handle and cannot be refused this way — are unchanged.
     /// @return The park's id, or @c ParkId::invalid() if the backend refused the registration —
     ///         which it does for an invalid handle, and for a kernel that would not arm the
     ///         interest. A refusal leaves nothing registered.
-    [[nodiscard]] ParkId registerPark(ParkEntry entry);
+    [[nodiscard]] ParkId registerPark(ParkEntry entry, NetError* refusal = nullptr);
 
     /// Detaches @p park from the backend and drops it, if it is still there. Idempotent. Called by
     /// the awaiter on resume, whether ready or cancelled.
@@ -804,7 +848,8 @@ class WaitHandleAwaiter
         if (_token.stop_requested())
             return false;
         _park = _loop.registerPark(
-            ParkEntry::onReadiness(async::detail::parkedWorkFor(awaiting), _handle, _kind, _interest));
+            ParkEntry::onReadiness(async::detail::parkedWorkFor(awaiting), _handle, _kind, _interest),
+            &_refusal);
         if (!_park)
             return false; // registration failed: resume and surface it in await_resume
         // If the token is stopped while parked (a whenAny/withTimeout sibling won), cancel the
@@ -831,7 +876,7 @@ class WaitHandleAwaiter
             _loop.unregisterPark(_park);
         }
         else if (_handle != platform::InvalidHandle && !_token.stop_requested())
-            throw FdRegistrationFailed {};
+            throw FdRegistrationFailed { .reason = std::move(_refusal) };
         if (_token.stop_requested() || _handle == platform::InvalidHandle
             || reason == FdWakeReason::Abandoned)
             throw async::OperationCancelled {};
@@ -845,6 +890,7 @@ class WaitHandleAwaiter
     Interest _interest;
     ParkId _park {};
     async::StopToken _token;
+    NetError _refusal {};
 };
 
 /// Suspends until @p predicate returns true, re-checking every @p interval on @p loop's clock.

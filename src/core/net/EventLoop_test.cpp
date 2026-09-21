@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/async/AsyncQueue.hpp>
 #include <core/async/Cancellation.hpp>
+#include <core/async/IExecutor.hpp>
+#include <core/async/ResumeOn.hpp>
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/IoBackend.hpp>
@@ -15,8 +18,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <coroutine>
 #include <optional>
 #include <ranges>
+#include <stdexcept>
 #include <thread>
 #include <tuple>
 
@@ -139,6 +144,53 @@ Task<void> incrementAndFinish(int* counter)
 Task<void> justReturn()
 {
     co_return;
+}
+
+/// An executor that accepts work and never runs it.
+///
+/// What `blockOn`'s refusal is about is a flow suspended on something the loop does not drive,
+/// so the queue in those cases is wired HERE rather than to the loop: the park is then genuinely
+/// unreachable from any turn, which is the condition under test, and the case can clear the
+/// queue's waiter slot afterwards without anything resuming a frame the refusal has destroyed.
+class InertExecutor final: public core::async::IExecutor
+{
+  public:
+    using core::async::IExecutor::submit;
+
+    void submit(std::coroutine_handle<> /*handle*/) override {}
+
+    /// Takes the work and drops it. The `ParkedWork` destructs here, which releases whatever
+    /// claim it carried — an executor that never runs its work still owes that much.
+    void submit(core::async::ParkedWork /*work*/) override {}
+};
+
+/// Parks on a queue nothing will ever push to, producing a value it can never produce.
+/// @param queue The queue to pop from; never null.
+Task<int> popOne(core::async::AsyncQueue<int>* queue)
+{
+    auto const item = co_await queue->pop();
+    co_return item.value_or(-1);
+}
+
+/// The `Task<void>` arm of the same flow: the one where a `blockOn` that returned would report
+/// success, because `result()` on a void task only rethrows and there is nothing stored to
+/// rethrow.
+/// @param queue The queue to pop from; never null.
+Task<void> popAndDiscard(core::async::AsyncQueue<int>* queue)
+{
+    std::ignore = co_await queue->pop();
+}
+
+/// Hands itself to @p loop and records that it got there.
+///
+/// Resumed by hand rather than spawned, so the `submit` happens BETWEEN turns and lands in the
+/// inbound queue — the same place a `ResumeOn` hand-off from a pool thread sits.
+/// @param loop The loop to resume on; never null.
+/// @param resumed Set once the hand-off has been honoured.
+Task<void> handOverToLoop(EventLoop* loop, bool* resumed)
+{
+    co_await core::async::ResumeOn { *loop };
+    *resumed = true;
 }
 
 /// Sets *destroyed = true when its frame unwinds (RAII), so a test can prove a
@@ -1124,4 +1176,122 @@ TEST_CASE("spawn at scale unlinks per completion rather than sweeping", "[EventL
     std::ignore = loop.runUntilIdle();
     CHECK(finished == Flows);
     CHECK(loop.spawnedCount() == 0);
+}
+
+TEST_CASE("blockOn refuses a flow it cannot advance rather than reading an unfinished result",
+          "[EventLoop][blockOn]")
+{
+    // `hasPendingWork()` asks whether THIS LOOP can advance anything — not whether the root can.
+    // A flow suspended on something else leaves all four of its sources empty, and a `blockOn`
+    // that answered by returning would read `Task<T>`'s result optional while it is still
+    // disengaged: an indeterminate value for a non-void T, and a silent success for void. The
+    // frame is destroyed on the way out either way, so the caller has to learn that the flow never
+    // finished — and the only place both facts exist is here.
+    auto idle = InertExecutor {};
+    auto queue = core::async::AsyncQueue<int> { idle, {} };
+
+    auto source = ScriptedBackend {};
+    auto loop = EventLoop { source };
+
+    // CHECK rather than REQUIRE, so that a regression reports as a failed assertion and still
+    // reaches the cleanup below. A REQUIRE here unwinds past it, and the queue then destructs
+    // with a consumer still parked on it — which aborts the binary on an assertion about the
+    // test's own hygiene, burying the one this case is about.
+    SECTION("a flow producing a value")
+    {
+        CHECK_THROWS_AS(loop.blockOn(popOne(&queue)), std::logic_error);
+    }
+
+    SECTION("a flow producing nothing")
+    {
+        CHECK_THROWS_AS(loop.blockOn(popAndDiscard(&queue)), std::logic_error);
+    }
+
+    // The refusal destroyed the frame that was parked here, so this queue now names a consumer
+    // that no longer exists. close() takes that waiter out and hands it to the executor above,
+    // which never runs it: the slot is clear for ~AsyncQueue's "destroyed with a consumer still
+    // parked" assertion, and nothing ever touches the frame.
+    queue.close();
+    CHECK_FALSE(queue.hasWaiter());
+}
+
+TEST_CASE("a readiness park dispatched but not yet resumed is still detached at close",
+          "[EventLoop][fd][closehang]")
+{
+    // The window between a dispatch and its resumption is a full turn wide BY CONSTRUCTION:
+    // readiness is dispatched in step 4 of one turn and resumed in step 2 of the next, which is
+    // guarantee G2. A close landing inside it is the ordinary case — post() is how another thread
+    // asks the loop to close a socket — and the close must still find the park. If it cannot, the
+    // kernel-side removal is left to the awaiter's own detach a turn later, which issues it
+    // against a descriptor number the kernel may already have handed to a new socket.
+    auto pipe = core::platform::createSystemPipe();
+    REQUIRE(pipe.has_value());
+
+    // Declared BEFORE the loop, so it outlives it: ~EventLoop resumes the queued flow and its
+    // RAII guard writes here as it unwinds.
+    auto destroyed = false;
+
+    auto source = ScriptedBackend {};
+    source.pushReadable(HandlerId { 1 }); // turn 1's wait dispatches the park
+    auto loop = EventLoop { source };
+
+    loop.spawn(waitReadableWithGuard(&loop, (*pipe)->readFd(), &destroyed));
+
+    // TWO turns, and the reason is not padding. `spawn` off-turn wakes the backend, and a wake
+    // consumes no script step — so turn 1's wait returns on the wake and dispatches nothing. Turn
+    // 1 is what runs the flow to its park; turn 2's wait is what delivers the scripted readiness.
+    // Written as one turn, this case passes while dispatching nothing at all.
+    std::ignore = loop.runOnce();
+    REQUIRE(source.attachedCount() == 1);
+    REQUIRE(loop.readyCount() == 0); // nothing dispatched yet
+
+    std::ignore = loop.runOnce();
+    // The discriminator: the waiter IS queued, so the park is in the window this case is about —
+    // dispatched in step 4 of one turn, resumed in step 2 of a turn that has not run.
+    REQUIRE(loop.readyCount() == 1);
+
+    // Still a registration the loop holds, so the count that names those says so. A park whose
+    // waiter has been queued has not stopped being attached.
+    CHECK(loop.parkedWaiterCount() == 1);
+
+    loop.notifyHandleClosing((*pipe)->readFd(), core::net::FdWakePolicy::Resume);
+    CHECK(source.attachedCount() == 0); // detached at close, not at the resume a turn later
+}
+
+TEST_CASE("teardown drops borrowed work still waiting in the inbound queue", "[EventLoop][teardown]")
+{
+    // `~EventLoop` resumes what it borrows in the ready queue and the park table. It does NOT do
+    // so here, and this case is what pins that rather than leaving it to be rediscovered.
+    //
+    // The reason is that the loop cannot tell what a borrowed handle names. `submit` takes a bare
+    // `std::coroutine_handle<>`, so a suspended flow that would unwind and a never-started lazy
+    // `Task` that would RUN are the same type -- and a `ResumeOn` continuation is no safer,
+    // because `await_resume()` is noexcept and returns rather than throwing, so resuming one runs
+    // its body against a loop that is being destroyed.
+    //
+    // What that costs is exactly what this case shows: a cross-thread hand-off whose loop dies
+    // before the next turn strands its flow, and whatever awaits that flow waits forever. An
+    // owner that needs the hand-off delivered runs one more turn before destroying the loop.
+    auto resumed = false;
+    // Outlives the loop, because the loop only borrows this frame: the `Task` here is its owner
+    // and what destroys it.
+    auto flow = std::optional<Task<void>> {};
+
+    {
+        auto clock = ManualClock {};
+        auto loop = core::net::testing::TestLoop { clock };
+
+        flow = handOverToLoop(&loop, &resumed);
+        // Started by hand, off-turn, so `submit` routes through the inbound queue exactly as a
+        // cross-thread `ResumeOn` does.
+        flow->handle().resume();
+
+        // Not in the ready queue: that is what makes this the inbound case rather than the one
+        // step 2 of the teardown already covers.
+        REQUIRE(loop.readyCount() == 0);
+        REQUIRE_FALSE(resumed);
+    }
+
+    // Still false, and the frame is still suspended. Destroying `flow` below is what frees it.
+    CHECK_FALSE(resumed);
 }

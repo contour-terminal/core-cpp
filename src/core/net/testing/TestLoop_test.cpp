@@ -462,13 +462,13 @@ void cancelPendingTransfersOwnership(EventLoop& loop, core::platform::NativeHand
         publishThenWaitReadable(&loop, readable, &handle, FrameSentinel { &counter });
         REQUIRE(handle);
 
-        // A backend with no readiness at all refuses the registration, so the flow never parks and
-        // there is nothing to take back. That is a property of the backend, not a failure here.
-        if (loop.parkedWaiterCount() == 0)
-        {
-            handle.destroy();
-            return;
-        }
+        // Every backend this case runs against accepts the registration, so the flow HAS parked.
+        // Asserted rather than branched on: the branch that used to stand here could not run --
+        // `BackendMatrix` excludes `Null`, `Scripted` and `HostDriven`, and the rest accept -- and
+        // if one ever did refuse, the `FdRegistrationFailed` would escape a `DetachedTask` into
+        // `unhandled_exception`, which terminates, so the branch's own cleanup could not run
+        // either. A guard that cannot execute is one nobody can maintain.
+        REQUIRE(loop.parkedWaiterCount() == 1);
 
         CHECK(loop.cancelPending(handle));
         CHECK(loop.parkedWaiterCount() == 0); // and the registration was detached with it

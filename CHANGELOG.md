@@ -507,11 +507,17 @@ workflow refuses one without a section here.
     named the type changes the name.
   - `delay()` takes a `core::platform::SteadyDuration` rather than `std::chrono::milliseconds`. A
     `5ms` argument converts; a caller that stored the parameter type changes it.
-  - **`blockOn()` no longer spins when its flow cannot advance.** It returns as soon as nothing is
-    queued and nothing is parked, and `Task::result()` then refuses the still-suspended task by
-    name instead of the loop burning a core forever
+  - **`blockOn()` throws `std::logic_error` when its flow cannot advance**, rather than spinning
+    at full CPU forever
     ([core-cpp#17](https://github.com/contour-terminal/core-cpp/issues/17), which Task B12 had
-    been carrying for the TUI runtime).
+    been carrying for the TUI runtime). "Cannot advance" means the loop has nothing queued,
+    nothing parked and nothing handed over, and the root has not finished — a flow suspended on
+    something this loop does not drive, such as an `AsyncQueue` wired to another executor or a
+    `co_await ResumeOn { pool }` that is live on a pool thread. The refusal is the loop's, not
+    `Task`'s: `Task::result()` is unchanged, because `blockOn` is the only place that holds both
+    "the root is unfinished" and "nothing can finish it". The frame is destroyed as the exception
+    unwinds, so anything still holding a handle to it holds a dangling one — the throw reports a
+    program that was already broken, it does not repair it.
   - **A coroutine resumed by readiness or by a deadline resumes one turn later**, in the next
     turn's step 2, because there is exactly one place a loop resumes and that is what makes
     guarantee G2 stateable. A test that counted waits, or that used `blockOn(trivialTask())` as
@@ -527,6 +533,28 @@ workflow refuses one without a section here.
   - `IoBackend` gains `setPump(HostCallback, void*)`, defaulted to a no-op beside `isHostDriven()`
     and `armWakeAt()`. A backend outside this repository need not implement it; a host-driven one
     that wants a loop to pump must.
+  - `FdRegistrationFailed` gains a `NetError reason` member carrying what the backend refused
+    with. `attach()` and `setInterest()` both return the kernel's reason so it is never swallowed,
+    and the loop was flattening both to `bool`: a consumer debugging descriptor exhaustion could
+    not tell it from a filter the kernel would not arm. Nothing constructs the type with
+    arguments, so no call site changes; a `catch` that wants the reason reads `.reason`.
+  - **`~EventLoop` DROPS borrowed work still waiting in the inbound queue**, and this is now
+    stated rather than left to be discovered. What the loop owns is freed and what it borrows is
+    resumed — in the ready queue and the park table, which hold work a turn has accepted. A
+    submission the inbound queue still holds is an offer no turn took up, and the loop cannot tell
+    what a borrowed `std::coroutine_handle<>` names: a suspended flow that would unwind and a
+    never-started lazy `Task` that would RUN are the same type, and `ResumeOn::await_resume()` is
+    noexcept, so resuming one runs its body against a loop that is being destroyed rather than
+    unwinding it. The cost is real and worth planning around: a cross-thread `ResumeOn { loop }`
+    whose loop dies before the next turn leaves its awaiting flow suspended forever. **Run one
+    more turn before destroying a loop other threads have been handing work to.** Posts are
+    dropped for the same reason, and owned chains are still freed rather than resumed.
+  - **A readiness park keeps its handle registration until the park itself is taken.** A park
+    whose waiter had been queued but not yet resumed was invisible to
+    `notifyHandleClosing()` for the turn in between, so its kernel registration was detached
+    after the close rather than before it — against a descriptor number the kernel may already
+    have reassigned. `parkedWaiterCount()` counts those parks again, which is what its
+    documentation always claimed.
 
   Consumer impact: contour, endo and tuidu all construct an `EventLoop`. The rename table
   (`tools/migrate/renames.json`) carries `net::WaitFdAwaiter`, and fastcached's `IReactor`,

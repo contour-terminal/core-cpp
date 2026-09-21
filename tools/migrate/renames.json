@@ -4951,6 +4951,18 @@
     },
     {
       "kind": "include",
+      "from": "FastCache/Async/IReactor.hpp",
+      "to": "core/net/EventLoop.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "Task B4. The one Async header that lands in core::net rather than core::async: IReactor's contract -- the turn, the park table, generation-checked cancellation and the ordered teardown -- became core::net::EventLoop, which owns an IoBackend. Its members are the FastCache::IReactor rows below. A file including it for the scheduling primitives alone (StopToken, ParkedWork, IExecutor) now wants the core/async header that holds the one it uses; this row names the whole-interface destination, which is where a caller of addTimer, submit or blockOn has to arrive.",
+      "target": {
+        "header": "core/net/EventLoop.hpp"
+      }
+    },
+    {
+      "kind": "include",
       "from": "FastCache/Net/ISocket.hpp",
       "to": "core/net/ISocket.hpp",
       "profiles": [

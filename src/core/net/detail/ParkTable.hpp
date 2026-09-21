@@ -309,9 +309,10 @@ namespace detail
         /// Takes the coroutine out of @p id, leaving the park in place.
         ///
         /// The park survives because its @c ReadinessHandler is still registered with the backend
-        /// and the awaiter's own resume is what unregisters it; what must go now are the reverse
-        /// indices, or a cancel or a closing descriptor arriving in the same turn would find a
-        /// park whose waiter is already queued and queue it twice.
+        /// and the awaiter's own resume is what unregisters it. What must go now is the WAITER
+        /// index, or a cancel arriving in the same turn would hand back work that is already
+        /// queued. The handle index stays, so a descriptor closing before the resumption can
+        /// still find this park and detach it while the descriptor is valid.
         /// @param id The park whose waiter to take.
         /// @return What was parked, or empty work if this park is gone or already taken.
         [[nodiscard]] async::ParkedWork takeWaiter(ParkId id) noexcept
@@ -320,7 +321,7 @@ namespace detail
             if (park == nullptr || !park->parked)
                 return {};
             auto work = park->parked.take();
-            dropIndices(*park);
+            dropWaiterIndices(*park);
             return work;
         }
 
@@ -336,7 +337,8 @@ namespace detail
                 return {};
             auto park = std::move(found->second);
             _parks.erase(found);
-            dropIndices(*park);
+            dropWaiterIndices(*park);
+            dropHandleIndex(*park);
             return park;
         }
 
@@ -381,7 +383,10 @@ namespace detail
         /// behind the live root* is the measurement, and without this it could not be made.
         [[nodiscard]] std::size_t timerSlotCount() const noexcept { return _timers.size(); }
 
-        /// @return How many of them are waiting on handle readiness.
+        /// @return How many of them hold a handle registration. One per registration the backend
+        ///         has on this table's account, including a park whose waiter has been queued and
+        ///         not yet resumed — that park is still attached, and a count that dropped it
+        ///         would read zero while the backend still holds it.
         [[nodiscard]] std::size_t readinessCount() const noexcept { return _byHandle.size(); }
 
         /// @return The soonest deadline any park is waiting on, or nullopt if none is.
@@ -443,6 +448,13 @@ namespace detail
         }
 
         /// Drops heap slots naming parks that are gone or no longer waiting on a deadline.
+        ///
+        /// **Only from the ROOT, and it stops at the first live one.** A stale slot deeper in the
+        /// heap survives until the root reaches it, which is what bounds the heap by deadlines
+        /// ever armed rather than by deadlines live. The alternative — erase-and-reheap per
+        /// cancellation — is O(n) per cancel, and is what makes a loop with many deadlines
+        /// quadratic. A caller that arms and cancels far more than it fires pays memory for that
+        /// choice, which is a measurement worth taking before changing it.
         void pruneTimers() noexcept
         {
             while (!_timers.empty())
@@ -457,31 +469,43 @@ namespace detail
             }
         }
 
-        /// Forgets @p park in every index but the park map itself, and is idempotent: the waiter
-        /// is taken one turn and the park itself another, and both paths come through here.
-        /// @param park The park being removed from the indices.
-        void dropIndices(Park& park) noexcept
+        /// Forgets what @p park was WAITING on: its waiter key, and its claim on the deadline
+        /// heap. Idempotent, because the waiter is taken one turn and the park itself another.
+        ///
+        /// Deliberately not the handle index. A park whose waiter has been queued is still
+        /// REGISTERED with the backend — the awaiter's own resume is what detaches it, a full turn
+        /// later — and @c parksOn is how a closing descriptor finds it in between. Erasing the
+        /// handle here made that window invisible to @c EventLoop::notifyHandleClosing, which is
+        /// the one thing that exists to close it.
+        /// @param park The park whose waiter is being taken.
+        void dropWaiterIndices(Park& park) noexcept
         {
             if (park.waiterKey != nullptr)
             {
                 _byWaiter.erase(park.waiterKey);
                 park.waiterKey = nullptr;
             }
-            if (park.handle != platform::InvalidHandle)
-            {
-                // Erase this park alone: a descriptor may carry a second one — a reader beside a
-                // writer — and erasing by key would silently drop that one too.
-                auto const [first, last] = _byHandle.equal_range(park.handle);
-                auto const index = std::ranges::find_if(
-                    first, last, [id = park.id](auto const& candidate) { return candidate.second == id; });
-                if (index != last)
-                    _byHandle.erase(index);
-            }
             if (park.deadline.has_value())
             {
                 park.deadline.reset();
                 --_liveTimers;
             }
+        }
+
+        /// Forgets @p park's readiness registration, which only @c take() may do: it is the one
+        /// path after which nothing is registered with the backend on this park's account.
+        /// @param park The park being removed from the table.
+        void dropHandleIndex(Park& park) noexcept
+        {
+            if (park.handle == platform::InvalidHandle)
+                return;
+            // Erase this park alone: a descriptor may carry a second one — a reader beside a
+            // writer — and erasing by key would silently drop that one too.
+            auto const [first, last] = _byHandle.equal_range(park.handle);
+            auto const index = std::ranges::find_if(
+                first, last, [id = park.id](auto const& candidate) { return candidate.second == id; });
+            if (index != last)
+                _byHandle.erase(index);
         }
 
         std::unordered_map<ParkId, std::unique_ptr<Park>> _parks;

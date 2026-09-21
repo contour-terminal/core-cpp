@@ -123,13 +123,28 @@ what follows is what a change to it must not break.
 6. **Unregister the wake.** A host-driven backend holds a pointer to the loop and an armed host
    timer; either outliving the loop is a call into freed storage on the host's next turn.
 
-- **What the loop OWNS is freed; what it BORROWS is resumed**, in both containers. A chain the
+- **What the loop OWNS is freed; what it BORROWS is resumed** -- in the ready queue and the park
+  table, which hold work a turn has ACCEPTED. **The inbound queue is dropped, deliberately**: a
+  submission still sitting there is an offer no turn took up, and the loop cannot ask a borrowed
+  `std::coroutine_handle<>` what it names. A suspended flow that would unwind and a never-started
+  lazy `Task` that would RUN are the same type, and `ResumeOn::await_resume()` is noexcept, so
+  resuming even a genuine continuation runs its body against a dying loop. Resuming it was tried
+  and reverted: one pre-existing case failed and one segfaulted. The cost -- a cross-thread
+  `ResumeOn { loop }` whose loop dies first strands its flow forever -- is paid by running one
+  more turn before destroying such a loop. A chain the
   loop owns is a `DetachedTask`, which carries no stop token -- a detached flow has no awaiting
   coroutine to inherit one from -- so resuming it would not cancel it, it would run the rest of
   its body on a loop that is being destroyed. A chain the loop borrows belongs to a `Task`
   somebody holds, that owner set a stop token, and resuming it is what makes the frame unwind and
   run its cleanup. The question is answered by `ParkedWork::abandon` being non-empty, recorded
   where the work is queued rather than asked of `detail::Parked`, which offers no accessor for it.
+- **A park whose waiter has been queued is still REGISTERED**, so it stays in the handle index
+  until the park itself is taken. Readiness is dispatched in turn step 4 and resumed in step 2 of
+  the NEXT turn, and a close landing in between must still find the park: dropping the handle
+  index when the waiter was taken made that window invisible to `notifyHandleClosing`, which
+  issued the kernel-side removal after the close instead of before it -- against a descriptor
+  number the kernel may already have reassigned. The waiter index is a different question and
+  does go then, or a cancel in the same turn hands back work that is already queued.
 - **`cancelPending`'s `true` is an ownership transfer, not a status**, so the claim it takes back
   is DISARMED rather than released: releasing the last claim would free the very frame the caller
   has just been handed. It searches the ready queue, the park table and the inbound queue, because

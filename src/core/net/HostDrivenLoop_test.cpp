@@ -175,8 +175,17 @@ TEST_CASE("run and blockOn are declared and compiled on every platform, host-dri
     // failure is an abort.
     //
     // What this one holds is the other half: that both are instantiable in a build where the
-    // default backend IS host-driven, which is the WebAssembly one. A `requires` expression
-    // rather than a call, because calling them here would abort this binary.
+    // default backend IS host-driven, which is the WebAssembly one. Neither is CALLED, because
+    // calling them here would abort this binary.
+    //
+    // `run()` is a non-template member compiled into `EventLoop.cpp`, which is in the WebAssembly
+    // FILE_SET, so a *requires*-expression is enough for it. `blockOn` is a header TEMPLATE, and
+    // a *requires*-expression instantiates only its declaration -- the return type is explicit, so
+    // the body is never touched, and a body that did not compile there would go unnoticed. Taking
+    // its address odr-uses it, which instantiates the definition. Nothing else in this binary
+    // calls it under Emscripten: the canary that does is `NOT EMSCRIPTEN`.
     STATIC_REQUIRE(requires(EventLoop& loop) { loop.run(); });
-    STATIC_REQUIRE(requires(EventLoop& loop) { loop.blockOn(Task<void> {}); });
+    auto const blockOnVoid =
+        static_cast<void (EventLoop::*)(core::async::Task<void>)>(&EventLoop::blockOn<void>);
+    CHECK(blockOnVoid != nullptr);
 }

@@ -33,6 +33,16 @@ What another thread may do to a loop is `post()`, `submit()`, `schedule()`, `req
 touches the loop's own containers, and none of them runs the work. Everything else is for the
 loop's thread.
 
+`spawn()` is the one that catches people, because it looks like `submit()` and is not. It writes
+the loop's own `std::list` of roots, the map that indexes them and the ready queue, with no lock
+and no inbound queue to hand to — and it uses the same `isOnWorkerThread()` its three siblings use
+to decide whether to hand over, only to decide whether to ring the backend's bell. Migrating a
+per-connection flow from `submit()` to `spawn()` for the frame lifetime, which is the reason
+anyone does, moves it from the cross-thread surface to the loop-thread-only one and nothing about
+the call announces that. It asserts on the same predicate the turn and the destructor use, so an
+acceptor thread calling it while a turn runs fails with a message rather than a torn splice. The
+setup call before `run()`, and the host-driven call between pumps, both remain legal.
+
 ## One turn of the loop
 
 1. Swap the inbound queue: run the posted functions and submissions, then resolve cancellation

@@ -86,6 +86,24 @@ EventLoop::~EventLoop()
     }
     _ready = std::move(borrowedQueue);
 
+    // **The inbound queue is NOT swept, and that is a decision rather than an omission.** Work
+    // handed over and not yet accepted by a turn is DROPPED: never resumed, never unwound.
+    //
+    // Resuming it was tried and is wrong. `submit(std::coroutine_handle<>)` borrows a bare
+    // handle, and the loop cannot ask a type-erased handle whether it names a suspended flow that
+    // would unwind or a never-started lazy `Task` that would RUN -- resuming the second starts a
+    // coroutine on a loop that is being destroyed. Even a genuine `ResumeOn` continuation is no
+    // better: `ResumeOn::await_resume()` is noexcept and returns rather than throwing, so
+    // resuming one runs its body here too, and a body that re-enters the loop segfaults.
+    // `LoopTeardown_test`'s "work somebody else owns is left alone" and `TestLoop_test`'s "stop
+    // short-circuits run()" are the two cases that say so, and the second says it with a SIGSEGV.
+    //
+    // What makes the ready queue different is not which container it is but what being in it
+    // MEANS: a turn accepted that work and the loop owes its resumption. A submission still in
+    // the inbound queue is an offer no turn has taken up, so the loop never took the obligation
+    // on. The consequence is real and belongs in the open: a cross-thread `ResumeOn { loop }`
+    // whose loop dies before the next turn leaves its awaiting flow suspended forever. An owner
+    // that needs it delivered runs one more turn before destroying the loop.
     _rootStop.request_stop();
     unparkEverything();
 
@@ -135,6 +153,8 @@ void EventLoop::abandonParkedWork() noexcept
     {
         auto ready = std::exchange(_ready, {});
         auto parks = _parks.takeAll();
+        // Every park this pass takes is gone, so every mark naming one is too.
+        _abandoned.clear();
         // The inbound queue too, and it is not an afterthought: a coroutine that parked with
         // `ResumeOn` from any thread but the loop's is sitting HERE and nowhere else, so a
         // teardown that swept only the loop's own containers would leak exactly the shape #1025
@@ -537,6 +557,8 @@ bool EventLoop::cancelPending(std::coroutine_handle<> handle) noexcept
     if (auto const id = _parks.byWaiter(handle))
     {
         auto park = _parks.take(id);
+        // Same reason as in `unregisterPark`: the mark is per park, so it goes when the park does.
+        _abandoned.erase(id);
         if (park)
         {
             if (park->attached)
@@ -600,12 +622,22 @@ bool EventLoop::stopRequested() const
 
 void EventLoop::requestStop()
 {
+    // The same predicate the turn and the destructor use: this loop's own thread, or nobody
+    // driving it. Anywhere else, this writes scheduler state beside a turn that is reading it.
+    assert(teardownIsSerialisedWithDispatch()
+           && "EventLoop::requestStop from a second thread while another is driving this loop: "
+              "post() a call to it instead");
     _rootStop.request_stop();
     unparkEverything();
 }
 
 void EventLoop::spawn(async::Task<void> task)
 {
+    // The same predicate the turn and the destructor use: this loop's own thread, or nobody
+    // driving it. Anywhere else, this writes scheduler state beside a turn that is reading it.
+    assert(teardownIsSerialisedWithDispatch()
+           && "EventLoop::spawn from a second thread while another is driving this loop: "
+              "post() a call to it instead");
     auto const handle = task.handle();
     if (!handle)
         return;
@@ -661,6 +693,11 @@ bool EventLoop::cancelTimer(TimerId timer) noexcept
 
 void EventLoop::resumeSoon(async::ParkedWork work)
 {
+    // The same predicate the turn and the destructor use: this loop's own thread, or nobody
+    // driving it. Anywhere else, this writes scheduler state beside a turn that is reading it.
+    assert(teardownIsSerialisedWithDispatch()
+           && "EventLoop::resumeSoon from a second thread while another is driving this loop: "
+              "post() a call to it instead");
     if (!work.resume)
         return;
     queueReady(std::move(work));
@@ -673,8 +710,13 @@ void EventLoop::queueReady(async::ParkedWork work)
         ReadyEntry { .parked = async::detail::Parked { std::move(work) }, .ownedByLoop = owned });
 }
 
-ParkId EventLoop::registerPark(ParkEntry entry)
+ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
 {
+    // The same predicate the turn and the destructor use: this loop's own thread, or nobody
+    // driving it. Anywhere else, this writes scheduler state beside a turn that is reading it.
+    assert(teardownIsSerialisedWithDispatch()
+           && "EventLoop::registerPark from a second thread while another is driving this loop: "
+              "post() a call to it instead");
     // A park is a coroutine to resume OR a callback to call; one without either would be filed,
     // indexed and fired into nothing.
     if (!entry.work.resume && entry.onExpired == nullptr)
@@ -702,13 +744,19 @@ ParkId EventLoop::registerPark(ParkEntry entry)
                                            .onWritable = &EventLoop::onParkReady,
                                            .onError = nullptr };
 
-        auto const attached = _backend.attach(park->handler);
+        auto attached = _backend.attach(park->handler);
         // A refused interest must not leave a park behind claiming the handle is watched: the
         // awaiting flow has to fail rather than park on an interest the kernel never accepted,
         // which nothing could ever resume.
-        auto const armed = attached ? _backend.setInterest(park->handler, entry.interest) : attached;
+        auto armed = attached ? _backend.setInterest(park->handler, entry.interest) : std::move(attached);
         if (!armed)
         {
+            // The kernel's reason travels out with the refusal rather than being flattened to a
+            // bool here. Both calls return it for exactly that purpose, and `BadHandle` versus a
+            // filter the kernel would not arm is the difference a consumer debugging descriptor
+            // exhaustion has to be able to see.
+            if (refusal != nullptr)
+                *refusal = std::move(armed.error());
             _backend.detach(park->handler);
             // The flow is about to resume and report the refusal, so the chain is ITS again.
             // Letting this park's claim go out of scope instead would free -- if it held the last
@@ -724,7 +772,17 @@ ParkId EventLoop::registerPark(ParkEntry entry)
 
 void EventLoop::unregisterPark(ParkId park) noexcept
 {
+    // The same predicate the turn and the destructor use: this loop's own thread, or nobody
+    // driving it. Anywhere else, this writes scheduler state beside a turn that is reading it.
+    assert(teardownIsSerialisedWithDispatch()
+           && "EventLoop::unregisterPark from a second thread while another is driving this loop: "
+              "post() a call to it instead");
     auto entry = _parks.take(park);
+    // The abandon mark goes with the park, on every path that takes one. `wakeReasonOf` consumes
+    // it one turn later on the ordinary path, but a park closed under `FdWakePolicy::Cancel` and
+    // then taken by `cancelPending` -- or freed at teardown -- never reaches that, and the mark
+    // would outlive the park it names for the loop's whole life.
+    _abandoned.erase(park);
     if (!entry)
         return;
     if (entry->attached)
@@ -737,6 +795,11 @@ void EventLoop::unregisterPark(ParkId park) noexcept
 
 FdWakeReason EventLoop::wakeReasonOf(ParkId park) noexcept
 {
+    // The same predicate the turn and the destructor use: this loop's own thread, or nobody
+    // driving it. Anywhere else, this writes scheduler state beside a turn that is reading it.
+    assert(teardownIsSerialisedWithDispatch()
+           && "EventLoop::wakeReasonOf from a second thread while another is driving this loop: "
+              "post() a call to it instead");
     // Consumed rather than merely read: the awaiter asks exactly once, and an id left behind here
     // would outlive its park and grow without bound on a long-lived loop.
     return _abandoned.erase(park) != 0 ? FdWakeReason::Abandoned : FdWakeReason::Ready;
