@@ -56,6 +56,12 @@ What it deliberately does not do, and what is therefore yours:
 
 - **A namespace definition** (`namespace tui { ... }`, `namespace net { ... }`). A consumer's own
   namespace and the moved one are the same token. endo has five such forward declarations.
+- **A namespace alias** (`namespace cli = crispy::cli;`), for the same reason from the other side:
+  the token being defined is the consumer's, the token on the right is the one that moved, and only
+  a person can say whether the alias should follow the move, be re-pointed at `core::cli`, or go
+  away entirely because the qualified uses it stood in for are now spelled out. Grep each profile
+  for `^\s*namespace\s+\w+\s*=` before you start; the count is small and the decisions are not
+  mechanical.
 - **A string or character literal.** A codemod may change what the code says, never what the
   program sends. Comments *are* rewritten, because a comment documents the code beside it.
 - **`crispy::` as a prefix.** contour keeps crispy's renderer half, so the table renames crispy
@@ -95,10 +101,10 @@ handed one.
 Six migrations are about to rewrite hundreds of files each. "I read the diff and it looked right"
 does not survive the first hundred, and the reviewer of a 53-call-site rename does not want to
 spot-check either. Prove the pass was **pure by construction** instead: for every file the commit
-touched, take the pre-image, apply the substitutions *you* assert the pass should have made, and
+modified, take the pre-image, apply the substitutions *you* assert the pass should have made, and
 compare with the post-image.
 
-```sh
+```bash
 # The substitutions you assert this pass made. Written out here, by hand, from the rename rows the
 # pull request applies -- see below for why they are not read back from the tool.
 substitutions() {
@@ -106,18 +112,42 @@ substitutions() {
         -e 's/@c Other/@c SystemError/g'
 }
 
-# For each file the commit touched, derive the post-image yourself and compare, whitespace stripped.
-for file in $(git diff --name-only HEAD~1 HEAD -- src); do
-    git show "HEAD~1:$file" | substitutions | tr -d '[:space:]' > /tmp/expected
-    git show "HEAD:$file"                   | tr -d '[:space:]' > /tmp/actual
-    cmp -s /tmp/expected /tmp/actual || echo "NOT PURE: $file"
-done
+# Every file the commit MODIFIED. --diff-filter=M is load-bearing: a file the commit added has no
+# pre-image and one it deleted has no post-image, so neither is a transform this can check, and
+# asking git for the missing side prints `fatal:` and counts the file as impure. A consumer
+# migration adds and deletes by the dozen, so without the filter the proof fails on its first
+# attempt, every time, and gets abandoned as broken. -z and `read -d ''` keep a path with a space
+# or a non-ASCII byte in it one path rather than two or a shell-quoted string git then cannot find.
+list=$(mktemp) expected=$(mktemp) actual=$(mktemp)
+git diff -z --name-only --diff-filter=M HEAD~1 HEAD -- src > "$list"
+
+# Derive the post-image yourself and compare, whitespace stripped. The loop reads from a file, not
+# from a pipe, so that its counters survive it -- in a pipeline the `while` runs in a subshell and
+# both counts come back zero, which reads exactly like a clean run.
+pure=0 impure=0
+while IFS= read -r -d '' file; do
+    git show "HEAD~1:$file" | substitutions | tr -d '[:space:]' > "$expected"
+    git show "HEAD:$file"                   | tr -d '[:space:]' > "$actual"
+    if cmp -s "$expected" "$actual"; then
+        pure=$((pure + 1))
+    else
+        impure=$((impure + 1)); echo "NOT PURE: $file"
+    fi
+done < "$list"
+echo "pure: $pure   not pure: $impure"
+rm -f "$list" "$expected" "$actual"
 ```
 
 Run against core-cpp's own `Other` -> `SystemError` rename (`8a88ce0`, 53 call sites) this answers
 `pure: 16   not pure: 2`, and names the two files as the ones carrying work that was not the
 rename -- which is the method doing both of its jobs at once: proving purity where purity is
 claimed, and refusing it where hand work happened.
+
+**What the filter leaves out, you review as itself.** An added, deleted or renamed file is outside
+this proof, and in a consumer migration that is most of the commit: the consumer's own copy of the
+code is deleted and nothing replaces it in that tree. That is a diff a person reads, and it reads
+easily -- a deletion has no bytes to be subtly wrong about. The proof covers the part that does:
+the files whose contents a codemod rewrote in place.
 
 Anything the pass did that the substitutions do not account for breaks the comparison and is named
 by file. That catches the two failure modes a diff read does not:

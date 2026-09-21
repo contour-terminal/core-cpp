@@ -1,10 +1,13 @@
-# The ruff build core-cpp's Python is formatted with, and the one place its version is stated.
+# The ruff build core-cpp's Python is formatted and linted with, and the one place its version is
+# stated.
 #
 # PyPI's ruff release: one build, with the same output on Linux, macOS and Windows.
-# scripts/tool-versions.py installs it, and scripts/ruff.py refuses every other build, because
-# ruff's formatter output changes between releases: an unpinned ruff would reformat a file CI then
-# reports as unformatted, which is the clang-format hazard with a different tool's name on it.
+# scripts/tool-versions.py installs it, and scripts/python-style.py refuses every other build,
+# because ruff's formatter output changes between releases: an unpinned ruff would reformat a file
+# CI then reports as unformatted, which is the clang-format hazard with a different tool's name on
+# it. The linter is pinned by the same file for the same reason from the other side -- a newer ruff
+# that finds one more thing turns a green branch red on a version nobody chose.
 #
-# Only the formatter is pinned to it. ruff's linter is not run (scripts/ruff.py says why).
+# Which rules run is ruff.toml's `[lint] select`, stated there rather than inherited.
 package: ruff
 version: 0.16.8

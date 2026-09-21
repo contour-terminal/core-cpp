@@ -265,9 +265,9 @@ workflow refuses one without a section here.
   a test refuses that case by name. `core::net_types` still links nothing and still includes no
   `<format>`: it is what `fastcache-cc` links alone in Task C4.
 
-- `tools/migrate/`, the tooling every consumer migration runs: `renames.json`, the 438-row rename
-  table; `rewrite.py --profile contour|endo|tuidu|fastcached`, an idempotent codemod over its
-  include, namespace, symbol, member and macro rows, anchored so that `net::` never matches inside
+- `tools/migrate/`, the tooling every consumer migration runs: `renames.json`, the rename table;
+  `rewrite.py --profile contour|endo|tuidu|fastcached`, an idempotent codemod over its include,
+  namespace, symbol, member and macro rows, anchored so that `net::` never matches inside
   `std::net::`, `endo::net::` or `mynet::` and so that a string literal is left alone; and
   `semantic_rename.py`, which renames a member through libclang only where the **declaration** it
   refers to is the one named, so `sock.Read(` moves where `sock` is a `FastCache::ISocket` and
@@ -279,15 +279,20 @@ workflow refuses one without a section here.
   bindings and fails on a skip, so the semantic pass is tested for real. None of this is part of
   the library: no target links it and no consumer builds it.
 
-- `ruff` is pinned like clang-format and clang-tidy, and the repository's Python is formatted with
-  it: `.ruff-version` states the release, `scripts/tool-versions.py` installs it and refuses a
-  mismatch, `scripts/ruff-format.py --check` is the gate, and the `style` CI job runs it beside
-  clang-format's. `ruff.toml` sets the line length to `.clang-format`'s `ColumnLimit`, so a Python
-  file and the C++ beside it wrap at the same column and one number governs both. The wrapper
-  refuses any ruff but the pin, because its formatter output changes between releases: an unpinned
-  ruff reformats a file that CI then reports as unformatted. Only the formatter runs; enabling
-  ruff's linter is a decision of its own. Nothing here enters a consumer's build, so there is no row
-  in `cmake/CoreCppDependencies.cmake`.
+- `ruff` is pinned like clang-format and clang-tidy, and the repository's Python is `snake_case`,
+  formatted *and* linted with it: `.ruff-version` states the release, `scripts/tool-versions.py`
+  installs it and refuses a mismatch, `scripts/python-style.py --check` runs both halves and reports
+  both before failing, and the `style` CI job runs it beside clang-format's. `ruff.toml` sets the
+  line length to `.clang-format`'s `ColumnLimit`, so a Python file and the C++ beside it wrap at the
+  same column and one number governs both, and it states ruff's default rule set (`E4`, `E7`, `E9`,
+  `F` — undefined names, unused imports, import and statement errors) rather than inheriting it, so
+  a future ruff cannot widen or narrow the gate by changing its mind about the default. Nothing
+  stylistic is selected: layout is the formatter's job, and the linter never rewrites. The wrapper
+  refuses any ruff but the pin, because its output changes between releases: an unpinned ruff
+  reformats a file that CI then reports as unformatted, and finds one more thing on a version
+  nobody chose. The `# noqa` comments are gone with it — a diagnostic-muting comment is the Python
+  spelling of `NOLINT`. Nothing here enters a consumer's build, so there is no row in
+  `cmake/CoreCppDependencies.cmake`.
 
 - `core::async` gains fastcached's executor and ownership vocabulary, merged onto contour's `Task`
   (the design spec, Part I §2, item 6). New headers, all header-only and all in the WebAssembly
@@ -362,18 +367,13 @@ workflow refuses one without a section here.
   assertion for a readiness park. A flow that resumed or unwound without unregistering leaves its
   handler attached to the backend, and a count that never returns to zero is how that shows.
 
-- The repository's Python is `snake_case` and is linted, not only formatted: `ruff.toml` states
-  ruff's default rule set (`E4`, `E7`, `E9`, `F` — undefined names, unused imports, import and
-  statement errors) rather than inheriting it, so a future ruff cannot widen or narrow the gate by
-  changing its mind about the default. Nothing stylistic is selected; layout is the formatter's job,
-  and the linter never rewrites. `scripts/ruff-format.py` is `scripts/python-style.py`, which runs
-  both halves and reports both before failing. The `# noqa` comments are gone with it: a
-  diagnostic-muting comment is the Python spelling of `NOLINT`.
 - `.agent/guides/consumer-migration.md` carries the byte-identity proof a consumer pull request runs
-  to show a mechanical pass was mechanical: re-derive each post-image from its pre-image by applying
-  only the rows the profile reported, and assert byte-identity. It catches an unintended rewrite and
-  a hand edit mixed into a codemod commit; it does not catch a correct rewrite to a wrong target,
-  which is what the drift gate is for.
+  to show a mechanical pass was mechanical: for every file the commit *modified*, re-derive the
+  post-image from the pre-image by applying the substitutions the author asserts by hand — never the
+  codemod's own report, and never the codemod again, or a tool that is wrong about a row is wrong
+  identically on both sides and proves itself correct — and compare with whitespace stripped. It
+  catches an unintended rewrite and a hand edit mixed into a codemod commit; it does not catch a
+  correct rewrite to a wrong target, which is what the drift gate is for.
 
 - `core::net::HostDrivenBackend` (`<core/net/HostDrivenBackend.hpp>`) and the `IHostScheduler`
   seam behind it: the backend for an event loop that does not own its thread. It does not block —
