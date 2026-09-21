@@ -11,10 +11,26 @@ Most of these rules were paid for in fastcached; the full measurements are in
 ## How core-cpp's tests are registered
 
 - **Tests sit next to their sources:** `Foo_test.cpp` beside `Foo.cpp`, in the module's
-  directory. There is one test binary per module, `core-cpp-<module>-test`, and a second one
-  where a module's tests must also run under a definition that changes what its headers declare
-  (`core-cpp-async-fallback-test`, with `CORE_ASYNC_FORCE_STOP_TOKEN_FALLBACK`): such a definition
-  holds for a whole program or for none of it, never for some of its files.
+  directory. A module has one binary named after it, `core-cpp-<module>-test`, and one more for
+  each **ground** it has to split. What follows is the grounds and not a list of the binaries, and
+  carries no count of either: a count is a completeness claim, nothing checks one, and this bullet
+  used to state the reason for a single split in the voice of a general rule — the splits that
+  contradicted it were each added by a lane that did not own this sentence.
+  - **A definition that changes what the module's headers declare.** Such a definition holds for a
+    whole program or for none of it, never for some of its files, so the cases that need it are a
+    program of their own (`CORE_ASYNC_FORCE_STOP_TOKEN_FALLBACK`).
+  - **A narrower or conditional target.** A binary may link one of the module's other targets
+    instead of `core::<module>` — `core_cpp_add_test(net NAME net_types ...)` — and a target that
+    exists only under an option (`CORE_CPP_WITH_TLS`) cannot share a binary with one that always
+    does.
+  - **A platform or label scope that differs.** A label and a `TIMEOUT` are properties of a
+    BINARY, so cases that must not carry the module's `loopback` label or its timeout, or that
+    build where the rest of the module does not (Emscripten included), can only be given different
+    ones by being a binary of their own.
+
+  Which ground a split rests on is said where the split is, in the module's `CMakeLists.txt`, and
+  that is the only place it is said: a reason recorded twice is a reason that can disagree with
+  itself.
 - **`core_cpp_add_test(<module> SOURCES ... [LIBS ...] [LABELS ...])` registers it**
   (`cmake/CoreCppTargets.cmake`): it links `core::<module>` and `core::testing_main`, registers
   the ctest `core-cpp.<module>`, and sets `SKIP_RETURN_CODE 77` and the labels `core-cpp` and
