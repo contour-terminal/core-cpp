@@ -186,6 +186,13 @@ jobs:
       - name: Tree-level coverage self-test
         run: python scripts/check-tree-level-coverage-selftest.py
 
+      # The formatters refuse a path that is not theirs. It runs here rather than in a build job
+      # because its input is two scripts of this tree, and it needs neither clang-format nor ruff
+      # installed -- the refusal happens before either binary is looked up.
+      # covers: core-cpp.format-scripts-selftest
+      - name: The format scripts refuse what is not theirs
+        run: python scripts/format-scripts-selftest.py
+
       # libclang's Python bindings are optional, so semantic_rename.py's cases skip wherever they are
       # missing -- and a suite whose only untested tool always skips is an untested tool. This is the
       # one job that installs them, and it fails on a skip rather than reporting the same green.

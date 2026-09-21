@@ -118,6 +118,35 @@ def main() -> int:
         )
         return 2
 
+    # EXTENSIONS used to filter only what --all DISCOVERED, never what a caller NAMED, so an
+    # explicitly named path went to clang-format whatever it was. clang-format parses its input as
+    # C++ regardless of the name, so `clang-format.py x.cmake` rewrote a CMake file as C++ and
+    # reported "1 file(s) formatted" -- and `--check` was worse than blind, it was inverted: it
+    # failed a pristine .cmake and passed the mangled one, so it drove a caller toward the damage
+    # and then certified it.
+    #
+    # Refused rather than skipped, and by name. A silent skip would leave a caller believing a file
+    # they named was formatted when nothing touched it, which is the same class of defect one layer
+    # up. This sits with the argument checks above rather than after the version check below,
+    # because a path that is not a C++ source is wrong whichever clang-format is installed -- and
+    # because it lets the self-test reach this refusal on a machine that has no clang-format at all.
+    if not arguments.all:
+        unsupported = [path for path in arguments.paths if Path(path).suffix[1:].lower() not in EXTENSIONS]
+        if unsupported:
+            print(
+                f"clang-format.py: refusing {len(unsupported)} path(s) that are not C++ sources:",
+                file=sys.stderr,
+            )
+            for path in unsupported:
+                print(f"  {path}", file=sys.stderr)
+            print(
+                "clang-format.py: clang-format parses whatever it is given as C++ and rewrites it, "
+                "so formatting one of these destroys it and reports success. C++ sources are: "
+                + ", ".join(f".{extension}" for extension in EXTENSIONS),
+                file=sys.stderr,
+            )
+            return 2
+
     pin = load_tool_versions().pinned("clang-format")
     binary = find_binary(arguments.binary)
     if binary is None:

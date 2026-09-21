@@ -262,6 +262,36 @@ set_tests_properties(core-cpp.tree-level-coverage core-cpp.tree-level-coverage-s
     LABELS "core-cpp;hygiene;tree-level"
     TIMEOUT 60)
 
+# That scripts/clang-format.py and scripts/python-style.py refuse a path that is not theirs.
+#
+# Both filtered by extension only inside `sources()`, which serves `--all`, so a path a caller
+# NAMED reached the tool unfiltered. clang-format reads its input as C++ whatever the name is, so
+# naming a `.cmake` rewrote it as C++ and printed "1 file(s) formatted" -- and `--check` was not
+# blind but inverted, failing the pristine file and passing the mangled one. Every other gate in
+# this tree has a self-test proving it refuses; these two had none, which is exactly why the hole
+# survived until a lane named a `.cmake` and lost it.
+#
+# It needs neither clang-format nor ruff: the refusal is an argument check that runs before either
+# binary is looked up, and the cases that must be ACCEPTED assert on the absence of the refusal
+# message rather than on an exit status, which a missing binary would otherwise supply for free.
+#
+# Bounds: 26 subprocess launches, each a Python start-up. 1.7s on Windows, so 120 is seventy times
+# the measurement -- process start-up is the cost here, and it is the thing that varies most
+# between a warm developer machine and a cold runner.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME core-cpp.format-scripts-selftest
+             COMMAND "${Python3_EXECUTABLE}"
+                     "${CORE_CPP_SOURCE_DIR}/scripts/format-scripts-selftest.py")
+else()
+    add_test(NAME core-cpp.format-scripts-selftest COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.format-scripts-selftest: SKIPPED -- no Python 3 interpreter was found at configure time")
+    set_tests_properties(core-cpp.format-scripts-selftest PROPERTIES
+        SKIP_REGULAR_EXPRESSION "SKIPPED")
+endif()
+set_tests_properties(core-cpp.format-scripts-selftest PROPERTIES
+    LABELS "core-cpp;hygiene;tree-level"
+    TIMEOUT 120)
+
 # A CRT assert, abort(), invalid parameter or crash must end the process instead of opening a dialog
 # that waits for a click. Each run must fail (WILL_FAIL) within the timeout; a run that hangs has hit a
 # dialog. The canary's main() asks for no suppression: linking core::testing_dialogs installs it.

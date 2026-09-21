@@ -126,6 +126,28 @@ def main() -> int:
         )
         return 2
 
+    # The same hole scripts/clang-format.py had: `*.py` filtered what --all DISCOVERED and never
+    # what a caller NAMED. The consequence here is far milder -- ruff cannot parse a .cmake as
+    # Python, so it reports `invalid-syntax` and exits 120 rather than rewriting the file -- but a
+    # caller who names one gets a syntax error about their CMake instead of being told they named
+    # something that is not Python. Closed here so the two scripts refuse the same way, and so the
+    # milder half of a defect does not survive the fix to the dangerous half.
+    if not arguments.all:
+        unsupported = [path for path in arguments.paths if Path(path).suffix.lower() != ".py"]
+        if unsupported:
+            print(
+                f"python-style.py: refusing {len(unsupported)} path(s) that are not Python sources:",
+                file=sys.stderr,
+            )
+            for path in unsupported:
+                print(f"  {path}", file=sys.stderr)
+            print(
+                "python-style.py: ruff reads its input as Python, so one of these produces a "
+                "syntax error about a file that was never Python. Name .py files.",
+                file=sys.stderr,
+            )
+            return 2
+
     pin = load_tool_versions().pinned("ruff")
     binary = find_binary(arguments.binary)
     if binary is None:

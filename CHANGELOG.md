@@ -826,6 +826,18 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- **`scripts/clang-format.py` no longer destroys a file it was handed.** The extension filter
+  applied only to what `--all` discovered, never to a path the caller named, so
+  `clang-format.py x.cmake` handed a CMake file to clang-format, which parses its input as C++
+  whatever the name is, rewrote it, and reported `1 file(s) formatted`. `--check` was worse than
+  blind: it **failed** the pristine file and **passed** the mangled one, so it pointed a caller at
+  the damage and then certified it. Both scripts now refuse a path that is not theirs, by name and
+  before either tool is looked up — refused rather than skipped, because a silent skip leaves a
+  caller believing a file they named was formatted when nothing touched it.
+  `scripts/python-style.py` had the same shape with a milder effect (ruff honours the extension and
+  leaves the file alone, but reported it as formatted), and is closed the same way. Both are now
+  held by `core-cpp.format-scripts-selftest`, which proves each refuses every foreign shape by name
+  and accepts its own — the absence of exactly that test is why this survived.
 - **`core::async`: a use-after-free when a chain parks again while an earlier park is being
   released.** `detail::claimOn()` armed the chain's abandon state and then took its claim as two
   separate atomic stores, so a concurrent `AbandonClaim` release could observe a state that never
