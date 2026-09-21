@@ -1,12 +1,21 @@
-# The SDD workspace is scratch: ledgers, briefs, reports and review packages are
-# per-session working files and stay out of the repository.
+# The SDD workspace is scratch by default: review packages and generated diffs are
+# regenerable from git and stay out of the repository.
 *
-# ...with one exception. global-constraints.md stopped being scratch hours into the
-# first session that used it: every dispatch cites it as binding, several lanes write
-# to it, and an untracked file has no index, no diff, no history and no protection
-# against a concurrent overwrite -- so none of the three shared-file rules it itself
-# states can apply to it. Tracking it turns that whole class of hazard back into the
-# one the rulebook already covers. `!*/` lets git descend; `*` still ignores the rest.
 !*/
 !.gitignore
+
+# The prose is not scratch, and treating it as such was a mistake this session had to
+# discover twice. Every dispatch is cited as binding by the lane executing it; every
+# report is what the next task is explicitly told to read first; every review is what a
+# fix round is written against; the ledger is the recovery map after a context loss.
+# An untracked file has no index, no diff, no history and no protection against a
+# concurrent overwrite -- so none of the shared-file rules these documents themselves
+# state can apply to them, and a paragraph one lane overwrites is gone with nothing to
+# report it. Past loss here is permanently unverifiable, which is the argument for
+# closing it rather than evidence that it bit us.
+#
+# `review-*.diff` stays ignored deliberately: it is the larger half of this directory
+# by bytes and the only regenerable one (`git diff A..B`).
 !global-constraints.md
+!progress.md
+!task-*.md

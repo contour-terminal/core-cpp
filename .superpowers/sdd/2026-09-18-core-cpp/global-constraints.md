@@ -438,3 +438,57 @@ correlates with it. A classification by correlate is the same defect one level d
 - **When a record of a past defect ages, date the row; do not chase the numbers.** A
   "what it said / what was true" table is correct as history and misleading as present tense. Its
   pointers will land on repaired text, which is the point of having repaired them.
+
+- **`global-constraints.md` is TRACKED (`d44e2d6`) and the shared-file rules apply to it.** Build
+  edits from `git show HEAD:<path>` plus your transform, not from the worktree copy; commit it
+  through a private index if your hunks are not the only ones. It was gitignored until a lane found
+  that **none of the three shared-file rules stated in this file could be applied to this file** —
+  no index, no diff, no history, no collision detection — while every dispatch cites it as binding
+  and several lanes write to it. A document that cannot obey its own rules is a special case, and
+  special cases are where rules stop being read.
+- **A working control proves the instrument, not the question.** C0 checked six SHAs against
+  core-cpp, got two "DOES NOT EXIST", and had a control (a fake `deadbee`) pass — so the probe was
+  working perfectly, on the wrong repository. The SHAs were fastcached's. Run the control *and* say
+  which question the probe's shape asks.
+- **A probe that succeeds at the wrong question hands you a confident number — and the wrong
+  answer is often the more interesting one.** Two bad SHAs in the lead's file; a tool claim of the
+  lead's shown false; a dispatch caught asserting something absent. Those are the results that
+  travel fastest, get reported first, and are least likely to be re-checked before they are
+  believed. **Be slowest with the finding you most want to be true.**
+- **A citation into a pinned tree cannot rot; a count of your own tree rots before the document is
+  read.** Both halves came out of one audit: B7's `IocpSocket.cpp:555-561` into fastcached at
+  `0708dd54` is still exact, while B3's "contour's `EventSourceParity_test` (1243 lines)" was wrong
+  when written (contour's is 1131; 1243 was *our* copy) and is 1588 today.
+- **Say which claims you did not reach.** A12 marked the `wake()` coalescing claim *unverified, not
+  confirmed false*, because asserting it from the call chain would have been the plausible-narrative
+  move. Naming what you did not verify is what makes what you did verify worth anything.
+- **A document written before a ruling cannot misstate the ruling; only documents written after it
+  can.** `task-B3-dispatch.md` had zero "true only after task N lands" defects because it predates
+  R101 entirely — it describes the interface B3 was told to build, and B3 built it. The defects of
+  that class were all in dispatches written *after* the ruling, from memory of its conclusion.
+
+- **A dispatch cannot hold a state; it can only tell you to check one.** Write the instruction, not
+  the fact. The controller wrote *"R101 is not true at `HEAD` yet"* into three dispatches; it was
+  true when written and false thirty minutes later, when `7cd86fc` landed. **A stale "not yet" is
+  exactly as misleading as a stale "already"** -- and the fix for one produced the other inside an
+  hour. The durable form names the file to read and asks for the answer in the report.
+- **A run's conclusion is a summary of its jobs; a job list is a summary of a log.** Two lanes hit
+  this an hour apart: a monitor fired on a run that *completed* having executed nothing (cancelled,
+  zero jobs), and a lane read a job list, saw `clang-tidy` named, and inferred from the job names
+  whose failure it was -- the log said its own file was in it too. **Exit a monitor on the job's
+  terminal state, not the run's; attribute a failure from the log, not the list.**
+- **A control is built from the same misconception as the probe.** It shares an author and a
+  premise, so it only ever tests the half you already doubted -- C0's fake-SHA control proved the
+  checker could tell real from fake and could not possibly reveal that it was asking the wrong
+  repository. **The control covers the instrument; the question needs its own check, and the check
+  for a question is naming what a wrong answer would look like** before you run it.
+- **Be slowest with the finding you most want to be true -- the re-check is driven by
+  dissatisfaction, which is backwards.** A confident wrong answer that is *boring* gets re-checked
+  because it is unsatisfying; one that is *interesting* gets reported.
+- **A parked patch's verification is evidence about a tree that has since moved.** "It applied
+  cleanly" is not the same claim as "it still does what I measured". Re-run the gates before
+  landing, however trivial the rebase looked.
+- **Skipping a gate is judgment only if you can name what it would have told you.** B3 skipped ASan
+  and TSan for a pure function's branch reorder -- neither can speak to it -- and ran the pinned
+  clang-tidy directly instead, which was the gate that had caught it before. The same lane's
+  earlier skip, under time pressure, could not be justified that way and put a defect on master.
