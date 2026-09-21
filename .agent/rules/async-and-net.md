@@ -61,7 +61,10 @@ The contract is the spec's (Part I §2, rules 1 to 6), and it is short enough to
 These landed with Task B1, which merged fastcached's `Task.hpp`, `ParkedWork.hpp`, `IExecutor.hpp`,
 `ResumeOn.hpp`, `ThreadPoolExecutor` and `AsyncQueue` into `core::async`. They are about coroutine
 frames rather than sockets, and every rule below is enforced by a case in
-`src/core/async/{Task,ParkedWork,AsyncQueue}_test.cpp`.
+`src/core/async/{Task,ParkedWork,AsyncQueue,ThreadPoolExecutor}_test.cpp`. Count the last one:
+it holds the only cases for the resume-or-free rule over a real pool and for a join whose children
+finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_USE_THREADS` is on
+— so in the WebAssembly leg those rules are stated and not exercised.
 
 - **The awaiter owns what it awaits, and ownership runs downward.** `Task::operator co_await` is
   rvalue-qualified and moves the frame into the awaiter, which lives in the awaiting coroutine's
@@ -96,13 +99,20 @@ frames rather than sockets, and every rule below is enforced by a case in
   disowns and resumes in one expression, and a handle it *declines* to resume (already done, or
   empty) has its owned chain root destroyed there rather than dropped. Taking the work out and
   then walking away is a silent leak on the one path the type exists to close.
-- **`using IExecutor::submit;` in every derived class, and two tools already say so.** A derived
-  class that re-declares one overload of a name hides every other overload of it. On top of the
-  compile-time check in `ParkedWork_test.cpp`, GCC's `-Woverloaded-virtual` and clang-tidy's
-  `bugprone-derived-method-shadowing-base-method` each refuse the hiding declaration outright, and
-  both are errors here. Keep those: `ParkedWork_test.cpp`'s negative control is a plain type
-  offering only `submit(handle)` — what the hiding leaves reachable — rather than the inheriting
-  form, precisely because the inheriting form no longer compiles in this tree. Origin:
+- **Both `IExecutor::submit` overloads are pure virtual, which is what actually closes the hiding
+  hazard.** A derived class that re-declares one overload of a name hides every other overload of
+  it — so an executor declaring only `submit(handle)` hides `submit(ParkedWork)`, fails to override
+  it, and is **abstract**: it cannot be instantiated, let alone leak. `using IExecutor::submit;` is
+  therefore belt-and-braces rather than the guard, and today every one of them is a no-op, because
+  each in-tree executor declares both halves itself. Say it in the class anyway, for the reader and
+  for the day an overload is added. The residual shape the keyword does bear on is an
+  **intermediate abstract** class declaring one half, and `-Woverloaded-virtual` — on GCC *and* on
+  clang, gated by `CORE_CPP_GCC_OR_CLANG` in `cmake/CoreCppToolchain.cmake` — and clang-tidy's
+  `bugprone-derived-method-shadowing-base-method` each refuse it outright, as errors here. Keep
+  `ParkedWork_test.cpp`'s negative control, which is a plain non-inheriting type offering only
+  `submit(handle)` — what the hiding leaves reachable — precisely because the inheriting form no
+  longer compiles in this tree; it proves the concept discriminates rather than accepting
+  everything. Origin:
   [fastcached#1041](https://github.com/LASTRADA-Software/fastcached/issues/1041).
 - **A queue or a resource never resumes its consumer inline.** `AsyncQueue::push()` and `close()`
   hand the parked handle to `IExecutor::submit` and return. A producer commonly pushes while
@@ -296,9 +306,11 @@ frames rather than sockets, and every rule below is enforced by a case in
   [fastcached#1054](https://github.com/LASTRADA-Software/fastcached/issues/1054).
 - **A derived interface that re-declares one overload hides every other overload of that name.**
   `IReactor` re-declared `Submit(handle)` and not `Submit(ParkedWork)`, so every call through the
-  derived type bound to the borrowing overload, and nothing diagnosed it. Every class deriving
-  from `async::IExecutor` says `using IExecutor::submit;`, and a compile-time check asserts that
-  `submit(ParkedWork{})` selects the owning overload. Origin:
+  derived type bound to the borrowing overload, and nothing diagnosed it. The shape is
+  unexpressible here because both `async::IExecutor::submit` overloads are **pure** — see the
+  executor rule above — so the hiding class stays abstract; the `using IExecutor::submit;` every
+  derived class writes and the compile-time check that `submit(ParkedWork{})` selects the owning
+  overload are the belt and the braces, not the trousers. Origin:
   [fastcached#1041](https://github.com/LASTRADA-Software/fastcached/issues/1041).
 - **A watchdog may not write to a socket a coroutine owns**, and the reason is ownership, not
   interleaving: the socket lives in the coroutine's frame, so a write that suspends can outlive

@@ -94,14 +94,21 @@ Imported from contour's `src/coro` at `6777ff05`, with `coro::` renamed `core::a
   [core-cpp#15](https://github.com/contour-terminal/core-cpp/issues/15). Task B1 does not close or
   narrow it: whether the transfer is a tail call is a property of the compiler's sibling-call
   optimisation and of WebAssembly's tail-call support, and the ownership graft changed who owns a
-  frame, not how `final_suspend` transfers control. The depth at which the chain overflows is the
-  same before and after.
+  frame, not how `final_suspend` transfers control. Nothing in this repository measures the depth at
+  which the chain overflows, so treat "unchanged" as an argument from what was edited rather than
+  as a number anybody took: the measurements above are the ones that exist, and the deep-chain case
+  is a pass/fail at 100000 awaits, not a bisection of the limit.
 
-  The teardown of such a chain is not a tail call and does not need to be: each level's awaiter
-  destroys the child it owns at the end of its own `co_await` expression, by which time that
-  child's awaiter has already destroyed its own, so a completed chain is released one frame at a
-  time. A chain destroyed *before* it completes is torn down by plain recursion, one awaiter per
-  level.
+  The teardown of a *completed* chain is not a tail call and does not need to be: each level's
+  awaiter destroys the child it owns at the end of its own `co_await` expression, by which time
+  that child's awaiter has already destroyed its own, so the chain is released one frame at a time,
+  at no depth. A chain destroyed *before* it completes is different, and is new in Task B1 — before
+  it, a root `Task` freed only its own frame. It is torn down by **plain recursion**, one stack
+  frame per level, with no tail call to collapse it and no compiler flag that changes that. So the
+  same 100000-deep chain that survives a completion at `-O2` would be freed recursively if it were
+  abandoned instead, and the depth at which *that* overflows is likewise unmeasured.
+  `Task_test.cpp` covers the property at ordinary depth and says so explicitly — its abandonment
+  case "never has one" deep — so nothing here would notice a regression in the depth itself.
 - `detail::UniqueCoroHandle<Promise>` (`<core/async/UniqueCoroHandle.hpp>`) is the move-only owner
   of a coroutine handle that `Task` and the combinators' child runners share.
 - `<core/async/Cancellation.hpp>` has `OperationCancelled`, which a cancelled frame throws to

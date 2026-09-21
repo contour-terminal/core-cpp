@@ -24,11 +24,13 @@ is [the plan](docs/superpowers/plans/2026-09-18-core-cpp.md).
 
 Every module exists. `Generator` is in base (Task A5b: it needs only std, and
 `core::async::Generator` would read as an asynchronous, `co_await`-able stream); `async` has
-`StopToken`, `Task` and the combinators; `net` is contour's `EventSource` design (Task A6), native
-only but for the header-only `net_types`; and `tui` is endo's terminal UI (Task A7), native only,
-with `tui_output` split off as a leaf that links base alone. Phase B merges fastcached's async and
-networking layer into `async` and `net`, and Task B12 moves the TUI runtime onto
-`core::net::EventLoop` -- which is why the `tui` row does not list `net` yet. The module DAG is the
+`StopToken`, `Task`, the combinators and -- since Task B1 merged fastcached's async design into it
+-- `ParkedWork`, `IExecutor`, `ResumeOn`, `ThreadPoolExecutor`, `AsyncQueue`, `DetachedTask` and
+`syncRun`; `net` is contour's `EventSource` design (Task A6), native only but for the header-only
+`net_types`; and `tui` is endo's terminal UI (Task A7), native only, with `tui_output` split off as
+a leaf that links base alone. What is left of Phase B is the networking half of that merge, into
+`net`, and Task B12 moving the TUI runtime onto `core::net::EventLoop` -- which is why the `tui`
+row does not list `net` yet. The module DAG is the
 table in `cmake/CoreCppModules.cmake`, and configure refuses a link it does not list.
 
 Consumers: contour (vendored), endo, fastcached, tuidu, Lightweight's `dbtool`, morph (CPM). Who

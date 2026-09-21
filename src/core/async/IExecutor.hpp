@@ -25,7 +25,11 @@ namespace core::async
 ///
 /// **A class deriving from this says `using IExecutor::submit;`.** A derived class that
 /// re-declares one overload of a name hides every other overload of it, so every call through the
-/// derived type would bind to the borrowing overload and nothing would diagnose it. Origin:
+/// derived type would bind to the borrowing overload — which is how the upstream defect behaved.
+/// Here it cannot: **both overloads below are pure**, so a derived class declaring only one hides
+/// the other, does not override it, and stays abstract. The `using` is for the reader, and for the
+/// day a third overload appears; what an intermediate abstract class could still do is caught by
+/// `-Woverloaded-virtual` and by clang-tidy, both errors in this tree. Origin:
 /// [fastcached#1041](https://github.com/LASTRADA-Software/fastcached/issues/1041).
 class IExecutor
 {
