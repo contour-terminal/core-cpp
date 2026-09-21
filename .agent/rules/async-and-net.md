@@ -223,10 +223,26 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
 - **A readiness backend reports errors that were not asked for.** epoll delivers `EPOLLERR` and
   `EPOLLHUP` whether or not they were requested, and a failed connect can arrive with neither
   direction set; dropping them is a hang and a loop spinning at 100% CPU with nothing logged.
-  They go to `ReadinessHandler::onError`, and the choice of callback is a pure function
-  (`selectReadinessCallback`) so it is tested without a kernel. A handler with no `onError` has a
-  failure delivered to whichever direction it *does* watch, which is what a parked read and a
-  parked accept both want.
+  The choice of callback is a pure function (`selectReadinessCallback`) so it is tested without a
+  kernel.
+- **A watched direction beats `onError`, and `Readiness::Failed` is best-effort** (Ruling R101).
+  `selectReadinessCallback` returns exactly ONE callback, so the older failure-first order was data
+  loss rather than a routing preference: a peer hangup on a socket with unread bytes arrives as
+  `POLLIN|POLLHUP` on poll and epoll, and the moment a handler set `onError` the reader stopped
+  being woken and those bytes were never read. `onError` now takes a failure only when no watched
+  direction accompanies it — the `POLLERR`-only failed connect it exists for. The reason this is
+  *correct* rather than merely safer: **no platform lets a caller learn what went wrong from the
+  readiness bits.** You are woken, you call `read()` or `write()`, and that reports the error. A
+  reader needs the wakeup so it can read 0; a dial needs it and then checks `SO_ERROR`. Neither
+  consults which callback fired, so nothing above a backend may branch on `Failed` for
+  correctness — it is a hint, and the backends genuinely disagree about it.
+- **Do not "fix" the divergence by mapping `EV_EOF` to `Readiness::Failed`.** It is the first thing
+  the next reader of this will reach for, and it is a regression: `EV_EOF` on a kqueue read filter
+  means the peer called `shutdown(WR)`, which is an ordinary EOF, so macOS would begin reporting
+  every normal close as a failure. The divergence is not a defect to be unified. What is portable,
+  and what `BackendParity_test` now pins, is that **a peer hangup wakes the direction the handler
+  watches, on every backend** — with the buffered bytes still collectable, which is the property
+  every handler actually depends on.
 - **Service at most one callback per registration per wait**: a readable callback may free
   the object the writable callback lives in. Level-triggering re-reports what was skipped. The
   merge is in `detail::ReadyBatch::add`, not in each backend, because only kqueue's kernel

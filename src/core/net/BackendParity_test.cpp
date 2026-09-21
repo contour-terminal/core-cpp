@@ -499,7 +499,7 @@ TEST_CASE("every backend serves a loopback listener", "[net][backend][parity]")
 // these cases HUNG until it existed.
 TEST_CASE("closing a socket resumes a parked reader on every backend", "[net][backend][parity][closehang]")
 {
-    // Socket_test covers this only for PollEventSource, so it stayed green while the
+    // Socket_test covers this only for PollBackend, so it stayed green while the
     // native backends were broken. Driving it through the loop on every backend is
     // what catches a source that holds a descriptor the socket thinks it closed.
     for (auto const& entry: BackendMatrix)
@@ -1077,6 +1077,83 @@ TEST_CASE("a muted registration stays silent when its peer hangs up", "[net][bac
         }
     }
 }
+
+TEST_CASE("a hangup over buffered data wakes the reader on every backend", "[net][backend][parity]")
+{
+    // Ruling R101's property, and the one nothing asserted before it. A peer that
+    // writes and then closes leaves a socket that is BOTH readable and hung up:
+    // POLLIN|POLLHUP on poll and epoll, EVFILT_READ carrying EV_EOF with data on
+    // kqueue. Whatever a backend calls that, the reader must be woken, because those
+    // bytes are still there and a read() is the only thing that will collect them.
+    //
+    // The probe sets onError, which is the configuration B6 will use and the one the
+    // defect needed: selectReadinessCallback returns exactly ONE callback, so under the
+    // old failure-first order poll and epoll answered onError here and the reader was
+    // never woken at all. kqueue and Wfmo answered onReadable and were always right.
+    //
+    // Deliberately NOT asserted: whether `failed` was set. That is where the backends
+    // legitimately disagree — EV_EOF on a read filter is an ordinary shutdown(WR), not
+    // an error — and Readiness::Failed is documented best-effort for exactly this
+    // reason. Asserting it would pin a divergence instead of the property.
+    for (auto const& entry: BackendMatrix)
+    {
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
+            continue;
+
+        DYNAMIC_SECTION("backend=" << entry.name)
+        {
+            auto sv = std::array<int, 2> {};
+            REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM, 0, sv.data()) == 0);
+
+            auto reader = Probe { sv[0] };
+            armProbe(*backend, reader, Interest::Read);
+
+            REQUIRE(::write(sv[1], "x", 1) == 1); // data first...
+            ::close(sv[1]);                       // ...then the hangup, arriving together
+
+            CHECK(backend->wait(std::chrono::milliseconds { 200 }).dispatched >= 1);
+            CHECK(reader.readable >= 1);
+
+            backend->detach(reader.handler);
+            ::close(sv[0]);
+        }
+    }
+}
+
+TEST_CASE("a hangup with nothing buffered still wakes somebody", "[net][backend][parity]")
+{
+    // The other half, and the limit of what is portable. With no data to collect, the
+    // backends differ in what they report -- poll and epoll set POLLHUP with no POLLIN,
+    // kqueue delivers a readable EV_EOF -- so which CALLBACK fires is a divergence and
+    // this case does not assert it. What every backend must do is wake the flow, or a
+    // reader parked on a closed peer waits for ever while a level-triggered
+    // registration re-reports the hangup on every wait: a loop at 100% CPU telling
+    // nobody.
+    for (auto const& entry: BackendMatrix)
+    {
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend)
+            continue;
+
+        DYNAMIC_SECTION("backend=" << entry.name)
+        {
+            auto sv = std::array<int, 2> {};
+            REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM, 0, sv.data()) == 0);
+
+            auto reader = Probe { sv[0] };
+            armProbe(*backend, reader, Interest::Read);
+
+            ::close(sv[1]);
+
+            CHECK(backend->wait(std::chrono::milliseconds { 200 }).dispatched >= 1);
+            CHECK(reader.total() >= 1);
+
+            backend->detach(reader.handler);
+            ::close(sv[0]);
+        }
+    }
+}
 #endif
 
 TEST_CASE("two registrations on one handle are accepted by every backend", "[net][backend][parity]")
@@ -1330,6 +1407,37 @@ TEST_CASE("a handler detached from inside a dispatch is not dispatched in the sa
 
         DYNAMIC_SECTION("backend=" << entry.name)
         {
+            // The CONTROL, and it is the whole difference between a case and a
+            // tautology. Everything below rests on one wait dequeuing both peers into a
+            // single batch; if a kernel reported only one of them, `dispatched == 1` and
+            // `peers[0] + peers[1] == 1` would BOTH still hold and the withdrawal would
+            // never be exercised. The case would go green having tested nothing, and
+            // silently. So the premise is asserted first, on two throwaway pipes with no
+            // withdrawal in them: this kernel does report two ready descriptors in one
+            // wait. This task has already been bitten once by assuming how many entries
+            // one wait fills.
+            {
+                auto controlPipes = std::array<std::unique_ptr<core::platform::SystemPipe>, 2> {};
+                auto controls = std::vector<std::unique_ptr<Probe>> {};
+                for (auto& slot: controlPipes)
+                {
+                    auto pipe = core::platform::createSystemPipe();
+                    REQUIRE(pipe.has_value());
+                    slot = std::move(*pipe);
+                    auto probe = std::make_unique<Probe>(slot->waitHandle());
+                    armProbe(*backend, *probe, Interest::Read);
+                    controls.push_back(std::move(probe));
+                }
+                auto const byte = std::array<std::byte, 1> { std::byte { 'x' } };
+                for (auto& slot: controlPipes)
+                    REQUIRE(slot->write(byte.data(), byte.size()).has_value());
+
+                REQUIRE(backend->wait(std::chrono::milliseconds { 200 }).dispatched == 2);
+
+                for (auto const& probe: controls)
+                    backend->detach(probe->handler);
+            }
+
             auto peers = std::array<WithdrawingPeer, 2> {};
             auto actedAlready = false;
             for (auto& peer: peers)

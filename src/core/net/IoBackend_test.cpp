@@ -64,13 +64,31 @@ TEST_CASE("a failure reaches onError even when no direction is signalled", "[net
     CHECK(selectReadinessCallback(handler, Readiness::Failed) == &onError);
 }
 
-TEST_CASE("a failure outranks a direction that is also signalled", "[net][iobackend][readiness]")
+TEST_CASE("a watched direction outranks a failure that arrived with it", "[net][iobackend][readiness]")
 {
+    // Ruling R101, and it is data loss rather than a routing preference. A peer
+    // hangup on a socket that still has UNREAD BYTES arrives as POLLIN|POLLHUP on
+    // poll and epoll. This function returns exactly one callback, so the older order
+    // — failure first — returned `onError` alone the moment a handler set the field,
+    // the reader was never woken, and those bytes were never read. kqueue and Wfmo
+    // report the same hangup as readable and were always right.
+    //
+    // The portable idiom is the reason this is the correct order and not merely the
+    // safer one: no platform lets you learn what went wrong from the readiness bits.
+    // You are woken, you call read() or write(), and THAT reports the error. A reader
+    // needs the wakeup so it can read 0; a dial needs the wakeup and then checks
+    // SO_ERROR. Neither consults which callback fired.
     auto const handler =
         ReadinessHandler { .onReadable = &onReadable, .onWritable = &onWritable, .onError = &onError };
 
-    CHECK(selectReadinessCallback(handler, Readiness::Readable | Readiness::Failed) == &onError);
-    CHECK(selectReadinessCallback(handler, Readiness::Writable | Readiness::Failed) == &onError);
+    CHECK(selectReadinessCallback(handler, Readiness::Readable | Readiness::Failed) == &onReadable);
+    CHECK(selectReadinessCallback(handler, Readiness::Writable | Readiness::Failed) == &onWritable);
+
+    // onError is not unreachable, it is a LAST RESORT: it takes the failure only when
+    // the direction it accompanied is one this handler does not watch, so there is no
+    // read or write for the caller to have the error reported through.
+    auto const readerOnly = ReadinessHandler { .onReadable = &onReadable, .onError = &onError };
+    CHECK(selectReadinessCallback(readerOnly, Readiness::Writable | Readiness::Failed) == &onError);
 }
 
 TEST_CASE("a failure with no onError falls back to a watched direction", "[net][iobackend][readiness]")

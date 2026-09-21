@@ -700,6 +700,21 @@ workflow refuses one without a section here.
   skipped on the next wait.
 
 ### Changed
+- **`core::net::selectReadinessCallback` routes a failure to the watched direction, and
+  `Readiness::Failed` is documented best-effort.** The function returns exactly one callback, and
+  it used to return `onError` whenever the kernel reported a failure — so a peer hangup on a socket
+  with **unread bytes still in it** (`POLLIN|POLLHUP` on poll and epoll) would have returned
+  `onError` alone the moment a handler set that field, the reader would never have been woken, and
+  those bytes would never have been read. kqueue and `WfmoBackend` report the same hangup as
+  readable and were always right. `onError` now takes a failure only when no watched direction
+  accompanies it, which is the `POLLERR`-only failed connect it exists for. Nothing shipped with
+  the old order and `EventLoop` sets `onError = nullptr`, so no consumer can observe the change;
+  Task B6 is the first code that would have. The portable guarantee, now pinned by
+  `BackendParity_test` on every backend, is that **a peer hangup wakes the direction the handler
+  watches** — a caller is woken, calls `read()` or `write()`, and learns what happened from that.
+  `Readiness::Failed` itself is a hint and must not be branched on for correctness: the backends
+  disagree and are each right to, since `EV_EOF` on a kqueue read filter is an ordinary
+  `shutdown(WR)` rather than an error.
 - `cmake/portable/CompileCache.cmake` is re-synced from fastcached
   `f6ec49f3446b8bc121eba82c64cde2de759e774a`, and `cmake/FetchTransferBound.cmake`'s pin moves to
   the same commit, where its content is unchanged. The whole delta is one diagnostic: with

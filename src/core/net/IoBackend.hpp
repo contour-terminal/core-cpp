@@ -96,6 +96,20 @@ enum class Readiness : std::uint8_t
     /// `POLLERR`/`POLLHUP`/`POLLNVAL`, or a Windows wait that failed on the handle.
     /// It arrives whether or not it was asked for, and can arrive with neither
     /// direction set.
+    ///
+    /// @warning **Best-effort, and NOT portable. Nothing above a backend may depend on
+    /// it.** It is a hint, never a fact. The backends genuinely disagree and are each
+    /// right to: poll and epoll set it for a peer hangup, while kqueue reports the same
+    /// hangup as ordinary readability — `EV_EOF` on a read filter means the peer called
+    /// `shutdown(WR)`, which is an EOF and not an error — and Wfmo sets it only when a
+    /// wait fails on the handle itself. Unifying them would mean either calling a
+    /// normal close a failure on macOS or suppressing a real error elsewhere.
+    ///
+    /// What IS portable, and what every handler actually needs, is that **a peer hangup
+    /// wakes the direction the handler watches, on every backend**. The caller is then
+    /// woken, calls `read()` or `write()`, and learns what happened from that — the
+    /// idiom on every platform. A handler that branches on @c Failed for correctness
+    /// is a handler that behaves differently on macOS.
     Failed = 0b0000'0100,
 };
 
@@ -142,16 +156,23 @@ struct ReadinessHandler
     ReadinessCallback onReadable = nullptr; ///< Called when @c handle is readable.
     ReadinessCallback onWritable = nullptr; ///< Called when @c handle is writable.
 
-    /// Called instead of the two above when the kernel reports a failure.
+    /// Called for a failure that reaches NEITHER watched direction — a last resort,
+    /// never a pre-emption.
     ///
-    /// Optional, and it exists because an error has to have somewhere to go. A
-    /// failure arrives whether or not it was asked for and can arrive with NEITHER
-    /// direction set — a failed outbound connect is exactly that — and an event
-    /// matching no branch is not harmlessly ignored: the registration is
-    /// level-triggered, so it is reported again on the very next wait and the loop
-    /// spins at 100% CPU while never telling anyone. A handler that leaves this null
-    /// has a failure delivered to whichever direction it does watch, which is what a
-    /// parked read and a parked accept both want.
+    /// Optional, and it exists because an error has to have somewhere to go. A failure
+    /// arrives whether or not it was asked for and can arrive with NEITHER direction
+    /// set — a failed outbound connect is exactly that — and an event matching no
+    /// branch is not harmlessly ignored: the registration is level-triggered, so it is
+    /// reported again on the very next wait and the loop spins at 100% CPU while never
+    /// telling anyone.
+    ///
+    /// It does **not** displace a direction the handler watches. A hangup that arrives
+    /// as `POLLIN|POLLHUP` — a socket with unread bytes still in it — goes to
+    /// @c onReadable, because the caller has a `read()` to learn the failure through
+    /// and bytes to collect on the way. Setting this field therefore never costs a
+    /// wakeup; before Ruling R101 it did, and the bytes were lost with it. A handler
+    /// that leaves it null has such a failure delivered to whichever direction it does
+    /// watch, which is what a parked read and a parked accept both want anyway.
     ReadinessCallback onError = nullptr;
 };
 
@@ -160,7 +181,18 @@ struct ReadinessHandler
 /// Pure, and separate from every backend, because the two rules it encodes were each
 /// a defect and a unit test can reach them here without a kernel:
 ///
-/// - **A failure is routed, never dropped.** See @c ReadinessHandler::onError.
+/// - **A watched direction wins; a failure is routed, never dropped.** A failure that
+///   arrives alongside a direction this handler watches goes to THAT direction, and
+///   @c ReadinessHandler::onError takes it only when no watched direction accompanies
+///   it. The older order — failure first — was a defect with teeth, because this
+///   function returns exactly one callback: a peer hangup on a socket with unread
+///   bytes arrives as `POLLIN|POLLHUP` on poll and epoll, so the moment a handler set
+///   `onError` the reader stopped being woken and those bytes were never read. The
+///   reason this order is *correct* and not merely safer is that no platform lets a
+///   caller learn what went wrong from the readiness bits: it is woken, it calls
+///   `read()` or `write()`, and that reports the error. A reader needs the wakeup so
+///   it can read 0; a dial needs it and then checks `SO_ERROR`. Neither asks which
+///   callback fired.
 /// - **At most one callback per registration per wait.** A callback resumes nothing,
 ///   but it does enqueue, and the loop that later drains that queue may run a frame
 ///   that frees the object this handler is embedded in. Dereferencing @p handler a
@@ -175,14 +207,21 @@ struct ReadinessHandler
 [[nodiscard]] constexpr ReadinessCallback selectReadinessCallback(ReadinessHandler const& handler,
                                                                   Readiness observed) noexcept
 {
-    auto const failed = hasReadiness(observed, Readiness::Failed);
-    if (failed && handler.onError != nullptr)
-        return handler.onError;
+    // A watched direction first, INCLUDING when a failure came with it: the caller has
+    // a read or a write to have the error reported through, and taking the wakeup away
+    // from it loses whatever the kernel had already buffered.
     if (hasReadiness(observed, Readiness::Readable) && handler.onReadable != nullptr)
         return handler.onReadable;
     if (hasReadiness(observed, Readiness::Writable) && handler.onWritable != nullptr)
         return handler.onWritable;
-    // A failure with no dedicated handler goes to whichever direction is watched.
+    auto const failed = hasReadiness(observed, Readiness::Failed);
+    // Only now: a failure with no watched direction to carry it. The failed outbound
+    // connect that arrives as POLLERR alone is exactly this, and it is what onError
+    // exists for.
+    if (failed && handler.onError != nullptr)
+        return handler.onError;
+    // And a failure with neither a direction nor an onError still has to wake someone,
+    // or a level-triggered registration reports it again on every wait for ever.
     if (failed)
         return handler.onReadable != nullptr ? handler.onReadable : handler.onWritable;
     return nullptr;
