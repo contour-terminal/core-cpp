@@ -208,6 +208,42 @@ foreach(row IN LISTS cases)
     endif()
 endforeach()
 
+# A file the dispatch drops is a file no rule runs over, and the scanner still reports success: the
+# kind walk skips silently (`if(NOT kind)`), and the count it prints comes from the list it globbed
+# rather than from the files it checked, so the number does not move when the checking stops. That
+# is not hypothetical -- scripts/check-upstream-drift.py's row total slid from 351 to 350 because a
+# substring match swallowed a data row, and nothing said a word.
+#
+# So this case plants a DEFECT rather than a violation: a copy of the scanner that skips every .hpp
+# after its kind is assigned, which is what a misplaced `continue` looks like. The clean tree has
+# four of them and ten files the kind table matches, so the two counts must disagree by four and the
+# scanner must die naming them. A mutation that changed both counts together -- deleting a row from
+# the `kinds` table, say -- would prove nothing, which is why it is the dispatch that is broken here
+# and not the table.
+#
+# The clean tree above already proves the UNMUTATED scanner passes; that is the half that keeps this
+# from being a control that refuses everything.
+file(READ "${SCANNER}" scannerText)
+string(REPLACE "if(NOT kind)" "if(NOT kind OR path MATCHES \"\\\\.hpp$\")" mutatedText "${scannerText}")
+if(mutatedText STREQUAL scannerText)
+    list(APPEND failures
+         "dropped-file control: the anchor 'if(NOT kind)' is gone from the scanner, so this case planted nothing -- re-anchor it rather than deleting it")
+endif()
+set(mutatedScanner "${WORK_DIR}/dropped-file-scanner.cmake")
+file(WRITE "${mutatedScanner}" "${mutatedText}")
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" "-DROOT=${WORK_DIR}/clean" -P "${mutatedScanner}"
+    RESULT_VARIABLE droppedRc
+    OUTPUT_VARIABLE droppedOut
+    ERROR_VARIABLE droppedErr)
+if(droppedRc EQUAL 0)
+    list(APPEND failures
+         "dropped-file control: a scanner that silently skips every .hpp still reported success")
+elseif(NOT "${droppedOut}${droppedErr}" MATCHES "checked 6 file")
+    list(APPEND failures
+         "dropped-file control: refused, but not over the count it checked: ${droppedOut}${droppedErr}")
+endif()
+
 if(failures)
     string(REPLACE ";" "\n  " printable "${failures}")
     message(FATAL_ERROR "hygiene-selftest:\n  ${printable}")

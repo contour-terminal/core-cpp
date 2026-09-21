@@ -700,6 +700,16 @@ workflow refuses one without a section here.
   skipped on the next wait.
 
 ### Changed
+- **`check-cmake-hygiene` reports how many files it *checked*, and refuses a count it cannot
+  reconcile.** The gate printed the number of files it *found*, which is not the number any rule ran
+  over: the kind dispatch skips a file silently, so a defect there shrinks the checked set without
+  moving the number and the gate goes on reporting success over less and less. It now holds the
+  dispatch's own tally against an independent recount taken with a different CMake primitive, and
+  fails naming both when they disagree. On this tree the message changes from `447 file(s) under
+  <root> are clean` to `checked 445 of 447 file(s)`; the two it does not check are a `README.md` and
+  a `.clang-tidy`, which no rule reaches. A guard against zero would not have caught the failure
+  this answers — `scripts/check-upstream-drift.py` once reported 350 rows where there were 351,
+  because a substring match swallowed one and its total was printed rather than checked.
 - **`core::net::selectReadinessCallback` routes a failure to the watched direction, and
   `Readiness::Failed` is documented best-effort.** The function returns exactly one callback, and
   it used to return `onError` whenever the kernel reported a failure — so a peer hangup on a socket

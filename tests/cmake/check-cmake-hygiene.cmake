@@ -219,6 +219,10 @@ set(violations "")
 set(violationCount 0)
 set(allowUsed "")
 
+# How many files the dispatch below actually gave a kind and read, as distinct from how many it
+# found. The control at the end of this file holds it against an independent recount.
+set(checkedCount 0)
+
 ## @brief Refuses @p line of @p path under @p rule, unless an allowlist row allows the rule in that
 ## file. @p shown is the text printed under the reason.
 function(core_cpp_hygiene_refuse rule path lineNumber shown)
@@ -255,6 +259,7 @@ foreach(path IN LISTS scanned)
     if(NOT kind)
         continue()
     endif()
+    math(EXPR checkedCount "${checkedCount} + 1")
 
     file(READ "${ROOT}/${path}" content)
     string(REPLACE "\\" "${backslashCode}" content "${content}")
@@ -530,5 +535,42 @@ endforeach()
 if(violationCount GREATER 0)
     message(FATAL_ERROR "check-cmake-hygiene: ${violationCount} violation(s):${violations}")
 endif()
+# --- the control: what was checked, counted twice ------------------------------------------------
+#
+# The number this gate printed used to be the number of files it FOUND. A file the dispatch skips is
+# skipped silently -- `if(NOT kind)` above -- so a defect in the kind walk stops files being checked
+# without moving the number, and the gate goes on reporting success over a shrinking set. That is
+# not a hypothetical failure: scripts/check-upstream-drift.py reported 350 rows where there were
+# 351, because a substring match swallowed one, and its total was printed rather than checked.
+#
+# A guard against zero would not have caught that, and zero is not the failure that happens. So the
+# dispatch's own tally is held against a recount that asks the same question of the same list with a
+# different CMake primitive -- list(FILTER) over the kind patterns, rather than the per-file
+# FIND/SUBSTRING/MATCHES walk with its `break` and `continue`. A defect in that walk moves one count
+# and not the other.
+#
+# What it does NOT catch, stated so nobody reads it as more than it is: the `kinds` table and the
+# pattern extraction are shared, so a row deleted from the table, or an error in the extraction
+# itself, moves both counts together and passes. This control is over the dispatch, which is where a
+# file goes quietly missing.
+set(kindPatterns "")
+foreach(row IN LISTS kinds)
+    string(FIND "${row}" "|" bar)
+    math(EXPR patternAt "${bar} + 1")
+    string(SUBSTRING "${row}" ${patternAt} -1 pattern)
+    list(APPEND kindPatterns "${pattern}")
+endforeach()
+string(JOIN "|" kindPattern ${kindPatterns})
+set(kindRecount "${scanned}")
+list(FILTER kindRecount INCLUDE REGEX "${kindPattern}")
+list(LENGTH kindRecount recountCount)
+if(NOT checkedCount EQUAL recountCount)
+    message(FATAL_ERROR
+        "check-cmake-hygiene: checked ${checkedCount} file(s), but ${recountCount} of the files "
+        "found match the kind table. Fix the dispatch rather than the count: a file it passes over "
+        "is a file no rule ran on, and this gate would otherwise have reported success.")
+endif()
+
 list(LENGTH scanned fileCount)
-message(STATUS "check-cmake-hygiene: ${fileCount} file(s) under ${ROOT} are clean")
+message(STATUS
+    "check-cmake-hygiene: checked ${checkedCount} of ${fileCount} file(s) under ${ROOT}; all clean")
