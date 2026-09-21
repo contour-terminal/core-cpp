@@ -69,15 +69,18 @@ jobs:
         run: python scripts/python-style.py --all --check
 
       # Also namespace = directory: the first named namespace of every source under src/core/.
+      # covers: core-cpp.cmake-hygiene
       - name: CMake and C++ hygiene
         run: cmake -DROOT="$GITHUB_WORKSPACE" -P tests/cmake/check-cmake-hygiene.cmake
 
+      # covers: core-cpp.cmake-hygiene-selftest
       - name: Hygiene self-test
         run: >-
           cmake -DSCANNER="$GITHUB_WORKSPACE/tests/cmake/check-cmake-hygiene.cmake"
           -DWORK_DIR="$RUNNER_TEMP/cmake-hygiene-selftest"
           -P tests/cmake/check-cmake-hygiene-selftest.cmake
 
+      # covers: core-cpp.check-release-selftest
       - name: Release-check self-test
         run: >-
           cmake -DCHECKER="$GITHUB_WORKSPACE/tests/cmake/check-release.cmake"
@@ -86,6 +89,7 @@ jobs:
 
       # Each case builds a git repository of its own and vendors it; the consumer-smoke job below
       # is where a vendored copy of this tree is configured, built and verified.
+      # covers: core-cpp.vendor-selftest
       - name: Vendoring self-test
         run: >-
           cmake -DTOOL="$GITHUB_WORKSPACE/cmake/CoreCppVendor.cmake"
@@ -93,12 +97,14 @@ jobs:
           -P tests/cmake/check-vendor-selftest.cmake
 
       # Emscripten sets UNIX; it must still compile no SOURCES_POSIX file.
+      # covers: core-cpp.platform-sources
       - name: Platform source selection
         run: >-
           cmake -DTARGETS="$GITHUB_WORKSPACE/cmake/CoreCppTargets.cmake"
           -P tests/cmake/check-platform-sources.cmake
 
       # Each scenario configures a project with no language enabled, so the default generator will do.
+      # covers: core-cpp.layering
       - name: Module table layering
         run: >-
           cmake -DROOT="$GITHUB_WORKSPACE" -DWORK_DIR="$RUNNER_TEMP/layering"
@@ -108,6 +114,7 @@ jobs:
       # the only job that runs it: it is `tree-level`, so the build jobs exclude it (Ruling R96).
       # Running here, before anything is configured, means a table that has drifted is the first
       # thing a pull request is told rather than the twenty-second.
+      # covers: core-cpp.migrate-renames
       - name: Consumer rename table matches the delivered headers
         run: python tools/migrate/check-renames.py --root "$GITHUB_WORKSPACE"
 
@@ -118,6 +125,7 @@ jobs:
       # found nothing" look identical, and a gate that does not report reads as passed
       # (.agent/rules/build-and-toolchain.md). Any exit status other than 0 or 77 is a real defect
       # in the table and fails this job.
+      # covers: core-cpp.upstream-drift
       - name: Upstream drift (reports; skips without the sibling checkouts)
         run: |
           set +e
@@ -131,8 +139,22 @@ jobs:
           exit "$status"
 
       # Its self-test needs only git, so unlike the checker itself this one answers for real here.
+      # covers: core-cpp.upstream-drift-selftest
       - name: Upstream drift self-test
         run: python scripts/check-upstream-drift-selftest.py
+
+      # What keeps the arrangement above honest, and the reason every step here carries a
+      # `# covers:` marker. The build jobs exclude the `tree-level` label, so a labelled check with
+      # no step in this job runs NOWHERE -- it does not fail and it does not skip, it is absent,
+      # and absence looks exactly like a green run. This holds the two lists against each other in
+      # both directions (Ruling R96).
+      # covers: core-cpp.tree-level-coverage
+      - name: Every tree-level check has a step in this job
+        run: python scripts/check-tree-level-coverage.py
+
+      # covers: core-cpp.tree-level-coverage-selftest
+      - name: Tree-level coverage self-test
+        run: python scripts/check-tree-level-coverage-selftest.py
 
       # libclang's Python bindings are optional, so semantic_rename.py's cases skip wherever they are
       # missing -- and a suite whose only untested tool always skips is an untested tool. This is the
@@ -145,6 +167,7 @@ jobs:
       - name: Install libclang's Python bindings
         run: python -m pip install "libclang==18.1.1"
 
+      # covers: core-cpp.migrate-codemods
       - name: Migration codemod tests, with the semantic pass running for real
         run: |
           python -c "import clang.cindex; print('clang.cindex from', clang.cindex.__file__)"
@@ -439,6 +462,17 @@ jobs:
 
       - name: Test
         run: ctest --preset ${{ matrix.preset }} -LE tree-level
+
+      # The one tree-level check that also runs off the style job, on one leg (Ruling R96).
+      # core-cpp.vendor-selftest carries the label because its input is the tree -- but what it
+      # asserts is that the vendoring tool reads git blobs with core.autocrlf=false, refuses a CR
+      # byte and refuses a symlink, and every one of those hazards fails on WINDOWS first. A check
+      # whose only witness is the Linux style runner cannot fail for the thing it exists to prove,
+      # on the platform where it would fail. One leg, ~93s, against the ~37 minutes the old
+      # arrangement spent running every tree-level check 24 times.
+      - name: Vendoring self-test, on the platform its hazards live on
+        if: matrix.preset == 'cl-debug'
+        run: ctest --preset ${{ matrix.preset }} -R '^core-cpp\.vendor-selftest$'
 
   # ---------------------------------------------------------------------------------------------
   sanitizers:

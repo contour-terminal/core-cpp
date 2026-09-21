@@ -210,6 +210,36 @@ else()
         TIMEOUT 60)
 endif()
 
+# What keeps R96's arrangement honest. The build jobs exclude `tree-level`, so a labelled check
+# that nobody adds a `style` step for runs NOWHERE in CI -- it neither fails nor skips, it is
+# absent, and an absent check is indistinguishable from a passing one. This holds the label against
+# the job's `# covers:` markers in both directions: a labelled test with no step, and a step naming
+# a test that no longer carries the label, which is how the pairing rots after a rename.
+#
+# It is itself tree-level -- it reads two files of this tree -- so it carries the label and has a
+# step of its own, which is the smallest case it has to get right.
+#
+# Bounds: both read two files and are measured in milliseconds; 60 is the floor this file gives
+# anything whose cost is process startup rather than work.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME core-cpp.tree-level-coverage
+             COMMAND "${Python3_EXECUTABLE}"
+                     "${CORE_CPP_SOURCE_DIR}/scripts/check-tree-level-coverage.py")
+    add_test(NAME core-cpp.tree-level-coverage-selftest
+             COMMAND "${Python3_EXECUTABLE}"
+                     "${CORE_CPP_SOURCE_DIR}/scripts/check-tree-level-coverage-selftest.py")
+else()
+    add_test(NAME core-cpp.tree-level-coverage COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.tree-level-coverage: SKIPPED -- no Python 3 interpreter was found at configure time")
+    add_test(NAME core-cpp.tree-level-coverage-selftest COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.tree-level-coverage-selftest: SKIPPED -- no Python 3 interpreter was found at configure time")
+    set_tests_properties(core-cpp.tree-level-coverage core-cpp.tree-level-coverage-selftest PROPERTIES
+        SKIP_REGULAR_EXPRESSION "SKIPPED")
+endif()
+set_tests_properties(core-cpp.tree-level-coverage core-cpp.tree-level-coverage-selftest PROPERTIES
+    LABELS "core-cpp;hygiene;tree-level"
+    TIMEOUT 60)
+
 # A CRT assert, abort(), invalid parameter or crash must end the process instead of opening a dialog
 # that waits for a click. Each run must fail (WILL_FAIL) within the timeout; a run that hangs has hit a
 # dialog. The canary's main() asks for no suppression: linking core::testing_dialogs installs it.
