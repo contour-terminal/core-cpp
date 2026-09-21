@@ -216,8 +216,10 @@ class ReentrantDisarm
         // Two questions, both answered out of containers a single-pass teardown would already
         // have let die. Recorded rather than only asked, so the case fails for its own reason
         // where a sanitizer is not watching.
+        // An empty handle is answered `false` without a search, so it asks nothing of the
+        // containers; a live one the loop never had is what forces BOTH of them to be walked.
         _counters->cancelAnswered = _loop->cancelPending(_handle);
-        _counters->parkedAtFree = _loop->parkedWaiterCount();
+        _counters->parkedAtFree = _loop->parkedWaiterCount() + _loop->pendingTimerCount();
         ++_counters->reentered;
     }
 
@@ -227,22 +229,84 @@ class ReentrantDisarm
     Counters* _counters;
 };
 
+/// A frame member that parks a NEW chain on the loop as it dies, exactly once.
+///
+/// This is what makes the abandon step's FIXPOINT observable. A single pass frees what the loop
+/// was holding and returns; anything that parked during that pass is then left to MEMBER
+/// destruction, where the park table is already being destroyed -- and the new chain's own
+/// re-entrant disarm reads it. With the fixpoint, the pass that created it is followed by another
+/// that frees it while every container is still whole.
+class ReparkOnce
+{
+  public:
+    /// @param loop The loop to park on as this dies; never null.
+    /// @param counters Where the new chain's progress is recorded.
+    /// @param armed Cleared by the first of these to fire, so the re-parking does not recurse.
+    ReparkOnce(EventLoop* loop, Counters* counters, bool* armed) noexcept:
+        _loop { loop }, _counters { counters }, _armed { armed }
+    {
+    }
+
+    ReparkOnce(ReparkOnce&& other) noexcept:
+        _loop { std::exchange(other._loop, nullptr) }, _counters { other._counters }, _armed { other._armed }
+    {
+    }
+
+    ReparkOnce(ReparkOnce const&) = delete;
+    ReparkOnce& operator=(ReparkOnce const&) = delete;
+    ReparkOnce& operator=(ReparkOnce&&) = delete;
+
+    ~ReparkOnce();
+
+  private:
+    EventLoop* _loop;
+    Counters* _counters;
+    bool* _armed;
+};
+
 /// A detached chain parked on the submit side whose frame re-enters the loop as it is freed.
 /// @param loop The loop to hand itself to, and the one the disarm re-enters.
 /// @param sentinel Counted when this frame dies.
 /// @param disarm Runs `cancelPending` on this loop as this frame dies.
+/// @param repark Parks a NEW chain on this loop as this frame dies, exactly once.
 /// @param counters Where the progress is recorded.
-DetachedTask parkOnSubmitWithDisarm(EventLoop* loop,
-                                    FrameSentinel sentinel,
-                                    ReentrantDisarm disarm,
-                                    Counters* counters)
+DetachedTask parkOnSubmitWithDisarm(
+    EventLoop* loop, FrameSentinel sentinel, ReentrantDisarm disarm, ReparkOnce repark, Counters* counters)
 {
     static_cast<void>(sentinel);
     static_cast<void>(disarm);
+    static_cast<void>(repark);
     ++counters->parked;
     co_await core::async::ResumeOn { *loop };
     ++counters->completed;
     co_return;
+}
+
+/// The chain `ReparkOnce` starts as it dies: it parks on a deadline nothing reaches, and holds a
+/// re-entrant disarm of its own, so freeing IT asks the loop a question too.
+/// @param loop The loop to park on.
+/// @param sentinel Counted when this frame dies.
+/// @param disarm Runs `cancelPending` on this loop as this frame dies.
+/// @param counters Where the progress is recorded.
+DetachedTask reparkedChain(EventLoop* loop,
+                           FrameSentinel sentinel,
+                           ReentrantDisarm disarm,
+                           Counters* counters)
+{
+    static_cast<void>(sentinel);
+    static_cast<void>(disarm);
+    ++counters->parked;
+    co_await loop->sleepUntil(loop->clock().now() + 1h);
+    ++counters->completed;
+    co_return;
+}
+
+ReparkOnce::~ReparkOnce()
+{
+    if (_loop == nullptr || !*_armed)
+        return;
+    *_armed = false;
+    reparkedChain(_loop, FrameSentinel { _counters }, ReentrantDisarm { _loop, {}, _counters }, _counters);
 }
 
 /// A lazy task carrying a sentinel, for the cases that need a frame rather than a chain.
@@ -602,23 +666,29 @@ TEST_CASE("A loop frees parked chains while all of its containers are still aliv
         // container has no buffer to read, and the defect would then be invisible.
         parkOnDeadlineForever(&driver.eventLoop(), FrameSentinel { &counters }, &counters);
 
-        // And the chain that re-enters, parked on the SUBMIT side.
+        // And the chain that re-enters, parked on the SUBMIT side. Its `ReparkOnce` member is
+        // what makes the fixpoint matter: freeing this chain starts another one, which a single
+        // pass would leave for member destruction.
+        auto armed = true;
         parkOnSubmitWithDisarm(&driver.eventLoop(),
                                FrameSentinel { &counters },
                                ReentrantDisarm { &driver.eventLoop(), absent.handle(), &counters },
+                               ReparkOnce { &driver.eventLoop(), &counters, &armed },
                                &counters);
 
         REQUIRE(counters.parked == 2);
         REQUIRE(counters.reentered == 0);
     }
 
-    // Both chains freed, and the re-entrant destructor did run -- so the search it performed
-    // happened against containers this loop had not yet let die.
-    CHECK(counters.destroyed == 2);
-    CHECK(counters.reentered == 1);
+    // Three chains freed -- the deadline park, the submission, and the one the submission's
+    // destructor parked -- and the re-entrant destructors both ran, so both searches happened
+    // against containers this loop had not yet let die.
+    CHECK(counters.destroyed == 3);
+    CHECK(counters.parked == 3);
+    CHECK(counters.reentered == 2);
     CHECK(counters.completed == 0);
     CHECK_FALSE(counters.cancelAnswered); // a handle the loop never held is not there to take back
-    CHECK(counters.parkedAtFree == 0);    // and the park table answered, rather than crashed
+    CHECK(counters.parkedAtFree == 0);    // and the tables answered, rather than crashed
 }
 
 // The primitive underneath these cases -- `detail::Parked::resume()` freeing a chain it declines
