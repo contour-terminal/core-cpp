@@ -1087,22 +1087,39 @@ TEST_CASE("spawn releases a finished flow in the turn that finished it", "[Event
     CHECK(loop.pendingTimerCount() == 1);
 }
 
-TEST_CASE("spawn of one hundred thousand flows leaves none behind", "[EventLoop][spawn]")
+TEST_CASE("spawn at scale unlinks per completion rather than sweeping", "[EventLoop][spawn]")
 {
-    // The scale the O(1) unlink exists for. With a sweep at the top of every turn this is
-    // quadratic in the number of live flows; here each completion costs one list erase and one
-    // map erase, and the binary's own timeout is the bound that would catch a regression.
-    constexpr auto Flows = 100000;
+    // The same property as the case above, at a scale where a sweep is not merely wasteful: with
+    // one at the top of every turn, running N flows to their ends is O(N x N/batch), which for ten
+    // thousand flows and a batch of sixty-four is sixteen million `done()` calls that answer
+    // nothing. The unlink makes it one list erase and one map erase apiece.
+    //
+    // **Ten thousand rather than a hundred thousand, and the reason is honest rather than tidy.**
+    // At a hundred thousand this case spent 38 of a 39-second MSVC Debug run inside the allocator
+    // -- 100k coroutine frames, a list node and a map node each, with iterator debugging on -- and
+    // took the whole net binary past the 120-second backstop that exists to report a HANG. That
+    // measured the Debug CRT's heap, not the loop; what it bought over ten thousand was one more
+    // digit. The per-completion assertion below is what actually discriminates a sweep, and it
+    // holds at any scale.
+    constexpr auto Flows = 10000;
+    constexpr auto Batch = std::size_t { 64 };
 
     auto clock = ManualClock {};
     // Declared BEFORE the loop, so it outlives it: ~EventLoop resumes every borrowed
     // park, and the flow's unwinding runs on what it was given.
     auto finished = 0;
-    auto loop = core::net::testing::TestLoop { clock };
+    auto loop =
+        core::net::testing::TestLoop { clock, core::net::EventLoopOptions { .dispatchBatch = Batch } };
 
     for ([[maybe_unused]] auto const index: std::views::iota(0, Flows))
         loop.spawn(finishAtOnce(&finished));
     REQUIRE(loop.spawnedCount() == Flows);
+
+    // One turn, and the count drops by exactly what that turn ran. A sweep at the top of the next
+    // turn would leave all ten thousand here.
+    auto const first = loop.runOnce();
+    CHECK(first.resumed == Batch);
+    CHECK(loop.spawnedCount() == Flows - Batch);
 
     std::ignore = loop.runUntilIdle();
     CHECK(finished == Flows);
