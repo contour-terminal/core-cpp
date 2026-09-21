@@ -6,6 +6,7 @@
 
 #include <core/net/IoBackend.hpp>
 
+#include <atomic>
 #include <cstddef>
 #include <expected>
 #include <optional>
@@ -54,21 +55,30 @@ class NullBackend final: public IoBackend
         return WaitResult {};
     }
 
-    void wake() noexcept override { ++_wakeCount; }
+    /// Counted atomically, because this is the ONE member of @c IoBackend another
+    /// thread may call -- a loop's `post()` from a worker reaches the backend through
+    /// here and nothing else. A plain increment is a data race even when the count is
+    /// only ever read for an assertion: TSan reports it, and the double would be
+    /// modelling the contract wrongly for any case that posts from a thread.
+    /// @c ScriptedBackend got this right; this one did not.
+    void wake() noexcept override { _wakeCount.fetch_add(1, std::memory_order_release); }
 
     /// @return How many times `wait()` was called.
     [[nodiscard]] std::size_t waitCount() const noexcept { return _waitCount; }
 
     /// @return How many times `wake()` was called.
-    [[nodiscard]] std::size_t wakeCount() const noexcept { return _wakeCount; }
+    [[nodiscard]] std::size_t wakeCount() const noexcept
+    {
+        return _wakeCount.load(std::memory_order_acquire);
+    }
 
     /// @return The number of handlers currently attached.
     [[nodiscard]] std::size_t attachedCount() const noexcept { return _attached.size(); }
 
   private:
     std::unordered_set<ReadinessHandler const*> _attached;
-    std::size_t _waitCount = 0;
-    std::size_t _wakeCount = 0;
+    std::size_t _waitCount = 0;                ///< Loop-thread only: `wait()` is never called off it.
+    std::atomic<std::size_t> _wakeCount { 0 }; ///< `wake()` is the one member another thread may call.
 };
 
 } // namespace core::net::testing
