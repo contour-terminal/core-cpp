@@ -233,8 +233,11 @@ core_cpp_module_target(NAME net_tls MODULE net KIND STATIC DEPS net PLATFORMS na
 # own because it links less than the module does: base alone, no libunicode and no coroutines, so a
 # program that only prints styled text (Lightweight's dbtool) takes nothing else with it.
 #
-# The module's own DEPS are what it links today. Task B12 moves the runtime onto core::net::EventLoop
-# and adds net here; until then nothing in tui includes it, so nothing may link it.
-core_cpp_module(NAME tui KIND STATIC DEPS base platform async PLATFORMS native WHEN CORE_CPP_WITH_TUI)
+# net is here because Task B12 composed the TUI runtime on core::net::EventLoop: TuiRuntime.hpp
+# names the loop, its awaitables and its handle kinds in its own signatures, so the dependency is
+# public rather than an implementation detail. core::tui_output still links base alone, which is
+# the whole reason it has a row of its own -- dbtool takes none of this.
+core_cpp_module(NAME tui KIND STATIC DEPS base platform async net PLATFORMS native
+                WHEN CORE_CPP_WITH_TUI)
 core_cpp_module_target(NAME tui_output MODULE tui KIND STATIC DEPS base
                        PLATFORMS native WHEN CORE_CPP_WITH_TUI)

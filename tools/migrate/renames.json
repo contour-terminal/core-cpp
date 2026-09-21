@@ -1855,13 +1855,13 @@
     {
       "kind": "include",
       "from": "tui/runtime/EventSource.hpp",
-      "to": "core/tui/runtime/EventSource.hpp",
+      "to": "core/tui/runtime/InputSource.hpp",
       "profiles": [
         "endo",
         "tuidu"
       ],
       "target": {
-        "header": "core/tui/runtime/EventSource.hpp"
+        "header": "core/tui/runtime/InputSource.hpp"
       }
     },
     {
@@ -1890,25 +1890,14 @@
     },
     {
       "kind": "include",
-      "from": "tui/runtime/PollEventSource.hpp",
-      "to": "core/tui/runtime/PollEventSource.hpp",
-      "profiles": [
-        "endo"
-      ],
-      "target": {
-        "header": "core/tui/runtime/PollEventSource.hpp"
-      }
-    },
-    {
-      "kind": "include",
       "from": "tui/runtime/TerminalEventSource.hpp",
-      "to": "core/tui/runtime/TerminalEventSource.hpp",
+      "to": "core/tui/runtime/TerminalInputSource.hpp",
       "profiles": [
         "endo",
         "tuidu"
       ],
       "target": {
-        "header": "core/tui/runtime/TerminalEventSource.hpp"
+        "header": "core/tui/runtime/TerminalInputSource.hpp"
       }
     },
     {
@@ -1926,37 +1915,131 @@
     {
       "kind": "include",
       "from": "tui/runtime/WithTimeout.hpp",
-      "to": "core/tui/runtime/WithTimeout.hpp",
+      "to": "core/net/WithTimeout.hpp",
       "profiles": [
         "endo"
       ],
       "target": {
-        "header": "core/tui/runtime/WithTimeout.hpp"
-      }
-    },
-    {
-      "kind": "include",
-      "from": "tui/runtime/platform/PollHelpers.hpp",
-      "to": "core/tui/runtime/posix/PollHelpers.hpp",
-      "profiles": [
-        "endo"
-      ],
-      "target": {
-        "header": "core/tui/runtime/posix/PollHelpers.hpp",
-        "public": false
+        "header": "core/net/WithTimeout.hpp"
       }
     },
     {
       "kind": "include",
       "from": "tui/runtime/testing/MockEventSource.hpp",
-      "to": "core/tui/runtime/testing/MockEventSource.hpp",
+      "to": "core/tui/runtime/testing/ScriptedInputSource.hpp",
       "profiles": [
         "endo",
         "tuidu"
       ],
       "target": {
-        "header": "core/tui/runtime/testing/MockEventSource.hpp"
+        "header": "core/tui/runtime/testing/ScriptedInputSource.hpp"
       }
+    },
+    {
+      "kind": "removed",
+      "from": "core::tui::runtime::EventSource",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "note": "the TUI runtime is composed on core::net::EventLoop (Task B12), which does the waiting, so there is no blocking multiplexer to inject. What is left of the seam is core::tui::runtime::InputSource (runtime/InputSource.hpp): it names the handles the loop should watch and decodes what is ready behind them, and has no wait() at all."
+    },
+    {
+      "kind": "removed",
+      "from": "core::tui::runtime::FdInterest",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "note": "readiness interest is the loop's: core::net::Interest, in core/net/IoBackend.hpp. Nothing above the loop names it -- waitReadable()/waitWritable() say which direction."
+    },
+    {
+      "kind": "removed",
+      "from": "core::tui::runtime::hasInterest",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "note": "with core::tui::runtime::FdInterest; core::net::hasInterest is the surviving one."
+    },
+    {
+      "kind": "removed",
+      "from": "core::tui::runtime::FdToken",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "note": "the runtime hands out no registration tokens: a park is the loop's, identified by core::net::ParkId, and an awaitable holds its own. Nothing a consumer writes names one."
+    },
+    {
+      "kind": "removed",
+      "from": "core::tui::runtime::WaitOutcome",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "note": "a wait dispatches instead of reporting. The runtime learns what happened by being resumed on the handle it parked on, not by reading a record of everything that did."
+    },
+    {
+      "kind": "removed",
+      "from": "core::tui::runtime::FdRegistration",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "note": "with core::tui::runtime::FdRegistry: the shared registration list is gone, because each backend keeps whatever its kernel needs."
+    },
+    {
+      "kind": "removed",
+      "from": "core::tui::runtime::FdRegistry",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "note": "the TUI keeps no registration list. co_await runtime.waitReadable(handle) parks on the loop, and the park is unregistered when the await resumes, ready or cancelled."
+    },
+    {
+      "kind": "removed",
+      "from": "core::tui::runtime::PollEventSource",
+      "profiles": [
+        "endo"
+      ],
+      "note": "there is no headless event source any more. A runtime with no terminal is one whose InputSource reports platform::InvalidHandle for its input handle -- it then starts no input flow -- and the socket work that used it is core::net::EventLoop's directly."
+    },
+    {
+      "kind": "removed",
+      "from": "core::tui::runtime::TerminalEventSource",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "note": "it became core::tui::runtime::TerminalInputSource (runtime/TerminalInputSource.hpp), an adapter with no wait: handles in, decoded events out. Both of its platform bodies are gone with it. Construct TuiRuntime(loop, terminal) and the adapter is made for you; the agent wakeup is now loop.post([&]{ runtime.notifyAgentReady(); }) and the interrupt wakeup is TuiRuntimeOptions::interruptWakeup."
+    },
+    {
+      "kind": "removed",
+      "from": "core::tui::runtime::WaitFdAwaiter",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "note": "core::net::WaitHandleAwaiter, which TuiRuntime::waitReadable/waitWritable now return. It takes a core::net::HandleKind, and it throws core::net::FdRegistrationFailed where the backend refuses a handle -- which the TUI awaitable flattened into OperationCancelled, so a plumbing failure and a deliberate cancellation could not be told apart."
+    },
+    {
+      "kind": "removed",
+      "from": "core::tui::runtime::withTimeout",
+      "profiles": [
+        "endo"
+      ],
+      "note": "core::net::withTimeout (core/net/WithTimeout.hpp), which takes the loop rather than the runtime: core::net::withTimeout(&runtime.loop(), std::move(work), timeout). The two were the same construction over two schedulers, and there is one scheduler now."
+    },
+    {
+      "kind": "removed",
+      "from": "core::tui::runtime::testing::MockEventSource",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "note": "it impersonated a scheduler, and scheduling is the loop's. A case scripts READINESS at core::net::testing::ScriptedBackend (or gets it from a real kernel through a core::platform::SystemPipe) and DECODING at core::tui::runtime::testing::ScriptedInputSource. pushEvents survives; pushTimeout, pushReadable and pushWritable belong to the backend, pushAgentReady is runtime.notifyAgentReady(), and pushInterrupt is a core::platform::Wakeup the runtime watches."
     },
     {
       "kind": "symbol",
@@ -3767,34 +3850,6 @@
       "target": {
         "header": "core/platform/testing/InMemoryFileSystem.hpp",
         "symbol": "core::platform::testing::InMemoryFileSystem",
-        "public": true
-      }
-    },
-    {
-      "kind": "symbol",
-      "from": "endo::testing::MockEventSource",
-      "to": "core::tui::runtime::testing::MockEventSource",
-      "profiles": [
-        "endo",
-        "tuidu"
-      ],
-      "target": {
-        "header": "core/tui/runtime/testing/MockEventSource.hpp",
-        "symbol": "core::tui::runtime::testing::MockEventSource",
-        "public": true
-      }
-    },
-    {
-      "kind": "symbol",
-      "from": "testing::MockEventSource",
-      "to": "core::tui::runtime::testing::MockEventSource",
-      "profiles": [
-        "endo",
-        "tuidu"
-      ],
-      "target": {
-        "header": "core/tui/runtime/testing/MockEventSource.hpp",
-        "symbol": "core::tui::runtime::testing::MockEventSource",
         "public": true
       }
     },

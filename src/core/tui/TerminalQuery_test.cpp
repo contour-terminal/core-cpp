@@ -5,7 +5,7 @@
 #include <core/tui/Terminal.hpp>
 #include <core/tui/TerminalInput.hpp>
 #include <core/tui/VtParser.hpp>
-#include <core/tui/runtime/TerminalEventSource.hpp>
+#include <core/tui/runtime/TerminalInputSource.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -362,13 +362,15 @@ TEST_CASE("Events handed back to TerminalInput are the next poll's, in arrival o
     CHECK(input.takePending().empty());
 }
 
-TEST_CASE("The runtime's terminal event source delivers handed-back events first", "[TerminalQuery]")
+TEST_CASE("The runtime's terminal input source hands back what a query did not want", "[TerminalQuery]")
 {
+    // The adapter's whole job on this path: what a query read and did not consume is taken
+    // through `takePending`, so the runtime can deliver it without waiting on a handle that will
+    // never become readable on its account.
     auto terminal = Terminal { std::make_unique<MockTerminalOutput>() };
     terminal.input().unread({ key(U'z') });
-    auto source = core::tui::runtime::TerminalEventSource { terminal };
+    auto source = core::tui::runtime::TerminalInputSource { terminal };
 
-    auto const outcome = source.wait(0);
-
-    CHECK(codepoints(outcome.events) == std::vector<char32_t> { U'z' });
+    CHECK(codepoints(source.takePending()) == std::vector<char32_t> { U'z' });
+    CHECK(source.takePending().empty());
 }

@@ -674,6 +674,20 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   the leaked set as *indirect only*, which is the signature. Origin:
   [fastcached#1025](https://github.com/LASTRADA-Software/fastcached/issues/1025),
   [fastcached#1054](https://github.com/LASTRADA-Software/fastcached/issues/1054).
+- **An object that parks flows on a loop takes them back in its own destructor, and is therefore
+  destroyed before the loop.** A long-lived flow parked on `waitReadable` holds a frame that names
+  the object that started it, and the loop will resume that frame whenever its handle next becomes
+  ready. So the flow's frame belongs to the object -- `submit`, which BORROWS, not `spawn`, which
+  hands it over and offers nothing that gives it back -- and the destructor calls `cancelPending`
+  on each one. `cancelPending`'s answer is an ownership transfer: true means the loop no longer
+  has it. **Then resume it once more rather than dropping it**, because the two states it covers
+  are not the same underneath. A PARKED flow comes back with its backend registration already
+  detached; a QUEUED one -- readiness dispatched, not yet drained -- does not, since only
+  `await_resume` unregisters a park, and a frame destroyed mid-await leaves the loop watching a
+  handle for an object that is gone. The last resumption runs `await_resume` and then finds a flag
+  the destructor set, so it returns instead of re-entering a body whose object is going away.
+  `core::tui::runtime::TuiRuntime` is the first such object; its four source flows are one per
+  handle. Origin: Task B12.
 - **A derived interface that re-declares one overload hides every other overload of that name.**
   `IReactor` re-declared `Submit(handle)` and not `Submit(ParkedWork)`, so every call through the
   derived type bound to the borrowing overload, and nothing diagnosed it. The shape is

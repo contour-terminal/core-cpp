@@ -69,15 +69,17 @@ src/core/
                             core::tui (TerminalInput, VtParser, Terminal, Buffer, Canvas,
                             Screen, the components and popups, completer/, MarkdownRenderer,
                             GenericSyntaxHighlighter, Sixel, images behind
-                            CORE_CPP_WITH_IMAGES, runtime/ with TuiRuntime and its event
-                            sources; native only, and only with CORE_CPP_WITH_TUI);
+                            CORE_CPP_WITH_IMAGES, runtime/ with TuiRuntime, InputSource,
+                            TerminalInputSource, Modal; native only, and only with
+                            CORE_CPP_WITH_TUI, and it links core::net since B12 composed the
+                            runtime on core::net::EventLoop);
                             posix/ (termios, SIGWINCH, poll, clipboard tools) windows/
                             (console modes, input records, resize event) detail/ are
-                            private, and so are runtime/posix/ and runtime/windows/;
-                            MockTerminalOutput, runtime/testing/MockEventSource and
+                            private -- runtime/ has no platform directories at all, because
+                            the loop does the waiting on every platform;
+                            MockTerminalOutput, runtime/testing/ScriptedInputSource and
                             TestHelpers.hpp are the fakes; .clang-tidy is the one directory
-                            override (see its own comment); the move onto
-                            core::net::EventLoop is planned (B12)
+                            override (see its own comment)
   testing/                  core::testing: SuppressWindowsDialogs (no test framework needed),
                             Environment (FakeEnvironment), ScopedTempDir,
                             ScopedWorkingDirectory, EnvHelper (ScopedEnv);

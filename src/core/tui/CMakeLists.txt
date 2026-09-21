@@ -73,9 +73,11 @@ endif()
 # posix/ has the termios raw mode, the SIGWINCH self-pipe and the clipboard tools, windows/ the
 # console modes, the input records and the resize event.
 #
-# runtime/ keeps its own EventSource and PollEventSource for now. Task B12 moves the runtime onto
-# core::net::EventLoop and deletes them, so they are imported as they stand rather than split, and
-# runtime/PollEventSource.cpp is the one file here that still chooses its platform with an #ifdef.
+# runtime/ is composed on core::net::EventLoop (Task B12), which is why core::net is in PUBLIC_LIBS
+# below: TuiRuntime.hpp names its loop, its awaitables and its handle kinds in its own signatures.
+# That commit also left this module with NO source that chooses its platform with an #ifdef, and no
+# runtime/posix or runtime/windows directory at all -- the multiplexing those two held is the
+# loop's, on every platform.
 core_cpp_add_module(tui KIND STATIC
     HEADERS
         ${_coreCppTuiImageHeaders}
@@ -134,14 +136,12 @@ core_cpp_add_module(tui KIND STATIC
         completer/CompletionProvider.hpp
         completer/FuzzyMatch.hpp
         completer/SmartCaseMatch.hpp
-        runtime/EventSource.hpp
+        runtime/InputSource.hpp
         runtime/Modal.hpp
         runtime/ModalComponent.hpp
-        runtime/PollEventSource.hpp
-        runtime/TerminalEventSource.hpp
+        runtime/TerminalInputSource.hpp
         runtime/TuiRuntime.hpp
-        runtime/WithTimeout.hpp
-        runtime/testing/MockEventSource.hpp
+        runtime/testing/ScriptedInputSource.hpp
     SOURCES
         ${_coreCppTuiImageSources}
         Box.cpp
@@ -183,20 +183,16 @@ core_cpp_add_module(tui KIND STATIC
         completer/Completer.cpp
         completer/FuzzyMatch.cpp
         completer/SmartCaseMatch.cpp
-        runtime/PollEventSource.cpp
         runtime/TuiRuntime.cpp
     SOURCES_POSIX
         ${_coreCppTuiImagePosix}
         posix/Terminal.cpp
         posix/TerminalInput.cpp
-        runtime/posix/PollHelpers.hpp
-        runtime/posix/TerminalEventSource.cpp
     SOURCES_WINDOWS
         ${_coreCppTuiImageWindows}
-        runtime/windows/TerminalEventSource.cpp
         windows/Terminal.cpp
         windows/TerminalInput.cpp
-    PUBLIC_LIBS core::base core::tui_output core::platform core::async unicode::unicode
+    PUBLIC_LIBS core::base core::tui_output core::platform core::async core::net unicode::unicode
     PRIVATE_LIBS ${_coreCppTuiImageLibs})
 
 core_cpp_add_test(tui NAME tui_output

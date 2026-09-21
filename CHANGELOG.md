@@ -10,6 +10,24 @@ workflow refuses one without a section here.
 ## [Unreleased]
 
 ### Added
+
+- `core::tui::runtime::InputSource`, the TUI runtime's one dependency-injection seam now that the
+  waiting is `core::net::EventLoop`'s: it names the handles to watch and decodes what is ready
+  behind them, and has no `wait()`. `TerminalInputSource` is the production implementation over a
+  `Terminal` -- header-only, with no platform body, because everything it asks is already portable
+  through `TerminalInput`. `core::tui::runtime::testing::ScriptedInputSource` is the test double,
+  which scripts decoding alone and can be pointed at a `core::platform::SystemPipe` so the same
+  case runs over every backend a platform builds. `TuiRuntimeOptions` carries the interrupt
+  wakeup, the POSIX signal fd and the escape-flush interval, and `TuiRuntime` gains `loop()` and
+  `notifyAgentReady()`.
+
+- `core::tui` has **no translation unit that chooses its platform with an `#ifdef`, and no platform
+  directory under `runtime/` at all.** `runtime/PollEventSource.cpp` was the last one, and the two
+  `TerminalEventSource` bodies were the last of those directories; the multiplexing all three held
+  is the event loop's, on every platform. `.agent/rules/platform.md`'s rule -- an OS difference is
+  an injected implementation, never an `#ifdef` in logic -- holds here by construction rather than
+  by review.
+
 - A syntax-check for platform sources this configuration does not otherwise compile
   (`core_cpp_add_unbuilt_source_check()` in `cmake/CoreCppHeaderSelfCheck.cmake`). `core::net`
   picks one `DefaultBackend.cpp` from five, and its `else()` arm — `posix/` — is reached only on a
@@ -184,17 +202,15 @@ workflow refuses one without a section here.
   `Spinner`, `ProgressBar`, `Tooltip`, `QuestionComponent`, the completion, command-palette and
   fuzzy-picker popups); `core::tui::completer`; `MarkdownRenderer` and `GenericSyntaxHighlighter`;
   sixel encoding, and with `CORE_CPP_WITH_IMAGES` the stb-backed loader, scaler and
-  `FilesystemImageProvider`; and `core::tui::runtime`, whose `TuiRuntime` drives coroutines
-  against an `EventSource` (`TerminalEventSource`, `PollEventSource`, `runModal()`,
-  `withTimeout()`). Test doubles: `MockTerminalOutput`, `runtime::testing::MockEventSource` and
-  `TestHelpers.hpp`. `runtime/TuiRuntime.hpp` and its test come from fastcached's copy
-  (`5389e29a`), which carries one fix endo has not taken back: `DelayAwaiter::await_ready()` is a
+  `FilesystemImageProvider`; and `core::tui::runtime`, whose `TuiRuntime` drove coroutines against
+  an `EventSource` (`TerminalEventSource`, `PollEventSource`, `runModal()`, `withTimeout()`). Test
+  doubles: `MockTerminalOutput`, `runtime::testing::MockEventSource` and `TestHelpers.hpp`. The
+  runtime was rewritten onto `core::net::EventLoop` before release and those types are gone; see
+  **Breaking** below. `runtime/TuiRuntime.hpp` and its test came from fastcached's copy
+  (`5389e29a`), which carried one fix endo has not taken back: `DelayAwaiter::await_ready()` is a
   constant and an elapsed deadline is decided in `await_suspend()`, because MSVC 19.44's ARM64
   code generator loses the enclosing `try` of a `co_await` on an awaiter whose `await_ready()`
-  reads the clock through a virtual `now()`.
-- `core::tui` does not link `core::net`: Task B12 moves the runtime onto `core::net::EventLoop`
-  and deletes `runtime/EventSource.hpp`, `runtime/PollEventSource.*` and `runtime/WithTimeout.hpp`,
-  and the module table's row gains `net` then.
+  reads the clock through a virtual `now()`. That awaiter is `core::net`'s now, and carries it.
 - The global property `CORE_CPP_TARGETS`: every compiled library core-cpp built, by its real
   target name, in the order the module table declares them. A parent project that instruments its
   build reads it and applies the same sanitizers or coverage to core-cpp's code, which is what
@@ -576,6 +592,58 @@ workflow refuses one without a section here.
   `tools/migrate/renames.json` and the codemods, not the compiler, and the row is already there.
 
 ### Breaking
+
+- **`core::tui::runtime::TuiRuntime` is composed on `core::net::EventLoop`, and the project no
+  longer carries a second scheduler.** The runtime had its own ready queue, timer min-heap, park
+  slots, `pumpOnce` and blocking `EventSource`; all of it is the loop's now, and every scheduling
+  member of `TuiRuntime` forwards there. What is genuinely the TUI's and stays is input semantics:
+  the decoded-event buffer, `nextEvent()` / `nextEventFor()` / `nextActivity()` /
+  `nextAgentReady()`, and the interrupt policy. `core::tui` links `core::net` as a result, and the
+  module table's `tui` row carries it.
+
+  Gone with the second scheduler: `runtime::EventSource`, `runtime::PollEventSource`,
+  `runtime::TerminalEventSource`, `runtime::WaitFdAwaiter`, `runtime::withTimeout`,
+  `runtime::testing::MockEventSource`, and the readiness vocabulary they shared --
+  `FdInterest`, `hasInterest`, `FdToken`, `WaitOutcome`, `FdRegistration`, `FdRegistry`. The
+  headers `runtime/EventSource.hpp`, `runtime/PollEventSource.{hpp,cpp}`,
+  `runtime/WithTimeout.hpp`, `runtime/posix/PollHelpers.hpp`,
+  `runtime/testing/MockEventSource.hpp` and all three `TerminalEventSource` files are deleted;
+  `tools/migrate/renames.json` carries a row for each, with what to write instead.
+
+  Migrations, in the order a caller meets them:
+
+  - **Construction.** `TuiRuntime(EventSource&, IClock&)` becomes
+    `TuiRuntime(core::net::EventLoop&, Terminal&, TuiRuntimeOptions = {})`, or
+    `TuiRuntime(EventLoop&, InputSource&, …)` where the input is injected. The clock is the
+    loop's, so a `ManualClock` is given to the loop rather than to the runtime. **Destroy the
+    runtime before its loop, on the loop's thread**: its source flows are parked on the loop and
+    name it, and the destructor is what takes them back.
+  - **The agent wakeup has no handle.** Where a `core::platform::Wakeup` was passed to
+    `TerminalEventSource` and waited on, a worker now calls
+    `loop.post([&]{ runtime.notifyAgentReady(); })` -- the loop's own cross-thread surface. The
+    `nextAgentReady()` and `nextActivity()` vocabulary is unchanged.
+  - **The interrupt wakeup is `TuiRuntimeOptions::interruptWakeup`**, and the POSIX signal fd is
+    `TuiRuntimeOptions::signalFd`. `core::platform::SignalHandler` records the signal and signals
+    the wakeup exactly as before; what changed is that a flow parked on that handle runs the
+    policy, rather than a branch inside a hand-built wait set.
+  - **`runtime::withTimeout(&runtime, …)` is `core::net::withTimeout(&runtime.loop(), …)`.** The
+    two were the same construction over two schedulers.
+  - **`waitReadable`/`waitWritable` return `core::net::WaitHandleAwaiter`** and take an optional
+    `core::net::HandleKind`. They throw `core::net::FdRegistrationFailed` where the backend
+    refuses a handle, which the old awaitable flattened into `OperationCancelled` -- so a caller
+    that catches only `OperationCancelled` now lets a plumbing failure escape, which is the point:
+    the two were indistinguishable and are different facts.
+  - **`delay`/`sleepUntil` return `core::net::DelayAwaiter`**, and `rootStopSource()`, `clock()`,
+    `spawn()` and `blockOn()` are the loop's. Prefer `loop.requestStop()` over
+    `rootStopSource().request_stop()`: it also unparks what it cancels.
+  - **A headless runtime replaces `PollEventSource`.** An `InputSource` that reports
+    `platform::InvalidHandle` for its input handle starts no input flow, and the socket work that
+    used to need a headless event source belongs to `core::net::EventLoop` directly.
+  - **Tests.** `runtime::testing::MockEventSource` is replaced by two doubles that are each one
+    thing: `core::net::testing::ScriptedBackend` scripts readiness (or a real
+    `core::platform::SystemPipe` provides it), and
+    `core::tui::runtime::testing::ScriptedInputSource` scripts decoding.
+
 
 - **`core::net::EventLoop` is the merged reactor contract: a five-step turn, a six-step teardown,
   a park table and the thread-affinity guarantees, all asserted.** It implements
@@ -1001,6 +1069,51 @@ workflow refuses one without a section here.
   which says the same thing.
 
 ### Fixed
+
+- **The TUI runtime's four deferred defects, all closed by composing it on `core::net::EventLoop`
+  (Task B12).** They were found reviewing Task A7's import from endo and deferred here because this
+  task deletes or rewrites the code they live in; nothing shipped with them.
+  - [core-cpp#16](https://github.com/contour-terminal/core-cpp/issues/16): **a cancelled `delay`
+    left its entry in the runtime's timer heap.** Its `await_resume` reset the stop-callback and
+    unregistered nothing, so a `whenAny` loser's heap entry outlived the frame it named and the
+    next pass over the heap called `done()` on freed storage. Reproduced as a SIGSEGV in a plain
+    debug build, not merely under a sanitizer. The loop's own awaitable unregisters its park on
+    every resume, ready or cancelled, and the regression case asserts `pendingTimerCount()` and
+    `pendingTimerSlotCount()` are both zero afterwards.
+  - [core-cpp#17](https://github.com/contour-terminal/core-cpp/issues/17): **`blockOn()` spun at
+    full CPU when nothing the runtime knew about was parked.** `pumpOnce()` returned without
+    waiting and `blockOn` looped on it unconditionally. `EventLoop::blockOn` waits on the backend
+    instead. An outcome test cannot separate a loop that slept from one that burned a core, so the
+    case asserts the ARGUMENT: every wait of an idle turn is indefinite, never zero.
+  - [core-cpp#18](https://github.com/contour-terminal/core-cpp/issues/18): **a cancelled input
+    awaiter stranded the runtime's single waiter slot.** `NextInputEventAwaiter`,
+    `NextEventForAwaiter` and `NextActivityAwaiter` armed no stop-callback, so a cancelled waiter
+    stayed parked until input happened to arrive -- after EOF on stdin, never -- and the next flow
+    to ask for input found the slot taken. All four input awaiters now arm one, and a cancelled
+    waiter releases its slot and its deadline. The case asserts the argument again: a `whenAny`
+    whose loser is parked on input must resolve with **no wait at all**.
+  - [core-cpp#19](https://github.com/contour-terminal/core-cpp/issues/19): **the Windows TUI event
+    source failed hard past 64 wait handles.** It called `WaitForMultipleObjects` with an unchecked
+    count and mapped the refusal onto `interrupted`, so a consumer watching ~60 descriptors saw the
+    whole TUI unwind indistinguishably from Ctrl+C; `PollEventSource` had the same limit and span
+    instead. Both files are deleted, and `core::net`'s Windows backend sweeps its set in chunks
+    (`detail/WaitChunking.hpp`). Held by a case that parks 70 concurrent handle waits and requires
+    every one to resolve.
+
+- **A focus change no longer closes an open modal.** The runtime woke its input waiter for any
+  non-input activity, including a dispatched focus report -- but a `nextEvent()` awaiter can only
+  yield an event or throw, so it threw `OperationCancelled`, and `runModal` catches that and
+  returns `std::nullopt`. Which waiters may be resumed with nothing is now stated as
+  `core::tui::runtime::InputWake` rather than inferred: only a waiter that can *say* nothing
+  happened (`nextEventFor`, `nextActivity`) is told so.
+
+- **A lone Escape keypress is delivered.** Disambiguating a bare `ESC` from the start of an arrow
+  key needs a clock, and the old runtime only called the parser's timeout hook when its multiplexed
+  wait timed out -- which, for a flow parked on `nextEvent()` with no timer pending, meant an
+  indefinite wait and a hook that was never called at all. The runtime now arms
+  `TuiRuntimeOptions::escapeFlush` (50ms by default) after any read that decoded to nothing, and
+  flushes when it elapses.
+
 
 - **`scripts/clang-format.py` no longer destroys a file it was handed.** The extension filter
   applied only to what `--all` discovered, never to a path the caller named, so

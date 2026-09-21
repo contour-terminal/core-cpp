@@ -2,7 +2,7 @@
 
 Rules for `src/core/tui/`: the `core::tui_output` leaf, the full `core::tui`, and its runtime.
 
-The module arrives in Task A7, from endo's `src/tui` at `f774a210`, and its runtime moves onto
+The module arrives in Task A7, from endo's `src/tui` at `f774a210`, and its runtime moved onto
 `core::net::EventLoop` in Task B12 (the design spec,
 [Part I §1 and §2](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/specs/2026-09-18-core-cpp-design.md)).
 Its consumers are endo, tuidu, fastcached's console tools and Lightweight's `dbtool`.
@@ -33,9 +33,14 @@ Its consumers are endo, tuidu, fastcached's console tools and Lightweight's `dbt
 ## Dependency injection
 
 - **`Terminal` takes its `TerminalOutput`**, and tests use `MockTerminalOutput`; a TUI test never
-  needs a real console. Input is a seam too: after Task B12 the runtime reads input through an
-  input pump on the loop (`loop.waitReadable(inputHandle, HandleKind::Waitable)`), and tests
-  drive it with `core::net::testing::ScriptedBackend`.
+  needs a real console. Input is a seam too, and it is TWO seams rather than one, because
+  readiness and decoding are different questions and one double that answered both would be
+  impersonating a scheduler: the runtime parks on `loop.waitReadable(inputHandle)` for readiness,
+  which a case scripts at `core::net::testing::ScriptedBackend` or takes from a real
+  `core::platform::SystemPipe`, and it decodes through an injected
+  `core::tui::runtime::InputSource`, which a case scripts at
+  `core::tui::runtime::testing::ScriptedInputSource`. Point the second at the first's pipe and the
+  same case runs over every backend the platform builds.
 - **A generic view talks to its data through a model interface** (tuidu's `TreeTableModel` is
   the example): the view stays domain-agnostic, and each application implements the model.
   Origin: [tuidu `AGENT.md`, "Dependency Injection via Constructor Injection"](https://github.com/contour-terminal/tuidu/blob/30107fbab72310fde5db89e7882eab288f6b541e/AGENT.md).
@@ -46,12 +51,30 @@ Its consumers are endo, tuidu, fastcached's console tools and Lightweight's `dbt
 
 ## The runtime is composition on the event loop
 
-After Task B12 there is one scheduler: `core::tui::TuiRuntime(EventLoop&, Terminal&)`. endo's
-`EventSource`, `PollEventSource` and its own `WithTimeout` are deleted; the agent wakeup becomes
-`loop.post()`, and an interrupt goes `SignalHandler` → `Wakeup` → `waitReadable`. On Windows the
-console input handle is parked through the IOCP backend's thread-pool bridge (see
-[`platform.md`](platform.md)). The event loop's own rules are in
-[`async-and-net.md`](async-and-net.md).
+There is one scheduler: `core::tui::runtime::TuiRuntime(EventLoop&, Terminal&)`, or
+`TuiRuntime(EventLoop&, InputSource&)` where the input is injected. endo's `EventSource`,
+`PollEventSource`, `TerminalEventSource` and its own `WithTimeout` are deleted; the agent wakeup
+becomes `loop.post([&]{ runtime.notifyAgentReady(); })`, and an interrupt goes `SignalHandler` →
+`Wakeup` → `waitReadable`, which files nothing on the loop and therefore wakes nothing: it signals
+a handle the loop is already watching.
+
+- **Each source is a parked flow, one per handle** -- terminal input, resize, the interrupt
+  wakeup, the POSIX signal fd -- and the runtime's destructor takes each one back off the loop.
+  That obligation is the rule in [`async-and-net.md`](async-and-net.md), "An object that parks
+  flows on a loop takes them back in its own destructor"; here it means **a `TuiRuntime` is
+  destroyed before its loop, on the loop's thread**.
+- **Which Windows wait serves the console handle is the backend's choice, not the TUI's.** Both
+  can: WFMO waits on it directly and sweeps its set in chunks past 64 handles, and IOCP reaches it
+  through the waitable-HANDLE bridge (see [`platform.md`](platform.md)). WFMO is still the default
+  Windows backend -- Task B7b is what changes that -- so do not write that the console handle
+  "goes through IOCP"; it goes through whichever backend `makeDefaultBackend()` returned, and the
+  runtime is tested against every one the platform builds.
+- **Only a waiter that can say "nothing happened" may be resumed with nothing.** `nextEvent()`
+  yields an event or throws, so waking it for a focus change reports that change as a
+  cancellation -- and `runModal` closes on a cancellation. `InputWake` is where that distinction
+  is stated.
+
+The event loop's own rules are in [`async-and-net.md`](async-and-net.md).
 
 ## Windows console tests
 

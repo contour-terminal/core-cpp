@@ -1,275 +1,448 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/tui/runtime/TuiRuntime.hpp>
 
+#include <core/platform/SignalHandler.hpp>
+
 #include <algorithm>
 #include <cassert>
-#include <limits>
 #include <utility>
 
 namespace core::tui::runtime
 {
 
-TuiRuntime::TuiRuntime(EventSource& source, core::platform::IClock& clock) noexcept:
-    _source(source), _clock(clock)
+TuiRuntime::TuiRuntime(net::EventLoop& loop, InputSource& input, TuiRuntimeOptions options):
+    _loop(loop),
+    _input(input),
+    _options(options),
+    _inputHandle(input.inputHandle()),
+    _resizeHandle(input.resizeHandle())
 {
+    startSourceFlows();
+}
+
+TuiRuntime::TuiRuntime(net::EventLoop& loop, Terminal& terminal, TuiRuntimeOptions options):
+    _loop(loop),
+    _ownedInput(std::in_place, terminal),
+    _input(*_ownedInput),
+    _options(options),
+    _inputHandle(_ownedInput->inputHandle()),
+    _resizeHandle(_ownedInput->resizeHandle())
+{
+    startSourceFlows();
 }
 
 TuiRuntime::~TuiRuntime()
 {
-    // Cancel every spawned flow and let parked awaiters unwind via RAII before
-    // their frames are destroyed. Order matters: request_stop() first so that when
-    // wakeAllWaiters() requeues parked handles, drainReadyQueue() resumes them into
-    // await_resume(), which sees stop_requested() and throws OperationCancelled —
-    // unwinding the frame's locals. The frames then complete (done() == true), so
-    // the spawned-flow Tasks destroy already-finished frames. Cancelled re-awaits
-    // resume synchronously (await_suspend returns false when stop is requested), so
-    // a single drain converges. No-op and effectively free when nothing is parked.
-    _rootStop.request_stop();
-    wakeAllWaiters();
-    drainReadyQueue();
+    // **Nothing may outlive this object still naming it**, and two different populations do: the
+    // flows this runtime parked in its own slots, and the source flows it started. Both are
+    // retired here, while the loop -- and this object -- are still alive.
+    assert(_loop.teardownIsSerialisedWithDispatch()
+           && "~TuiRuntime from a second thread while another is driving its loop: this clears "
+              "scheduler state beside a turn that is reading it");
+    _stopping = true;
+
+    unwindParkedWaiters();
+    retireTimer(_escapeFlush);
+
+    // The source flows. Each frame names THIS object, and the loop is holding it -- parked on a
+    // handle, or already queued to resume -- so a readiness dispatched after this object is gone
+    // would resume one into freed storage.
+    //
+    // `cancelPending` is the retrieval, and its answer is an ownership transfer rather than a
+    // status: true means the loop no longer has it and this call may resume or destroy it. Both
+    // cases it covers need the same thing next. A PARKED flow comes back with its backend
+    // registration already detached, and a QUEUED one does not -- only `await_resume` unregisters,
+    // and for a queued flow that has not run yet. So each is resumed exactly once more: the
+    // awaiter unregisters its park, `_stopping` is what stops the body from carrying on, and the
+    // frame completes rather than being destroyed mid-await with a registration still live.
+    for (auto& source: _sources)
+    {
+        if (source.done())
+            continue;
+        if (_loop.cancelPending(source.handle()) && !source.done())
+            source.handle().resume();
+    }
 }
 
-void TuiRuntime::spawn(core::async::Task<void> task)
+void TuiRuntime::unwindParkedWaiters()
 {
-    task.handle().promise().setStopToken(_rootStop.get_token());
-    _ready.push_back(task.handle());
-    _roots.push_back(std::move(task));
+    // A flow awaiting this runtime is unwound HERE, from the destructor body, while every member
+    // it is about to read is still alive. Handing it to the loop instead would have it resumed
+    // afterwards, and its `await_resume` asks this object for the slot, the deadline and the
+    // buffer. Worse, an awaiter that is never resumed never runs `_cancelReg.reset()`, so its
+    // cancellation callback -- which names this runtime -- stays armed on a token the LOOP owns,
+    // and `~EventLoop`'s own `request_stop()` then calls it against storage that is gone. That is
+    // the failure AddressSanitizer reported: a stack-use-after-scope read of the runtime, from the
+    // loop's teardown, one scope further out.
+    //
+    // The waiters the loop is already holding come back first, by the same retrieval the source
+    // flows use. `cancelPending` answering false would mean the loop no longer has it, which
+    // cannot happen while it is still listed here: a waiter leaves that list only through
+    // `await_resume`, and `await_resume` only runs from a resumption.
+    for (auto const waiter: std::exchange(_handedToLoop, {}))
+        if (waiter && !waiter.done() && _loop.cancelPending(waiter))
+            waiter.resume();
+
+    // Then the parked ones. This terminates in at most two passes whatever the resumed bodies do:
+    // `_stopping` is set, so `await_suspend` declines to park and `await_resume` throws, and a
+    // flow that catches the cancellation and awaits again cannot get back into a slot.
+    while (_inputWaiter || _agentWaiter)
+    {
+        auto const waiter = _inputWaiter ? takeInputWaiter() : std::exchange(_agentWaiter, {});
+        if (waiter && !waiter.done())
+            waiter.resume();
+    }
+}
+
+void TuiRuntime::handToLoop(std::coroutine_handle<> waiter)
+{
+    if (!waiter || waiter.done())
+        return;
+    _handedToLoop.push_back(waiter);
+    _loop.resumeSoon(async::ParkedWork { .resume = waiter });
+}
+
+void TuiRuntime::forgetHandedToLoop(std::coroutine_handle<> waiter) noexcept
+{
+    std::erase(_handedToLoop, waiter);
+}
+
+void TuiRuntime::startSourceFlows()
+{
+    if (_inputHandle != platform::InvalidHandle)
+        startSourceFlow(inputFlow());
+    if (_resizeHandle != platform::InvalidHandle)
+        startSourceFlow(resizeFlow());
+    if (_options.interruptWakeup != nullptr)
+        startSourceFlow(interruptFlow());
+    if (_options.signalFd != platform::InvalidHandle)
+        startSourceFlow(signalFlow());
+}
+
+void TuiRuntime::startSourceFlow(async::Task<void> flow)
+{
+    assert(_sourceCount < _sources.size() && "TuiRuntime: more source flows than slots for them");
+    // `submit` rather than `spawn`, and the difference is the whole of the teardown above: `spawn`
+    // hands the frame to the loop, which offers no way to take one back, so a runtime destroyed
+    // before its loop would leave the loop owning a frame that names freed storage. `submit`
+    // BORROWS -- the frame stays here, in `_sources`, and the destructor is what makes that
+    // borrow honest.
+    _sources[_sourceCount] = std::move(flow);
+    _loop.submit(_sources[_sourceCount].handle());
+    ++_sourceCount;
+}
+
+async::Task<void> TuiRuntime::inputFlow()
+{
+    while (true)
+    {
+        try
+        {
+            co_await _loop.waitReadable(_inputHandle);
+        }
+        catch (async::OperationCancelled const&)
+        {
+            co_return;
+        }
+        catch (net::FdRegistrationFailed const&)
+        {
+            // The backend will not watch this handle -- it is closed, or the kernel refused the
+            // filter. Returning is the only option that does not spin: re-parking would ask the
+            // same refused question on every turn, forever.
+            co_return;
+        }
+        if (_stopping)
+            co_return;
+
+        auto decoded = _input.readReady();
+        if (decoded.empty())
+            // Bytes arrived and decoded to nothing: either a partial escape sequence, or a console
+            // record that is not input. Arm the flush so a lone ESC is eventually delivered as
+            // Escape rather than waiting for a continuation nobody is going to type.
+            armEscapeFlush();
+        else
+            retireTimer(_escapeFlush);
+        routeDecoded(std::move(decoded));
+    }
+}
+
+async::Task<void> TuiRuntime::resizeFlow()
+{
+    while (true)
+    {
+        try
+        {
+            co_await _loop.waitReadable(_resizeHandle);
+        }
+        catch (async::OperationCancelled const&)
+        {
+            co_return;
+        }
+        catch (net::FdRegistrationFailed const&)
+        {
+            co_return;
+        }
+        if (_stopping)
+            co_return;
+
+        if (auto resize = _input.readResize())
+        {
+            auto events = std::vector<InputEvent> {};
+            events.push_back(std::move(*resize));
+            routeDecoded(std::move(events));
+        }
+    }
+}
+
+async::Task<void> TuiRuntime::interruptFlow()
+{
+    while (true)
+    {
+        try
+        {
+            co_await _loop.waitReadable(_options.interruptWakeup->nativeHandle());
+        }
+        catch (async::OperationCancelled const&)
+        {
+            co_return;
+        }
+        catch (net::FdRegistrationFailed const&)
+        {
+            co_return;
+        }
+        if (_stopping)
+            co_return;
+
+        _options.interruptWakeup->reset();
+        // The wakeup only says "look"; the flag is where the signal handler recorded WHAT. A
+        // wakeup with no flag behind it is a spurious signal and is not an interrupt. Clearing it
+        // here is what makes each interrupt observed exactly once.
+        if (!platform::SignalHandler::hasPendingSigint())
+            continue;
+        platform::SignalHandler::clearPendingSigint();
+        runInterruptPolicy();
+    }
+}
+
+async::Task<void> TuiRuntime::signalFlow()
+{
+    while (true)
+    {
+        try
+        {
+            co_await _loop.waitReadable(_options.signalFd);
+        }
+        catch (async::OperationCancelled const&)
+        {
+            co_return;
+        }
+        catch (net::FdRegistrationFailed const&)
+        {
+            co_return;
+        }
+        if (_stopping)
+            co_return;
+
+        // A reaped job (SIGCHLD) is non-input activity: resume an idle flow so its owner reports
+        // finished jobs promptly instead of at the next keypress.
+        if (platform::SignalHandler::processSignalFd())
+            notifyActivity();
+    }
+}
+
+void TuiRuntime::runInterruptPolicy()
+{
+    if (_onInterrupt)
+        _onInterrupt();
+    else
+        // Not `rootStopSource().request_stop()`, which cancels every flow and unparks none of
+        // them: a flow parked on a socket would observe its cancellation only when that socket
+        // next became readable. `requestStop` is the same request plus the unparking.
+        _loop.requestStop();
+}
+
+void TuiRuntime::routeDecoded(std::vector<InputEvent> events)
+{
+    if (events.empty())
+        return;
+
+    // The source dispatches the terminal's own protocol responses (colour scheme, focus, cursor
+    // position, cell size) and removes them. A focus change is reported back because it is
+    // non-input activity an idle flow still wants: focus chrome has to redraw.
+    auto const focusChanged = _input.consumeReports(events);
+
+    for (auto& event: events)
+        // A second filter over a source that is contracted to have applied the first. It is
+        // deliberate: `isProtocolReport` is the policy, a source is only obliged to deliver
+        // decoded events, and a report that reached an application as input would look like a
+        // keystroke nobody typed. The cost is one predicate per event.
+        if (!isProtocolReport(event))
+            _inputBuffer.push_back(std::move(event));
+
+    if (focusChanged)
+        notifyActivity();
+    deliverInput();
+}
+
+bool TuiRuntime::hasBufferedInput()
+{
+    if (_inputBuffer.empty())
+        // A terminal query reads input while it waits for its reply and hands back whatever was
+        // not the reply. Those events were read off the input handle BEFORE anything still on it,
+        // so nothing is going to become readable on their account and no source flow will ever
+        // notice them. Asking here is what delivers them, at the one moment it matters.
+        for (auto& event: _input.takePending())
+            if (!isProtocolReport(event))
+                _inputBuffer.push_back(std::move(event));
+    return !_inputBuffer.empty();
 }
 
 InputEvent TuiRuntime::popBufferedInput()
 {
+    assert(!_inputBuffer.empty() && "TuiRuntime::popBufferedInput with nothing buffered");
     auto event = std::move(_inputBuffer.front());
     _inputBuffer.pop_front();
     return event;
 }
 
-void TuiRuntime::scheduleTimer(std::chrono::steady_clock::time_point deadline, std::coroutine_handle<> waiter)
+void TuiRuntime::parkOnInput(std::coroutine_handle<> waiter,
+                             InputWake wake,
+                             std::optional<platform::SteadyTimePoint> deadline)
 {
-    _timers.push_back(TimerEntry { .deadline = deadline, .handle = waiter });
-    std::ranges::push_heap(_timers, soonestFirst);
+    assert(!_stopping && "TuiRuntime::parkOnInput during teardown: the awaiters decline to park");
+    assert(!_inputWaiter && "TuiRuntime: an input waiter is already parked");
+    _inputWaiter = waiter;
+    _inputWake = wake;
+    if (deadline)
+        _inputDeadline = _loop.addTimer(*deadline, &TuiRuntime::onInputDeadline, this);
 }
 
-FdToken TuiRuntime::registerFdWaiter(core::platform::NativeHandle fd,
-                                     FdInterest interest,
-                                     std::coroutine_handle<> waiter)
+void TuiRuntime::releaseInputWaiter(std::coroutine_handle<> waiter) noexcept
 {
-    auto const token = _source.attach(fd, interest);
-    if (!token)
-        return FdToken::invalid();
-    _fdWaiters.emplace(token, waiter);
-    return token;
-}
-
-void TuiRuntime::unregisterFdWaiter(FdToken token) noexcept
-{
-    if (!token)
+    // An empty handle is an awaiter that declined to park -- it was cancelled before it got the
+    // chance -- and it owns none of this state. Without this the comparison below would find an
+    // empty slot "equal" and retire a deadline belonging to nobody.
+    if (!waiter)
         return;
-    _source.detach(token);
-    _fdWaiters.erase(token);
-}
-
-void TuiRuntime::requeueForCancellation(std::coroutine_handle<> waiter)
-{
-    if (!waiter || waiter.done())
-        return;
-
-    // If parked as an fd waiter, drop and detach its registration so the stale
-    // entry cannot also fire. A timer-parked handle has no index here; its heap
-    // entry is left in place and skipped later (the handle will be done by then).
-    using Waiter = decltype(_fdWaiters)::value_type;
-    if (auto const it = std::ranges::find(_fdWaiters, waiter, &Waiter::second); it != _fdWaiters.end())
+    // Idempotent, and usually a no-op on the slot: the resumption that brought this flow back is
+    // what emptied it. What is not a no-op is the deadline -- a waiter resumed by an EVENT still
+    // owns the timer its timeout armed, and leaving it would fire into an empty slot later.
+    if (_inputWaiter == waiter)
     {
-        _source.detach(it->first);
-        _fdWaiters.erase(it);
+        _inputWaiter = {};
+        _inputWake = InputWake::EventOnly;
     }
-
-    // Re-queue once. drainReadyQueue skips already-done handles, and a later stale
-    // timer fire will see done() and skip it, so a single push is safe.
-    _ready.push_back(waiter);
+    retireTimer(_inputDeadline);
+    forgetHandedToLoop(waiter);
 }
 
-void TuiRuntime::wakeFdWaiters(std::vector<FdToken> const& tokens)
+void TuiRuntime::parkOnAgent(std::coroutine_handle<> waiter)
 {
-    for (auto const token: tokens)
-    {
-        auto const it = _fdWaiters.find(token);
-        if (it == _fdWaiters.end())
-            continue;
-        auto const handle = it->second;
-        // Drop the parked slot now; the awaiter detaches the source registration in
-        // its await_resume. Erasing first keeps the map consistent if the resumed
-        // frame re-enters the runtime.
-        _fdWaiters.erase(it);
-        if (handle && !handle.done())
-            _ready.push_back(handle);
-    }
+    assert(!_stopping && "TuiRuntime::parkOnAgent during teardown: the awaiters decline to park");
+    assert(!_agentWaiter && "TuiRuntime: an agent waiter is already parked");
+    _agentWaiter = waiter;
 }
 
-void TuiRuntime::drainReadyQueue()
-{
-    while (!_ready.empty())
-    {
-        auto const handle = _ready.front();
-        _ready.pop_front();
-        if (handle && !handle.done())
-            handle.resume();
-    }
-}
-
-int TuiRuntime::computeTimeoutMs() const
-{
-    // The soonest of the next timer and a timed input waiter's deadline.
-    auto soonest = std::optional<std::chrono::steady_clock::time_point> {};
-    if (!_timers.empty())
-        soonest = _timers.front().deadline;
-    if (_inputDeadline && (!soonest || *_inputDeadline < *soonest))
-        soonest = _inputDeadline;
-
-    if (!soonest)
-        return -1; // Block indefinitely until a source becomes ready.
-
-    auto const now = _clock.now();
-    if (*soonest <= now)
-        return 0;
-
-    auto const ms = std::chrono::duration_cast<std::chrono::milliseconds>(*soonest - now).count();
-    // A positive remainder under 1ms truncates to 0; clamp to 1 so the next wait
-    // actually blocks instead of spinning on wait(0) until the deadline crosses now.
-    return static_cast<int>(std::clamp<long long>(ms, 1, std::numeric_limits<int>::max()));
-}
-
-void TuiRuntime::routeDecodedEvent(InputEvent&& event)
-{
-    // Defensive net: the production EventSource already consumes color-scheme /
-    // focus / cursor / cell reports (Terminal::consumeProtocolReports), but a
-    // source is only contracted to deliver decoded events, not to pre-filter —
-    // and DecModeReport / DcsResponse are not stripped upstream. Drop any report
-    // here so it never surfaces as application input regardless of the source.
-    // TODO(#19): route reports to one-shot Terminal query awaiters when those land.
-    if (isProtocolReport(event))
-        return;
-    _inputBuffer.push_back(std::move(event));
-}
-
-void TuiRuntime::fireExpiredTimers()
-{
-    auto const now = _clock.now();
-    while (!_timers.empty() && _timers.front().deadline <= now)
-    {
-        std::ranges::pop_heap(_timers, soonestFirst);
-        auto const entry = _timers.back();
-        _timers.pop_back();
-        if (entry.handle && !entry.handle.done())
-            _ready.push_back(entry.handle);
-    }
-}
-
-void TuiRuntime::wakeWaiter(std::coroutine_handle<>& waiter)
+void TuiRuntime::releaseAgentWaiter(std::coroutine_handle<> waiter) noexcept
 {
     if (!waiter)
         return;
-    if (&waiter == &_inputWaiter)
-    {
-        _inputDeadline.reset();
-        _inputWaiterWantsAgent = false;
-    }
-    auto const handle = std::exchange(waiter, {});
-    if (!handle.done())
-        _ready.push_back(handle);
+    if (_agentWaiter == waiter)
+        _agentWaiter = {};
+    forgetHandedToLoop(waiter);
 }
 
-void TuiRuntime::wakeAllWaiters()
+void TuiRuntime::requestCancelWaiter(std::coroutine_handle<> waiter) noexcept
 {
-    wakeWaiter(_inputWaiter);
-    wakeWaiter(_agentWaiter);
-    for (auto const& entry: _timers)
-        if (entry.handle && !entry.handle.done())
-            _ready.push_back(entry.handle);
-    _timers.clear();
+    if (!waiter)
+        return;
+    // These two slots are this runtime's state, and this runtime's state is the loop thread's --
+    // the same rule `EventLoop::registerPark` asserts, for the same reason: a token stopped from
+    // another thread would write them beside a turn reading them. Cancel a TUI flow on the loop's
+    // thread, or `post()` a call to whatever does it.
+    assert(_loop.teardownIsSerialisedWithDispatch()
+           && "TuiRuntime: a TUI flow was cancelled from a second thread while another is driving "
+              "its loop; post() the cancellation to the loop instead");
 
-    // Flush every fd waiter so a cancelled awaitable can unwind. Detach each from
-    // the source and re-queue its handle; await_resume then observes the requested
-    // stop and throws OperationCancelled. Move the slots out first so a resumed
-    // frame re-entering the runtime cannot mutate the container mid-iteration.
-    auto parked = std::exchange(_fdWaiters, {});
-    for (auto const& [token, handle]: parked)
-    {
-        _source.detach(token);
-        if (handle && !handle.done())
-            _ready.push_back(handle);
-    }
-
-    // Clear transient wait state so a reused runtime (the prompt runtime persists
-    // across REPL iterations) cannot carry a stale deadline or pending flag into the
-    // next blockOn. wakeWaiter already resets these when _inputWaiter was set; this
-    // also covers the case where the slot was already empty.
-    _inputDeadline.reset();
-    _inputWaiterWantsAgent = false;
-    _agentPending = false;
-}
-
-void TuiRuntime::pumpOnce()
-{
-    drainReadyQueue();
-
-    // Nothing is parked on a source: a well-formed root flow either completed
-    // (the caller's loop will observe `done()`) or is awaiting a child task that
-    // will itself park. Returning avoids a wait with no one to wake.
-    auto const hasParked = _inputWaiter || _agentWaiter || !_timers.empty() || !_fdWaiters.empty();
-    if (!hasParked)
+    if (_inputWaiter == waiter)
+        std::ignore = takeInputWaiter();
+    else if (_agentWaiter == waiter)
+        _agentWaiter = {};
+    else
+        // Already resumed -- by an event, by a deadline, or by an earlier cancellation. Queueing
+        // it again would resume a frame the first resumption may already have destroyed.
         return;
 
-    auto outcome = _source.wait(computeTimeoutMs());
+    // BORROWS, which is what this is: the frame belongs to whoever is awaiting, it is suspended
+    // at the `co_await` this cancels, and its `await_resume` is what runs next.
+    handToLoop(waiter);
+}
 
-    if (outcome.interrupted)
+std::coroutine_handle<> TuiRuntime::takeInputWaiter() noexcept
+{
+    retireTimer(_inputDeadline);
+    _inputWake = InputWake::EventOnly;
+    return std::exchange(_inputWaiter, {});
+}
+
+void TuiRuntime::deliverInput()
+{
+    if (!_inputWaiter || !hasBufferedInput())
+        return;
+    handToLoop(takeInputWaiter());
+}
+
+void TuiRuntime::notifyActivity()
+{
+    // A `nextEvent()` waiter is deliberately left alone: its `await_resume` can produce an event
+    // or throw, and nothing else, so resuming it with no event would report a focus change as a
+    // cancellation -- which is how a focus change used to close an open modal.
+    if (!_inputWaiter || _inputWake == InputWake::EventOnly)
+        return;
+    handToLoop(takeInputWaiter());
+}
+
+void TuiRuntime::notifyAgentReady()
+{
+    _agentPending = true;
+    if (_agentWaiter)
     {
-        if (_onInterrupt)
-            _onInterrupt();
-        else
-            _rootStop.request_stop();
-        if (_rootStop.stop_requested())
-            wakeAllWaiters();
+        handToLoop(std::exchange(_agentWaiter, {}));
+        return;
     }
+    if (_inputWaiter && _inputWake == InputWake::OrAgent)
+        handToLoop(takeInputWaiter());
+}
 
-    for (auto& event: outcome.events)
-        routeDecodedEvent(std::move(event));
+void TuiRuntime::armEscapeFlush()
+{
+    if (_escapeFlush)
+        return; // the earlier deadline is the one that matters
+    _escapeFlush =
+        _loop.addTimer(_loop.clock().now() + _options.escapeFlush, &TuiRuntime::onEscapeFlush, this);
+}
 
-    if (outcome.agentReady)
-    {
-        // Agent wakeups are only meaningful to an agent-interested waiter
-        // (nextActivity with wantsAgent, or nextAgentReady). The invariant is that
-        // exactly one such consumer exists while the agent worker runs; a plain
-        // nextEvent waiter must never coexist with a live agent channel, else this
-        // flag would go unconsumed and a later await_ready() would resume on a stale
-        // wakeup. Assert documents and enforces that in debug builds.
-        assert((!_inputWaiter || _inputWaiterWantsAgent || _agentWaiter)
-               && "agentReady fired with no agent-interested waiter parked");
-        _agentPending = true;
-    }
+void TuiRuntime::retireTimer(net::TimerId& timer) noexcept
+{
+    if (timer)
+        std::ignore = _loop.cancelTimer(timer);
+    timer = net::TimerId::invalid();
+}
 
-    // Wake the input waiter when an event is ready, its timed wait elapsed
-    // (nextEventFor/nextActivity resume so the caller can run idle ticks), a
-    // non-input activity occurred (focus change / finished job — resume so the
-    // caller can redraw or report), or — for nextActivity, which also services the
-    // agent worker — when a message is pending.
-    if (_inputWaiter
-        && (hasBufferedInput() || inputDeadlinePassed() || outcome.activity
-            || (_inputWaiterWantsAgent && _agentPending)))
-        wakeWaiter(_inputWaiter);
+void TuiRuntime::onInputDeadline(void* state) noexcept
+{
+    auto& self = *static_cast<TuiRuntime*>(state);
+    // The timer has fired, so it is gone from the loop's table; clearing the id here is what stops
+    // `releaseInputWaiter` from trying to cancel one that already ran.
+    self._inputDeadline = net::TimerId::invalid();
+    self.notifyActivity();
+}
 
-    // Wake a dedicated nextAgentReady() waiter while a message is pending.
-    if (_agentWaiter && _agentPending)
-        wakeWaiter(_agentWaiter);
-
-    // Resume coroutines parked on any generic fd that became ready this wait.
-    wakeFdWaiters(outcome.readyRead);
-    wakeFdWaiters(outcome.readyWrite);
-
-    fireExpiredTimers();
-
-    // Resume coroutines woken during this iteration so an event is delivered in
-    // the same pump it arrived, rather than on the next one.
-    drainReadyQueue();
+void TuiRuntime::onEscapeFlush(void* state) noexcept
+{
+    auto& self = *static_cast<TuiRuntime*>(state);
+    self._escapeFlush = net::TimerId::invalid();
+    self.routeDecoded(self._input.flushPartial());
 }
 
 NextInputEventAwaiter TuiRuntime::nextEvent() noexcept
@@ -279,32 +452,12 @@ NextInputEventAwaiter TuiRuntime::nextEvent() noexcept
 
 NextEventForAwaiter TuiRuntime::nextEventFor(std::chrono::milliseconds timeout) noexcept
 {
-    return NextEventForAwaiter { *this, _clock.now() + timeout };
+    return NextEventForAwaiter { *this, _loop.clock().now() + timeout };
 }
 
 NextActivityAwaiter TuiRuntime::nextActivity(std::chrono::milliseconds timeout) noexcept
 {
-    return NextActivityAwaiter { *this, _clock.now() + timeout };
-}
-
-DelayAwaiter TuiRuntime::delay(std::chrono::milliseconds duration) noexcept
-{
-    return DelayAwaiter { *this, _clock.now() + duration };
-}
-
-DelayAwaiter TuiRuntime::sleepUntil(std::chrono::steady_clock::time_point deadline) noexcept
-{
-    return DelayAwaiter { *this, deadline };
-}
-
-WaitFdAwaiter TuiRuntime::waitReadable(core::platform::NativeHandle fd) noexcept
-{
-    return WaitFdAwaiter { *this, fd, FdInterest::Read };
-}
-
-WaitFdAwaiter TuiRuntime::waitWritable(core::platform::NativeHandle fd) noexcept
-{
-    return WaitFdAwaiter { *this, fd, FdInterest::Write };
+    return NextActivityAwaiter { *this, _loop.clock().now() + timeout };
 }
 
 NextAgentReadyAwaiter TuiRuntime::nextAgentReady() noexcept

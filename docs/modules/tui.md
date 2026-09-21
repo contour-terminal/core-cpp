@@ -4,15 +4,11 @@ The terminal UI. Namespace `core::tui`, directory `src/core/tui/`, targets `core
 `core::tui` (only with `CORE_CPP_WITH_TUI`, which is on by default and off under Emscripten).
 
 Imported from endo's `src/tui` at `f774a210`, which includes the coroutine-runtime work fastcached
-upstreamed there. `runtime/TuiRuntime.hpp` and its test come from fastcached's own copy
-(`5389e29a`), which carries one fix endo has not taken back yet.
+upstreamed there. The runtime has since been rewritten onto [`core::net::EventLoop`](net.md).
 
 !!! note "Status"
-    Available. Its runtime still drives its own `EventSource`; Task B12 of the
-    [implementation plan](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/plans/2026-09-18-core-cpp.md)
-    moves it onto [`core::net::EventLoop`](net.md) and deletes `runtime/EventSource.hpp`,
-    `runtime/PollEventSource.*` and `runtime/WithTimeout.hpp`. `core::tui` does not link
-    `core::net` until then.
+    Available. Its runtime is composed on [`core::net::EventLoop`](net.md), so `core::tui` links
+    `core::net`; `core::tui_output` still links [base](base.md) alone.
 
 ## `core::tui_output`
 
@@ -68,13 +64,18 @@ and on stb when `CORE_CPP_WITH_IMAGES` is on. Native only: there is no terminal 
 - **Images.** With `CORE_CPP_WITH_IMAGES`: `loadImage()`, `resizeImage()` and `readClipboardImage()`
   over stb, `encodeSixel()`, and `FilesystemImageProvider`, which implements the always-present
   `ImageProvider` interface `MarkdownRenderer` takes.
-- **Runtime.** `core::tui::runtime`: `TuiRuntime` drives coroutines against an `EventSource`
-  (`co_await runtime.nextEvent()`, `delay()`, `waitReadable()`, `waitWritable()`), with
-  `TerminalEventSource` over a real terminal, `PollEventSource` for headless work, `runModal()` and
-  `withTimeout()`.
+- **Runtime.** `core::tui::runtime`: `TuiRuntime` gives the TUI its input vocabulary --
+  `co_await runtime.nextEvent()`, `nextEventFor()`, `nextActivity()`, `nextAgentReady()` -- and
+  forwards everything else to the [event loop](net.md) it is constructed on: `blockOn()`,
+  `spawn()`, `delay()`, `sleepUntil()`, `waitReadable()`, `waitWritable()`, the clock and the root
+  stop source. Input arrives through an injected `InputSource`, which names the handles to watch
+  and decodes what is ready behind them; `TerminalInputSource` is that over a `Terminal`, and
+  `TuiRuntime(loop, terminal)` makes one for you. `runModal()` drives a modal to its result; for a
+  deadline use `core::net::withTimeout(&runtime.loop(), …)`.
 - **Test doubles.** `MockTerminalOutput` records what a renderer did semantically instead of
-  emitting VT, `runtime::testing::MockEventSource` scripts a wait, and `TestHelpers.hpp` reads a
-  rendered `Buffer` back as text.
+  emitting VT, `runtime::testing::ScriptedInputSource` scripts the decoding (readiness comes from
+  `core::net::testing::ScriptedBackend` or from a real `core::platform::SystemPipe`), and
+  `TestHelpers.hpp` reads a rendered `Buffer` back as text.
 
 ## Registering a language
 
@@ -153,6 +154,7 @@ itself with an `#ifdef` of its platform:
   `WaitForMultipleObjects`, the resize event, and `GetConsoleScreenBufferInfo`.
 
 `TerminalInput`'s own handles live in an opaque `NativeState` those two define, so
-`<core/tui/TerminalInput.hpp>` names neither `<termios.h>` nor `<windows.h>`. The one file that
-still chooses its platform with an `#ifdef` is `runtime/PollEventSource.cpp`, which Task B12
-deletes.
+`<core/tui/TerminalInput.hpp>` names neither `<termios.h>` nor `<windows.h>`. No file in this
+module chooses its platform with an `#ifdef`, and `runtime/` has no platform directory at all: the
+multiplexed wait its two `TerminalEventSource` bodies held is the event loop's, on every
+platform.
