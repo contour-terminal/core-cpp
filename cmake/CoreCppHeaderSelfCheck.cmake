@@ -93,6 +93,20 @@ function(core_cpp_add_header_self_check)
         # requirements and publishes none of its own. Nothing links it -- building it IS the check.
         target_link_libraries(${checkTarget} PRIVATE ${target})
         core_cpp_apply_toolchain(${checkTarget})
+        # ...but NOT clang-tidy, which core_cpp_apply_toolchain would otherwise switch on here.
+        #
+        # clang-tidy resolves its configuration from the `.clang-tidy` nearest the SOURCE FILE, and
+        # these sources are generated into the build tree. So they are analysed under the ROOT
+        # config and never see the per-directory ones -- `src/core/tui/.clang-tidy` turns
+        # `readability-enum-initial-value` off for `core::tui::KeyCode`, and that suppression
+        # cannot reach a file outside `src/core/tui/`. Every tui header then failed the tidy leg,
+        # 29 of them, for a finding its own directory had already answered.
+        #
+        # Switching it off is right rather than merely convenient: what this target asks is
+        # "does this header compile with nothing included before it", and tidy already analyses
+        # every real source under the configuration its directory chose. Re-analysing each header
+        # through a generated stub is the same question asked again with the wrong answer to hand.
+        set_target_properties(${checkTarget} PROPERTIES CXX_CLANG_TIDY "")
         set_target_properties(${checkTarget} PROPERTIES FOLDER "core-cpp/header-self-check")
         list(APPEND checkTargets ${checkTarget})
     endforeach()
