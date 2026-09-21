@@ -30,6 +30,11 @@
 #include <cstring>
 #include <tuple>
 
+// Everything below is what a build WITH assertions needs, and nothing else compiles it: with
+// `NDEBUG` there is no refusal to provoke, `main` skips, and a helper left visible there is an
+// unused function -- which is an error in this tree, as it should be.
+#ifndef NDEBUG
+
 namespace
 {
 
@@ -61,6 +66,8 @@ core::async::Task<void> parkForever(core::net::EventLoop* loop)
 }
 
 } // namespace
+
+#endif
 
 /// @param argc The argument count.
 /// @param argv `run` or `blockOn`, naming which refusal to provoke.

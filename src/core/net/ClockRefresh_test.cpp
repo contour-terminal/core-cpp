@@ -17,17 +17,23 @@
 //
 // Ported from fastcached's `Async/ReactorClockRefresh_test.cpp` at `0708dd54`, which asserted
 // only the second half and did so through a real platform reactor.
+#include <core/async/ParkedWork.hpp>
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/testing/ScriptedBackend.hpp>
+#include <core/net/testing/TestLoop.hpp>
 #include <core/platform/Clock.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <coroutine>
+#include <cstddef>
 #include <optional>
 #include <ranges>
 #include <tuple>
+#include <vector>
 
 using core::async::Task;
 using core::net::EventLoop;
@@ -133,31 +139,67 @@ TEST_CASE("The turn refreshes its clock after the wait, so a deadline it reached
     CHECK(backend.waitCount() == 1); // the second turn had nothing left to wait on
 }
 
+namespace
+{
+
+/// Hands the awaiting coroutine straight back to the loop.
+struct YieldToLoop
+{
+    EventLoop* loop; ///< Where to hand it back.
+
+    /// @return False: always suspend, so the sample below is taken once per turn.
+    [[nodiscard]] bool await_ready() const noexcept { return false; }
+
+    /// @tparam Promise The awaiting coroutine's promise type.
+    /// @param awaiting The coroutine to re-queue.
+    template <typename Promise>
+    void await_suspend(std::coroutine_handle<Promise> awaiting) const
+    {
+        loop->resumeSoon(core::async::detail::parkedWorkFor(awaiting));
+    }
+
+    void await_resume() const noexcept {}
+};
+
+/// Reads the loop's clock once per turn, @p turns times.
+/// @param loop The loop to yield to.
+/// @param samples Receives one reading per turn.
+/// @param turns How many readings to take.
+Task<void> sampleClockEachTurn(EventLoop* loop,
+                               std::vector<core::platform::SteadyTimePoint>* samples,
+                               int turns)
+{
+    for ([[maybe_unused]] auto const turn: std::views::iota(0, turns))
+    {
+        samples->push_back(loop->clock().now());
+        co_await YieldToLoop { loop };
+    }
+}
+
+} // namespace
+
 TEST_CASE("A loop given a plain steady clock is unaffected by the refresh calls", "[EventLoop][clock]")
 {
     // The refresh is unconditional -- the loop cannot know which IClock it was handed -- so the
-    // default no-op has to be safe on the turn's hot path as well as in isolation. That the loop
-    // runs at all here is the assertion; a refresh that disturbed a direct-reading clock would
-    // show up as a non-monotonic sample.
+    // default no-op has to be safe on the turn's hot path as well as in isolation. A refresh that
+    // disturbed a direct-reading clock would show up as a non-monotonic sample, so the samples are
+    // taken from inside the flow, one per turn, and compared: eight turns, eight refreshes apiece.
+    //
+    // Deliberately not written as "park on a deadline and wait for it": a real clock reaches a
+    // real deadline after some unknown number of turns, which in a Release build is more than a
+    // bound can honestly be set to.
+    constexpr auto Turns = 8;
+
     auto clock = core::platform::SteadyClock {};
-    auto backend = ScriptedBackend {};
-    // A scripted wait sleeps through nothing, so the real clock reaches a 1ms deadline after some
-    // unknown number of turns. Bounded rather than tuned: what is asserted is that it arrives.
-    for ([[maybe_unused]] auto const step: std::views::iota(0, 2000))
-        backend.pushTimeout();
-    auto loop =
-        EventLoop { backend, clock, core::net::EventLoopOptions { .idle = core::net::IdlePolicy::Return } };
+    auto loop = core::net::testing::TestLoop { clock };
 
+    auto samples = std::vector<core::platform::SteadyTimePoint> {};
     auto const before = clock.now();
-    auto fired = false;
-    loop.spawn(delayThenFlag(&loop, 1ms, &fired));
-    for ([[maybe_unused]] auto const turn: std::views::iota(0, 2000))
-    {
-        if (fired)
-            break;
-        std::ignore = loop.runOnce();
-    }
+    loop.spawn(sampleClockEachTurn(&loop, &samples, Turns));
+    std::ignore = loop.drain();
 
-    CHECK(fired);
-    CHECK(clock.now() >= before);
+    REQUIRE(samples.size() == static_cast<std::size_t>(Turns));
+    CHECK(std::ranges::is_sorted(samples)); // monotonic across every refresh the turns made
+    CHECK(samples.front() >= before);
+    CHECK(clock.now() >= samples.back());
 }
