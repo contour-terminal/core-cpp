@@ -3544,3 +3544,80 @@ wrong when quoted** -- the value moved between two correct measurements of it.
 
 Also corrected in the same exchange: I told the lane four commits had landed since `c30f61a`. Two
 had. It checked and said so.
+
+### A banned-token gate cannot count: the correction always contains the token
+
+Three instances now, in three unrelated media, all within one session:
+
+| Banned thing | Where the count lies |
+|---|---|
+| the false wake-family sentence | grep returns 5, every one inside a correction quoting it |
+| `WILL_FAIL` | survives in the comments explaining what replaced it -- which are correct and must stay |
+| `std::jthread` | `grep -c jthread` on master returns **3**, all comments saying why it is absent |
+
+**This is structural, not coincidence.** A correction that does not name what it corrects is
+unusable, so the corrected document necessarily contains the forbidden string. **Therefore a gate
+that counts occurrences of a banned token reports every correctly-corrected file as a violation**,
+and the natural response -- deleting the explanation to make the count go down -- destroys the
+only thing that stops the defect returning.
+
+Consequences for the gates this project is about to add (core-cpp#39, core-cpp#40, and B13's
+canary work):
+
+- **Check for the replacement, not the absence of the original.**
+- Or **count outside comment and quotation context** -- a banned *code* token is a different query
+  from a banned *string*, and only the first is what anyone means.
+- Or **quote with an ellipsis** where the document is prose, which keeps the absence-check valid.
+- And whatever is chosen, **the gate's self-test must include a correctly-corrected file** and
+  assert it PASSES. A self-test that only plants violations proves the gate fires, never that it
+  does not fire on the fix.
+
+The lane put it best: *a bare count would read as "still broken", and the count is what an audit
+script would use.*
+
+**Measured tree-wide afterwards, which turns the rule from an argument into a number.**
+`git grep -l "std::jthread" origin/master` returns **four** files:
+
+```
+src/core/async/AsyncQueue_test.cpp        comment explaining the absence
+src/core/net/testing/TestLoop_test.cpp    comment -- and it is the convention B12 was told to read
+src/core/tui/runtime/TuiRuntime_test.cpp  three comments, after the fix
+src/core/net/windows/IocpCanary.cpp       the ONLY real use, inside if(CORE_CPP_TESTING AND WIN32)
+```
+
+**One use, three explanations, and a list-based gate would flag three correct files and catch
+nothing.** Note also what the correct files are *for*: two of them exist to stop exactly the defect
+that broke master. A gate that pressures an author to delete them would remove the tree's own
+immune response to its most recent outage.
+
+### An unreachability claim is checked by building the case, not by auditing the argument
+
+B12 derived that H1 -- `releaseInputWaiter` cancelling a different waiter's deadline -- was latent:
+`queueReady` appends at the back, `drainReadyQueue` takes from the front, `parkOnInput` asserts the
+slot is empty, so nothing can park in the window. It tried the batch bound and a cross-thread
+submit; both append behind. **I accepted the derivation and praised it** -- *"deriving
+unreachability beats asserting it"*.
+
+**The re-review disproved it by CONSTRUCTING the case**, with the tree's own doubles, and it fails
+with only `releaseInputWaiter` reverted: `pendingTimerCount() == 0` instead of `1`, a five-second
+timeout silently cancelled.
+
+The hole: **the queued waiter is appended *during* the drain.** Everything already behind the
+front entry therefore runs after the slot was emptied and before that waiter resumes -- and
+`EventLoop::turn` routinely puts a readiness resumption (step 4) and a timer resumption (step 5)
+into that same ready queue. **Every premise was true and the conclusion did not follow.**
+
+**Rule: a derivation and a construction are not the same evidence.** A derivation of
+unreachability can be wrong in a way that *reads as rigour* -- correct premises, careful prose,
+an invalid step -- and reviewing the prose cannot find the invalid step reliably, because the
+reviewer checks the same premises. The only reliable check is an attempt to build the case, and a
+failed attempt is weaker evidence than a successful one but still stronger than an argument.
+
+**Corollary for me:** when a lane reports *"I could not write a case, and here is why none
+exists"*, that is the point to spend a re-review rather than the point to save one. It is the
+shape most likely to be both careful and wrong, and the fix had already been applied -- so the
+false claim would have survived precisely because nothing was broken.
+
+And the gap that let it stand is stated in one line by the re-reviewer: **the suite still has no
+case where two flows interleave on the input slot.** The missing case and the wrong derivation are
+the same fact seen twice.

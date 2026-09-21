@@ -2014,3 +2014,75 @@ batched append per task. Lanes told the same.
 **Open question put to the user:** per-task re-reviews have caught real defects, including a
 use-after-free the first review missed, but roughly double review spend. Proposal is to keep them
 for `net`/`async` lifetime work and drop them for the remaining docs and CI tasks.
+
+## Task B6: COMPLETE — `770f2dc`. The critical path is cleared.
+
+33 files, +4787/-206. Nine gate configurations green against a committed tree: clang-debug,
+gcc-release, ASan, TSan and clang-tidy at 37/37 (gcc-release 6 skipped), emscripten 28/28, and
+both Windows presets 38/38 at **537 ninja steps** with `--clean-first`. `core-cpp-net-test` is
+1430 assertions in 200 cases.
+
+**Five tasks unblocked: B7b, B8, B9, B10, B11.** Dispatched B8 (dial and DNS) and B9 (UDP and
+blocking transports) immediately, plus the review of B6. **B7b, B10 and B11 held for the next
+wave** -- six concurrent lanes is a review-bandwidth problem, not a machine problem.
+
+**Three things worth keeping from this lane:**
+
+- **Its mutations discriminated rather than merely failing.** A no-op `shutdownWrite` reds 4 of 18
+  assertions; a send that reports a refused write as success *while the FIN still goes out* reds
+  **only 2** -- which is the concrete argument for the second assertion existing at all. Both
+  predictions were written down first and both were exact.
+- **It found its own canary could pass on another guard's marker.** Its first PASS string was
+  shared across modes, so a mode reaching the wrong guard would have matched. Markers now name
+  their mode. Same defect class as the shared exit code across three dialog-canary modes, found
+  independently by a second lane.
+- **Re-deriving §3 without `hasPendingWork()` led it to a claim it could not support**, and it said
+  so rather than shipping the stronger sentence: a backend-side registration cannot miss
+  `registerPark`'s host-wake arming, because `HostDrivenBackend` refuses every handle and so a
+  readiness park cannot exist on a host-driven loop at all. **The weaker claim is the true one, and
+  its reason is structural rather than lucky.** The live cost is the turn's step-4 predicate.
+
+**Routed, not fixed:** `EventLoop.cpp:536` prices a declined canary against *"a `WILL_FAIL` canary
+process"*, a shape the tree no longer has. B6 asked that **B13 re-decide the question rather than
+re-word the sentence** -- the argument changed, not merely its vocabulary. That is the right
+instinct and it is now B13's.
+
+## `770f2dc` CI-GREEN — the socket contract is verified, and the critical path is behind us
+
+Phase B done: B1, B2, B3, B4, B5, B6, B7a, B7c, B13a, and B12 pending its fix round 2.
+Running: B8 (dial and DNS), B9 (UDP and blocking transports), review of B6, B12 round 2.
+Not yet dispatched: B7b, B10, B11, then B13 (gates, docs, v0.1.0).
+
+## INFRASTRUCTURE: every worktree registration vanished, and the recovery is worth writing down
+
+`.git/worktrees/` held **one** entry (`wt-b5`) where it had held ten. The worktree DIRECTORIES
+were intact on disk with all their files; only git's administrative records were gone, so every
+worktree answered:
+
+```
+fatal: not a git repository: D:/core-cpp/.git/worktrees/core-cpp-wt-b8
+```
+
+Two lanes were mid-setup inside worktrees git could no longer see.
+
+**`git worktree repair` does not help here.** It fixes a worktree whose directory MOVED; it cannot
+reconstruct an admin directory that is gone -- *"unable to locate repository; .git file does not
+reference a repository"*. Worth knowing before reaching for it under pressure.
+
+**The recovery, in the order it must happen:**
+
+1. **Establish what is already safe.** `git ls-remote origin refs/heads/master` -> `770f2dc`. B6's
+   and B12's work was pushed; only uncommitted work was ever at risk.
+2. **Measure what is at risk before touching anything.**
+   `find <dir> -newermt "-40 minutes" -type f` gave 717 for each new lane -- the checkout itself,
+   not work -- and **0** for the lane that had not started its round. That measurement is what made
+   the next step safe rather than hopeful.
+3. **Move aside, never delete.** `mv <dir> <dir>.orphan`, then `git worktree add <original path>
+   --detach origin/master`. Recreating at the **original path** matters: the lanes hold that path
+   in their context, and a new path would need three messages and would still be forgotten once.
+4. **Tell each lane the verification to run rather than the assurance that it is fine** --
+   `rev-parse --short HEAD` and `status` -- and ask for the evidence you do not have.
+
+**Cause not established.** No lane reported an odd worktree message, and I did not guess at one
+while three were running. The `.orphan` directories stay until someone confirms they were empty of
+work.
