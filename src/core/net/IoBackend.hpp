@@ -21,6 +21,7 @@
 /// platform provides them. `BackendParity_test` holds them to that, and
 /// @c testing::ScriptedBackend lets a loop be driven with no kernel at all.
 
+#include <core/net/IHostScheduler.hpp>
 #include <core/net/NetError.hpp>
 #include <core/platform/Clock.hpp>
 #include <core/platform/Types.hpp>
@@ -395,7 +396,8 @@ class IoBackend
 
     /// @return True if this backend has no wait of its own and is pumped by a host
     ///         (a browser's event loop, a Qt one). A host-driven loop must not be
-    ///         `run()` or blocked on; it advances only when the host pumps it.
+    ///         `run()` or blocked on; it advances only when the host pumps it, and
+    ///         @c EventLoop asserts both.
     [[nodiscard]] virtual bool isHostDriven() const noexcept { return false; }
 
     /// Asks the host to pump the loop at @p deadline. Meaningful only on a host-driven
@@ -403,6 +405,24 @@ class IoBackend
     /// takes its timeout through @c wait and ignores this.
     /// @param deadline When the next pump is due, or nullopt if nothing is scheduled.
     virtual void armWakeAt(std::optional<platform::SteadyTimePoint> /*deadline*/) noexcept {}
+
+    /// Registers what a host's pump calls: one turn of the loop this backend drives.
+    ///
+    /// Virtual here rather than concrete on @c HostDrivenBackend, although only a
+    /// host-driven backend has anything to do with it, because @c EventLoop holds an
+    /// @c IoBackend& and nothing else — a loop that had to downcast to reach this would
+    /// be a loop that knows one concrete backend by name, and a host-driven backend
+    /// written for Qt or for a game engine's frame callback could then never be given a
+    /// pump at all. It sits beside @c isHostDriven and @c armWakeAt, which are the
+    /// other two members of that same contract and are defaulted for the same reason.
+    ///
+    /// The loop sets it once at construction and clears it in the last step of its
+    /// teardown; a backend still holding the pointer afterwards would call into freed
+    /// storage on the host's next turn.
+    /// @param pump What to call on the loop's thread when the host pumps, or nullptr to
+    ///        unregister.
+    /// @param state Passed to @p pump untouched.
+    virtual void setPump(HostCallback /*pump*/, void* /*state*/) noexcept {}
 };
 
 /// @return The kind @c makeDefaultBackend() prefers on this platform, whether or not

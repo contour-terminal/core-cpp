@@ -4,30 +4,45 @@
 /// @file
 /// `EventLoop` — the single-threaded coroutine driver for the async socket layer.
 ///
-/// The loop owns the one blocking primitive (an injected @c IoBackend) and
-/// multiplexes handle readiness and timers over it. Flows (`async::Task`s) suspend on
-/// the awaitables the loop hands out — `waitReadable()`, `waitWritable()`,
-/// `delay()` — and the pump resumes them when what they wait on is ready.
+/// The loop owns the one blocking primitive (an injected @c IoBackend) and multiplexes handle
+/// readiness and deadlines over it. Flows (`async::Task`s) suspend on the awaitables the loop
+/// hands out — `waitReadable()`, `waitWritable()`, `delay()` — and the turn resumes them when
+/// what they wait on is ready. It implements @c core::async::IExecutor, so anything that can be
+/// handed an executor — `ResumeOn`, `AsyncQueue`, a `Task` chain — can be handed a loop.
 ///
-/// **Backends dispatch, the loop resumes.** A backend's wait invokes the callbacks on
-/// the @c ReadinessHandler each park registers, and those callbacks only ENQUEUE;
-/// every resumption happens in @c drainReadyQueue, on the loop thread, after the wait
-/// has returned. @c drainReadyQueue asserts that, so a backend that ever resumed from
-/// inside its own ready-list walk fails with a stack rather than corrupting the walk.
+/// **The turn is a contract, and its order is load-bearing.** `runOnce` does exactly five things,
+/// in this order, and the reason for each is written beside it in `EventLoop.cpp`:
 ///
-/// Ported from Endo's TuiRuntime (see contour's src/coro/README.md for provenance) with the
-/// terminal-input and agent machinery removed, plus two additions the daemon
-/// needs: finished spawned flows are reaped every pump (upstream accumulated
-/// them until destruction), and a thread-safe @c post() that marshals work onto the
-/// loop thread AND breaks an in-flight blocking wait — one mechanism for both, now
-/// that the wakeup channel belongs to the backend (@c IoBackend::wake).
+///   1. swap the inbound queue: run posts, then resolve cancel requests by live @c ParkId;
+///   2. drain the ready queue — **the one place a coroutine is resumed**;
+///   3. `clock.refresh()`, then compute the timeout;
+///   4. `backend.wait(timeout)`;
+///   5. `clock.refresh()`, then fire expired deadlines, FIFO by sequence.
 ///
-/// Threading: all scheduler state is touched only on the loop thread. The sole
-/// cross-thread surface is @c post().
+/// Readiness dispatched in step 4 and deadlines fired in step 5 are RESUMED in the next turn's
+/// step 2, which is what makes guarantee G2 — every resumption happens in turn step 2 — a thing
+/// the loop can state rather than a thing each backend must be trusted with.
+///
+/// **Backends dispatch, the loop resumes.** A backend's wait invokes the callbacks on the
+/// @c ReadinessHandler each park registers, and those callbacks only ENQUEUE. @c drainReadyQueue
+/// asserts it, so a backend that ever resumed from inside its own ready-list walk fails with a
+/// stack rather than corrupting the walk. Origin:
+/// [fastcached#475](https://github.com/LASTRADA-Software/fastcached/issues/475).
+///
+/// Ported from contour's `net/EventLoop` (itself Endo's TuiRuntime) and merged with fastcached's
+/// `Async/IReactor.hpp` at `0708dd54`: the turn structure, the park table, generation-checked
+/// cancellation, the ordered teardown and the thread-affinity guarantees are fastcached's.
+///
+/// Threading: all scheduler state is touched only on the loop thread. The cross-thread surface is
+/// @c post(), @c submit(), @c schedule(), @c requestCancel() and @c stop().
 
 #include <core/async/Cancellation.hpp>
+#include <core/async/IExecutor.hpp>
+#include <core/async/ParkedWork.hpp>
 #include <core/async/Task.hpp>
 #include <core/net/IoBackend.hpp>
+#include <core/net/detail/ParkTable.hpp>
+#include <core/net/detail/WorkerIdentity.hpp>
 #include <core/platform/Clock.hpp>
 #include <core/platform/Types.hpp>
 
@@ -38,427 +53,584 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace core::net
 {
 
-/// Thrown by WaitFdAwaiter::await_resume when the fd could not be registered
-/// with the backend (fd table exhausted, or a kernel that refused the interest).
-/// Distinct from OperationCancelled so the caller can tell a plumbing failure from a
-/// deliberate cancellation.
+/// Thrown by @c WaitHandleAwaiter::await_resume when the handle could not be registered with the
+/// backend (descriptor table exhausted, or a kernel that refused the interest). Distinct from
+/// @c async::OperationCancelled so the caller can tell a plumbing failure from a deliberate
+/// cancellation.
 struct FdRegistrationFailed
 {
 };
 
-/// Identifies one parked readiness wait for the loop's own bookkeeping.
+/// How a flow parked on a handle is resumed when that handle closes.
 ///
-/// An id rather than a pointer to the park, because a park is announced as closing
-/// (@c notifyHandleClosing) before the pump consumes that announcement, and the park
-/// may be resumed and destroyed in between: a recorded pointer would dangle, and a
-/// recorded id resolves to "no such park" instead. Task B4 widens this into the
-/// spec's `ParkId` over every kind of parked work; here it names an fd wait alone.
-///
-/// A strong struct rather than an `enum class` because it is an opaque,
-/// monotonically-allocated handle id — a wide value space that never wraps in a
-/// session — and not an enumeration of named cases. 32 bits would wrap after four
-/// billion parks, which a server doing ten thousand a second reaches in five days.
-struct ParkId
-{
-    std::uint64_t value = 0; ///< The park's id; 0 means none.
-
-    /// @return True if two ids name the same park.
-    [[nodiscard]] friend constexpr bool operator==(ParkId, ParkId) noexcept = default;
-
-    /// @return True if this id names a live park (non-zero).
-    [[nodiscard]] constexpr explicit operator bool() const noexcept { return value != 0; }
-
-    /// @return The sentinel for no park, which is what a failed registration reports.
-    [[nodiscard]] static constexpr ParkId invalid() noexcept { return ParkId { 0 }; }
-};
-
-} // namespace core::net
-
-namespace std
-{
-
-/// Hash specialization so @c ParkId can key an unordered container: the loop maps a
-/// park's id to the park itself, and a descriptor to the parks on it. Declared HERE,
-/// between the type and its first use, because a specialization that arrives after
-/// the container is instantiated is not the one the container picked up.
-template <>
-struct hash<core::net::ParkId>
-{
-    /// @param park The id to hash.
-    /// @return The hash of its underlying value.
-    [[nodiscard]] std::size_t operator()(core::net::ParkId park) const noexcept
-    {
-        return std::hash<std::uint64_t> {}(park.value);
-    }
-};
-
-} // namespace std
-
-namespace core::net
-{
-
-/// How a flow parked on a descriptor is resumed when that descriptor closes.
-///
-/// A readiness poller cannot report a CLOSED descriptor: epoll drops it from the
-/// set and kqueue drops its filters, both silently, so a parked flow would never
-/// be resumed at all (poll(2) reports POLLNVAL and Windows reports the handle as
-/// failed, which is why those two backends never had the bug). @c
-/// EventLoop::notifyHandleClosing is how a closing descriptor supplies that
-/// missing readiness — and this says what the flow should observe once it wakes.
+/// A readiness poller cannot report a CLOSED descriptor: epoll drops it from the set and kqueue
+/// drops its filters, both silently, so a parked flow would never be resumed at all (poll(2)
+/// reports POLLNVAL and Windows reports the handle as failed, which is why those two backends
+/// never had the bug). @c EventLoop::notifyHandleClosing is how a closing descriptor supplies
+/// that missing readiness — and this says what the flow should observe once it wakes.
 enum class FdWakePolicy : std::uint8_t
 {
-    /// Resume on the flow's normal path. For an explicit `close()`, where the
-    /// owner is alive — it is the one that called close — so the flow can safely
-    /// re-read the owner's closed flag and report the close as an error.
+    /// Resume on the flow's normal path. For an explicit `close()`, where the owner is alive — it
+    /// is the one that called close — so the flow can safely re-read the owner's closed flag and
+    /// report the close as an error.
     Resume = 0,
 
-    /// Resume by throwing @c OperationCancelled. For a destructor, where the owner
-    /// is already gone: unwinding through @c await_resume never re-enters the flow
-    /// body, so nothing dereferences the dead owner. This is the same reason
-    /// ~EventLoop requests stop BEFORE waking its parked waiters.
+    /// Resume by throwing @c async::OperationCancelled. For a destructor, where the owner is
+    /// already gone: unwinding through @c await_resume never re-enters the flow body, so nothing
+    /// dereferences the dead owner. This is the same reason ~EventLoop requests stop BEFORE
+    /// moving its parked waiters to the ready queue.
     Cancel,
 };
 
-/// Why a parked fd waiter was resumed, reported back to the awaiter by
-/// @c EventLoop::unregisterFdWaiter.
+/// Why a parked handle waiter was resumed, reported back to the awaiter by
+/// @c EventLoop::wakeReasonOf.
 enum class FdWakeReason : std::uint8_t
 {
     Ready = 0, ///< Ordinary readiness (or an explicit close under FdWakePolicy::Resume).
-    Abandoned, ///< The descriptor closed under FdWakePolicy::Cancel; unwind instead of resuming.
+    Abandoned, ///< The handle closed under FdWakePolicy::Cancel; unwind instead of resuming.
+};
+
+/// What a turn does when it finds nothing to wait for.
+///
+/// A loop that owns its thread should BLOCK when it is idle — the backend's wake channel is what
+/// ends that wait, and a loop that polled instead would spend a core doing nothing. A loop driven
+/// a turn at a time by somebody else must not: the caller is what waits, and blocking inside a
+/// turn would block them. Fixed at construction, because it is a property of who drives the loop
+/// and that does not change halfway through.
+enum class IdlePolicy : std::uint8_t
+{
+    Block = 0, ///< An idle turn waits on the backend until a wake or a deadline arrives.
+    Return,    ///< An idle turn returns at once, having waited on nothing.
+};
+
+/// The loop's configuration, fixed at construction.
+struct EventLoopOptions
+{
+    IdlePolicy idle = IdlePolicy::Block; ///< What an idle turn does.
+
+    /// How many ready coroutines one turn resumes before it goes back round.
+    ///
+    /// A turn is BOUNDED so that work which re-queues itself — a flow yielding in a loop, a
+    /// queue whose consumer immediately waits again — cannot starve the readiness and deadline
+    /// steps. The remainder stays queued and the next turn takes it; nothing is dropped.
+    std::size_t dispatchBatch = 64;
+
+    /// A label for diagnostics and for a profiler's thread name. Borrowed: it must outlive the
+    /// loop, which a string literal and a long-lived configuration string both do.
+    std::string_view name = {};
+};
+
+/// What one turn of @c EventLoop::runOnce did.
+struct RunOnceResult
+{
+    std::size_t resumed = 0;    ///< Coroutines resumed in step 2.
+    std::size_t dispatched = 0; ///< Readiness reports the backend delivered in step 4.
+
+    /// Whether this turn found nothing at all to do: nothing posted, nothing ready, nothing
+    /// parked. What @c runUntilIdle and @c testing::TestLoop::drain stop on.
+    bool idle = false;
 };
 
 class DelayAwaiter;
-class WaitFdAwaiter;
+class WaitHandleAwaiter;
 
-/// Single-threaded cooperative scheduler driving coroutine flows over handle
-/// readiness and timers.
+/// Single-threaded cooperative scheduler driving coroutine flows over handle readiness and
+/// deadlines, and an @c async::IExecutor.
 ///
-/// Construct with an @c IoBackend, `spawn` background flows and/or `blockOn`
-/// a root flow; the pump runs on the calling thread until the root flow
-/// completes.
-class EventLoop
+/// Construct with an @c IoBackend, `spawn` background flows and/or `blockOn` a root flow; the
+/// turn runs on the calling thread.
+class EventLoop: public async::IExecutor
 {
   public:
-    /// @param backend The multiplexed wait the pump drives (not owned; outlives the
-    ///        loop, because every registration this loop made is detached in
-    ///        ~EventLoop and not a moment later).
-    /// @param clock The monotonic time source for timers and delays (not owned;
-    ///        outlives the loop). Defaults to the process steady clock; tests
-    ///        inject a @c platform::ManualClock for deterministic timing. The loop
-    ///        calls its @c refresh() before it computes a wait's timeout and after
-    ///        the wait returns, so a @c platform::CachedClock serves the current turn.
-    explicit EventLoop(IoBackend& backend, platform::IClock& clock = platform::defaultSteadyClock());
+    /// @param backend The multiplexed wait the turn drives (not owned; outlives the loop, because
+    ///        every registration this loop made is detached in ~EventLoop and not a moment later).
+    /// @param clock The monotonic time source for deadlines (not owned; outlives the loop).
+    ///        Defaults to the process steady clock; tests inject a @c platform::ManualClock for
+    ///        deterministic timing. The loop calls its @c refresh() before it computes a wait's
+    ///        timeout and after the wait returns, so a @c platform::CachedClock serves the turn.
+    /// @param options The loop's configuration; see @c EventLoopOptions.
+    explicit EventLoop(IoBackend& backend,
+                       platform::IClock& clock = platform::defaultSteadyClock(),
+                       EventLoopOptions options = {});
 
     EventLoop(EventLoop const&) = delete;
     EventLoop& operator=(EventLoop const&) = delete;
     EventLoop(EventLoop&&) = delete;
     EventLoop& operator=(EventLoop&&) = delete;
 
-    /// Cancels and unwinds any still-parked spawned flows before their frames are
-    /// destroyed: requests stop, wakes every waiter, and drains the ready queue so
-    /// parked awaiters resume, observe cancellation (OperationCancelled), and run
-    /// their RAII cleanup. Members (including the spawned-flow storage) destruct
-    /// afterward. A no-op when nothing is parked (the common case).
-    ~EventLoop();
+    /// Tears the loop down in the one order that is safe. The steps, and why each is where it is,
+    /// are in `EventLoop.cpp`; the short form is: assert teardown is serialised with dispatch,
+    /// request stop and move every park to the ready queue, run bounded drain passes, abandon to
+    /// a fixpoint, destroy the spawned roots, unregister the wake.
+    ///
+    /// **Objects registered with a loop are destroyed before it.** A socket, listener or dial
+    /// that outlives its loop has a registration nothing will detach.
+    ~EventLoop() override;
 
-    /// Drives the pump until @p task completes, then returns its result.
+    /// Runs turns until @c stop() is called.
+    ///
+    /// **Non-virtual, and that is the obligation half of the teardown rule**
+    /// ([fastcached#668](https://github.com/LASTRADA-Software/fastcached/issues/668)): it claims
+    /// the worker identity and then turns, so a loop cannot answer @c running() without having
+    /// entered here, and cannot enter here without answering it. A virtual `run` would let a
+    /// derived loop forget to claim, and @c teardownIsSerialisedWithDispatch would then answer
+    /// `true` unconditionally — the FALSE-SAFE direction, where every guard built on it stays
+    /// green while checking nothing.
+    ///
+    /// @pre The backend is not host-driven. A host-driven loop does not own its thread: it
+    ///      advances only through host pumps, and a `run()` there would spin forever without ever
+    ///      letting the host deliver one. Asserted rather than compiled out, because the browser
+    ///      reaches this through a consumer's mistake, not through ours.
+    void run();
+
+    /// Runs exactly one turn: the five steps in the order this file's header states.
+    /// @param maxWait An upper bound on how long step 4 may wait, or nullopt for the loop's own
+    ///        answer. A caller driving the loop beside something else passes zero.
+    /// @return What the turn did.
+    RunOnceResult runOnce(std::optional<platform::SteadyDuration> maxWait = std::nullopt);
+
+    /// Runs turns until one of them is idle.
+    /// @return How many coroutines were resumed in all.
+    std::size_t runUntilIdle();
+
+    /// Drives turns until @p task completes, then returns its result.
+    ///
+    /// @pre The backend is not host-driven, for @c run()'s reason.
     /// @param task The root flow to run (its frame is kept alive for the call).
     /// @return The value produced by @p task (or void).
+    /// @throws std::logic_error if @p task can no longer be advanced — nothing is queued, nothing
+    ///         is parked, and it has not finished. That is a deadlocked flow, and answering with
+    ///         a value it never produced would hide it; a loop that kept turning would spin at
+    ///         full CPU instead, which is what this replaces.
     template <typename T>
     T blockOn(async::Task<T> task)
     {
+        assert(!_backend.isHostDriven()
+               && "EventLoop::blockOn on a host-driven loop: such a loop advances only through "
+                  "host pumps, so blocking on it can never complete");
+        auto const onWorker = detail::WorkerIdentity::Scope { _worker };
         task.handle().promise().setStopToken(_rootStop.get_token());
-        _ready.push_back(task.handle());
+        _ready.push_back(
+            ReadyEntry { .parked = async::detail::Parked { async::ParkedWork { .resume = task.handle() } },
+                         .ownedByLoop = false });
         while (!task.done())
-            pumpOnce();
+        {
+            if (!hasPendingWork())
+                break;
+            std::ignore = turn(std::nullopt, task.handle());
+        }
         return task.result();
     }
 
-    /// Starts a background flow that runs alongside the root flow. Its frame is
-    /// kept alive by the loop and reclaimed on the pump after it completes.
-    /// @param task The flow to run.
-    void spawn(async::Task<void> task);
+    /// Asks @c run() to return once the current turn ends. Idempotent, and safe from any thread.
+    void stop() noexcept;
 
-    /// @return The number of spawned background flows whose frames are still held
-    ///         (completed flows are reaped at the top of every pump).
-    [[nodiscard]] std::size_t spawnedCount() const noexcept { return _roots.size(); }
+    /// Requests cancellation of every flow and moves all parked waiters to the ready queue so
+    /// they unwind promptly via @c async::OperationCancelled. Must be called on the loop thread —
+    /// from a signal handler or another thread, `post()` a call to it.
+    void requestStop();
 
-    /// @return The number of coroutines currently parked on a timer. A cancelled
-    ///         timer-parked flow detaches its entry here (see requeueForCancellation),
-    ///         so a leaked entry after a `whenAny`/`withTimeout` loser unwinds is
-    ///         observable as a nonzero count — the invariant the cancellation path
-    ///         must preserve.
-    [[nodiscard]] std::size_t pendingTimerCount() const noexcept { return _timers.size(); }
+    /// @return The root cancellation source; `request_stop()` cancels every flow (but does not
+    ///         unpark its waiters — prefer @c requestStop()).
+    [[nodiscard]] async::StopSource& rootStopSource() noexcept { return _rootStop; }
 
-    /// @return The number of readiness parks the loop still holds — one per
-    ///         registration it has with the backend. The same invariant as
-    ///         @c pendingTimerCount, for the other kind of park: a flow that resumed
-    ///         or unwound without unregistering leaves its handler attached to the
-    ///         backend, and a count that never returns to zero is how that shows
-    ///         before it becomes a wait on a handle nobody is waiting for.
-    [[nodiscard]] std::size_t parkedWaiterCount() const noexcept { return _parks.size(); }
+    /// Both overloads, so a call through an `EventLoop&` reaches the owning one. A derived class
+    /// that re-declares one overload of a name hides every other overload of it, which is how
+    /// seven parking sites upstream silently bound to the borrowing form
+    /// ([fastcached#1041](https://github.com/LASTRADA-Software/fastcached/issues/1041)).
+    using async::IExecutor::submit;
 
-    /// Enqueues @p callback to run on the loop thread and wakes the loop if it is
-    /// blocked inside a wait. The ONLY EventLoop entry point that is safe to call
-    /// from other threads; everything else must run on the loop thread (use post
-    /// to get there). The wake goes through @c IoBackend::wake, which is the one
-    /// thread-safe member of that interface and the one channel every backend owns.
+    /// Queues @p handle for resumption on the loop thread. BORROWS: the caller guarantees the
+    /// frame outlives the resumption. Safe from any thread.
+    /// @param handle The coroutine to resume.
+    void submit(std::coroutine_handle<> handle) override;
+
+    /// Queues @p work for resumption on the loop thread, saying what may be freed if it never is.
+    /// Safe from any thread.
+    /// @param work The coroutine to resume, and the chain root to free if it is not.
+    void submit(async::ParkedWork work) override;
+
+    /// Queues @p handle for resumption once the clock reaches @p deadline. BORROWS. Safe from any
+    /// thread.
+    /// @param deadline When to resume it.
+    /// @param handle The coroutine to resume.
+    void schedule(platform::SteadyTimePoint deadline, std::coroutine_handle<> handle);
+
+    /// Queues @p work for resumption once the clock reaches @p deadline, saying what may be freed
+    /// if the deadline never arrives. Safe from any thread.
+    /// @param deadline When to resume it.
+    /// @param work The coroutine to resume, and the chain root to free if it is not.
+    void schedule(platform::SteadyTimePoint deadline, async::ParkedWork work);
+
+    /// Takes @p handle back off this loop while it is still waiting to be resumed.
+    ///
+    /// **Its result is an ownership transfer, not a status.** `true` means THIS call removed it,
+    /// so the caller is now the only one who may resume or destroy it — and the claim on any
+    /// chain the loop was holding is given back (disarmed) rather than released, or taking work
+    /// off a loop would free what the caller has just been handed. `false` means the loop no
+    /// longer had it — already resumed, or never here — and the caller must not touch it.
+    ///
+    /// It destroys rather than resumes, because a resume only queues on a loop that is about to
+    /// stop. Must be called on the loop thread.
+    /// @param handle A handle previously given to @c submit, @c schedule or an awaitable.
+    /// @return Whether this call took it back.
+    [[nodiscard]] bool cancelPending(std::coroutine_handle<> handle) noexcept;
+
+    /// Enqueues @p callback to run on the loop thread, in step 1 of the next turn, and wakes the
+    /// loop if it is blocked inside a wait. Safe from any thread.
     /// @param callback The work to run on the loop thread.
     void post(std::function<void()> callback);
 
-    /// Requests cancellation of every flow and wakes all parked waiters so they
-    /// unwind promptly via @c OperationCancelled. Must be called on the loop
-    /// thread — from a signal handler or another thread, `post()` a call to it.
-    void requestStop();
+    /// Starts a background flow that runs alongside the root flow. Its frame is kept alive by the
+    /// loop and released the instant the flow completes — the turn that resumes it to completion
+    /// unlinks it, in O(1), rather than a later sweep over every spawned flow.
+    /// @param task The flow to run.
+    void spawn(async::Task<void> task);
 
-    /// @return The root cancellation source; `request_stop()` cancels every flow
-    ///         (but does not wake parked waiters — prefer requestStop()).
-    [[nodiscard]] async::StopSource& rootStopSource() noexcept { return _rootStop; }
+    /// @return The number of spawned background flows whose frames are still held.
+    [[nodiscard]] std::size_t spawnedCount() const noexcept { return _roots.size(); }
 
-    /// @return The monotonic clock backing all timers and delays. Awaiters read
-    ///         deadlines through this so tests can drive time deterministically
-    ///         via an injected @c platform::ManualClock.
+    /// @return The number of parks waiting on a deadline. A cancelled park detaches its entry, so
+    ///         a leaked entry after a `whenAny`/`withTimeout` loser unwinds is observable as a
+    ///         nonzero count — the invariant the cancellation path must preserve.
+    [[nodiscard]] std::size_t pendingTimerCount() const noexcept { return _parks.timerCount(); }
+
+    /// @return The number of readiness parks the loop still holds — one per registration it has
+    ///         with the backend. The same invariant as @c pendingTimerCount, for the other kind of
+    ///         park.
+    [[nodiscard]] std::size_t parkedWaiterCount() const noexcept { return _parks.readinessCount(); }
+
+    /// @return How many coroutines are queued for the next drain. Nonzero after a turn means the
+    ///         turn's batch bound was reached.
+    [[nodiscard]] std::size_t readyCount() const noexcept { return _ready.size(); }
+
+    /// @return The monotonic clock backing every deadline. Awaiters read deadlines through this so
+    ///         tests can drive time deterministically via an injected @c platform::ManualClock.
     [[nodiscard]] platform::IClock& clock() const noexcept { return _clock; }
 
     /// @param duration How long to suspend.
     /// @return An awaitable that resumes after @p duration elapses.
-    [[nodiscard]] DelayAwaiter delay(std::chrono::milliseconds duration) noexcept;
+    [[nodiscard]] DelayAwaiter delay(platform::SteadyDuration duration) noexcept;
 
     /// @param deadline The absolute instant (on this loop's clock) to resume at.
     /// @return An awaitable that resumes once the clock reaches @p deadline.
     [[nodiscard]] DelayAwaiter sleepUntil(platform::SteadyTimePoint deadline) noexcept;
 
-    /// Suspends until @p fd is readable (data, EOF, or HUP/ERR), without consuming
-    /// any bytes — the caller then performs a non-blocking read.
-    /// @param fd The native handle to wait on (must outlive the await).
-    /// @return An awaitable resolving when @p fd is readable; throws
-    ///         @c OperationCancelled if the flow is cancelled while parked.
-    [[nodiscard]] WaitFdAwaiter waitReadable(platform::NativeHandle fd) noexcept;
+    /// Suspends until @p handle is readable (data, EOF, or HUP/ERR), without consuming any bytes
+    /// — the caller then performs a non-blocking read.
+    /// @param handle The native handle to wait on (must outlive the await).
+    /// @param kind What @p handle is. It matters where a platform has more than one kind of
+    ///        waitable object: on Windows a SOCKET and a waitable HANDLE reach different wait
+    ///        primitives, and the backend cannot tell them apart from the value alone.
+    /// @return An awaitable resolving when @p handle is readable; throws
+    ///         @c async::OperationCancelled if the flow is cancelled while parked.
+    [[nodiscard]] WaitHandleAwaiter waitReadable(platform::NativeHandle handle,
+                                                 HandleKind kind = DefaultHandleKind) noexcept;
 
-    /// Suspends until @p fd is writable (space available in the send buffer).
-    /// @param fd The native handle to wait on (must outlive the await).
-    /// @return An awaitable resolving when @p fd is writable; throws
-    ///         @c OperationCancelled if the flow is cancelled while parked.
-    [[nodiscard]] WaitFdAwaiter waitWritable(platform::NativeHandle fd) noexcept;
+    /// Suspends until @p handle is writable (space available in the send buffer).
+    /// @param handle The native handle to wait on (must outlive the await).
+    /// @param kind What @p handle is; see @c waitReadable.
+    /// @return An awaitable resolving when @p handle is writable; throws
+    ///         @c async::OperationCancelled if the flow is cancelled while parked.
+    [[nodiscard]] WaitHandleAwaiter waitWritable(platform::NativeHandle handle,
+                                                 HandleKind kind = DefaultHandleKind) noexcept;
 
-    /// Announces that @p fd is ABOUT TO BE CLOSED, so any flow parked on it is
-    /// resumed instead of waiting forever for readiness that can no longer arrive.
+    /// Announces that @p handle is ABOUT TO BE CLOSED, so any flow parked on it is resumed
+    /// instead of waiting forever for readiness that can no longer arrive.
     ///
-    /// Call this BEFORE the `close()` syscall, on the loop thread: the descriptor
-    /// must still be valid so the backend can drop its kernel registration
-    /// cleanly. Deferring that to the awaiter's own detach would issue the removal
-    /// against a descriptor number the kernel may already have handed to a new
-    /// socket, silently unregistering that one instead.
+    /// Call this BEFORE the `close()` syscall, on the loop thread: the handle must still be valid
+    /// so the backend can drop its kernel registration cleanly. Deferring that to the awaiter's
+    /// own detach would issue the removal against a descriptor number the kernel may already have
+    /// handed to a new socket, silently unregistering that one instead.
     ///
-    /// The wake is only RECORDED here and delivered by the next pump as ordinary
-    /// readiness. It is deliberately not queued for resumption from this call: a
-    /// coroutine queued outside the pump still has its cancellation callback armed,
-    /// so a later `requestStop()` would queue it a second time and the pump would
-    /// then resume a frame the first resume had already destroyed.
-    /// Not @c noexcept, though every caller is: recording a wake appends to a vector
-    /// (and, for @c Cancel, a set), so allocation failure propagates as termination
-    /// from a `close()` that cannot report it. Swallowing it would be worse — the
-    /// wake would be lost and the flow would hang, which is the bug this exists to
-    /// fix — and by that point the process is out of memory anyway.
-    /// @param fd The descriptor about to be closed.
-    /// @param policy How a flow parked on @p fd should observe the close — normally
-    ///        (an explicit close, owner alive) or as cancellation (a destructor).
-    void notifyHandleClosing(platform::NativeHandle fd, FdWakePolicy policy);
+    /// The wake is only RECORDED here and delivered by the next turn as ordinary readiness. It is
+    /// deliberately not queued for resumption from this call: a coroutine queued outside the turn
+    /// still has its cancellation callback armed, so a later `requestStop()` would queue it a
+    /// second time and the turn would then resume a frame the first resume had already destroyed.
+    /// Not @c noexcept, though every caller is: recording a wake appends to a vector, so
+    /// allocation failure propagates as termination from a `close()` that cannot report it.
+    /// @param handle The handle about to be closed.
+    /// @param policy How a flow parked on @p handle should observe the close.
+    void notifyHandleClosing(platform::NativeHandle handle, FdWakePolicy policy);
 
-    /// @name Awaiter-facing scheduler primitives (internal)
-    /// Called by the loop's awaitables; not part of the consumer API.
+    /// @return Whether a thread is currently inside a turn of this loop. False before the first
+    ///         turn and after the last one returns, which is the honest answer: with nothing
+    ///         dequeuing there is no worker thread to be on.
+    [[nodiscard]] bool running() const noexcept { return _worker.running(); }
+
+    /// @return Whether the calling thread is the one currently driving this loop.
+    [[nodiscard]] bool isOnWorkerThread() const noexcept { return _worker.isOnWorkerThread(); }
+
+    /// Whether an object this loop owns may be destroyed right now, on this thread.
+    ///
+    /// **This is the rule, and the two queries above exist only to express it** (guarantee G5).
+    /// Clearing a pending awaitable races the readiness dispatch, so a socket or listener
+    /// belonging to a loop is destroyed either on that loop's worker thread — where no dispatch
+    /// can be running concurrently, because dispatching is what that thread is doing — or with
+    /// the loop stopped, where there is nothing to race. Any other thread, while a turn has not
+    /// returned, is the violation.
+    ///
+    /// Non-virtual on purpose: one rule derived from two facts, in one place, so a loop can
+    /// answer the facts and cannot restate the rule differently. Origin:
+    /// [fastcached#668](https://github.com/LASTRADA-Software/fastcached/issues/668).
+    /// @return True when destruction here is serialised against readiness dispatch.
+    [[nodiscard]] bool teardownIsSerialisedWithDispatch() const noexcept
+    {
+        return !running() || isOnWorkerThread();
+    }
+
+    /// @name Awaiter-facing scheduler primitives
+    /// Called by the loop's own awaitables and by the socket layer built on it.
     /// @{
 
-    void scheduleTimer(platform::SteadyTimePoint deadline, std::coroutine_handle<> waiter);
+    /// Queues @p work for resumption in the next drain. What every backend, completion, stop and
+    /// thread-pool callback reaches, and it ENQUEUES — it never resumes. Loop thread only.
+    /// @param work The coroutine to resume, and the chain root to free if it is not.
+    void resumeSoon(async::ParkedWork work);
 
-    /// Registers @p fd with the backend for @p interest and parks @p waiter until it
-    /// becomes ready. Several waiters may be parked concurrently — including two on
-    /// one descriptor, a reader beside a writer — so each park owns its own
-    /// @c ReadinessHandler and is named by its own @c ParkId.
-    /// @param fd The native handle to wait on.
-    /// @param interest The readiness to wait for (Read or Write).
-    /// @param waiter The coroutine to resume on readiness or cancellation.
-    /// @return The park's id (to unregister on resume/cancel), or @c ParkId::invalid()
-    ///         if the backend refused the registration — which it does for an invalid
-    ///         handle, and for a kernel that would not arm the interest.
-    [[nodiscard]] ParkId registerFdWaiter(platform::NativeHandle fd,
-                                          Interest interest,
-                                          std::coroutine_handle<> waiter);
+    /// Parks @p entry: registers its handle with the backend if it names one, arms its deadline if
+    /// it has one, and files it so a cancel can find it by id.
+    /// @param entry What to park; see @c ParkEntry.
+    /// @return The park's id, or @c ParkId::invalid() if the backend refused the registration —
+    ///         which it does for an invalid handle, and for a kernel that would not arm the
+    ///         interest. A refusal leaves nothing registered.
+    [[nodiscard]] ParkId registerPark(ParkEntry entry);
 
-    /// Detaches @p park from the backend and drops it, if it is still there.
-    /// Idempotent. Called by the awaiter on resume (ready or cancelled).
+    /// Detaches @p park from the backend and drops it, if it is still there. Idempotent. Called by
+    /// the awaiter on resume, whether ready or cancelled.
     /// @param park The park to remove.
-    /// @return @c FdWakeReason::Abandoned if the descriptor was closed under
-    ///         @c FdWakePolicy::Cancel while this waiter was parked on it — the
-    ///         awaiter then unwinds instead of resuming into an owner that is gone.
-    ///         @c FdWakeReason::Ready otherwise.
-    [[nodiscard]] FdWakeReason unregisterFdWaiter(ParkId park) noexcept;
+    void unregisterPark(ParkId park) noexcept;
 
-    /// Re-queues @p waiter for resumption because its cancellation token fired while
-    /// it was parked on a timer or fd. Used by the timed/fd awaiters' stop-callbacks
-    /// so a `whenAny`/`withTimeout` loser parked on `delay`/`waitReadable` unwinds
-    /// promptly instead of only when its deadline/fd eventually fires. The awaiter
-    /// then observes stop_requested() in await_resume and throws OperationCancelled.
-    /// Its timer entry / fd registration is detached HERE (not left for a later fire),
-    /// so no stale coroutine_handle can outlive the awaiter's frame once it unwinds.
-    /// Safe to call once per parked waiter.
-    /// @param waiter The parked coroutine to resume for cancellation.
-    void requeueForCancellation(std::coroutine_handle<> waiter);
+    /// @param park The park to ask about.
+    /// @return @c FdWakeReason::Abandoned if the handle was closed under @c FdWakePolicy::Cancel
+    ///         while this waiter was parked on it — the awaiter then unwinds instead of resuming
+    ///         into an owner that is gone — and @c FdWakeReason::Ready otherwise. Consumes the
+    ///         mark: the awaiter asks exactly once, and a mark left behind would outlive its park.
+    [[nodiscard]] FdWakeReason wakeReasonOf(ParkId park) noexcept;
+
+    /// Asks that the flow parked at @p park be unparked and resumed so it can observe its
+    /// cancellation. **Safe from any thread**, which is what a stop callback needs: a token may be
+    /// stopped from a signal handler, a watchdog or a peer's thread.
+    ///
+    /// Generation-checked: a request naming a park that has already resumed resolves to nothing,
+    /// because ids are never reused. From another thread it goes through the inbound queue and is
+    /// resolved in step 1 of the next turn; from the loop's own thread it is resolved here,
+    /// because the owner of a cancelled flow commonly destroys its frame the moment control
+    /// returns to it — a `whenAny` loser is freed as soon as the winner returns — and a park left
+    /// live until the next turn would then name freed storage.
+    /// @param park The park to cancel.
+    void requestCancel(ParkId park) noexcept;
 
     /// @}
 
   private:
-    /// One scheduled timer: a deadline and the coroutine to resume at it.
-    struct TimerEntry
+    /// A deadline handed over from another thread, waiting to be armed on the loop's own.
+    struct TimedWork
     {
-        platform::SteadyTimePoint deadline;
-        std::coroutine_handle<> handle;
+        platform::SteadyTimePoint deadline {}; ///< When to resume it.
+        async::ParkedWork work {};             ///< What to resume, and what to free if it is not.
     };
 
-    /// Heap comparator placing the soonest deadline at the heap root (a min-heap
-    /// over the standard max-heap, by reversing the comparison).
-    /// @return True if @p a is later than @p b.
-    [[nodiscard]] static bool soonestFirst(TimerEntry const& a, TimerEntry const& b) noexcept
+    /// What another thread has handed the loop, waiting for step 1.
+    struct Inbound
     {
-        return a.deadline > b.deadline;
-    }
+        std::vector<std::function<void()>> posts;   ///< Callbacks to run on the loop thread.
+        std::vector<async::ParkedWork> submissions; ///< Coroutines to queue for the next drain.
+        std::vector<TimedWork> scheduled;           ///< Deadlines to arm.
+        std::vector<ParkId> cancels;                ///< Parks to unpark and resume for cancellation.
 
-    /// Runs one iteration: reap finished spawns, run posted work, resume ready
-    /// coroutines, then wait and route readiness.
-    void pumpOnce();
+        /// @return Whether anything is waiting.
+        [[nodiscard]] bool empty() const noexcept
+        {
+            return posts.empty() && submissions.empty() && scheduled.empty() && cancels.empty();
+        }
+    };
 
-    /// Destroys the frames of spawned flows that have completed. Upstream Endo
-    /// only released them in the destructor, which is an unbounded leak for a
-    /// long-lived loop spawning per-connection flows.
-    void reapFinishedSpawns();
+    /// The turn, with the one extra question @c blockOn has to be able to ask.
+    /// @param maxWait An upper bound on how long step 4 may wait, or nullopt for the loop's own
+    ///        answer.
+    /// @param until A flow this drive exists to finish, or an empty handle. Once it is done the
+    ///        turn skips step 4, for the reason written there.
+    /// @return What the turn did.
+    RunOnceResult turn(std::optional<platform::SteadyDuration> maxWait, std::coroutine_handle<> until);
 
-    /// Runs every callback handed to post() since the last drain, outside the lock.
-    void runPostedCallbacks();
+    /// Turn step 1: swap the inbound queue, run the posts and submissions, then resolve the
+    /// cancels.
+    /// @return Whether anything was found there.
+    bool runInbound();
 
-    /// Resumes every coroutine currently in the ready queue.
+    /// Teardown step 4: frees the `abandon` roots of every piece of parked work nothing else owns,
+    /// looping until a pass finds nothing — because freeing a chain can park again.
+    void abandonParkedWork() noexcept;
+
+    /// @return Whether @c stop() has been called. Read under the inbound mutex, because it is
+    ///         written from any thread.
+    [[nodiscard]] bool stopRequested() const;
+
+    /// Turn step 2: resumes queued coroutines, up to the batch bound.
     ///
-    /// The one place a coroutine is resumed, which is what makes Rule 1 assertable:
-    /// it requires that no backend dispatch is in flight on this thread, so a backend
-    /// that resumed from inside its own ready-list walk is caught here rather than
-    /// when the walk reads the entry a resumed frame has freed.
-    void drainReadyQueue();
+    /// The one place a coroutine is resumed, which is what makes Rule 1 assertable: it requires
+    /// that no backend dispatch is in flight on this thread, so a backend that resumed from
+    /// inside its own ready-list walk is caught here rather than when the walk reads the entry a
+    /// resumed frame has freed.
+    /// @param bound The most coroutines this drain may resume.
+    /// @return How many it resumed.
+    std::size_t drainReadyQueue(std::size_t bound);
 
-    /// @return How long the next wait may block: until the soonest timer, or nullopt
-    ///         if no timer is pending. The rounding — a sub-millisecond remainder must
-    ///         not become a zero-timeout spin — belongs to the backend's own
-    ///         conversion (@c detail::toTimeoutMillis), which is where the unit is.
-    [[nodiscard]] std::optional<platform::SteadyDuration> computeTimeout() const;
+    /// Turn step 3: how long the next wait may block.
+    /// @param maxWait The caller's own bound, or nullopt.
+    /// @return The timeout for @c IoBackend::wait, or nullopt for an indefinite wait. The rounding
+    ///         — a sub-millisecond remainder must not become a zero-timeout spin — belongs to the
+    ///         backend's own conversion (@c detail::toTimeoutMillis), which is where the unit is.
+    [[nodiscard]] std::optional<platform::SteadyDuration> computeTimeout(
+        std::optional<platform::SteadyDuration> maxWait);
 
-    /// Moves expired timers' coroutines into the ready queue.
-    void fireExpiredTimers();
-
-    /// Queues the coroutine parked at @p park for resumption, and takes the park out
-    /// of the scheduling indices. This is what a backend's readiness callback reaches,
-    /// and it ENQUEUES — it never resumes. Idempotent per park within one pump: the
-    /// second call finds the waiter already taken and does nothing.
+    /// Queues @p work for the next drain, recording whether its chain is the loop's to free.
     ///
-    /// The park itself survives (its @c ReadinessHandler is still registered with the
-    /// backend); @c unregisterFdWaiter is what detaches and destroys it, from the
-    /// awaiter that owns it.
+    /// The one place a @c ReadyEntry is made, so the flag cannot be got wrong at one site out of
+    /// six.
+    /// @param work The coroutine to resume, and the chain root to free if it is not.
+    void queueReady(async::ParkedWork work);
+
+    /// Turn step 5: queues the waiters of every park whose deadline has been reached.
+    /// @return How many were queued.
+    std::size_t fireExpiredTimers();
+
+    /// Queues the coroutine parked at @p park for resumption, and takes it out of the scheduling
+    /// indices. What a backend's readiness callback reaches, and it ENQUEUES. Idempotent per park
+    /// within one turn: the second call finds the waiter already taken and does nothing.
     /// @param park The park whose waiter to queue.
     void queueParkedWaiter(ParkId park);
 
     /// The readiness callback every park registers, for both directions.
     ///
-    /// Static and `noexcept`, because that is what a @c ReadinessCallback is. It only
-    /// enqueues. Allocation failure inside the queue terminates rather than being
-    /// swallowed, which is the same trade @c notifyHandleClosing makes and for the
-    /// same reason: a lost wake is a flow that hangs.
-    /// @param handler The ready park's handler, whose `owner` is its @c FdPark.
+    /// Static and `noexcept`, because that is what a @c ReadinessCallback is. It only enqueues.
+    /// @param handler The ready park's handler, whose `owner` is its @c detail::Park.
     static void onParkReady(ReadinessHandler& handler) noexcept;
 
-    /// Wakes every parked flow so cancelled awaitables can unwind. Detaches each park
-    /// from the backend first, so nothing stays registered past this call.
-    void wakeAllWaiters();
-
-    /// Forgets the waiter parked at @p park, across both indices that name it, and
-    /// hands it back. The single place that does so: several call sites would
-    /// otherwise each have to remember every container a park is recorded in, and one
-    /// that forgot would leave a stale entry pointing at a frame about to be
-    /// destroyed. The park itself is left in place for @c unregisterFdWaiter.
-    /// @param park The park whose waiter is being taken.
-    /// @return The coroutine that was parked, or a null handle if there was none.
-    [[nodiscard]] std::coroutine_handle<> takeParkedWaiter(ParkId park) noexcept;
-
-    /// One parked readiness wait: the registration the backend holds, the coroutine to
-    /// resume, and the descriptor it parked on.
+    /// What a host's pump calls: one turn, waiting on nothing.
     ///
-    /// Held by unique_ptr, because @c ReadinessHandler::owner points back at this and
-    /// the backend holds the handler's address: a park may not move once registered.
-    struct FdPark
+    /// Static and `noexcept`, because that is what a @c HostCallback is. An exception escaping a
+    /// resumed coroutine therefore terminates rather than unwinding into the host's own loop,
+    /// which is the same trade @c async::DetachedTask makes and for the same reason: there is no
+    /// frame left to unwind into.
+    /// @param state The loop, as a `void*`.
+    static void onHostPump(void* state) noexcept;
+
+    /// Moves every parked waiter to the ready queue so cancelled awaitables can unwind. Detaches
+    /// each park from the backend first, so nothing stays registered past this call.
+    void unparkEverything();
+
+    /// Resolves one cancel request: unparks @p park and queues its waiter.
+    /// @param park The park to cancel.
+    void resolveCancel(ParkId park);
+
+    /// @return Whether anything could still advance a flow: queued work, a park, or something
+    ///         another thread has handed over.
+    [[nodiscard]] bool hasPendingWork() const;
+
+    /// @return Whether anything is waiting in the inbound queue.
+    [[nodiscard]] bool hasInbound() const;
+
+    /// Tells a host-driven backend when the next turn is due, after every turn.
+    void armHostWake();
+
+    IoBackend& _backend;            ///< The injected multiplexed wait and dispatcher.
+    platform::IClock& _clock;       ///< The injected monotonic time source.
+    EventLoopOptions _options;      ///< Fixed at construction.
+    detail::WorkerIdentity _worker; ///< Which thread is inside a turn, if any.
+
+    /// One queued resumption, and whether the chain behind it is the loop's to free.
+    ///
+    /// The flag is recorded WHERE THE WORK IS QUEUED rather than read back out of
+    /// @c async::detail::Parked, which deliberately offers no accessor for it: the ownership
+    /// travels inside that type so no fire site can forget the release, and a second way to ask
+    /// the same question is a second way for the two answers to drift apart. What the loop needs
+    /// it for is teardown, where a chain it owns is freed and a chain it borrows is resumed — the
+    /// same rule the park table follows, and the reason both containers can state it once.
+    struct ReadyEntry
     {
-        ReadinessHandler handler {};                         ///< What the backend has registered.
-        EventLoop* loop = nullptr;                           ///< The loop to enqueue onto.
-        ParkId id {};                                        ///< This park's identity.
-        std::coroutine_handle<> waiter;                      ///< The suspended coroutine; null once queued.
-        platform::NativeHandle fd = platform::InvalidHandle; ///< The descriptor it is parked on.
+        async::detail::Parked parked {}; ///< The coroutine, and what to free if it is not resumed.
+        bool ownedByLoop = false;        ///< Whether @c parked carried a claim when it was queued.
     };
 
-    /// Detaches @p park from the backend and destroys it, dropping every index that
-    /// names it. A no-op for a park that is already gone.
-    /// @param park The park to remove.
-    void destroyPark(ParkId park) noexcept;
+    /// Coroutines ready to resume now, each owning whatever chain nothing else can free.
+    ///
+    /// Declared BEFORE @c _parks so it is destroyed after it: freeing a chain re-enters the loop
+    /// — a frame holding a deadline runs its disarm into @c cancelPending, which reads both — and
+    /// the destructor body frees everything while both are alive precisely so this ordering is
+    /// never relied upon. It is stated here because the day somebody deletes the destructor body,
+    /// the order is what decides whether the failure is a crash or silence.
+    std::deque<ReadyEntry> _ready;
 
-    IoBackend& _backend;                        ///< The injected multiplexed wait and dispatcher.
-    platform::IClock& _clock;                   ///< The injected monotonic time source.
-    std::deque<std::coroutine_handle<>> _ready; ///< Coroutines ready to resume now.
-    std::vector<TimerEntry> _timers;            ///< Min-heap by deadline (soonest at front).
-    std::unordered_map<ParkId, std::unique_ptr<FdPark>> _parks;        ///< Live readiness parks, by id.
-    std::unordered_map<std::coroutine_handle<>, ParkId> _waiterToPark; ///< Reverse map for O(1) cancellation.
-    /// Reverse index from descriptor to the parks on it, so a closing descriptor finds
-    /// its waiters in O(1) rather than scanning every park. A multimap because one
-    /// descriptor can carry two parks at once — a reader and a writer — and closing it
-    /// must resume both.
-    std::unordered_multimap<platform::NativeHandle, ParkId> _fdToParks;
-    /// Parks whose descriptor closed since the last pump, merged into the next pump as
-    /// one more source of readiness. Consumed ONLY in pumpOnce: ~EventLoop must resume
-    /// parked flows through its own request_stop()-first path, not on their normal
-    /// path, because by then their owners are already destroyed.
+    detail::ParkTable _parks; ///< Every park, by id, with its reverse indices.
+
+    /// Parks whose handle closed since the last turn, merged into the next turn as one more source
+    /// of readiness. Consumed ONLY in a turn: ~EventLoop must resume parked flows through its own
+    /// request_stop()-first path, not on their normal path, because by then their owners are
+    /// already destroyed.
     std::vector<ParkId> _closedParks;
-    /// The subset of @c _closedParks whose descriptor closed under
-    /// @c FdWakePolicy::Cancel, so @c unregisterFdWaiter can tell the awaiter to
-    /// unwind rather than resume.
-    std::unordered_set<ParkId> _abandoned;
-    std::vector<async::Task<void>> _roots; ///< Keeps live spawned background flows alive.
-    async::StopSource _rootStop;           ///< Root cancellation source.
-    std::uint64_t _nextParkId = 0;         ///< Source of never-zero park ids.
 
-    std::mutex _postMutex;                      ///< Guards _posted (the only cross-thread state).
-    std::vector<std::function<void()>> _posted; ///< Callbacks awaiting the loop thread.
+    /// The subset of @c _closedParks whose handle closed under @c FdWakePolicy::Cancel, so
+    /// @c wakeReasonOf can tell the awaiter to unwind rather than resume.
+    std::unordered_set<ParkId> _abandoned;
+
+    /// Live spawned background flows. A `std::list` because a completing flow unlinks ITSELF in
+    /// O(1) through the iterator below: a `vector` swept with `erase_if` every turn is O(n) per
+    /// turn, which a server spawning one flow per connection pays forever.
+    std::list<async::Task<void>> _roots;
+
+    /// Where each spawned flow's frame sits in @c _roots, so the turn that resumes it to
+    /// completion can unlink it without searching.
+    std::unordered_map<void*, std::list<async::Task<void>>::iterator> _rootByHandle;
+
+    /// Whether a @c run() is what is driving the turn, which is what makes an idle turn block
+    /// rather than return; see step 4. Loop thread only.
+    bool _inRun = false;
+
+    async::StopSource _rootStop; ///< Root cancellation source.
+
+    mutable std::mutex _inboundMutex; ///< Guards @c _inbound and @c _stopRequested.
+    Inbound _inbound;                 ///< What other threads have handed over.
+    bool _stopRequested = false;      ///< Set by @c stop(), from any thread; read by @c run().
 };
 
 /// Awaitable that resumes after a delay (or throws on cancellation).
 ///
-/// While parked it registers a stop-callback so that if its cancellation token is
-/// stopped before the deadline (e.g. a `whenAny`/`withTimeout` sibling won), the
-/// parked coroutine is re-queued promptly and unwinds via @c OperationCancelled,
-/// rather than lingering until the deadline elapses. Its timer entry is removed
-/// when it is re-queued, so no handle dangles once the frame unwinds.
+/// While parked it registers a stop-callback so that if its cancellation token is stopped before
+/// the deadline (a `whenAny`/`withTimeout` sibling won), the park is cancelled promptly and the
+/// coroutine unwinds via @c async::OperationCancelled rather than lingering until the deadline
+/// elapses. Its park is removed when it is cancelled, so no handle dangles once the frame unwinds.
 class DelayAwaiter
 {
   public:
+    /// @param loop The loop whose clock and deadline heap this parks on.
+    /// @param deadline When to resume.
     DelayAwaiter(EventLoop& loop, platform::SteadyTimePoint deadline) noexcept:
         _loop(loop), _deadline(deadline)
     {
     }
 
+    /// @return True when the deadline has already passed, so the flow never suspends.
     [[nodiscard]] bool await_ready() const noexcept { return _deadline <= _loop.clock().now(); }
 
+    /// Parks the awaiting coroutine on the deadline, unless it is already cancelled.
+    /// @tparam Promise The awaiting coroutine's promise type.
+    /// @param awaiting The coroutine performing the `co_await`.
+    /// @return False (resume now) if already cancelled; true to park.
     template <typename Promise>
     [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting)
     {
@@ -466,15 +638,16 @@ class DelayAwaiter
             _token = awaiting.promise().stopToken();
         if (_token.stop_requested())
             return false;
-        _loop.scheduleTimer(_deadline, awaiting);
-        _cancelReg.emplace(_token, [&loop = _loop, awaiting] { loop.requeueForCancellation(awaiting); });
+        _park = _loop.registerPark(ParkEntry::onDeadline(async::detail::parkedWorkFor(awaiting), _deadline));
+        _cancelReg.emplace(_token, [&loop = _loop, park = _park] { loop.requestCancel(park); });
         return true;
     }
 
-    /// @throws OperationCancelled if the flow was cancelled while parked.
+    /// @throws async::OperationCancelled if the flow was cancelled while parked.
     void await_resume()
     {
         _cancelReg.reset();
+        _loop.unregisterPark(_park);
         if (_token.stop_requested())
             throw async::OperationCancelled {};
     }
@@ -483,37 +656,43 @@ class DelayAwaiter
     std::optional<async::StopCallback<std::function<void()>>> _cancelReg;
     EventLoop& _loop;
     platform::SteadyTimePoint _deadline;
+    ParkId _park {};
     async::StopToken _token;
 };
 
-/// Awaitable that resumes when a registered fd reaches a given readiness (Read or
-/// Write), or throws @c OperationCancelled if the awaiting flow is cancelled while
-/// parked. Returned by @c EventLoop::waitReadable / @c waitWritable.
+/// Awaitable that resumes when a registered handle reaches a given readiness (Read or Write), or
+/// throws @c async::OperationCancelled if the awaiting flow is cancelled while parked. Returned by
+/// @c EventLoop::waitReadable / @c waitWritable.
 ///
-/// Readiness is observed via the OS wait, so the awaiter is never ready before it
-/// suspends: it always parks (after registering the fd with the backend), and the
-/// loop resumes it when the backend dispatches readiness for it. On resume — whether
-/// ready or cancelled — it unregisters, so the registration never outlives the await.
-class WaitFdAwaiter
+/// Readiness is observed via the OS wait, so the awaiter is never ready before it suspends: it
+/// always parks (after registering the handle with the backend), and the loop resumes it when the
+/// backend dispatches readiness for it. On resume — whether ready or cancelled — it unregisters,
+/// so the registration never outlives the await.
+class WaitHandleAwaiter
 {
   public:
-    /// @param loop The loop whose backend the fd is registered with.
-    /// @param fd The native handle to wait on.
+    /// @param loop The loop whose backend the handle is registered with.
+    /// @param handle The native handle to wait on.
+    /// @param kind What @p handle is.
     /// @param interest The readiness to wait for (Read or Write).
-    WaitFdAwaiter(EventLoop& loop, platform::NativeHandle fd, Interest interest) noexcept:
-        _loop(loop), _fd(fd), _interest(interest)
+    WaitHandleAwaiter(EventLoop& loop,
+                      platform::NativeHandle handle,
+                      HandleKind kind,
+                      Interest interest) noexcept:
+        _loop(loop), _handle(handle), _kind(kind), _interest(interest)
     {
     }
 
-    /// Readiness is only known after the OS wait, so a valid fd never reports ready
-    /// before suspending. An invalid fd resolves immediately (await_resume then
-    /// reports cancellation), avoiding a pointless park on a handle that can never
-    /// signal.
-    [[nodiscard]] bool await_ready() const noexcept { return _fd == platform::InvalidHandle; }
+    /// Readiness is only known after the OS wait, so a valid handle never reports ready before
+    /// suspending. An invalid handle resolves immediately (await_resume then reports
+    /// cancellation), avoiding a pointless park on a handle that can never signal.
+    /// @return True only for an invalid handle.
+    [[nodiscard]] bool await_ready() const noexcept { return _handle == platform::InvalidHandle; }
 
-    /// Captures the cancellation token, then (unless already cancelled) attaches the
-    /// fd and parks. Checks cancellation BEFORE registering so a cancelled flow
-    /// resumes immediately without leaving a dangling registration.
+    /// Captures the cancellation token, then (unless already cancelled) attaches the handle and
+    /// parks. Checks cancellation BEFORE registering so a cancelled flow resumes immediately
+    /// without leaving a dangling registration.
+    /// @tparam Promise The awaiting coroutine's promise type.
     /// @param awaiting The coroutine performing the `co_await`.
     /// @return False (resume now) if already cancelled or the attach failed; true to park.
     template <typename Promise>
@@ -523,58 +702,61 @@ class WaitFdAwaiter
             _token = awaiting.promise().stopToken();
         if (_token.stop_requested())
             return false;
-        _registration = _loop.registerFdWaiter(_fd, _interest, awaiting);
-        if (!_registration)
+        _park = _loop.registerPark(
+            ParkEntry::onReadiness(async::detail::parkedWorkFor(awaiting), _handle, _kind, _interest));
+        if (!_park)
             return false; // registration failed: resume and surface it in await_resume
-        // If the token is stopped while parked (a whenAny/withTimeout sibling won),
-        // re-queue this coroutine promptly so it unwinds instead of waiting for the
-        // fd to become ready (which may never happen).
-        _cancelReg.emplace(_token, [&loop = _loop, awaiting] { loop.requeueForCancellation(awaiting); });
+        // If the token is stopped while parked (a whenAny/withTimeout sibling won), cancel the
+        // park promptly so the flow unwinds instead of waiting for readiness that may never come.
+        _cancelReg.emplace(_token, [&loop = _loop, park = _park] { loop.requestCancel(park); });
         return true;
     }
 
-    /// Unregisters the park and, if the flow was cancelled while parked, the
-    /// descriptor was abandoned under it, or the registration failed, reports the
-    /// failure.
-    /// @throws FdRegistrationFailed if the fd could not be registered with the
-    ///         backend (resource exhaustion, or a kernel that refused the interest —
-    ///         distinct from cancellation).
-    /// @throws OperationCancelled if cancelled while parked, the fd was invalid, or
-    ///         the fd was closed under @c FdWakePolicy::Cancel while parked. That
-    ///         last case is what keeps a destructor from resuming this flow into an
-    ///         owner that no longer exists: throwing here unwinds the frame without
-    ///         ever re-entering its body.
+    /// Unregisters the park and reports a failure, a cancellation or an abandoned handle.
+    /// @throws FdRegistrationFailed if the handle could not be registered with the backend
+    ///         (resource exhaustion, or a kernel that refused the interest — distinct from
+    ///         cancellation).
+    /// @throws async::OperationCancelled if cancelled while parked, the handle was invalid, or it
+    ///         was closed under @c FdWakePolicy::Cancel while parked. That last case is what keeps
+    ///         a destructor from resuming this flow into an owner that no longer exists: throwing
+    ///         here unwinds the frame without ever re-entering its body.
     void await_resume()
     {
         _cancelReg.reset();
         auto reason = FdWakeReason::Ready;
-        if (_registration)
-            reason = _loop.unregisterFdWaiter(_registration);
-        else if (_fd != platform::InvalidHandle && !_token.stop_requested())
+        if (_park)
+        {
+            reason = _loop.wakeReasonOf(_park);
+            _loop.unregisterPark(_park);
+        }
+        else if (_handle != platform::InvalidHandle && !_token.stop_requested())
             throw FdRegistrationFailed {};
-        if (_token.stop_requested() || _fd == platform::InvalidHandle || reason == FdWakeReason::Abandoned)
+        if (_token.stop_requested() || _handle == platform::InvalidHandle
+            || reason == FdWakeReason::Abandoned)
             throw async::OperationCancelled {};
     }
 
   private:
     std::optional<async::StopCallback<std::function<void()>>> _cancelReg;
     EventLoop& _loop;
-    platform::NativeHandle _fd;
+    platform::NativeHandle _handle;
+    HandleKind _kind;
     Interest _interest;
-    ParkId _registration {};
+    ParkId _park {};
     async::StopToken _token;
 };
 
-/// Suspends until @p predicate returns true, re-checking every @p interval on
-/// @p loop's clock. This is the shared teardown-drain idiom — wait for a write
-/// queue to flush, a debounce to fire, an output pacer to empty — in ONE place.
+/// Suspends until @p predicate returns true, re-checking every @p interval on @p loop's clock.
+/// This is the shared teardown-drain idiom — wait for a write queue to flush, a debounce to fire,
+/// an output pacer to empty — in ONE place.
 ///
-/// It POLLS rather than parking on a completion signal, which is acceptable on
-/// the low-frequency connection-teardown paths that use it (the cost is at most
-/// one @p interval of extra latency at close); it is NOT for hot paths.
+/// It POLLS rather than parking on a completion signal, which is acceptable on the low-frequency
+/// connection-teardown paths that use it (the cost is at most one @p interval of extra latency at
+/// close); it is NOT for hot paths.
 /// @param loop The loop whose delay drives the poll (and cancels it on shutdown).
 /// @param predicate Checked before each wait; the poll returns once it holds.
 /// @param interval How long to suspend between checks.
+/// @return A task that completes once @p predicate holds.
 [[nodiscard]] async::Task<void> pollUntil(EventLoop* loop,
                                           std::function<bool()> predicate,
                                           std::chrono::milliseconds interval = std::chrono::milliseconds {

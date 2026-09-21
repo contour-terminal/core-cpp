@@ -4,13 +4,16 @@
 #include <core/net/EventLoop.hpp>
 #include <core/net/IoBackend.hpp>
 #include <core/net/WithTimeout.hpp>
+#include <core/net/detail/ReadyBatch.hpp>
 #include <core/net/detail/WaitChunking.hpp>
 #include <core/net/testing/ScriptedBackend.hpp>
+#include <core/net/testing/TestLoop.hpp>
 #include <core/platform/Clock.hpp>
 #include <core/platform/SystemPipe.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <optional>
 #include <ranges>
@@ -55,16 +58,6 @@ Task<int> awaitDelayThenFire(EventLoop* loop, int delayMs, bool* fired)
     co_await loop->delay(std::chrono::milliseconds { delayMs });
     *fired = true;
     co_return delayMs;
-}
-
-/// Spends @p spent of @p clock's time, as a batch of work that long would, then parks on a delay of
-/// @p delayMs and sets *fired once it fires.
-Task<void> spendThenDelay(
-    EventLoop* loop, ManualClock* clock, std::chrono::milliseconds spent, int delayMs, bool* fired)
-{
-    clock->advance(spent);
-    co_await loop->delay(std::chrono::milliseconds { delayMs });
-    *fired = true;
 }
 
 /// Sets *flag true after @p delayMs — a stand-in for the async condition
@@ -232,34 +225,9 @@ TEST_CASE("A pending delay bounds the wait timeout and fires deterministically",
     REQUIRE(timeoutMs(source.recordedTimeouts().back()) == 250);  // the remaining half
 }
 
-TEST_CASE("The loop refreshes a caching clock before each timeout and after each wait", "[EventLoop][clock]")
-{
-    // A CachedClock serves the instant of its last refresh(), and IClock's contract makes whoever
-    // owns the loop refresh it: after the wait returns, so the turn sees the instant the wait ended
-    // at, and before a timeout is computed, so the time the turn spent is not waited for again.
-    // Each blockOn(justReturn()) below is one pump, and so one wait.
-    auto manual = ManualClock {};
-    auto cached = core::platform::CachedClock { manual };
-    auto source = ClockAdvancingBackend { manual, std::chrono::milliseconds { 250 } };
-    source.pushTimeout();
-    source.pushTimeout();
-    auto fired = false; // declared before the loop, which may still hold the flow when it goes
-    auto loop = EventLoop { source, cached };
-
-    // The delay is scheduled against the clock's first sample, 0, and so is due at 500. The flow
-    // spends 100 of that before the first wait, which only a refresh before the timeout counts.
-    loop.spawn(spendThenDelay(&loop, &manual, std::chrono::milliseconds { 100 }, 500, &fired));
-    loop.blockOn(justReturn());
-    CHECK(timeoutMs(source.recordedTimeouts().back()) == 400);
-    CHECK_FALSE(fired);
-
-    // The first wait ended at 350 and the second ends at 600: only a refresh after each wait lets
-    // the loop see either, and so time the second wait by 150 and fire the delay after it.
-    loop.blockOn(justReturn());
-    CHECK(timeoutMs(source.recordedTimeouts().back()) == 150);
-    CHECK(fired);
-    CHECK(source.waitCount() == 2);
-}
+// The two `clock.refresh()` calls the turn makes are asserted in `ClockRefresh_test.cpp`, one
+// case per call: a single case here passed with either of them removed, which is not a test of
+// them.
 
 TEST_CASE("pollUntil returns as soon as its predicate holds", "[EventLoop][poll]")
 {
@@ -473,11 +441,15 @@ TEST_CASE("a recorded close is delivered without blocking the pump", "[EventLoop
     auto loop = EventLoop { source };
 
     loop.spawn(waitReadableWithGuard(&loop, (*pipe)->readFd(), &destroyed));
-    loop.blockOn(justReturn());
+    // Driven with runOnce rather than blockOn: blockOn exists to finish one flow and stops the
+    // moment that flow is finished, so a trivial root no longer makes the loop perform a turn's
+    // wait at all -- which is the point of it, and useless for a case about that wait.
+    std::ignore = loop.runOnce();
     auto const waitsBeforeClose = source.waitCount();
 
     loop.notifyHandleClosing((*pipe)->readFd(), core::net::FdWakePolicy::Resume);
-    loop.blockOn(justReturn());
+    std::ignore = loop.runOnce();
+    std::ignore = loop.runOnce(); // step 2 of the next turn is where the resumption happens
 
     REQUIRE(source.waitCount() == waitsBeforeClose + 1);
     // Zero, not -1: an indefinite wait would never return on the closed fd's account.
@@ -638,12 +610,12 @@ TEST_CASE("requestStop() posted from another thread cancels a parked flow", "[Ev
     REQUIRE(loop.parkedWaiterCount() == 0); // the cancelled waiter unregistered its park
 }
 
-TEST_CASE("Finished spawned flows are reaped on the next pump", "[EventLoop][spawn]")
+TEST_CASE("Finished spawned flows are released by the turn that ran them", "[EventLoop][spawn]")
 {
-    // Upstream Endo held every spawned frame until destruction — an unbounded leak
-    // for a long-lived loop spawning per-connection flows. The reap runs at the top
-    // of every pump, so frames finished during one blockOn are reclaimed by the
-    // first pump of the next.
+    // Upstream Endo held every spawned frame until destruction -- an unbounded leak for a
+    // long-lived loop spawning per-connection flows -- and contour's fix was a sweep at the top of
+    // every pump, which reclaimed them one pump late and cost O(n) per pump to do it. Now the turn
+    // that resumes a spawned flow to its end unlinks it there, in O(1).
     auto source = ScriptedBackend {};
     auto loop = EventLoop { source };
 
@@ -653,12 +625,8 @@ TEST_CASE("Finished spawned flows are reaped on the next pump", "[EventLoop][spa
     REQUIRE(loop.spawnedCount() == 2);
 
     loop.blockOn(awaitZeroDelay(&loop));
-    REQUIRE(counter == 2); // both flows ran to completion...
-    // ...but were not yet reaped: the reap preceding their completion already ran.
-    REQUIRE(loop.spawnedCount() == 2);
-
-    loop.blockOn(awaitZeroDelay(&loop));
-    REQUIRE(loop.spawnedCount() == 0); // the next pump's reap reclaimed the frames
+    REQUIRE(counter == 2);             // both flows ran to completion...
+    REQUIRE(loop.spawnedCount() == 0); // ...and their frames went with the turn that ran them
 }
 
 TEST_CASE("withTimeout returns the work's value when it finishes first", "[EventLoop][timeout]")
@@ -801,4 +769,330 @@ TEST_CASE("WaitChunking rotates the start chunk fairly and maps indices back", "
         CHECK(core::net::nextWaitRotation(4, 7) == 0);  // 7 % 4 == 3, then wraps
         CHECK(core::net::nextWaitRotation(1, 0) == 0);  // a single chunk always stays put
     }
+}
+
+// --------------------------------------------------------------------------------------------
+// The turn: its order, its bound, and the thread-affinity guarantees it holds.
+// --------------------------------------------------------------------------------------------
+
+namespace
+{
+
+/// Parks on a deadline an hour out and records how it came back.
+/// @param loop The loop to park on.
+/// @param outcome 1 if the deadline arrived, 2 if the flow was cancelled.
+Task<void> parkForAnHour(EventLoop* loop, int* outcome)
+{
+    try
+    {
+        co_await loop->sleepUntil(loop->clock().now() + std::chrono::hours { 1 });
+        *outcome = 1;
+    }
+    catch (OperationCancelled const&)
+    {
+        *outcome = 2;
+    }
+}
+
+/// Hands the awaiting coroutine straight back to the loop's ready queue.
+///
+/// Work that re-queues itself is what a turn's batch bound exists to bound, and a loop's own
+/// `resumeSoon` is how the socket layer will do it.
+struct ResumeOnLoop
+{
+    EventLoop* loop; ///< Where to hand the coroutine back.
+
+    /// @return False: always suspend, so the resumption goes through the loop.
+    [[nodiscard]] bool await_ready() const noexcept { return false; }
+
+    /// @tparam Promise The awaiting coroutine's promise type.
+    /// @param awaiting The coroutine to re-queue.
+    template <typename Promise>
+    void await_suspend(std::coroutine_handle<Promise> awaiting) const
+    {
+        loop->resumeSoon(core::async::detail::parkedWorkFor(awaiting));
+    }
+
+    void await_resume() const noexcept {}
+};
+
+/// A flow that yields back to the loop @p limit times, counting its passes.
+/// @param loop The loop to yield to.
+/// @param passes Incremented once per resumption.
+/// @param limit How many passes to make.
+Task<void> yieldRepeatedly(EventLoop* loop, int* passes, int limit)
+{
+    for ([[maybe_unused]] auto const pass: std::views::iota(0, limit))
+    {
+        ++*passes;
+        co_await ResumeOnLoop { loop };
+    }
+}
+
+/// A ScriptedBackend that publishes whether the loop is inside its wait right now.
+///
+/// What makes guarantee G2 assertable from the flow's own frame: a resumption that happened
+/// inside `backend.wait()` is one a backend performed rather than the loop, and that is the whole
+/// class of defect Rule 1 exists to prevent.
+class WaitMarkingBackend: public ScriptedBackend
+{
+  public:
+    /// @param timeout Passed through.
+    /// @return What the next scripted step dispatched.
+    core::net::WaitResult wait(std::optional<core::platform::SteadyDuration> timeout) override
+    {
+        _inWait = true;
+        auto const result = ScriptedBackend::wait(timeout);
+        _inWait = false;
+        return result;
+    }
+
+    /// @return True while a wait is in flight on this thread.
+    [[nodiscard]] bool inWait() const noexcept { return _inWait; }
+
+  private:
+    bool _inWait = false;
+};
+
+/// Parks on readiness and records, from its own frame, what was true at the instant it resumed.
+/// @param loop The loop to park on.
+/// @param backend The backend to ask.
+/// @param fd The handle to park on.
+/// @param sawWait Set to whether the backend was inside its wait.
+/// @param sawDispatch Set to whether a readiness dispatch was in flight.
+Task<void> recordResumptionContext(EventLoop* loop,
+                                   WaitMarkingBackend* backend,
+                                   core::platform::NativeHandle fd,
+                                   bool* sawWait,
+                                   bool* sawDispatch)
+{
+    co_await loop->waitReadable(fd);
+    *sawWait = backend->inWait();
+    *sawDispatch = core::net::detail::readinessDispatchInFlight();
+}
+
+/// A flow that finishes at once, so a spawn can be watched being RELEASED.
+/// @param finished Incremented when the body runs.
+Task<void> finishAtOnce(int* finished)
+{
+    ++*finished;
+    co_return;
+}
+
+/// A flow that parks on a deadline nothing reaches, so a spawn can be watched being HELD.
+/// @param loop The loop to park on.
+Task<void> parkOnce(EventLoop* loop)
+{
+    co_await loop->sleepUntil(loop->clock().now() + std::chrono::hours { 1 });
+}
+
+} // namespace
+
+TEST_CASE("A cross-thread cancel is resolved before the turn drains, so it unwinds in that turn",
+          "[EventLoop][turn][cancel]")
+{
+    // **The ordering of step 1 and step 2, made observable.** A stop requested from another
+    // thread reaches the loop as a ParkId in the inbound queue, and step 1 is what turns it into
+    // a queued resumption. Resolved AFTER the drain instead, that resumption would sit in the
+    // ready queue while steps 3 and 4 computed a timeout and waited -- and this loop's only
+    // deadline is an hour out, so a cancel from another thread would take effect an hour later,
+    // or never, depending on whether anything else woke the loop.
+    auto clock = ManualClock {};
+    auto source = ScriptedBackend {};
+    source.pushTimeout(); // the one wait the parking turn performs
+    auto loop = EventLoop { source, clock };
+
+    auto outcome = 0;
+    loop.spawn(parkForAnHour(&loop, &outcome));
+
+    auto const parking = loop.runOnce();
+    REQUIRE(parking.resumed == 1);
+    REQUIRE(loop.pendingTimerCount() == 1);
+    REQUIRE(outcome == 0);
+
+    // Requested from a thread that is not the loop's, which is where a stop callback commonly
+    // runs -- a signal handler, a watchdog, a peer's thread. The callback hands back a ParkId; it
+    // does not touch the park table itself.
+    auto stopper = std::thread { [&loop] { loop.rootStopSource().request_stop(); } };
+    stopper.join();
+    CHECK(loop.pendingTimerCount() == 1); // nothing was resolved on that thread
+    CHECK(loop.readyCount() == 0);
+
+    auto const settled = loop.runOnce();
+    CHECK(settled.resumed == 1); // resolved in step 1, resumed in step 2, one turn
+    CHECK(outcome == 2);
+    CHECK(loop.pendingTimerCount() == 0);
+    CHECK(loop.spawnedCount() == 0);
+}
+
+TEST_CASE("A turn resumes at most its dispatch batch and leaves the rest queued", "[EventLoop][turn]")
+{
+    // A turn is BOUNDED, or work that re-queues itself starves the readiness and deadline steps:
+    // a loop whose flows yield in a loop would never reach step 4 at all, and every socket it
+    // serves would stall behind them. What the bound must not do is DROP anything, so the
+    // remainder is asserted as well as the batch.
+    auto clock = ManualClock {};
+    auto loop = core::net::testing::TestLoop { clock, core::net::EventLoopOptions { .dispatchBatch = 4 } };
+
+    auto passes = 0;
+    loop.spawn(yieldRepeatedly(&loop, &passes, 10));
+
+    auto const first = loop.runOnce();
+    CHECK(first.resumed == 4);
+    CHECK(passes == 4);
+    CHECK(loop.readyCount() == 1); // queued again, not lost
+
+    auto const second = loop.runOnce();
+    CHECK(second.resumed == 4);
+    CHECK(passes == 8);
+
+    std::ignore = loop.runUntilIdle();
+    CHECK(passes == 10);
+    CHECK(loop.spawnedCount() == 0);
+}
+
+TEST_CASE("IdlePolicy::Return never blocks inside a turn", "[EventLoop][turn]")
+{
+    // A loop somebody else drives a turn at a time must not wait inside one: the caller is what
+    // waits. The observable form is the timeout it hands the backend -- zero, even with a deadline
+    // an hour out that a blocking loop would happily sleep on.
+    auto clock = ManualClock {};
+    auto source = ScriptedBackend {};
+    source.pushTimeout();
+    auto loop =
+        EventLoop { source, clock, core::net::EventLoopOptions { .idle = core::net::IdlePolicy::Return } };
+
+    auto outcome = 0;
+    loop.spawn(parkForAnHour(&loop, &outcome));
+
+    auto const turn = loop.runOnce();
+    CHECK(turn.resumed == 1);
+    REQUIRE(source.waitCount() == 1);
+    CHECK(timeoutMs(source.recordedTimeouts().back()) == 0);
+}
+
+TEST_CASE("G2: a flow is never resumed from inside the backend's wait", "[EventLoop][threading]")
+{
+    // Rule 1 seen from the loop's side. A backend DISPATCHES -- it runs the callbacks on the
+    // handlers it holds -- and those callbacks only enqueue; the resumption happens afterwards, in
+    // step 2, on the loop's thread. A resume from inside the wait lets the resumed frame free the
+    // object whose entry the backend's walk has not reached yet.
+    //
+    // Asserted from the FLOW's own frame, which is the only place that can see it: a loop
+    // asserting its own invariant would pass on a backend that never resumed anything at all.
+    auto pipe = core::platform::createSystemPipe();
+    REQUIRE(pipe.has_value());
+
+    auto source = WaitMarkingBackend {};
+    source.pushReadable(HandlerId { 1 });
+    auto loop = EventLoop { source };
+
+    auto sawWait = true;
+    auto sawDispatch = true;
+    loop.blockOn(recordResumptionContext(&loop, &source, (*pipe)->readFd(), &sawWait, &sawDispatch));
+
+    CHECK_FALSE(sawWait);
+    CHECK_FALSE(sawDispatch);
+    CHECK_FALSE(source.inWait()); // and the wait had ended by then, not merely not been entered
+}
+
+TEST_CASE("G3: a helper thread only posts, and the work runs on the loop's thread", "[EventLoop][threading]")
+{
+    // Everything a helper thread may do to a loop -- post, submit, schedule, cancel, stop -- hands
+    // work over and returns. None of it runs on the helper's thread, and none of it touches the
+    // loop's own containers. What proves it is where the work RAN, recorded by the work itself.
+    auto source = ScriptedBackend {};
+    auto loop = EventLoop { source };
+
+    auto ranOn = std::thread::id {};
+    auto helperRan = std::thread::id {};
+    auto const loopThread = std::this_thread::get_id();
+
+    auto helper = std::thread { [&loop, &ranOn, &helperRan] {
+        helperRan = std::this_thread::get_id();
+        loop.post([&ranOn] { ranOn = std::this_thread::get_id(); });
+    } };
+    helper.join();
+
+    CHECK(helperRan != loopThread);     // the helper really was another thread
+    CHECK(ranOn == std::thread::id {}); // and it ran none of the work itself
+
+    std::ignore = loop.runOnce();
+    CHECK(ranOn == loopThread);
+}
+
+TEST_CASE("A running loop refuses teardown from any other thread", "[EventLoop][threading]")
+{
+    // Guarantee G5's two facts, asked of a loop that is actually running. A loop that forgot to
+    // claim its worker thread would answer `true` to the rule from every thread -- the false-safe
+    // direction, where the teardown assertion stays green while checking nothing. `run()` claims
+    // it, and `run()` is non-virtual so no loop can enter the turn without having claimed.
+    // A real backend, because this is the one case that actually enters `run()`: an idle turn
+    // there BLOCKS on the backend's wake channel, which is what `stop()` breaks. A scripted
+    // backend would have to script a step per turn and would race the stop for the last one.
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
+
+    CHECK_FALSE(loop.running());
+    CHECK(loop.teardownIsSerialisedWithDispatch()); // the legitimate "stopped" arm
+
+    auto entered = std::atomic<bool> { false };
+    loop.post([&entered] { entered.store(true, std::memory_order_release); });
+
+    auto worker = std::thread { [&loop] { loop.run(); } };
+    while (!entered.load(std::memory_order_acquire))
+        std::this_thread::yield();
+
+    CHECK(loop.running());
+    CHECK_FALSE(loop.isOnWorkerThread());
+    CHECK_FALSE(loop.teardownIsSerialisedWithDispatch());
+
+    loop.stop();
+    worker.join();
+
+    // Released on the way out, or every later teardown would be refused forever by a loop that
+    // has finished.
+    CHECK_FALSE(loop.running());
+    CHECK(loop.teardownIsSerialisedWithDispatch());
+}
+
+TEST_CASE("spawn releases a finished flow in the turn that finished it", "[EventLoop][spawn]")
+{
+    // O(1) per completion, and what that means observably: the count drops as each flow ends, not
+    // on some later turn that sweeps the whole list. A sweep would leave the finished flow's frame
+    // -- and everything it holds: a socket, a temporary directory, a slot in somebody's counter --
+    // alive until the next turn, and would cost O(n) on every turn to do it.
+    auto clock = ManualClock {};
+    auto loop = core::net::testing::TestLoop { clock };
+
+    auto finished = 0;
+    loop.spawn(parkOnce(&loop));         // held: it parks and never comes back
+    loop.spawn(finishAtOnce(&finished)); // released: it runs to its end in this turn
+    REQUIRE(loop.spawnedCount() == 2);
+
+    std::ignore = loop.runOnce();
+
+    CHECK(finished == 1);
+    CHECK(loop.spawnedCount() == 1); // dropped by the turn that ran it, with no sweep
+    CHECK(loop.pendingTimerCount() == 1);
+}
+
+TEST_CASE("spawn of one hundred thousand flows leaves none behind", "[EventLoop][spawn]")
+{
+    // The scale the O(1) unlink exists for. With a sweep at the top of every turn this is
+    // quadratic in the number of live flows; here each completion costs one list erase and one
+    // map erase, and the binary's own timeout is the bound that would catch a regression.
+    constexpr auto Flows = 100000;
+
+    auto clock = ManualClock {};
+    auto loop = core::net::testing::TestLoop { clock };
+
+    auto finished = 0;
+    for ([[maybe_unused]] auto const index: std::views::iota(0, Flows))
+        loop.spawn(finishAtOnce(&finished));
+    REQUIRE(loop.spawnedCount() == Flows);
+
+    std::ignore = loop.runUntilIdle();
+    CHECK(finished == Flows);
+    CHECK(loop.spawnedCount() == 0);
 }

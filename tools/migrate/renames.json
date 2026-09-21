@@ -5362,6 +5362,20 @@
     },
     {
       "kind": "symbol",
+      "from": "net::WaitFdAwaiter",
+      "to": "core::net::WaitHandleAwaiter",
+      "profiles": [
+        "contour",
+        "endo"
+      ],
+      "target": {
+        "header": "core/net/EventLoop.hpp",
+        "symbol": "core::net::WaitHandleAwaiter"
+      },
+      "note": "Task B4. It parks on a HANDLE with a stated HandleKind rather than on a descriptor, because a Windows SOCKET and a waitable HANDLE reach different wait primitives and the backend cannot tell them apart from the value. endo's core::tui::runtime::WaitFdAwaiter is a different type and keeps its name until Task B12 removes it."
+    },
+    {
+      "kind": "symbol",
       "from": "net::testing::AllBackends",
       "to": "core::net::testing::BackendMatrix",
       "profiles": [
@@ -5409,8 +5423,6 @@
       "profiles": [
         "fastcached"
       ],
-      "status": "pending",
-      "task": "B4",
       "target": {
         "header": "core/net/EventLoop.hpp",
         "symbol": "core::net::EventLoop::submit"
@@ -5423,10 +5435,8 @@
       "profiles": [
         "fastcached"
       ],
-      "status": "pending",
-      "task": "B4",
       "target": {
-        "header": "core/net/EventLoop.hpp",
+        "header": "core/net/PlatformLoop.hpp",
         "symbol": "core::net::PlatformLoop"
       }
     },
@@ -5437,11 +5447,150 @@
       "profiles": [
         "fastcached"
       ],
-      "status": "pending",
-      "task": "B4",
       "target": {
         "header": "core/net/testing/TestLoop.hpp",
         "symbol": "core::net::testing::TestLoop"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::ReactorWorkerIdentity",
+      "to": "core::net::detail::WorkerIdentity",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/detail/WorkerIdentity.hpp",
+        "symbol": "core::net::detail::WorkerIdentity"
+      },
+      "note": "Task B4. `detail`, because a consumer never names it: `EventLoop` holds one and answers `running()`, `isOnWorkerThread()` and `teardownIsSerialisedWithDispatch()` out of it. Its `Scope` nests here, which upstream's did not need."
+    },
+    {
+      "kind": "member",
+      "from": "TeardownIsSerialisedWithDispatch",
+      "to": "teardownIsSerialisedWithDispatch",
+      "apply": "semantic",
+      "scope": "FastCache::IReactor",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/EventLoop.hpp",
+        "symbol": "core::net::EventLoop::teardownIsSerialisedWithDispatch"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "IsOnWorkerThread",
+      "to": "isOnWorkerThread",
+      "apply": "semantic",
+      "scope": "FastCache::IReactor",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/EventLoop.hpp",
+        "symbol": "core::net::EventLoop::isOnWorkerThread"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Running",
+      "to": "running",
+      "apply": "semantic",
+      "scope": "FastCache::IReactor",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/EventLoop.hpp",
+        "symbol": "core::net::EventLoop::running"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Clock",
+      "to": "clock",
+      "apply": "semantic",
+      "scope": "FastCache::IReactor",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/EventLoop.hpp",
+        "symbol": "core::net::EventLoop::clock"
+      },
+      "note": "Task B4. `clock()` is const and returns `core::platform::IClock&`; upstream's was non-const and returned FastCache's own IClock."
+    },
+    {
+      "kind": "member",
+      "from": "Stop",
+      "to": "stop",
+      "apply": "semantic",
+      "scope": "FastCache::IReactor",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/EventLoop.hpp",
+        "symbol": "core::net::EventLoop::stop"
+      },
+      "note": "Task B4. `stop()` asks a `run()` to return and is safe from any thread; what upstream ALSO meant by Stop -- cancel every flow and unpark its waiters -- is `requestStop()` here, and the two are separated because a shutdown that only wants the loop back should not cancel work that is mid-flight."
+    },
+    {
+      "kind": "member",
+      "from": "Run",
+      "to": "run",
+      "apply": "semantic",
+      "scope": "FastCache::IReactor",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/EventLoop.hpp",
+        "symbol": "core::net::EventLoop::run"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "CancelPending",
+      "to": "cancelPending",
+      "apply": "semantic",
+      "scope": "FastCache::IReactor",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/EventLoop.hpp",
+        "symbol": "core::net::EventLoop::cancelPending"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Schedule",
+      "to": "schedule",
+      "apply": "semantic",
+      "scope": "FastCache::IReactor",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/EventLoop.hpp",
+        "symbol": "core::net::EventLoop::schedule"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Submit",
+      "to": "submit",
+      "apply": "semantic",
+      "scope": "FastCache::IReactor",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/EventLoop.hpp",
+        "symbol": "core::net::EventLoop::submit"
       }
     },
     {

@@ -425,6 +425,51 @@ workflow refuses one without a section here.
 
 ### Breaking
 
+- **`core::net::EventLoop` is the merged reactor contract: a five-step turn, a six-step teardown,
+  a park table and the thread-affinity guarantees, all asserted.** It implements
+  `core::async::IExecutor`, so anything that takes an executor -- `ResumeOn`, `AsyncQueue`, a
+  `Task` chain -- takes a loop. What arrives with it: `run()`, `runOnce()`, `runUntilIdle()`,
+  `stop()`, `submit()` and `schedule()` in both the borrowing and the owning form,
+  `cancelPending()`, `resumeSoon()`, `registerPark()`, `unregisterPark()`, `requestCancel()`,
+  `running()`, `isOnWorkerThread()`, `teardownIsSerialisedWithDispatch()`, `IdlePolicy`,
+  `EventLoopOptions`, `RunOnceResult`, `ParkEntry`, `core::net::PlatformLoop` (which owns
+  `makeDefaultBackend()`) and `core::net::testing::TestLoop` (the real loop over `NullBackend`,
+  driven by hand). `ParkId` widens from an fd wait to every kind of parked work, and it is the
+  generation check: ids are never reused, so a cancel request for a park that has gone resolves to
+  nothing.
+
+  Migrations, in the order a caller meets them:
+
+  - `WaitFdAwaiter` is `WaitHandleAwaiter`, and `waitReadable`/`waitWritable` take a second,
+    defaulted `HandleKind`. Call sites that wrote `auto` or `co_await` change nothing; one that
+    named the type changes the name.
+  - `delay()` takes a `core::platform::SteadyDuration` rather than `std::chrono::milliseconds`. A
+    `5ms` argument converts; a caller that stored the parameter type changes it.
+  - **`blockOn()` no longer spins when its flow cannot advance.** It returns as soon as nothing is
+    queued and nothing is parked, and `Task::result()` then refuses the still-suspended task by
+    name instead of the loop burning a core forever
+    ([core-cpp#17](https://github.com/contour-terminal/core-cpp/issues/17), which Task B12 had
+    been carrying for the TUI runtime).
+  - **A coroutine resumed by readiness or by a deadline resumes one turn later**, in the next
+    turn's step 2, because there is exactly one place a loop resumes and that is what makes
+    guarantee G2 stateable. A test that counted waits, or that used `blockOn(trivialTask())` as
+    "pump once", counts differently now; `runOnce()` is what drives one turn.
+  - **`~EventLoop` frees what the loop owns and resumes what it borrows.** A `DetachedTask` parked
+    on a loop that is destroyed is FREED, not run on: it carries no stop token, so resuming it
+    would not cancel it, it would run the rest of its body on a loop that is going away
+    ([fastcached#1025](https://github.com/LASTRADA-Software/fastcached/issues/1025)). A flow whose
+    frame a `Task` owns is resumed, observes the stop and unwinds, as before.
+  - `EventLoop::run()` and `blockOn()` are **precondition violations on a host-driven loop** and
+    assert. They are compiled under WebAssembly rather than removed, so the mistake is an abort
+    with a message rather than a link error in a consumer's build.
+  - `IoBackend` gains `setPump(HostCallback, void*)`, defaulted to a no-op beside `isHostDriven()`
+    and `armWakeAt()`. A backend outside this repository need not implement it; a host-driven one
+    that wants a loop to pump must.
+
+  Consumer impact: contour, endo and tuidu all construct an `EventLoop`. The rename table
+  (`tools/migrate/renames.json`) carries `net::WaitFdAwaiter`, and fastcached's `IReactor`,
+  `PlatformReactor`, `TestReactor` and their members are marked delivered.
+
 - `core::platform::testing::InMemoryFileSystem` models a file's lifetime the way POSIX does, where
   it used to hand each stream a private copy. A stream now survives `remove()` of its file and
   follows it across `rename()`, `openRead()` sees writes that land after it was opened, and

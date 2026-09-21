@@ -1,0 +1,95 @@
+// SPDX-License-Identifier: Apache-2.0
+#pragma once
+
+/// @file
+/// `testing::TestLoop` — a deterministic @c EventLoop with no I/O behind it.
+///
+/// Pairs with @c platform::ManualClock so deadline-driven behaviour is reproducible: a case
+/// submits its entry point, advances the clock and calls @c tick() or @c drain(). Nothing waits
+/// on anything real, so nothing is timing-dependent.
+///
+/// It is an @c EventLoop over @c NullBackend with @c IdlePolicy::Return, and being the real loop
+/// rather than a second implementation is the point: fastcached's `TestReactor` was a separate
+/// reactor, so every rule the platform reactors held — the turn order, the teardown order, the
+/// ownership of parked work — had to be written twice and could differ. Here a case that passes
+/// on a `TestLoop` and fails on a `PlatformLoop` is a backend difference and nothing else.
+///
+/// Ported from fastcached's `Async/TestReactor.{hpp,cpp}` at `0708dd54`.
+
+#include <core/net/EventLoop.hpp>
+#include <core/net/testing/NullBackend.hpp>
+#include <core/platform/Clock.hpp>
+
+#include <cstddef>
+#include <utility>
+
+namespace core::net::testing
+{
+
+namespace detail
+{
+
+    /// Holds the @c NullBackend a @c TestLoop owns, so it outlives the loop over it. A private
+    /// base for @c core::net::detail::OwnedBackend's reason: a member is initialised after every
+    /// base, and @c EventLoop is a base.
+    class OwnedNullBackend
+    {
+      protected:
+        OwnedNullBackend() = default;
+        ~OwnedNullBackend() = default;
+
+        OwnedNullBackend(OwnedNullBackend const&) = delete;
+        OwnedNullBackend(OwnedNullBackend&&) = delete;
+        OwnedNullBackend& operator=(OwnedNullBackend const&) = delete;
+        OwnedNullBackend& operator=(OwnedNullBackend&&) = delete;
+
+        /// Accepts registrations, reports nothing, never blocks. Named apart from @c EventLoop's
+        /// own `_backend`, because a name found in two base classes is ambiguous whatever its access.
+        NullBackend _ownedBackend;
+    };
+
+} // namespace detail
+
+/// A single-threaded loop driven entirely by hand.
+class TestLoop final: private detail::OwnedNullBackend, public EventLoop
+{
+  public:
+    /// @param clock The clock deadlines are measured against (not owned) — typically a
+    ///        @c platform::ManualClock.
+    /// @param options The loop's configuration. The idle policy is forced to
+    ///        @c IdlePolicy::Return whatever is passed: this loop has no thread of its own to
+    ///        block, and a turn that blocked would block the case driving it.
+    explicit TestLoop(platform::IClock& clock, EventLoopOptions options = {}):
+        detail::OwnedNullBackend {}, EventLoop { _ownedBackend, clock, returning(std::move(options)) }
+    {
+    }
+
+    /// Runs exactly one turn.
+    /// @return How many coroutines it resumed. Zero means the loop had nothing to do, which is
+    ///         what @c drain stops on.
+    std::size_t tick() { return runOnce(platform::SteadyDuration::zero()).resumed; }
+
+    /// Runs turns until one of them does nothing.
+    /// @return How many coroutines were resumed in all.
+    std::size_t drain() { return runUntilIdle(); }
+
+    /// @return How many coroutines are queued for the next drain.
+    [[nodiscard]] std::size_t pendingSubmissions() const noexcept { return readyCount(); }
+
+    /// @return How many parks are waiting on a deadline.
+    [[nodiscard]] std::size_t pendingTimers() const noexcept { return pendingTimerCount(); }
+
+    /// @return The backend this loop owns, for a case that asserts what it was asked.
+    [[nodiscard]] NullBackend& backend() noexcept { return _ownedBackend; }
+
+  private:
+    /// @param options What the caller asked for.
+    /// @return The same options with the idle policy forced; see the constructor.
+    [[nodiscard]] static EventLoopOptions returning(EventLoopOptions options) noexcept
+    {
+        options.idle = IdlePolicy::Return;
+        return options;
+    }
+};
+
+} // namespace core::net::testing

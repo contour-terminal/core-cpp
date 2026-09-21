@@ -37,16 +37,24 @@ if(CORE_CPP_USE_THREADS)
     list(APPEND _coreCppNetPublicLibs Threads::Threads)
 endif()
 
-# What builds under single-threaded WebAssembly: the backend interface, the host-driven backend and
-# the pure logic behind them. There is no thread to block and no descriptor to poll there, so a loop
-# is PUMPED by the browser through an IHostScheduler; readiness arrives through the browser's own
-# APIs and reaches the loop as a post. The test doubles are header-only and need no row here.
+# What builds under single-threaded WebAssembly: the event loop, the backend interface, the
+# host-driven backend and the pure logic behind them. There is no thread to block and no descriptor
+# to poll there, so a loop is PUMPED by the browser through an IHostScheduler; readiness arrives
+# through the browser's own APIs and reaches the loop as a post. `run()` and `blockOn()` are
+# COMPILED here rather than removed -- they assert at runtime instead, because the browser reaches
+# them through a consumer's mistake and a symbol simply absent there fails at link time in somebody
+# else's build. The test doubles are header-only and need no row here.
 set(_coreCppNetSubset
+    EventLoop.cpp
     HostDrivenBackend.cpp
+    detail/ParkTable.hpp
     detail/ReadyBatch.hpp
-    detail/WaitTimeout.hpp)
+    detail/ScopeGuard.hpp
+    detail/WaitTimeout.hpp
+    detail/WorkerIdentity.hpp)
 set(_coreCppNetSubsetTests
     HostDrivenBackend_test.cpp
+    HostDrivenLoop_test.cpp
     IoBackend_test.cpp
     testing/ScriptedBackend_test.cpp)
 #
@@ -86,26 +94,28 @@ core_cpp_add_module(net KIND STATIC
         IListener.hpp
         IoBackend.hpp
         ISocket.hpp
+        PlatformLoop.hpp
         Sockets.hpp
         SplitSocket.hpp
         WithTimeout.hpp
         WriteQueue.hpp
+        detail/ParkTable.hpp
+        detail/WorkerIdentity.hpp
         testing/BackendMatrix.hpp
         testing/CoroTestSupport.hpp
         testing/InMemoryTransport.hpp
         testing/ManualHostScheduler.hpp
         testing/NullBackend.hpp
         testing/ScriptedBackend.hpp
+        testing/TestLoop.hpp
     SOURCES
         ${_coreCppNetSubset}
         AsyncBufferedReader.cpp
         Diagnostics.cpp
-        EventLoop.cpp
         HttpServer.cpp
         WriteQueue.cpp
         ${_coreCppNetDefaultBackend}
         detail/PeerAddress.hpp
-        detail/ScopeGuard.hpp
         detail/WaitChunking.hpp
         detail/WakeupChannel.hpp
     SOURCES_POSIX
@@ -182,10 +192,13 @@ core_cpp_add_test(net
     SOURCES
         AsyncBufferedReader_test.cpp
         BackendParity_test.cpp
+        ClockRefresh_test.cpp
         EventLoop_test.cpp
         HttpServer_test.cpp
+        LoopTeardown_test.cpp
         Socket_test.cpp
         WriteQueue_test.cpp
+        testing/TestLoop_test.cpp
     SOURCES_POSIX
         posix/FdPassing_test.cpp
         posix/UnixSocket_test.cpp
@@ -204,3 +217,26 @@ endif()
 # TIMEOUT for the same reason as above, and with more cause: two of these cases say in their own
 # comments that a regression does not fail them, it hangs them.
 core_cpp_add_test(net NAME net_tls SOURCES Tls_test.cpp LABELS loopback TIMEOUT 120)
+
+# `EventLoop::run()` and `EventLoop::blockOn()` on a host-driven loop are precondition violations,
+# and an assertion cannot be asserted from inside a Catch case: it aborts the process, which ends
+# the binary rather than the case. Each mode is therefore its own process, and each must FAIL.
+# Not under Emscripten, where a bare executable is a node invocation that core_cpp_add_test's
+# wrapper exists to arrange; the refusal is compiled there (the net_backend binary instantiates
+# both), and driving it under node is what Task B5's wasm smoke leg adds.
+if(NOT EMSCRIPTEN)
+    add_executable(core-cpp-hostdriven-canary HostDrivenCanary.cpp)
+    target_link_libraries(core-cpp-hostdriven-canary PRIVATE core::net)
+    core_cpp_apply_toolchain(core-cpp-hostdriven-canary)
+    foreach(mode IN ITEMS run blockOn)
+        add_test(NAME core-cpp.hostdriven-canary.${mode}
+                 COMMAND core-cpp-hostdriven-canary ${mode})
+        # SKIP_RETURN_CODE takes precedence over WILL_FAIL, so a build with assertions compiled out
+        # reports a skip rather than the defect the canary exists to catch.
+        set_tests_properties(core-cpp.hostdriven-canary.${mode} PROPERTIES
+            WILL_FAIL TRUE
+            TIMEOUT 60
+            SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
+            LABELS "core-cpp;net;canary")
+    endforeach()
+endif()

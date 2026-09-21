@@ -118,7 +118,7 @@ class HostDrivenBackend final: public IoBackend
     /// backend before it can hand over a pointer to itself.
     /// @param pump What to call on the loop's thread when the host pumps.
     /// @param state Passed to @p pump untouched.
-    void setPump(HostCallback pump, void* state) noexcept;
+    void setPump(HostCallback pump, void* state) noexcept override;
 
     /// @return How many times the host has actually pumped this backend.
     [[nodiscard]] std::size_t pumpCount() const noexcept { return _pumpCount; }
