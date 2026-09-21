@@ -347,8 +347,13 @@ where the wrong list lived. So:
 - **A host-driven loop refuses `run()` and `blockOn()`**, and the refusal is COMPILED under
   WebAssembly rather than removed: a consumer reaches it by mistake, not by design, and a symbol
   simply absent there fails at link time in somebody else's build with nothing to say why.
-  `core-cpp.hostdriven-canary` drives both, registered `WILL_FAIL`; its SIGABRT handler exists
-  because ctest reads a signal as an exception and `WILL_FAIL` inverts only a return code.
+  `core-cpp.hostdriven-canary` drives both. It is judged by a **marker it prints to `stderr`
+  immediately before the forbidden call**, matched with `PASS_REGULAR_EXPRESSION` —
+  **not `WILL_FAIL`, which was removed from every registration in this tree by `a48e727`** because
+  it inverts *any* non-zero exit and so passes a canary that died before reaching its mechanism.
+  Its SIGABRT handler is load-bearing rather than tidiness: both regex properties are defeated by a
+  raw signal, so a cleanup deleting "unused" abort handling would turn every canary here into a
+  silent pass. The marker goes to `stderr` because `_Exit` flushes nothing.
 
 ## Task ownership
 

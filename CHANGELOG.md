@@ -531,9 +531,10 @@ workflow refuses one without a section here.
 
 - **Guarantees G1 and G4 are asserted on the Windows port, and each has a canary.**
   `core-cpp.iocp-canary.g1` calls `wait()` from a second thread while another is dequeuing;
-  `core-cpp.iocp-canary.g4` associates one handle with one port twice. Both are `WILL_FAIL`
-  programs, because an assertion aborts the process and so cannot be provoked from inside a test
-  case, and both SKIP where assertions are compiled out. They exist because neither violation fails
+  `core-cpp.iocp-canary.g4` associates one handle with one port twice. Each is a separate program,
+  because an assertion aborts the process and so cannot be provoked from inside a test case; each
+  is judged by a marker it prints to `stderr` immediately before the forbidden call, and both SKIP
+  where assertions are compiled out. They exist because neither violation fails
   on its own: IOCP is *designed* to be drained by many threads, and a lost association is a socket
   awaiting completions that are delivered elsewhere — a hang with nothing in any log.
 

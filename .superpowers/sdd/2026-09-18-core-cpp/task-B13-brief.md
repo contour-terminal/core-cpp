@@ -100,6 +100,23 @@ rather than reasoned:
 rather than this paragraph** — it is a description, and a description of an artifact decays while
 the artifact does not.
 
+**And you own the cleanup that proves the point.** `a48e727` changed the registrations and left
+**nine doc comments describing the scheme it replaced**, so the code and its own documentation
+disagree today:
+
+```
+src/core/net/EventLoop.cpp:521              src/core/net/windows/IocpCanary.cpp:20,23,24
+src/core/net/HostDrivenCanary.cpp:8,17,18   src/core/net/windows/IocpBackend_test.cpp:25
+tests/WindowsDialogCanary.cpp:4,12
+```
+
+Not folded into `a48e727` because two lanes held uncommitted work across `src/core/net/` when it
+was found. **Leave the comments that explain the replacement** — the `PASS_REGULAR_EXPRESSION …
+REPLACES WILL_FAIL` notes in the three `CMakeLists.txt` files and the "Load-bearing for the ctest
+registration" blocks in both canary sources are correct and are the reason the property is
+understood. Fix only the ones that still assert the registration *is* `WILL_FAIL`. **Re-derive the
+list yourself** — it was produced by one grep and this brief is a description of it.
+
 Two facts from B4's round that bear on how you build it:
 
 - **A canary registered with a bare `add_test()` lands in every consumer's ctest suite.** That is

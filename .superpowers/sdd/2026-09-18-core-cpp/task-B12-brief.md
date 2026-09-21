@@ -63,8 +63,15 @@ so say which configuration covered which file.
 
 ## What you inherit that the brief predates
 
-- **B6 owns `ISocket` and a frameless readiness park** (`ParkEntry::onReady`); your input pump is a
-  consumer of that mechanism, not a second one.
+- **B6 owns `ISocket` and is BUILDING a frameless readiness park — it does not exist at your base,
+  and this bullet originally said it did.** Measured at `5d7a5ae`: `ParkEntry` offers
+  `onDeadline(ParkedWork, tp)`, `onCallback(TimerCallback, void* state, tp)` and
+  `onReadiness(ParkedWork, ...)`. So there is a readiness park and there is a frameless park, and
+  **there is no frameless readiness park** — `onReadiness` takes a coroutine handle. An earlier
+  draft named `ParkEntry::onReady`, which is wrong in the name *and* in the kind, and it cost the
+  lane that read it a design decision: **your input pump has to be a coroutine, because of the
+  code rather than by choice.** B6's approved scope expansion adds the missing variant for the same
+  reason. Do not design toward it; note it as the follow-up that would simplify the pump.
 - **B7a owns the IOCP backend and the waitable-HANDLE bridge**, which is what `waitReadable` on a
   console handle resolves to on Windows. **B7b, which flips `makeDefaultBackend()` to IOCP, may not
   have landed when you start** — so state in your report which Windows backend your runtime was
