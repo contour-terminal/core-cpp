@@ -5363,7 +5363,8 @@
       "target": {
         "header": "core/net/ISocket.hpp",
         "symbol": "core::net::ISocket::close"
-      }
+      },
+      "note": "Task B6. ISocket::IsClosed -> isClosed is recorded HERE rather than rewritten: the table keys a member row on (profile, name) and FastCache::AsyncQueue::IsClosed already holds it, the mirror of the Close collision that row records. Every other ISocket member B6 renamed has a row of its own: WriteVectored, WaitReadable, CancelRead, ShutdownWrite, SetReceiveDeadline, HandshakeIfNeeded and PeerAddress."
     },
     {
       "kind": "symbol",
@@ -6310,6 +6311,226 @@
         "contour"
       ],
       "note": "core::net::KqueueBackend (bsd/KqueueBackend.hpp), still private; reach it through makeBackend(BackendKind::Kqueue)."
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/ReadSlot.hpp",
+      "to": "core/net/SocketContract.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SocketContract.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/WriteSlot.hpp",
+      "to": "core/net/SocketContract.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SocketContract.hpp"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::IoAwaitable",
+      "to": "core::net::IoAwaitable",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IoAwaitable.hpp",
+        "symbol": "core::net::IoAwaitable"
+      },
+      "note": "Task B6. It is now an alias for core::net::ResultAwaitable<std::size_t>, so accept, handshake and fd-passing reads share one awaitable. A caller that only awaits one is unaffected; a caller that CONSTRUCTED one is not, because the suspend hook moved into the constructor -- see the removed rows for SetSuspendCallback and CallbackState."
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::Detail::ClaimReadSlot",
+      "to": "core::net::contract::claimReadSlot",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SocketContract.hpp",
+        "symbol": "core::net::contract::claimReadSlot"
+      },
+      "note": "Task B6. Public rather than a detail namespace: a transport outside this library is under the same one-read-operation rule, so it gets the same tripwire."
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::Detail::ClaimWriteSlot",
+      "to": "core::net::contract::claimWriteSlot",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SocketContract.hpp",
+        "symbol": "core::net::contract::claimWriteSlot"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::Detail::RequireReadBuffer",
+      "to": "core::net::contract::requireReadBuffer",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SocketContract.hpp",
+        "symbol": "core::net::contract::requireReadBuffer"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::SocketResult",
+      "to": "core::net::SocketResult",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ISocket.hpp",
+        "symbol": "core::net::SocketResult"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "WriteVectored",
+      "to": "writeVectored",
+      "apply": "semantic",
+      "scope": "FastCache::ISocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ISocket.hpp",
+        "symbol": "core::net::ISocket::writeVectored"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "WaitReadable",
+      "to": "waitReadable",
+      "apply": "semantic",
+      "scope": "FastCache::ISocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ISocket.hpp",
+        "symbol": "core::net::ISocket::waitReadable"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "CancelRead",
+      "to": "cancelRead",
+      "apply": "semantic",
+      "scope": "FastCache::ISocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ISocket.hpp",
+        "symbol": "core::net::ISocket::cancelRead"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "ShutdownWrite",
+      "to": "shutdownWrite",
+      "apply": "semantic",
+      "scope": "FastCache::ISocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ISocket.hpp",
+        "symbol": "core::net::ISocket::shutdownWrite"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "SetReceiveDeadline",
+      "to": "setReceiveDeadline",
+      "apply": "semantic",
+      "scope": "FastCache::ISocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ISocket.hpp",
+        "symbol": "core::net::ISocket::setReceiveDeadline"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "HandshakeIfNeeded",
+      "to": "handshakeIfNeeded",
+      "apply": "semantic",
+      "scope": "FastCache::ISocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ISocket.hpp",
+        "symbol": "core::net::ISocket::handshakeIfNeeded"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "PeerAddress",
+      "to": "peerAddress",
+      "apply": "semantic",
+      "scope": "FastCache::ISocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ISocket.hpp",
+        "symbol": "core::net::ISocket::peerAddress"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Complete",
+      "to": "complete",
+      "apply": "semantic",
+      "scope": "FastCache::IoAwaitable",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IoAwaitable.hpp",
+        "symbol": "core::net::ResultAwaitable::complete"
+      }
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::IoAwaitable::SetSuspendCallback",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "Task B6: the hook moved into the constructor, because an awaitable that could be armed after it was built had a window in which it was neither ready nor arm-able and nothing said so. A transport now passes arm, retire and owner to ResultAwaitable(arm, retire, owner) -- and the RETIRE hook is new and mandatory: a flow whose stop token fires unwinds through await_resume, and a transport still holding a pointer to that operation would complete into a destroyed frame. A coroutine-shaped transport skips all three and uses ResultAwaitable(Task) instead."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::IoAwaitable::CallbackState",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "Task B6: with the owner pointer passed at construction, the arm and retire hooks are handed it directly and nothing has to read it back off the awaitable."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::contract::retireParkedRead",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "Task B6: fastcached's Detail::RetireParkedRead is not carried over. It was a template over an Impl exposing readOp and UpdateInterest, shared because EpollSocket and KqueueSocket spelled the retirement identically. core-cpp has ONE reactor socket, and its retirement also has to unregister a loop park and disarm a receive deadline, so the body lives in PosixSocket::takeRead and there is no second copy for a shared helper to prevent."
     }
   ]
 }

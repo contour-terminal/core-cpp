@@ -32,6 +32,7 @@ endif()
 
 core_cpp_add_module(async KIND INTERFACE
     HEADERS
+        AsTask.hpp
         AsyncQueue.hpp
         Awaitable.hpp
         Cancellation.hpp
@@ -64,6 +65,7 @@ endif()
 # whose promise holds one. Both binaries below build this list, so a case added here is run over
 # std::stop_token and over the fallback.
 set(_coreCppAsyncStopTokenTests
+    AsTask_test.cpp
     AsyncQueue_test.cpp
     Awaitable_test.cpp
     ParkedWork_test.cpp

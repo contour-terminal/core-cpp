@@ -72,7 +72,29 @@ namespace
         TlsSocket(TlsSocket&&) = delete;
         TlsSocket& operator=(TlsSocket&&) = delete;
 
-        async::Task<IoResult> read(std::span<std::byte> buffer) override
+        /// **Coroutine-backed, and that is the shape a decorator is owed.** A raw socket's read
+        /// is a syscall and a retry, so it needs no frame; a TLS read decrypts, may drive the
+        /// handshake, and may park on a raw read of its own — a loop with state that outlives each
+        /// step. `ResultAwaitable`'s task constructor owns the frame and hands the awaiting flow's
+        /// stop token down into it, so this is exactly as cancellable as a frame-free operation and
+        /// unwinds through its own `co_await`s. Task B11 owns this file's merge; B6 changed the
+        /// signature and nothing of the record pump.
+        /// @param buffer The destination.
+        /// @return The plaintext byte count, `0` at close_notify, or a @c NetError.
+        IoAwaitable read(std::span<std::byte> buffer) override { return IoAwaitable { readPlain(buffer) }; }
+
+        /// @param buffer The source.
+        /// @return The byte count written, or a @c NetError.
+        IoAwaitable write(std::span<std::byte const> buffer) override
+        {
+            return IoAwaitable { writePlain(buffer) };
+        }
+
+        // writeVectored is NOT overridden: no scattered syscall is reachable through a TLS record
+        // layer, so the base's write-each-segment-in-turn default is already the right algorithm.
+
+      private:
+        async::Task<IoResult> readPlain(std::span<std::byte> buffer)
         {
             if (auto const handshaken = co_await handshake(); !handshaken)
                 co_return std::unexpected(handshaken.error());
@@ -111,7 +133,7 @@ namespace
             }
         }
 
-        async::Task<IoResult> write(std::span<std::byte const> buffer) override
+        async::Task<IoResult> writePlain(std::span<std::byte const> buffer)
         {
             if (auto const handshaken = co_await handshake(); !handshaken)
                 co_return std::unexpected(handshaken.error());
@@ -151,6 +173,22 @@ namespace
                 }
             }
             co_return total;
+        }
+
+      public:
+        /// Retires a read parked on the INNER transport.
+        ///
+        /// **A TLS read is not read-only at the transport layer**, which is why this override
+        /// exists and why the base's no-op would be wrong here: a `waitReadable` decrypts and parks
+        /// on a raw read whenever OpenSSL wants more bytes, so inheriting the no-op would leave the
+        /// inner socket's slot occupied and hand the next read a double-arm.
+        void cancelRead() noexcept override { _inner->cancelRead(); }
+
+        /// @param deadline How long a read may wait; bounds the INNER transport's read, which is
+        ///        where a TLS read actually waits.
+        void setReceiveDeadline(std::chrono::milliseconds deadline) noexcept override
+        {
+            _inner->setReceiveDeadline(deadline);
         }
 
         [[nodiscard]] std::string peerAddress() const override { return _inner->peerAddress(); }

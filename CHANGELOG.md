@@ -28,6 +28,21 @@ workflow refuses one without a section here.
   an injected implementation, never an `#ifdef` in logic -- holds here by construction rather than
   by review.
 
+- `core::async::asTask(awaitable)` (`<core/async/AsTask.hpp>`) — wraps any awaiter in a `Task`, for
+  the one caller shape an awaitable cannot serve: one that must store the operation, keep it across
+  a suspension point, or hand it to a combinator. It costs a coroutine frame, so it is an explicit
+  call rather than an implicit conversion.
+
+- `ctest -R socket-contract-canary` — three processes (`read-slot`, `write-slot`,
+  `empty-read-buffer`) that drive a REAL socket into each of the socket contract's Debug guards and
+  must die. Each is judged on a marker naming its own mode, printed immediately before the guarded
+  call, and fails on a marker printed after it: a process that died on its way to the call is then
+  not read as a guard that fired. They skip (77) where assertions are compiled out. Writing them
+  found a defect they now guard: an operation created and never awaited left the socket's slot
+  naming freed storage,
+  and the next `close()` dereferenced null — in Release, where the guard that catches the usual
+  spelling is compiled out.
+
 - A syntax-check for platform sources this configuration does not otherwise compile
   (`core_cpp_add_unbuilt_source_check()` in `cmake/CoreCppHeaderSelfCheck.cmake`). `core::net`
   picks one `DefaultBackend.cpp` from five, and its `else()` arm — `posix/` — is reached only on a
@@ -643,6 +658,67 @@ workflow refuses one without a section here.
     thing: `core::net::testing::ScriptedBackend` scripts readiness (or a real
     `core::platform::SystemPipe` provides it), and
     `core::tui::runtime::testing::ScriptedInputSource` scripts decoding.
+
+
+- **`core::net::ISocket`'s operations are frame-free, stop-aware awaitables rather than
+  `async::Task`s.** `read`, `write`, `writeVectored`, `waitReadable` and `readWithFd` return
+  `core::net::ResultAwaitable<R>` (`IoAwaitable` is the byte-count spelling), and
+  `handshakeIfNeeded` returns `ResultAwaitable<void>`. Awaiting one allocates no coroutine frame,
+  which is what lets a server hold a parked read per connection without paying a frame per idle
+  connection. New on the interface, arriving from fastcached: `writeVectored`, `waitReadable`,
+  `cancelRead`, `shutdownWrite`, `setReceiveDeadline` and `handshakeIfNeeded`. Also new:
+  `core::net::SocketResult`, and `core::net::contract::{requireReadBuffer, claimReadSlot,
+  claimWriteSlot, assertTeardownIsSerialisedWithDispatch}` — the socket contract's guards, public
+  because a transport outside this library is under the same rules.
+
+  *Migration, for a caller that only awaits.* Nothing changes: `co_await sock.read(buffer)` works
+  against an awaitable exactly as it did against a task.
+
+  *Migration, for a caller that STORES the operation.* An awaitable is a one-shot temporary bound
+  to its `co_await` expression — it cannot be held across a suspension point, put in a container or
+  handed to `whenAny`, because nothing but the awaiting frame keeps it alive. Wrap it:
+  `loop.blockOn(sock.read(buffer))` becomes
+  `loop.blockOn(core::async::asTask(sock.read(buffer)))`, and likewise for
+  `whenAny(sock.read(buffer), …)`. `core::async::asTask` (new, `<core/async/AsTask.hpp>`) costs
+  exactly the frame the awaitables avoid, which is why it is a call at the site that needs one
+  rather than an implicit conversion every site gets.
+
+  *Migration, for a caller that IMPLEMENTS `ISocket`.* A transport whose operations are genuinely
+  coroutines — a TLS record pump, a scripted test double — keeps its coroutine and wraps it:
+  `IoAwaitable read(std::span<std::byte> b) override { return IoAwaitable { readTask(b) }; }`, where
+  `readTask` is the old `Task<IoResult>` body unchanged. The awaiting flow's stop token still
+  reaches it through `Task`'s own awaiter. A transport that wants the frame-free path passes an
+  arm hook, a retire hook and an owner pointer instead. `writeVectored` and `readWithFd` have
+  working defaults, so an existing implementation need not grow them.
+
+  *Migration, for a caller of `readWithFd`.* Unchanged in behaviour: the base default still reads
+  through `read` and reports `fd = -1`.
+
+- **Cancellation of a socket operation now distinguishes the flow from the resource.** A stop on
+  the awaiting flow's own token throws `core::async::OperationCancelled`; a cancel from the socket
+  — `close()`, `cancelRead()` — resolves with `NetErrorCode::Cancelled` as a **value**.
+
+  *What changed, precisely.* A read that was **already parked** when `close()` arrived used to
+  resume, re-check the socket and report `BadHandle`; it now reports `Cancelled`. A read **issued
+  after** the socket was closed still reports `BadHandle`, unchanged — the two were the same code
+  before and are now distinguishable, which is the point. So a caller that branched on `BadHandle`
+  to mean "somebody closed this socket under me" must add `Cancelled`; a caller that used it to mean
+  "this socket is not usable" needs no change.
+
+  *And the flow side.* A stop on the awaiting flow's own token used to surface as whatever the
+  loop's `waitReadable` awaiter threw, from inside the read's retry loop; it is now
+  `OperationCancelled` out of the socket operation itself. A caller that never caught it and only
+  inspected the error value now has to catch it around a read it can cancel. Design spec §2 item 5.
+
+- **`core::net::ParkEntry` gains a frameless readiness park**, and with it
+  `core::net::ReadyCallback` and `core::net::ParkWake`. `ParkEntry::onReadyCallback(callback,
+  state, handle, kind, interest)` files a park that calls back rather than resuming a coroutine,
+  and — unlike a timer park — SURVIVES its own dispatch, so its owner can run a retry loop across
+  many wakes and retire it with `unregisterPark`. It is what makes a socket operation frame-free,
+  and it is a park in the same table as every other kind, so it inherits `notifyHandleClosing`,
+  `requestCancel`'s generation check, `registerPark`'s host-wake arming, the turn's decision to
+  enter the backend wait, and the teardown. Nothing existing changes shape: a `ParkEntry` built
+  through `onDeadline`, `onCallback` or `onReadiness` behaves exactly as before.
 
 
 - **`core::net::EventLoop` is the merged reactor contract: a five-step turn, a six-step teardown,

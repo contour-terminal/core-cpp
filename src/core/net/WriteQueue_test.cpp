@@ -65,12 +65,23 @@ class ParkingSocket: public core::net::ISocket
     [[nodiscard]] std::string const& written() const noexcept { return _written; }
 
     /// Never exercised: a WriteQueue only ever writes.
-    [[nodiscard]] Task<core::net::IoResult> read(std::span<std::byte> /*buffer*/) override
+    /// @return A clean EOF, with no wait.
+    [[nodiscard]] core::net::IoAwaitable read(std::span<std::byte> /*buffer*/) override
     {
-        co_return std::size_t { 0 }; // clean EOF
+        return core::net::IoAwaitable { core::net::IoResult { std::size_t { 0 } } };
     }
 
-    [[nodiscard]] Task<core::net::IoResult> write(std::span<std::byte const> buffer) override
+    /// Coroutine-backed: this double PARKS on a predicate, which is what makes it a test of
+    /// backpressure rather than of a buffer copy.
+    /// @param buffer The source.
+    /// @return The byte count once released, or BadHandle if closed while parked.
+    [[nodiscard]] core::net::IoAwaitable write(std::span<std::byte const> buffer) override
+    {
+        return core::net::IoAwaitable { writeWhenReleased(buffer) };
+    }
+
+  private:
+    Task<core::net::IoResult> writeWhenReleased(std::span<std::byte const> buffer)
     {
         co_await core::net::pollUntil(&_loop, [this] { return !_isParked || _isClosed; });
         if (_isClosed)
@@ -80,6 +91,7 @@ class ParkingSocket: public core::net::ISocket
         co_return buffer.size();
     }
 
+  public:
     void close() noexcept override { _isClosed = true; }
     [[nodiscard]] bool isClosed() const noexcept override { return _isClosed; }
 

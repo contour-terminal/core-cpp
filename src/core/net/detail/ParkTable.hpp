@@ -96,6 +96,47 @@ class EventLoop;
 /// the same trade @c async::DetachedTask makes and for the same reason.
 using TimerCallback = void (*)(void* state);
 
+/// Why a frameless park's owner is being called.
+///
+/// A park with a coroutine behind it needs no such thing: readiness resumes it on its normal path
+/// and a cancel resumes it into an `await_resume` that throws, so the two are told apart by what
+/// the frame observes. A FRAMELESS park has no frame to observe anything, so the reason has to be
+/// handed to the callback — and it is the whole reason the callback can be one function rather
+/// than three.
+enum class ParkWake : std::uint8_t
+{
+    /// The backend reported the readiness this park watches. For a socket that means *try the
+    /// syscall again*; it does NOT mean the operation can complete, because a level-triggered
+    /// poller may report a readable descriptor whose `recv` still answers `EAGAIN`.
+    Ready,
+
+    /// @c EventLoop::requestCancel named this park — the awaiting flow's stop token was stopped,
+    /// possibly from another thread. The owner settles its operation and stops watching.
+    Cancelled,
+
+    /// The handle was announced closing under @c FdWakePolicy::Cancel, so the owner is going away
+    /// and must not be resumed on its normal path. The registration is already detached.
+    Abandoned,
+};
+
+/// What a frameless readiness park's owner is called with when its handle wakes.
+///
+/// A function pointer and a `void*` rather than a `std::function`, matching @c TimerCallback and
+/// @c ReadinessCallback: it is the house shape for a loop-side callback and it allocates nothing
+/// on a path a server runs once per read. Invoked on the loop's thread, in turn step 2, **as often
+/// as the handle wakes** — unlike @c TimerCallback, which is invoked at most once, because a
+/// readiness park survives its own dispatch and only its owner retires it.
+///
+/// **This is what makes a socket operation frame-free.** `ISocket::write` writes every byte of its
+/// buffer, so it is inherently multi-step — send, partial, wait writable, send more — and a
+/// `co_await` expression suspends exactly once, so `await_resume` cannot re-park. The retry loop
+/// therefore cannot live in the awaiting coroutine and has to run where the readiness is
+/// delivered. That is here.
+///
+/// Not `noexcept`, for the reason @c TimerCallback gives: it is queued beside coroutine
+/// resumptions, which are not either.
+using ReadyCallback = void (*)(void* state, ParkWake wake);
+
 /// Names one callback timer armed on an @c EventLoop.
 ///
 /// **It is a park, and this is a distinct type over the same table.** A callback timer is filed in
@@ -142,10 +183,15 @@ struct ParkEntry
     std::optional<platform::SteadyTimePoint> deadline;
 
     /// What to call when the deadline arrives, for a park with no coroutine behind it; null for
-    /// every other kind. Exactly one of @c work and this is set.
+    /// every other kind. Exactly one of @c work, this and @c onReady is set.
     TimerCallback onExpired = nullptr;
 
-    /// The opaque pointer handed to @c onExpired. Borrowed: it must outlive the park.
+    /// What to call when the handle wakes, for a readiness park with no coroutine behind it; null
+    /// for every other kind. Exactly one of @c work, @c onExpired and this is set.
+    ReadyCallback onReady = nullptr;
+
+    /// The opaque pointer handed to @c onExpired or @c onReady. Borrowed: it must outlive the
+    /// park, which for a socket operation means the socket outlives its own registration.
     void* callbackState = nullptr;
 
     /// @param work The coroutine to resume, and what to free if it is never resumed.
@@ -159,6 +205,7 @@ struct ParkEntry
                            .interest = Interest::None,
                            .deadline = deadline,
                            .onExpired = nullptr,
+                           .onReady = nullptr,
                            .callbackState = nullptr };
     }
 
@@ -176,6 +223,7 @@ struct ParkEntry
                            .interest = Interest::None,
                            .deadline = deadline,
                            .onExpired = onExpired,
+                           .onReady = nullptr,
                            .callbackState = state };
     }
 
@@ -195,7 +243,27 @@ struct ParkEntry
                            .interest = interest,
                            .deadline = std::nullopt,
                            .onExpired = nullptr,
+                           .onReady = nullptr,
                            .callbackState = nullptr };
+    }
+
+    /// @param onReady What to call each time @p handle wakes; must not be null.
+    /// @param state The opaque pointer handed to @p onReady; must outlive the park.
+    /// @param handle The handle to watch.
+    /// @param kind What @p handle is.
+    /// @param interest Which readiness to watch for.
+    /// @return A park waiting on handle readiness with no coroutine behind it.
+    [[nodiscard]] static ParkEntry onReadyCallback(
+        ReadyCallback onReady, void* state, platform::NativeHandle handle, HandleKind kind, Interest interest)
+    {
+        return ParkEntry { .work = {},
+                           .handle = handle,
+                           .kind = kind,
+                           .interest = interest,
+                           .deadline = std::nullopt,
+                           .onExpired = nullptr,
+                           .onReady = onReady,
+                           .callbackState = state };
     }
 };
 
@@ -228,7 +296,16 @@ namespace detail
         /// rather than duplicated. See @c EventLoop::addTimer.
         TimerCallback onExpired = nullptr;
 
-        void* callbackState = nullptr; ///< The opaque pointer handed to @c onExpired. Borrowed.
+        /// What to call each time this park's handle wakes, for a frameless readiness park; null
+        /// for a park with a coroutine behind it. **This is the whole of how a frame-free socket
+        /// operation joins the table**: the retry loop of a multi-step read or write runs here,
+        /// where the readiness arrives, because the awaiting coroutine suspends only once and
+        /// therefore cannot re-park itself. Unlike @c onExpired, this park SURVIVES its own
+        /// dispatch — only its owner retires it. See @c EventLoop::registerPark.
+        ReadyCallback onReady = nullptr;
+
+        /// The opaque pointer handed to @c onExpired or @c onReady. Borrowed.
+        void* callbackState = nullptr;
 
         /// Whether the chain parked here belongs to the LOOP — that is, whether `ParkedWork`
         /// carried a claim on it. Recorded at registration, because the answer decides what

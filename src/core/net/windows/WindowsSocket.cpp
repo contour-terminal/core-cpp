@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/windows/WindowsSocket.hpp>
 
+#include <core/net/SocketContract.hpp>
 #include <core/net/windows/NetworkEvents.hpp>
 
+#include <array>
 #include <utility>
 
 namespace core::net
@@ -118,7 +120,18 @@ async::Task<void> WindowsSocket::parkUntilReady(Ready kind)
     }
 }
 
-async::Task<IoResult> WindowsSocket::read(std::span<std::byte> buffer)
+IoAwaitable WindowsSocket::read(std::span<std::byte> buffer)
+{
+    contract::requireReadBuffer(buffer);
+    return IoAwaitable { readTask(buffer) };
+}
+
+IoAwaitable WindowsSocket::write(std::span<std::byte const> buffer)
+{
+    return IoAwaitable { writeTask(buffer) };
+}
+
+async::Task<IoResult> WindowsSocket::readTask(std::span<std::byte> buffer)
 {
     while (true)
     {
@@ -150,7 +163,44 @@ async::Task<IoResult> WindowsSocket::read(std::span<std::byte> buffer)
     }
 }
 
-async::Task<IoResult> WindowsSocket::write(std::span<std::byte const> buffer)
+IoAwaitable WindowsSocket::waitReadable()
+{
+    return IoAwaitable { waitReadableTask() };
+}
+
+void WindowsSocket::shutdownWrite() noexcept
+{
+    if (!_closed && _socket != INVALID_SOCKET)
+        ::shutdown(_socket, SD_SEND);
+}
+
+async::Task<IoResult> WindowsSocket::waitReadableTask()
+{
+    while (true)
+    {
+        if (auto const closed = closedError("waitReadable on closed socket"))
+            co_return std::unexpected(*closed);
+
+        // One byte, peeked: it consumes nothing the following read would have returned, and the
+        // count it measures IS the contract -- `0` is EOF, `>0` is data pending.
+        auto probe = std::array<char, 1> {};
+        auto const got = ::recv(_socket, probe.data(), 1, MSG_PEEK);
+        if (got >= 0)
+            co_return got == 0 ? std::size_t { 0 } : std::size_t { 1 };
+
+        auto const err = WSAGetLastError();
+        if (err == WSAEWOULDBLOCK)
+        {
+            co_await parkUntilReady(Ready::Read);
+            continue;
+        }
+        // Anything but "nothing yet" is the peer GONE -- a reset above all -- and answering "one
+        // byte is pending" there says the opposite of what happened to a caller that only watches.
+        co_return std::unexpected(fromWsa(err, "recv"));
+    }
+}
+
+async::Task<IoResult> WindowsSocket::writeTask(std::span<std::byte const> buffer)
 {
     std::size_t total = 0;
     while (total < buffer.size())

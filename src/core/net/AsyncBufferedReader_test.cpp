@@ -42,7 +42,29 @@ class FakeSocket final: public core::net::ISocket
     /// simply closing.
     void failAfterChunks(core::net::NetErrorCode code) { _failure = code; }
 
-    Task<core::net::IoResult> read(std::span<std::byte> buffer) override
+    /// Coroutine-backed: this double scripts fragmentation, which is a state machine over calls
+    /// rather than a syscall, so a frame is what it is. @c ResultAwaitable's task constructor is
+    /// how a transport says that.
+    /// @param buffer The destination.
+    /// @return The next scripted chunk, EOF, or the injected failure.
+    core::net::IoAwaitable read(std::span<std::byte> buffer) override
+    {
+        return core::net::IoAwaitable { readScripted(buffer) };
+    }
+
+    /// @param buffer The source; discarded.
+    /// @return The byte count, as a write that always succeeds.
+    core::net::IoAwaitable write(std::span<std::byte const> buffer) override
+    {
+        return core::net::IoAwaitable { writeDiscarding(buffer) };
+    }
+
+    void close() noexcept override { _closed = true; }
+
+    [[nodiscard]] bool isClosed() const noexcept override { return _closed; }
+
+  private:
+    Task<core::net::IoResult> readScripted(std::span<std::byte> buffer)
     {
         if (_chunks.empty())
         {
@@ -59,16 +81,11 @@ class FakeSocket final: public core::net::ISocket
         co_return n;
     }
 
-    Task<core::net::IoResult> write(std::span<std::byte const> buffer) override
+    Task<core::net::IoResult> writeDiscarding(std::span<std::byte const> buffer)
     {
         co_return buffer.size(); // discarded; the reader never writes
     }
 
-    void close() noexcept override { _closed = true; }
-
-    [[nodiscard]] bool isClosed() const noexcept override { return _closed; }
-
-  private:
     std::deque<std::string> _chunks;
     std::optional<core::net::NetErrorCode> _failure;
     bool _closed = false;

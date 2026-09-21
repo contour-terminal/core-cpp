@@ -499,6 +499,101 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   `SSL_peek`, which removes nothing the next `read` would have returned. Origin:
   [fastcached#712](https://github.com/LASTRADA-Software/fastcached/issues/712).
 
+## The socket contract: three rules, and the guards that hold them
+
+Task B6 merged fastcached's `EpollSocket`/`KqueueSocket` and contour's `PosixSocket` into one
+socket whose operations are frame-free `ResultAwaitable`s. These are the rules that merge had to
+get right, and each one is a defect that has already happened.
+
+- **A socket operation allocates no coroutine frame, and the retry loop is therefore NOT in the
+  awaiting coroutine.** A `co_await` expression suspends exactly once, so `await_resume` cannot
+  re-park — while `write` must send every byte of its buffer, and a level-triggered poller may
+  report a descriptor readable whose `recv` still answers `EAGAIN`. The loop runs where the
+  readiness is delivered: a frameless `core::net::ReadyCallback` park on the loop, completing the
+  awaitable when the operation finally answers. Anything that needs to STORE an operation pays the
+  frame explicitly through `core::async::asTask`.
+
+- **A cancel from the FLOW throws; a cancel from the RESOURCE is a value.** `close()`,
+  `cancelRead()` and a closed listener answer `NetErrorCode::Cancelled` as a
+  `std::expected` value, because the flow is alive and asked a question about a socket that has
+  gone away. The awaiting flow's own stop token throws `core::async::OperationCancelled`, because
+  the flow is being unwound and its `co_await` has no value to hand back. **A merge that collapses
+  them makes a closed socket indistinguishable from a cancelled flow**, and every caller that
+  branches on the difference — a connection loop deciding whether to reconnect — takes the wrong
+  arm. Design spec §2 item 5.
+
+- **If a receive already produced a value, the value wins over a stop.** A receive that took bytes
+  out of the stream cannot un-take them: they exist nowhere else. So `await_resume` tests the
+  result before it tests the token, never the other way round. Origin:
+  [fastcached#884](https://github.com/LASTRADA-Software/fastcached/issues/884). The case that pins
+  it must request the stop BEFORE the completion lands — the obvious spelling, complete then stop,
+  resumes the flow synchronously and asserts nothing at all, measured.
+
+- **A DESTRUCTOR abandons a parked operation; `close()` resolves it.** `close()` can hand the flow
+  a value because the socket is still there to look at. A destructor cannot: by the time the flow
+  runs, `this` is gone, so `ResultAwaitable::abandon()` makes `await_resume` throw whatever the
+  flow's own token says. Unwinding never re-enters the body, which is the only safe thing to do
+  with a frame whose socket has been destroyed. This is `FdWakePolicy::Cancel` in the shape an
+  awaitable can express it.
+
+- **Detach the operation FIRST, complete it LAST, and touch no member afterwards.** Completing
+  resumes the parked coroutine, and a coroutine that OWNS the socket runs to its end and destroys
+  it before the completion returns. `PosixSocket::close` takes BOTH operations into locals before
+  it settles either, so the second settle does not read a `this` the first one freed. The ASan
+  report that established this is recorded on fastcached's `EpollSocket::Close`.
+
+- **A socket has ONE read operation and ONE write operation, and the read verbs share theirs.**
+  `read`, `readWithFd` and `waitReadable` all claim the read slot; arming any over a parked one
+  drops that coroutine, which is then never resumed and never freed — no assertion, no error, no
+  log, and a leak proportional to traffic. `core::net::contract::claimReadSlot` and
+  `claimWriteSlot` are the tripwires; they are **public**, because a transport outside this
+  library is under the same rule. Origin:
+  [fastcached#663](https://github.com/LASTRADA-Software/fastcached/issues/663) and
+  [fastcached#893](https://github.com/LASTRADA-Software/fastcached/issues/893).
+
+- **The guards are Debug-only, and that is a decision rather than an omission.** In a release
+  build each is what it replaced: one store, or nothing. Refusing the operation instead would turn
+  today's silent leak into a broken connection on a live path, which is the worse trade — so the
+  fix for a caller that trips one belongs at the caller. Each is watched refusing by
+  `ctest -R socket-contract-canary`, which drives a REAL socket into the guard and must die:
+  asserting the assertion would prove `assert` works and say nothing about whether a transport
+  ever reaches it.
+
+- **The verb records the operation; the AWAIT arms it, and the gap between them is reachable.**
+  `[[nodiscard]]` makes dropping a socket operation a warning, not an impossibility — and a
+  consumer building with different flags does not even get the warning. So `ResultAwaitable`'s
+  destructor retires an operation that was never awaited, and every consumer of the slot tolerates
+  an entry whose awaitable is null. Found by the read-slot canary: without this, `auto op =
+  sock->read(buf);` in a scope that returns early left the slot naming freed storage, and the next
+  `close()` dereferenced null — in Release, where the guard is not there to catch the spelling that
+  produced it.
+
+- **`waitReadable`'s count is the contract, not a hint.** `0` means the peer has closed its write
+  side and a `read` here returns EOF; `>0` means bytes are pending. The default answers `1`,
+  which is the fail-safe direction: a transport that cannot tell must not claim EOF, because a
+  false `>0` costs one `read` that discovers the truth while a false `0` tells a caller its peer is
+  gone. Origin:
+  [fastcached#677](https://github.com/LASTRADA-Software/fastcached/issues/677).
+
+- **`cancelRead` retires whatever is parked NOW, which is not the same as being idempotent.** A
+  retirement that completes its victim inline resumes that coroutine before the call returns, so a
+  flow that arms its next read there leaves a NEW operation in the slot and a second call retires
+  THAT one. The declaration once claimed the stronger word. Origin:
+  [fastcached#1233](https://github.com/LASTRADA-Software/fastcached/issues/1233).
+
+- **A receive deadline is a consumer of the loop's timers, never a wake of its own.**
+  `setReceiveDeadline` arms an `EventLoop::addTimer` on the one deadline heap `computeTimeout` and
+  `armHostWake` already read, and the read that answers cancels it. A socket that computed a "next
+  wake" for itself is the second mechanism the timer rule exists to prevent, and its symptom is a
+  wait that is too long — a hang, not a failure. See *Timers: one mechanism, and it does not poll*.
+
+- **A stop callback may run on ANY thread, so it names a loop park and never the socket.** The
+  awaitable is told the park id at arm time — on the loop's thread, strictly before the callback
+  can be registered, which is what makes that id safe to read without being atomic — and the
+  callback does nothing but `EventLoop::requestCancel`. The loop resolves it on its own thread and
+  calls the socket back with `ParkWake::Cancelled`. A stop callback that reached into the socket
+  directly would be touching the loop thread's members from a watchdog's.
+
 ## Dialling, and the backends underneath
 
 - **A synchronous dial spends a thread the caller does not own.** A loop thread dials through

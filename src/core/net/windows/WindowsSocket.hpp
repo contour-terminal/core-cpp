@@ -2,6 +2,7 @@
 #pragma once
 
 #include <core/net/ISocket.hpp>
+#include <core/net/IoAwaitable.hpp>
 
 // clang-format off
 #include <winsock2.h>
@@ -44,8 +45,49 @@ class WindowsSocket final: public ISocket
     WindowsSocket(WindowsSocket&&) = delete;
     WindowsSocket& operator=(WindowsSocket&&) = delete;
 
-    [[nodiscard]] async::Task<IoResult> read(std::span<std::byte> buffer) override;
-    [[nodiscard]] async::Task<IoResult> write(std::span<std::byte const> buffer) override;
+    /// @copydoc ISocket::read
+    ///
+    /// **Coroutine-backed rather than frame-free, and deliberately so until Task B7.** The
+    /// frame-free shape exists to save a coroutine frame per parked operation; buying it here means
+    /// rewriting the WSAEventSelect retry loop into a readiness callback, in a class Task B7
+    /// replaces outright with an IOCP socket. So B6 changed the SIGNATURE -- which is the
+    /// interface's, and had to change everywhere at once -- and left the body alone. The awaiting
+    /// flow's stop token still reaches it, through `Task`'s own awaiter.
+    /// @param buffer The destination.
+    /// @return The byte count read, `0` on a clean EOF, or a @c NetError.
+    [[nodiscard]] IoAwaitable read(std::span<std::byte> buffer) override;
+
+    /// @copydoc ISocket::write
+    /// @param buffer The source.
+    /// @return The byte count written, or a @c NetError. @see read for why this is coroutine-backed.
+    [[nodiscard]] IoAwaitable write(std::span<std::byte const> buffer) override;
+
+    /// @copydoc ISocket::waitReadable
+    ///
+    /// Implemented rather than inherited, because the inherited default answers a flat `1` and this
+    /// socket can tell: a `MSG_PEEK` of one byte says `0` for EOF and `>0` for pending data, exactly
+    /// as on POSIX. Leaving the default in place would re-create the divergence
+    /// [fastcached#677](https://github.com/LASTRADA-Software/fastcached/issues/677) was filed on —
+    /// the same call reporting opposite numbers on Windows and Linux for the same event.
+    /// @return `0` for EOF, `>0` for pending data, or a @c NetError.
+    [[nodiscard]] IoAwaitable waitReadable() override;
+
+    /// @copydoc ISocket::shutdownWrite
+    ///
+    /// Implemented rather than inherited for the reason the base states: the no-op default is for
+    /// FAKES, and a transport that HAS a write half to close costs its peer the early EOF by
+    /// inheriting it.
+    void shutdownWrite() noexcept override;
+
+    // cancelRead is deliberately NOT overridden here, and it is the one place this class knowingly
+    // falls short of the contract. `ISocket::cancelRead`'s own documentation says the inherited
+    // no-op is unsafe for a transport whose reads park, and this one's do -- on the WSAEventSelect
+    // event, through `parkUntilReady`. Retiring that park needs a handle on it, which a socket whose
+    // read is an ordinary coroutine awaiting the loop does not have; giving it one is a redesign of
+    // this class, and Task B7 replaces the class outright with an IOCP socket that owns its
+    // operations the way PosixSocket does. So the gap is named here rather than papered over with an
+    // override that does not retire anything. No caller in this library calls cancelRead on Windows
+    // today; `CancelRead_test` and `SocketDecorator_test` are registered POSIX-only and say so.
 
     [[nodiscard]] std::string peerAddress() const override { return _peerAddress; }
 
@@ -58,6 +100,20 @@ class WindowsSocket final: public ISocket
     [[nodiscard]] bool isClosed() const noexcept override { return _closed || _peerClosed; }
 
   private:
+    /// The read body, as the coroutine it has been since contour wrote it.
+    /// @param buffer The destination.
+    /// @return The byte count read, `0` on a clean EOF, or a @c NetError.
+    [[nodiscard]] async::Task<IoResult> readTask(std::span<std::byte> buffer);
+
+    /// The write body, likewise.
+    /// @param buffer The source.
+    /// @return The byte count written, or a @c NetError.
+    [[nodiscard]] async::Task<IoResult> writeTask(std::span<std::byte const> buffer);
+
+    /// The readability probe's body.
+    /// @return `0` for EOF, `>0` for pending data, or a @c NetError.
+    [[nodiscard]] async::Task<IoResult> waitReadableTask();
+
     /// Closes the socket and its event, telling the loop first so a flow parked on
     /// the event is resumed rather than left waiting on a handle that can never
     /// signal again.

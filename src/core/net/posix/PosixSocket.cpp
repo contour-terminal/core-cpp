@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/posix/PosixSocket.hpp>
 
+#include <core/net/SocketContract.hpp>
 #include <core/net/detail/WouldBlock.hpp>
 #include <core/net/posix/FdUtils.hpp> // MSG_NOSIGNAL fallback, makeNonBlockingCloexec
 
 #include <sys/socket.h>
+#include <sys/uio.h>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstring>
 #include <ranges>
@@ -15,10 +18,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-// macOS / BSD also lack MSG_CMSG_CLOEXEC (atomic close-on-exec for received
-// descriptors); there readWithFd sets FD_CLOEXEC via fcntl right after
-// receipt instead — a tiny fork race, matching what every portable imsg
-// implementation accepts on those platforms.
+// macOS / BSD also lack MSG_CMSG_CLOEXEC (atomic close-on-exec for received descriptors); there
+// readWithFd sets FD_CLOEXEC via fcntl right after receipt instead — a tiny fork race, matching
+// what every portable imsg implementation accepts on those platforms.
 #ifndef MSG_CMSG_CLOEXEC
     #define MSG_CMSG_CLOEXEC 0
 #endif
@@ -30,7 +32,15 @@ using detail::isWouldBlock;
 
 namespace
 {
+    /// How many segments one `sendmsg` carries. A cursor drives the rest, so this bounds the
+    /// stack array rather than the write: a caller passing more segments than this simply takes
+    /// more syscalls, which is what a partial send would have cost anyway.
+    constexpr std::size_t MaxIoVectors = 16;
+
     /// Maps an errno from a socket call to a NetError category.
+    /// @param err The captured errno.
+    /// @param context What was being attempted.
+    /// @return The classified error.
     [[nodiscard]] NetError fromErrno(int err, std::string context)
     {
         auto code = NetErrorCode::SystemError;
@@ -43,14 +53,29 @@ namespace
         }
         return makeNetError(code, err, std::move(context));
     }
+
+    /// @param what Which verb is refusing.
+    /// @return The error a verb reports on a socket that is already closed.
+    [[nodiscard]] NetError closedSocket(char const* what)
+    {
+        return makeNetError(NetErrorCode::BadHandle, 0, std::string { what } + " on closed socket");
+    }
+
+    /// @return The error a verb reports when the loop would not watch the descriptor. Distinct
+    ///         from a cancellation: nothing was cancelled, the registration was refused, and a
+    ///         caller that cannot tell them apart retries a socket that can never become ready.
+    [[nodiscard]] NetError registrationRefused()
+    {
+        return makeNetError(NetErrorCode::SystemError, 0, "the event loop refused to watch this socket");
+    }
 } // namespace
 
 PosixSocket::PosixSocket(EventLoop& loop, int fd, std::string peerAddress) noexcept:
     _loop(loop), _fd(fd), _peerAddress(std::move(peerAddress))
 {
 #ifdef SO_NOSIGPIPE
-    // macOS / BSD: suppress SIGPIPE on writes to a peer-closed socket at the socket
-    // level (the portable analogue of Linux's MSG_NOSIGNAL send flag).
+    // macOS / BSD: suppress SIGPIPE on writes to a peer-closed socket at the socket level (the
+    // portable analogue of Linux's MSG_NOSIGNAL send flag).
     int const one = 1;
     if (_fd >= 0)
         ::setsockopt(_fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
@@ -59,9 +84,10 @@ PosixSocket::PosixSocket(EventLoop& loop, int fd, std::string peerAddress) noexc
 
 PosixSocket::~PosixSocket()
 {
-    // Cancel, not Resume: read/write reach _fd and _closed through `this`, which is
-    // about to stop existing. A flow resumed on its normal path would read them from
-    // freed memory; unwinding via OperationCancelled never re-enters the body.
+    contract::assertTeardownIsSerialisedWithDispatch(_loop);
+    // Cancel, not Resume: a parked flow resumed on its normal path would read `_fd` and `_closed`
+    // through a `this` that is about to stop existing. Abandoning it unwinds the frame through
+    // OperationCancelled, which never re-enters the body.
     close(FdWakePolicy::Cancel);
 }
 
@@ -75,75 +101,114 @@ void PosixSocket::close(FdWakePolicy policy) noexcept
     if (_closed)
         return;
     _closed = true;
+
+    // **Detached FIRST, completed LAST, with no member touched in between.** Completing resumes
+    // the parked coroutine, and a coroutine that OWNS this socket runs to its end and destroys it
+    // before the completion returns. Both operations are taken into locals before either is
+    // settled, so the second settle does not read a `this` the first one freed.
+    auto read = takeRead();
+    auto write = takeWrite();
+
     if (_fd >= 0)
     {
-        // Before the close, while the descriptor is still valid: epoll and kqueue
-        // cannot report a closed descriptor, so without this a flow parked on it
-        // would never be resumed.
+        // Before the close, while the descriptor is still valid: epoll and kqueue cannot report a
+        // closed descriptor, so without this a flow parked on it would never be resumed. It also
+        // releases the private dup() a duplicate registration holds.
         _loop.notifyHandleClosing(_fd, policy);
         ::close(_fd);
         _fd = -1;
     }
+
+    // Past this point nothing may touch a member. The awaitables live in their own coroutines'
+    // frames rather than in this object, so they stay valid once the first resume has taken the
+    // socket down.
+    if (policy == FdWakePolicy::Cancel)
+    {
+        abandonRead(read);
+        if (write.awaitable != nullptr)
+            write.awaitable->abandon();
+        return;
+    }
+    settleRead(read, makeNetError(NetErrorCode::Cancelled, 0, "the socket was closed"));
+    if (write.awaitable != nullptr)
+        write.awaitable->complete(
+            std::unexpected(makeNetError(NetErrorCode::Cancelled, 0, "the socket was closed")));
 }
 
-async::Task<IoResult> PosixSocket::read(std::span<std::byte> buffer)
+void PosixSocket::cancelRead() noexcept
+{
+    if (_closed || _read.kind == ReadKind::None || _read.awaitable == nullptr)
+        return;
+    // The detach-then-complete discipline, for the one caller-facing verb that uses it without
+    // closing the socket: the slot is free when this returns, and the waiter is resolved INLINE,
+    // because a readiness transport consumes nothing and so a retired read can lose nothing.
+    auto read = takeRead();
+    settleRead(read, makeNetError(NetErrorCode::Cancelled, 0, "the read was retired by cancelRead"));
+}
+
+void PosixSocket::shutdownWrite() noexcept
+{
+    if (_closed || _fd < 0 || _plainFd)
+        return;
+    ::shutdown(_fd, SHUT_WR);
+}
+
+void PosixSocket::setReceiveDeadline(std::chrono::milliseconds deadline) noexcept
+{
+    // Non-positive leaves the current setting alone, matching SO_RCVTIMEO's own reading of zero.
+    if (deadline <= std::chrono::milliseconds::zero())
+        return;
+    _receiveDeadline = deadline;
+}
+
+// ---- The read side ----------------------------------------------------------------------------
+
+std::optional<IoResult> PosixSocket::tryRead(std::span<std::byte> buffer)
 {
     while (true)
     {
-        if (_closed || _fd < 0)
-            co_return std::unexpected(makeNetError(NetErrorCode::BadHandle, 0, "read on closed socket"));
-
         auto const n = _plainFd ? ::read(_fd, buffer.data(), buffer.size())
                                 : ::recv(_fd, buffer.data(), buffer.size(), 0);
         if (n > 0)
-            co_return static_cast<std::size_t>(n);
+            return IoResult { static_cast<std::size_t>(n) };
         if (n == 0)
         {
-            _peerClosed = true;          // isClosed() now answers true, as ISocket documents
-            co_return std::size_t { 0 }; // clean EOF
+            _peerClosed = true; // isClosed() now answers true, as ISocket documents
+            return IoResult { std::size_t { 0 } };
         }
 
         auto const err = errno;
         if (err == ENOTSOCK && !_plainFd)
         {
-            // An adopted PTY master or pipe end (net::adoptFd): recv/send do
-            // not apply; detect once, serve via plain read/write from now on.
+            // An adopted PTY master or pipe end (net::adoptFd): recv/send do not apply; detect
+            // once, serve via plain read/write from now on.
             _plainFd = true;
             continue;
         }
         if (err == EIO && _plainFd)
         {
-            _peerClosed = true;          // the child is gone: an EOF by another name
-            co_return std::size_t { 0 }; // a PTY master reports child exit as EIO
+            _peerClosed = true;                    // the child is gone: an EOF by another name
+            return IoResult { std::size_t { 0 } }; // a PTY master reports child exit as EIO
         }
-        if (isWouldBlock(err))
-        {
-            // Park until the fd is readable, then retry. A cancelled wait throws
-            // OperationCancelled, which unwinds the caller — the right behaviour for
-            // a cancelled connection.
-            co_await _loop.waitReadable(_fd);
-            continue;
-        }
-        if (err == EINTR)
-            continue;
-        co_return std::unexpected(fromErrno(err, _plainFd ? "read" : "recv"));
+        if (isWouldBlock(err) || err == EINTR)
+            return std::nullopt;
+        return IoResult { std::unexpected(fromErrno(err, _plainFd ? "read" : "recv")) };
     }
 }
 
-async::Task<std::expected<ReadWithFd, NetError>> PosixSocket::readWithFd(std::span<std::byte> buffer)
+std::optional<std::expected<ReadWithFd, NetError>> PosixSocket::tryReadWithFd(std::span<std::byte> buffer)
 {
     while (true)
     {
-        if (_closed || _fd < 0)
-            co_return std::unexpected(makeNetError(NetErrorCode::BadHandle, 0, "read on closed socket"));
-
         if (_plainFd)
         {
-            // A PTY/pipe fd cannot carry SCM_RIGHTS; serve as a plain read.
-            auto const n = co_await read(buffer);
-            if (!n)
-                co_return std::unexpected(n.error());
-            co_return ReadWithFd { .bytesRead = *n, .fd = -1 };
+            // A PTY/pipe fd cannot carry SCM_RIGHTS; serve it as a plain read.
+            auto const plain = tryRead(buffer);
+            if (!plain.has_value())
+                return std::nullopt;
+            if (!plain->has_value())
+                return std::unexpected(plain->error());
+            return ReadWithFd { .bytesRead = **plain, .fd = -1 };
         }
 
         auto iov = ::iovec { .iov_base = buffer.data(), .iov_len = buffer.size() };
@@ -157,14 +222,13 @@ async::Task<std::expected<ReadWithFd, NetError>> PosixSocket::readWithFd(std::sp
         auto const n = ::recvmsg(_fd, &msg, MSG_CMSG_CLOEXEC);
         if (n >= 0)
         {
-            // Keep the FIRST received fd; close any extras (mirroring the
-            // rewritten-imsg receive semantics: one fd per message).
+            // Keep the FIRST received fd; close any extras (mirroring the rewritten-imsg receive
+            // semantics: one fd per message).
             auto fd = -1;
-            // A peer advertising more fds than the one-fd contract allows must not
-            // let cmsg_len drive reads (or closes) past the control buffer: on
-            // MSG_CTRUNC the kernel reports the FULL sent length even though only
-            // part of it landed. Clamp to capacity, and distrust the whole set on
-            // truncation — close what arrived, keep nothing.
+            // A peer advertising more fds than the one-fd contract allows must not let cmsg_len
+            // drive reads (or closes) past the control buffer: on MSG_CTRUNC the kernel reports the
+            // FULL sent length even though only part of it landed. Clamp to capacity, and distrust
+            // the whole set on truncation — close what arrived, keep nothing.
             auto const capacity = (sizeof(control) - CMSG_LEN(0)) / sizeof(int);
             auto const truncated = (msg.msg_flags & MSG_CTRUNC) != 0;
             auto* next = CMSG_FIRSTHDR(&msg);
@@ -196,7 +260,7 @@ async::Task<std::expected<ReadWithFd, NetError>> PosixSocket::readWithFd(std::sp
                     fd = -1;
                 }
             }
-            co_return ReadWithFd { .bytesRead = static_cast<std::size_t>(n), .fd = fd };
+            return ReadWithFd { .bytesRead = static_cast<std::size_t>(n), .fd = fd };
         }
 
         auto const err = errno;
@@ -205,64 +269,504 @@ async::Task<std::expected<ReadWithFd, NetError>> PosixSocket::readWithFd(std::sp
             _plainFd = true;
             continue;
         }
-        if (isWouldBlock(err))
-        {
-            co_await _loop.waitReadable(_fd);
-            continue;
-        }
-        if (err == EINTR)
-            continue;
-        co_return std::unexpected(fromErrno(err, "recvmsg"));
+        if (isWouldBlock(err) || err == EINTR)
+            return std::nullopt;
+        return std::unexpected(fromErrno(err, "recvmsg"));
     }
 }
 
-async::Task<IoResult> PosixSocket::write(std::span<std::byte const> buffer)
+std::optional<IoResult> PosixSocket::tryProbe() const
 {
-    std::size_t total = 0;
-    while (total < buffer.size())
-    {
-        if (_closed || _fd < 0)
-            co_return std::unexpected(makeNetError(NetErrorCode::BadHandle, 0, "write on closed socket"));
+    // A one-byte MSG_PEEK: `0` is EOF and `>0` is data pending, which is the whole of
+    // `waitReadable`'s contract. It consumes nothing, so a probe can be retried and retired freely.
+    auto probe = std::array<std::byte, 1> {};
+    auto const got = _plainFd ? ssize_t { 1 } // a PTY/pipe cannot be peeked; treat readiness as data
+                              : ::recv(_fd, probe.data(), probe.size(), MSG_PEEK);
+    if (got >= 0)
+        return IoResult { got == 0 ? std::size_t { 0 } : std::size_t { 1 } };
 
-        auto const remaining = buffer.subspan(total);
-        // MSG_NOSIGNAL: a write to a peer-closed socket returns EPIPE rather than
-        // raising SIGPIPE and killing the process.
-        auto const n = _plainFd ? ::write(_fd, remaining.data(), remaining.size())
-                                : ::send(_fd, remaining.data(), remaining.size(), MSG_NOSIGNAL);
-        // Captured here, before any branch: everything below reads THIS call's errno.
-        auto const err = errno;
+    auto const err = errno;
+    if (isWouldBlock(err) || err == EINTR)
+        return std::nullopt;
+
+    // **A negative peek is TWO things, and answering both with `1` says the opposite of what
+    // happened for the second.** EAGAIN/EINTR is a spurious readiness with nothing behind it, and
+    // parking again is right. Anything else — ECONNRESET above all — is the peer GONE, and a
+    // watcher that never reads would take "one byte is pending" as proof of life
+    // ([fastcached#899](https://github.com/LASTRADA-Software/fastcached/issues/899)).
+    return IoResult { std::unexpected(fromErrno(err, "recv")) };
+}
+
+IoAwaitable PosixSocket::read(std::span<std::byte> buffer)
+{
+    contract::requireReadBuffer(buffer);
+    if (_closed || _fd < 0)
+        return IoAwaitable { std::unexpected(closedSocket("read")) };
+
+    if (auto const done = tryRead(buffer); done.has_value())
+        return IoAwaitable { *done };
+
+    contract::claimReadSlot(_read.awaitable);
+    _read.kind = ReadKind::Bytes;
+    _read.buffer = buffer;
+    return IoAwaitable { [](void* owner, IoAwaitable& self) {
+                            auto* const socket = static_cast<PosixSocket*>(owner);
+                            socket->_read.awaitable = &self;
+                            if (!socket->armRead(Interest::Read))
+                            {
+                                socket->_read = {};
+                                self.complete(std::unexpected(registrationRefused()));
+                                return;
+                            }
+                            self.cancelThrough(socket->_loop, socket->_read.park);
+                        },
+                         &PosixSocket::retireRead,
+                         this };
+}
+
+ResultAwaitable<ReadWithFd> PosixSocket::readWithFd(std::span<std::byte> buffer)
+{
+    contract::requireReadBuffer(buffer);
+    if (_closed || _fd < 0)
+        return ResultAwaitable<ReadWithFd> { std::unexpected(closedSocket("read")) };
+
+    if (auto done = tryReadWithFd(buffer); done.has_value())
+        return ResultAwaitable<ReadWithFd> { std::move(*done) };
+
+    contract::claimReadSlot(_read.awaitable);
+    _read.kind = ReadKind::WithFd;
+    _read.buffer = buffer;
+    return ResultAwaitable<ReadWithFd> { [](void* owner, ResultAwaitable<ReadWithFd>& self) {
+                                            auto* const socket = static_cast<PosixSocket*>(owner);
+                                            socket->_read.awaitable = &self;
+                                            if (!socket->armRead(Interest::Read))
+                                            {
+                                                socket->_read = {};
+                                                self.complete(std::unexpected(registrationRefused()));
+                                                return;
+                                            }
+                                            self.cancelThrough(socket->_loop, socket->_read.park);
+                                        },
+                                         &PosixSocket::retireRead,
+                                         this };
+}
+
+IoAwaitable PosixSocket::waitReadable()
+{
+    if (_closed || _fd < 0)
+        return IoAwaitable { std::unexpected(closedSocket("waitReadable")) };
+
+    if (auto const done = tryProbe(); done.has_value())
+        return IoAwaitable { *done };
+
+    contract::claimReadSlot(_read.awaitable);
+    _read.kind = ReadKind::Probe;
+    _read.buffer = {};
+    return IoAwaitable { [](void* owner, IoAwaitable& self) {
+                            auto* const socket = static_cast<PosixSocket*>(owner);
+                            socket->_read.awaitable = &self;
+                            if (!socket->armRead(Interest::Read))
+                            {
+                                socket->_read = {};
+                                self.complete(std::unexpected(registrationRefused()));
+                                return;
+                            }
+                            self.cancelThrough(socket->_loop, socket->_read.park);
+                        },
+                         &PosixSocket::retireRead,
+                         this };
+}
+
+bool PosixSocket::armRead(Interest interest)
+{
+    _read.park = _loop.registerPark(
+        ParkEntry::onReadyCallback(&PosixSocket::onReadWake, this, _fd, DefaultHandleKind, interest));
+    if (!_read.park)
+        return false;
+
+    // The receive deadline is armed HERE and nowhere else, so it bounds exactly what it says it
+    // bounds: one read that had to wait. It is a timer on the loop's ONE deadline heap rather than
+    // a wake this socket computes for itself — a second "when should we next wake" is the design
+    // fault whose symptom is a wait that is too long, which is a hang rather than a failure.
+    if (_receiveDeadline > std::chrono::milliseconds::zero())
+        _read.deadline =
+            _loop.addTimer(_loop.clock().now() + _receiveDeadline, &PosixSocket::onReadDeadline, this);
+    return true;
+}
+
+void PosixSocket::pumpRead()
+{
+    if (_read.awaitable == nullptr)
+        return;
+
+    switch (_read.kind)
+    {
+        case ReadKind::None: return;
+
+        case ReadKind::Bytes: {
+            auto const done = tryRead(_read.buffer);
+            if (!done.has_value())
+                return; // a spurious readiness; stay parked for the next one
+            auto operation = takeRead();
+            static_cast<IoAwaitable*>(operation.awaitable)->complete(*done);
+            return;
+        }
+
+        case ReadKind::WithFd: {
+            auto done = tryReadWithFd(_read.buffer);
+            if (!done.has_value())
+                return;
+            auto operation = takeRead();
+            static_cast<ResultAwaitable<ReadWithFd>*>(operation.awaitable)->complete(std::move(*done));
+            return;
+        }
+
+        case ReadKind::Probe: {
+            auto const done = tryProbe();
+            if (!done.has_value())
+                return;
+            auto operation = takeRead();
+            static_cast<IoAwaitable*>(operation.awaitable)->complete(*done);
+            return;
+        }
+    }
+}
+
+PosixSocket::ReadOperation PosixSocket::takeRead() noexcept
+{
+    auto taken = std::exchange(_read, ReadOperation {});
+    if (taken.deadline)
+        std::ignore = _loop.cancelTimer(taken.deadline);
+    if (taken.park)
+        _loop.unregisterPark(taken.park);
+    return taken;
+}
+
+void PosixSocket::settleRead(ReadOperation& operation, NetError error) noexcept
+{
+    // **A read with no awaitable is a real state, not a defensive `if`.** The verb records the kind
+    // and the buffer when it is CALLED, while the awaitable is recorded when it is AWAITED -- and
+    // `[[nodiscard]]` makes dropping one in between a warning rather than an impossibility. So a
+    // caller that creates a read and never awaits it leaves the slot naming an operation with no
+    // frame behind it, and `close()` then arrives here with nothing to complete.
+    if (operation.awaitable == nullptr)
+        return;
+
+    switch (operation.kind)
+    {
+        case ReadKind::None: return;
+        case ReadKind::Bytes:
+        case ReadKind::Probe:
+            static_cast<IoAwaitable*>(operation.awaitable)->complete(std::unexpected(std::move(error)));
+            return;
+        case ReadKind::WithFd:
+            static_cast<ResultAwaitable<ReadWithFd>*>(operation.awaitable)
+                ->complete(std::unexpected(std::move(error)));
+            return;
+    }
+}
+
+void PosixSocket::abandonRead(ReadOperation& operation) noexcept
+{
+    if (operation.awaitable == nullptr)
+        return; // created and never awaited; see settleRead
+
+    switch (operation.kind)
+    {
+        case ReadKind::None: return;
+        case ReadKind::Bytes:
+        case ReadKind::Probe: static_cast<IoAwaitable*>(operation.awaitable)->abandon(); return;
+        case ReadKind::WithFd:
+            static_cast<ResultAwaitable<ReadWithFd>*>(operation.awaitable)->abandon();
+            return;
+    }
+}
+
+void PosixSocket::onReadWake(void* state, ParkWake wake)
+{
+    auto* const socket = static_cast<PosixSocket*>(state);
+    if (socket->_read.kind == ReadKind::None || socket->_read.awaitable == nullptr)
+        return;
+    switch (wake)
+    {
+        case ParkWake::Ready: socket->pumpRead(); return;
+        case ParkWake::Cancelled: {
+            // The awaiting flow's own token was stopped. The operation is settled with a value and
+            // `await_resume` turns it into an OperationCancelled, because the token it reads is
+            // the one that was stopped — the value here is what a flow whose token is NOT stopped
+            // would have seen, and nothing observes it.
+            auto operation = socket->takeRead();
+            settleRead(operation,
+                       makeNetError(NetErrorCode::Cancelled, 0, "the awaiting flow was cancelled"));
+            return;
+        }
+        case ParkWake::Abandoned: {
+            auto operation = socket->takeRead();
+            abandonRead(operation);
+            return;
+        }
+    }
+}
+
+void PosixSocket::onReadDeadline(void* state)
+{
+    auto* const socket = static_cast<PosixSocket*>(state);
+    if (socket->_read.kind == ReadKind::None || socket->_read.awaitable == nullptr)
+        return;
+    // Taken first: the timer has fired, so its id is spent, and `takeRead`'s cancelTimer resolves
+    // to nothing — which is the generation check doing the work rather than a flag.
+    auto operation = socket->takeRead();
+    settleRead(operation,
+               makeNetError(NetErrorCode::Timeout, 0, "the receive deadline elapsed before any data"));
+}
+
+void PosixSocket::retireRead(void* owner, void* awaitable) noexcept
+{
+    auto* const socket = static_cast<PosixSocket*>(owner);
+    // Identity, not merely "something is parked": an operation that was retired and replaced must
+    // not be able to retire its successor.
+    if (socket->_read.awaitable != awaitable)
+        return;
+    std::ignore = socket->takeRead();
+}
+
+// ---- The write side ---------------------------------------------------------------------------
+
+std::optional<IoResult> PosixSocket::trySend(WriteOperation& operation)
+{
+    return operation.segments.empty() ? trySendFlat(operation) : trySendSegments(operation);
+}
+
+std::optional<IoResult> PosixSocket::trySendFlat(WriteOperation& operation)
+{
+    while (!operation.remaining.empty())
+    {
+        // MSG_NOSIGNAL: a write to a peer-closed socket returns EPIPE rather than raising SIGPIPE
+        // and killing the process.
+        auto const n =
+            _plainFd ? ::write(_fd, operation.remaining.data(), operation.remaining.size())
+                     : ::send(_fd, operation.remaining.data(), operation.remaining.size(), MSG_NOSIGNAL);
+        auto const err = errno; // captured before any branch: everything below reads THIS call
         if (n > 0)
         {
-            total += static_cast<std::size_t>(n);
+            operation.written += static_cast<std::size_t>(n);
+            operation.remaining = operation.remaining.subspan(static_cast<std::size_t>(n));
             continue;
         }
-        // A zero return on a non-empty buffer is neither progress nor a named failure, and
-        // `errno` does not describe it — it still holds whatever the previous syscall left.
-        // Falling through to the ladder below therefore spun on an already-writable socket,
-        // retried for ever, or reported a failure that never happened, depending on that
-        // stale value. Report the one thing that is true: the transport took nothing.
-        // (`read` handles its own zero — a clean EOF — before reaching its ladder.)
+        // A zero return on a non-empty buffer is neither progress nor a named failure, and `errno`
+        // does not describe it -- it still holds whatever the previous syscall left. Falling through
+        // to the ladder below therefore spun on an already-writable socket, retried for ever, or
+        // reported a failure that never happened, depending on that stale value. Report the one
+        // thing that is true: the transport took nothing.
         if (n == 0)
-            co_return std::unexpected(
+            return IoResult { std::unexpected(
                 makeNetError(NetErrorCode::SystemError,
                              0,
-                             _plainFd ? "write accepted no bytes" : "send accepted no bytes"));
-
+                             _plainFd ? "write accepted no bytes" : "send accepted no bytes")) };
         if (err == ENOTSOCK && !_plainFd)
         {
+            // An adopted PTY master or pipe end: send does not apply; serve via plain write.
             _plainFd = true;
             continue;
         }
+        if (err == EINTR)
+            continue; // interrupted before anything moved; the same send again
         if (isWouldBlock(err))
+            return std::nullopt;
+        return IoResult { std::unexpected(fromErrno(err, _plainFd ? "write" : "send")) };
+    }
+    return IoResult { operation.written };
+}
+
+void PosixSocket::advanceSegmentCursor(WriteOperation& operation, std::size_t sent) noexcept
+{
+    auto left = sent;
+    while (left > 0 && operation.segmentIndex < operation.segments.size())
+    {
+        auto const inThisSegment =
+            operation.segments[operation.segmentIndex].size() - operation.segmentOffset;
+        if (left < inThisSegment)
         {
-            co_await _loop.waitWritable(_fd);
+            operation.segmentOffset += left;
+            return;
+        }
+        left -= inThisSegment;
+        ++operation.segmentIndex;
+        operation.segmentOffset = 0;
+    }
+}
+
+std::optional<IoResult> PosixSocket::trySendSegments(WriteOperation& operation)
+{
+    while (operation.segmentIndex < operation.segments.size())
+    {
+        auto vectors = std::array<::iovec, MaxIoVectors> {};
+        auto count = std::size_t { 0 };
+        auto offset = operation.segmentOffset;
+        for (auto const index: std::views::iota(operation.segmentIndex, operation.segments.size())
+                                   | std::views::take(MaxIoVectors))
+        {
+            auto const segment = operation.segments[index].subspan(offset);
+            offset = 0;
+            if (segment.empty())
+                continue;
+            vectors.at(count) =
+                ::iovec { .iov_base = const_cast<std::byte*>(segment.data()), .iov_len = segment.size() };
+            ++count;
+        }
+        if (count == 0)
+            break; // every remaining segment is empty; there is nothing left to send
+
+        auto msg = ::msghdr {};
+        msg.msg_iov = vectors.data();
+        msg.msg_iovlen = static_cast<decltype(msg.msg_iovlen)>(count);
+        auto const n = ::sendmsg(_fd, &msg, MSG_NOSIGNAL);
+        auto const err = errno;
+        if (n > 0)
+        {
+            operation.written += static_cast<std::size_t>(n);
+            advanceSegmentCursor(operation, static_cast<std::size_t>(n));
             continue;
         }
+        if (n == 0)
+            return IoResult { std::unexpected(
+                makeNetError(NetErrorCode::SystemError, 0, "sendmsg accepted no bytes")) };
         if (err == EINTR)
             continue;
-        co_return std::unexpected(fromErrno(err, _plainFd ? "write" : "send"));
+        if (isWouldBlock(err))
+            return std::nullopt;
+        return IoResult { std::unexpected(fromErrno(err, "sendmsg")) };
     }
-    co_return total;
+
+    operation.segmentIndex = operation.segments.size();
+    operation.segmentOffset = 0;
+    return IoResult { operation.written };
+}
+
+IoAwaitable PosixSocket::write(std::span<std::byte const> buffer)
+{
+    if (_closed || _fd < 0)
+        return IoAwaitable { std::unexpected(closedSocket("write")) };
+
+    _write.remaining = buffer;
+    _write.segments = {};
+    _write.segmentIndex = 0;
+    _write.segmentOffset = 0;
+    _write.written = 0;
+    _write.keepAlive = {};
+    if (auto const done = trySend(_write); done.has_value())
+    {
+        auto const result = *done;
+        _write = {};
+        return IoAwaitable { result };
+    }
+
+    contract::claimWriteSlot(_write.awaitable);
+    return IoAwaitable {
+        [](void* owner, IoAwaitable& self) {
+            auto* const socket = static_cast<PosixSocket*>(owner);
+            socket->_write.awaitable = &self;
+            socket->_write.park = socket->_loop.registerPark(ParkEntry::onReadyCallback(
+                &PosixSocket::onWriteWake, socket, socket->_fd, DefaultHandleKind, Interest::Write));
+            if (!socket->_write.park)
+            {
+                socket->_write = {};
+                self.complete(std::unexpected(registrationRefused()));
+                return;
+            }
+            self.cancelThrough(socket->_loop, socket->_write.park);
+        },
+        &PosixSocket::retireWrite,
+        this
+    };
+}
+
+IoAwaitable PosixSocket::writeVectored(std::span<std::span<std::byte const> const> segments,
+                                       std::shared_ptr<void const> keepAlive)
+{
+    if (_closed || _fd < 0)
+        return IoAwaitable { std::unexpected(closedSocket("write")) };
+
+    _write.remaining = {};
+    _write.segments = segments;
+    _write.segmentIndex = 0;
+    _write.segmentOffset = 0;
+    _write.written = 0;
+    _write.keepAlive = std::move(keepAlive);
+    if (auto const done = trySend(_write); done.has_value())
+    {
+        auto const result = *done;
+        _write = {};
+        return IoAwaitable { result };
+    }
+
+    contract::claimWriteSlot(_write.awaitable);
+    return IoAwaitable {
+        [](void* owner, IoAwaitable& self) {
+            auto* const socket = static_cast<PosixSocket*>(owner);
+            socket->_write.awaitable = &self;
+            socket->_write.park = socket->_loop.registerPark(ParkEntry::onReadyCallback(
+                &PosixSocket::onWriteWake, socket, socket->_fd, DefaultHandleKind, Interest::Write));
+            if (!socket->_write.park)
+            {
+                socket->_write = {};
+                self.complete(std::unexpected(registrationRefused()));
+                return;
+            }
+            self.cancelThrough(socket->_loop, socket->_write.park);
+        },
+        &PosixSocket::retireWrite,
+        this
+    };
+}
+
+void PosixSocket::pumpWrite()
+{
+    if (_write.awaitable == nullptr)
+        return; // created and never awaited; see settleRead
+    auto const done = trySend(_write);
+    if (!done.has_value())
+        return; // still backed up; stay parked for the next writable edge
+    auto operation = takeWrite();
+    operation.awaitable->complete(*done);
+}
+
+PosixSocket::WriteOperation PosixSocket::takeWrite() noexcept
+{
+    auto taken = std::exchange(_write, WriteOperation {});
+    if (taken.park)
+        _loop.unregisterPark(taken.park);
+    return taken;
+}
+
+void PosixSocket::onWriteWake(void* state, ParkWake wake)
+{
+    auto* const socket = static_cast<PosixSocket*>(state);
+    if (socket->_write.awaitable == nullptr)
+        return;
+    switch (wake)
+    {
+        case ParkWake::Ready: socket->pumpWrite(); return;
+        case ParkWake::Cancelled: {
+            auto operation = socket->takeWrite();
+            operation.awaitable->complete(
+                std::unexpected(makeNetError(NetErrorCode::Cancelled, 0, "the awaiting flow was cancelled")));
+            return;
+        }
+        case ParkWake::Abandoned: {
+            auto operation = socket->takeWrite();
+            operation.awaitable->abandon();
+            return;
+        }
+    }
+}
+
+void PosixSocket::retireWrite(void* owner, void* awaitable) noexcept
+{
+    auto* const socket = static_cast<PosixSocket*>(owner);
+    if (socket->_write.awaitable != awaitable)
+        return;
+    std::ignore = socket->takeWrite();
 }
 
 } // namespace core::net

@@ -691,13 +691,21 @@ class EventLoop: public async::IExecutor
     /// back out of the table afterwards.
     /// @param park The callback park to fire. A park that is gone — cancelled between step 5 and
     ///        here — is skipped, which is what makes that window cancellable.
-    void runDueCallback(ParkId park);
+    /// @param wake Why it is being run; see @c ParkWake. A timer ignores it.
+    void runDueCallback(ParkId park, ParkWake wake);
 
     /// Queues the coroutine parked at @p park for resumption, and takes it out of the scheduling
     /// indices. What a backend's readiness callback reaches, and it ENQUEUES. Idempotent per park
     /// within one turn: the second call finds the waiter already taken and does nothing.
     /// @param park The park whose waiter to queue.
     void queueParkedWaiter(ParkId park);
+
+    /// Queues @p park's waiter, or — for a frameless readiness park — its callback, with the
+    /// reason it is being woken.
+    /// @param park The park to queue.
+    /// @param wake Why. Overridden by @c ParkWake::Abandoned where the handle was announced
+    ///        closing under @c FdWakePolicy::Cancel.
+    void queueParkedWaiter(ParkId park, ParkWake wake);
 
     /// The readiness callback every park registers, for both directions.
     ///
@@ -753,6 +761,10 @@ class EventLoop: public async::IExecutor
         /// park out of the table is what makes this entry resolve to nothing. It is the same
         /// generation check every other cancellation path uses, reused rather than re-invented.
         ParkId callbackPark {};
+
+        /// Why @c callbackPark is being run, for a frameless READINESS park. Ignored for a timer,
+        /// which has exactly one reason to fire and therefore needs none carried.
+        ParkWake wake = ParkWake::Ready;
     };
 
     /// Coroutines ready to resume now, each owning whatever chain nothing else can free.

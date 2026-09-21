@@ -117,9 +117,11 @@ core_cpp_add_module(net KIND STATIC
         IHostScheduler.hpp
         IListener.hpp
         InterruptibleSleep.hpp
+        IoAwaitable.hpp
         IoBackend.hpp
         ISocket.hpp
         PlatformLoop.hpp
+        SocketContract.hpp
         SleepUntil.hpp
         Sockets.hpp
         SplitSocket.hpp
@@ -140,6 +142,8 @@ core_cpp_add_module(net KIND STATIC
         AsyncBufferedReader.cpp
         Diagnostics.cpp
         HttpServer.cpp
+        ISocket.cpp
+        SocketContract.cpp
         WriteQueue.cpp
         ${_coreCppNetDefaultBackend}
         detail/PeerAddress.hpp
@@ -221,16 +225,28 @@ core_cpp_add_test(net NAME net_backend
 if(NOT EMSCRIPTEN)
 core_cpp_add_test(net
     SOURCES
+        AcceptedHalfClose_test.cpp
         AsyncBufferedReader_test.cpp
         BackendParity_test.cpp
         ClockRefresh_test.cpp
         EventLoop_test.cpp
         HttpServer_test.cpp
+        IoAwaitable_test.cpp
         LoopTeardown_test.cpp
         Socket_test.cpp
+        WaitReadable_test.cpp
         WriteQueue_test.cpp
         testing/TestLoop_test.cpp
+    # POSIX-only, and each for the same reason: they drive verbs that only PosixSocket implements.
+    # `ReactorSocket_test` names PosixSocket directly. `CancelRead_test` and `SocketDecorator_test`
+    # retire a parked read through `cancelRead`, which `WindowsSocket` deliberately does not
+    # override -- retiring its park needs a handle on it that a coroutine awaiting the loop does not
+    # have, and Task B7 replaces that class with an IOCP socket that owns its operations. The gap is
+    # stated on `WindowsSocket` itself; this is where it costs coverage.
     SOURCES_POSIX
+        CancelRead_test.cpp
+        ReactorSocket_test.cpp
+        SocketDecorator_test.cpp
         posix/FdPassing_test.cpp
         posix/UnixSocket_test.cpp
     SOURCES_WINDOWS
@@ -356,6 +372,41 @@ if(CORE_CPP_TESTING AND WIN32)
         set_tests_properties(core-cpp.iocp-canary.${guarantee} PROPERTIES
             PASS_REGULAR_EXPRESSION "${guarantee}: about to"
             FAIL_REGULAR_EXPRESSION "nothing refused it"
+            TIMEOUT 60
+            SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
+            LABELS "core-cpp;net;canary")
+    endforeach()
+endif()
+
+# The three socket-contract guards, watched refusing against a REAL socket.
+#
+# **Registered on MARKERS rather than WILL_FAIL**, and the program's own header says why at length:
+# WILL_FAIL inverts any non-zero exit, so a canary that dies before reaching the guarded call reads
+# exactly like one whose assertion fired -- and an uncaught throw reaches abort() with stderr empty,
+# which no failure-string alternation can catch. The PASS expression is the marker printed
+# immediately BEFORE the forbidden operation, which is what proves the process got that far; the
+# FAIL expression is the marker printed after it plus every early-exit text. ctest checks FAIL
+# first, which is what lets the pass marker sit on both paths.
+#
+# The PASS expression names the MODE, because a marker shared by all three would be printed
+# by whichever guard the process actually reached: a mode that fell into the wrong branch
+# would pass on another guard's marker.
+#
+# SKIP_RETURN_CODE is evaluated ahead of both, so a Release build abstains rather than failing for
+# want of a marker NDEBUG was never going to print. These run on Debug legs only.
+#
+# POSIX only for now, because the socket they drive is PosixSocket; Task B7's Windows socket enrols
+# `windows` here with no change to the modes, which are the contract's and not the platform's.
+if(CORE_CPP_TESTING AND NOT EMSCRIPTEN AND NOT WIN32)
+    add_executable(core-cpp-socket-contract-canary SocketContractCanary.cpp)
+    target_link_libraries(core-cpp-socket-contract-canary PRIVATE core::net core::testing_dialogs)
+    core_cpp_apply_toolchain(core-cpp-socket-contract-canary)
+    foreach(guard IN ITEMS read-slot write-slot empty-read-buffer)
+        add_test(NAME core-cpp.socket-contract-canary.${guard}
+                 COMMAND core-cpp-socket-contract-canary ${guard})
+        set_tests_properties(core-cpp.socket-contract-canary.${guard} PROPERTIES
+            PASS_REGULAR_EXPRESSION "${guard}: reached the guarded call"
+            FAIL_REGULAR_EXPRESSION "SURVIVED;unknown mode;usage:;no default backend;could not make a socket pair;did not park"
             TIMEOUT 60
             SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
             LABELS "core-cpp;net;canary")

@@ -389,7 +389,7 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
         // place that hands control outside the loop is worth the extra queue hop.
         if (entry.callbackPark)
         {
-            runDueCallback(entry.callbackPark);
+            runDueCallback(entry.callbackPark, entry.wake);
             ++resumed;
             continue;
         }
@@ -471,8 +471,23 @@ std::size_t EventLoop::fireExpiredTimers()
     return fired;
 }
 
-void EventLoop::runDueCallback(ParkId park)
+void EventLoop::runDueCallback(ParkId park, ParkWake wake)
 {
+    // A READINESS park is answered first, and the difference from a timer is that it SURVIVES its
+    // own dispatch. Its owner runs a retry loop across many wakes -- a `write` of a buffer larger
+    // than the send window takes as many writable edges as it takes -- so taking it out here would
+    // retire an operation after one partial transfer. Only the owner retires it, through
+    // `unregisterPark`. Read before the call rather than after, because the callback is allowed to
+    // do exactly that and the table must not be touched afterwards.
+    if (auto const* const readiness = _parks.find(park);
+        readiness != nullptr && readiness->onReady != nullptr)
+    {
+        auto* const onReady = readiness->onReady;
+        auto* const state = readiness->callbackState;
+        onReady(state, wake);
+        return;
+    }
+
     // Taken out of the table BEFORE the call, and that is what makes two things true at once: a
     // `cancelTimer` from inside the callback finds nothing (this timer HAS fired), and the
     // callback may destroy whatever owns it, because nothing here reads the table afterwards.
@@ -808,7 +823,7 @@ ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
               "post() a call to it instead");
     // A park is a coroutine to resume OR a callback to call; one without either would be filed,
     // indexed and fired into nothing.
-    if (!entry.work.resume && entry.onExpired == nullptr)
+    if (!entry.work.resume && entry.onExpired == nullptr && entry.onReady == nullptr)
         return ParkId::invalid();
 
     auto park = std::make_unique<detail::Park>();
@@ -816,6 +831,7 @@ ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
     park->handle = entry.handle;
     park->deadline = entry.deadline;
     park->onExpired = entry.onExpired;
+    park->onReady = entry.onReady;
     park->callbackState = entry.callbackState;
     park->ownedByLoop = static_cast<bool>(entry.work.abandon);
     park->parked = async::detail::Parked { std::move(entry.work) };
@@ -964,7 +980,12 @@ void EventLoop::resolveCancel(ParkId park)
     // No such park: it has already resumed, or it was never here. That is the generation check,
     // and the id itself is what performs it -- ids are never reused, so a stale request can never
     // name a park made since.
-    if (entry == nullptr || !entry->parked)
+    //
+    // A FRAMELESS readiness park has no `parked` and is still cancellable: it is how a socket
+    // operation is stopped, and its owner is told so through `ParkWake::Cancelled` rather than by
+    // a frame observing a stopped token. Its registration comes down here for the same reason a
+    // coroutine park's does.
+    if (entry == nullptr || (!entry->parked && entry->onReady == nullptr))
         return;
 
     // Drop the kernel registration NOW, while the park is still alive: a stale registration could
@@ -974,7 +995,7 @@ void EventLoop::resolveCancel(ParkId park)
         _backend.detach(entry->handler);
         entry->attached = false;
     }
-    queueParkedWaiter(park);
+    queueParkedWaiter(park, entry->onReady != nullptr ? ParkWake::Cancelled : ParkWake::Ready);
 }
 
 void EventLoop::onParkReady(ReadinessHandler& handler) noexcept
@@ -985,6 +1006,30 @@ void EventLoop::onParkReady(ReadinessHandler& handler) noexcept
 
 void EventLoop::queueParkedWaiter(ParkId park)
 {
+    queueParkedWaiter(park, ParkWake::Ready);
+}
+
+void EventLoop::queueParkedWaiter(ParkId park, ParkWake wake)
+{
+    // A FRAMELESS readiness park is queued as a callback rather than as a resumption, and -- unlike
+    // a timer -- it is NOT taken out of the table: its owner runs a retry loop across many wakes
+    // and only the owner retires it. Queued rather than called here for the reason a due timer is:
+    // this is reached from inside a backend dispatch, where Rule 1 permits enqueueing and nothing
+    // else.
+    if (auto const* const readiness = _parks.find(park);
+        readiness != nullptr && readiness->onReady != nullptr)
+    {
+        // A frameless park has no waiter for `notifyHandleClosing`'s mark to reach, so it is
+        // consulted HERE instead of in an `await_resume`. Consuming it is safe for the same reason
+        // it is safe there -- exactly one thing asks per announcement -- and it cannot take the
+        // mark a COROUTINE park's awaiter is owed, because this branch is only reached for a park
+        // that has no coroutine at all.
+        auto const closing = wakeReasonOf(park) == FdWakeReason::Abandoned ? ParkWake::Abandoned : wake;
+        _ready.push_back(
+            ReadyEntry { .parked = {}, .ownedByLoop = false, .callbackPark = park, .wake = closing });
+        return;
+    }
+
     auto work = _parks.takeWaiter(park);
     if (!work.resume)
         return; // already taken this turn, or no such park

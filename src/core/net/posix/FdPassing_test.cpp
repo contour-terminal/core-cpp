@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#include <core/async/AsTask.hpp>
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/IoBackend.hpp>
@@ -22,7 +23,10 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+using core::async::asTask;
 using core::async::Task;
+
+using core::async::asTask;
 
 namespace
 {
@@ -101,7 +105,7 @@ TEST_CASE("readWithFd receives bytes and one SCM_RIGHTS descriptor", "[net][fdpa
     ::close(pipeFds[0]); // the receiver owns its own copy now
 
     auto buffer = std::array<std::byte, 64> {};
-    auto const result = pair.loop.blockOn(pair.ours->readWithFd(buffer));
+    auto const result = pair.loop.blockOn(asTask(pair.ours->readWithFd(buffer)));
     REQUIRE(result.has_value());
     CHECK(result->bytesRead == 5);
     REQUIRE(result->fd >= 0);
@@ -138,7 +142,7 @@ TEST_CASE("readWithFd keeps at most one descriptor and leaks none", "[net][fdpas
     ::close(extraPipe[1]); // ours was the last local copy of the write end...
 
     auto buffer = std::array<std::byte, 8> {};
-    auto const result = pair.loop.blockOn(pair.ours->readWithFd(buffer));
+    auto const result = pair.loop.blockOn(asTask(pair.ours->readWithFd(buffer)));
     REQUIRE(result.has_value());
 
     if (result->fd >= 0)
@@ -178,7 +182,7 @@ TEST_CASE("readWithFd without ancillary data reports fd -1", "[net][fdpass]")
     REQUIRE(::write(pair.theirs, "plain", 5) == 5);
 
     auto buffer = std::array<std::byte, 8> {};
-    auto const result = pair.loop.blockOn(pair.ours->readWithFd(buffer));
+    auto const result = pair.loop.blockOn(asTask(pair.ours->readWithFd(buffer)));
     REQUIRE(result.has_value());
     CHECK(result->bytesRead == 5);
     CHECK(result->fd == -1);
@@ -223,12 +227,12 @@ TEST_CASE("a split socket reads one half and writes the other", "[net][fdpass]")
 
     REQUIRE(::write(inbound[1], "in", 2) == 2);
     auto buffer = std::array<std::byte, 8> {};
-    auto const got = pair.loop.blockOn(split->read(buffer));
+    auto const got = pair.loop.blockOn(asTask(split->read(buffer)));
     REQUIRE(got.has_value());
     CHECK(*got == 2);
 
     auto const payload = std::string_view { "out" };
-    auto const wrote = pair.loop.blockOn(split->write(std::as_bytes(std::span { payload })));
+    auto const wrote = pair.loop.blockOn(asTask(split->write(std::as_bytes(std::span { payload }))));
     REQUIRE(wrote.has_value());
     auto proof = std::array<char, 8> {};
     CHECK(::read(outbound[0], proof.data(), proof.size()) == 3);
@@ -258,7 +262,7 @@ TEST_CASE("a split socket forwards an fd received on its read half", "[net][fdpa
     ::close(pipeFds[0]);
 
     auto buffer = std::array<std::byte, 64> {};
-    auto const result = pair.loop.blockOn(split->readWithFd(buffer));
+    auto const result = pair.loop.blockOn(asTask(split->readWithFd(buffer)));
     REQUIRE(result.has_value());
     CHECK(result->bytesRead == 5);
     REQUIRE(result->fd >= 0); // the base default would have dropped it as -1

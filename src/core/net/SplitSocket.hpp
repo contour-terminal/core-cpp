@@ -11,7 +11,11 @@
 
 #include <core/net/ISocket.hpp>
 
+#include <chrono>
+#include <cstddef>
 #include <memory>
+#include <span>
+#include <utility>
 
 namespace core::net
 {
@@ -27,22 +31,45 @@ class SplitSocket final: public ISocket
     {
     }
 
-    [[nodiscard]] async::Task<IoResult> read(std::span<std::byte> buffer) override
-    {
-        return _readHalf->read(buffer);
-    }
+    /// **Every verb forwards the inner operation out by value, adding nothing.** A
+    /// @c ResultAwaitable is neither copyable nor movable, so this is not a choice of style: the
+    /// returned prvalue is constructed straight into the caller's frame, and the half's own arm and
+    /// retire hooks point at the half. Which is exactly right — the slot being claimed is the
+    /// half's, so its one-read-operation rule stays the half's to enforce.
+    [[nodiscard]] IoAwaitable read(std::span<std::byte> buffer) override { return _readHalf->read(buffer); }
 
     /// Forwards to the read half so an fd passed over an fd-capable read half
-    /// (SCM_RIGHTS) is not silently dropped by the base default (which reports -1).
-    [[nodiscard]] async::Task<std::expected<ReadWithFd, NetError>> readWithFd(
-        std::span<std::byte> buffer) override
+    /// (SCM_RIGHTS) is not silently dropped by the base default.
+    [[nodiscard]] ResultAwaitable<ReadWithFd> readWithFd(std::span<std::byte> buffer) override
     {
         return _readHalf->readWithFd(buffer);
     }
 
-    [[nodiscard]] async::Task<IoResult> write(std::span<std::byte const> buffer) override
+    [[nodiscard]] IoAwaitable waitReadable() override { return _readHalf->waitReadable(); }
+
+    [[nodiscard]] IoAwaitable write(std::span<std::byte const> buffer) override
     {
         return _writeHalf->write(buffer);
+    }
+
+    [[nodiscard]] IoAwaitable writeVectored(std::span<std::span<std::byte const> const> segments,
+                                            std::shared_ptr<void const> keepAlive = {}) override
+    {
+        return _writeHalf->writeVectored(segments, std::move(keepAlive));
+    }
+
+    /// Retires the READ half's parked operation. The write half has no read slot to retire, and
+    /// forwarding there would be a call with nothing to do rather than a second retirement.
+    void cancelRead() noexcept override { _readHalf->cancelRead(); }
+
+    /// Half-closes the WRITE half, which is the only half that has a write side to close.
+    void shutdownWrite() noexcept override { _writeHalf->shutdownWrite(); }
+
+    /// Bounds a read, so it goes to the half reads come from.
+    /// @param deadline How long a read may wait.
+    void setReceiveDeadline(std::chrono::milliseconds deadline) noexcept override
+    {
+        _readHalf->setReceiveDeadline(deadline);
     }
 
     void close() noexcept override
