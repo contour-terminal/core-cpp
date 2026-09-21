@@ -141,8 +141,10 @@ TEST_CASE("A null loop reports Deadline without parking", "[InterruptibleSleep]"
     loop.spawn(sleepAndRecord(nullptr, source.get_token(), clock.now() + 1h, &outcome));
     std::ignore = loop.drain();
 
+    // No `pendingTimerCount() == 0` here: the sleep was handed `nullptr` and has no way to reach
+    // this loop, so that assertion is true for every possible implementation. The line above is
+    // the one that can come out the other way.
     CHECK(outcome == Outcome::Deadline);
-    CHECK(loop.pendingTimerCount() == 0);
 }
 
 TEST_CASE("The deadline arriving reports Deadline", "[InterruptibleSleep]")

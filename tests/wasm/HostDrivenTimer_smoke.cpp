@@ -56,6 +56,24 @@ void setFlag(void* state)
     *static_cast<bool*>(state) = true;
 }
 
+/// Yields to the host until @p flag is set, or until @c Bound elapses.
+///
+/// Yielding is the whole of what this program does that a unit test cannot: `emscripten_sleep`
+/// unwinds the C++ stack (which is what `-sASYNCIFY` is for), lets the host run its own callbacks
+/// — which is where the loop's turns happen — and rewinds.
+/// @param flag What to wait for.
+/// @return How long it waited, so a failure can say so.
+[[nodiscard]] std::chrono::milliseconds waitForFlag(bool const* flag)
+{
+    auto waited = 0ms;
+    while (!*flag && waited < Bound)
+    {
+        emscripten_sleep(static_cast<unsigned>(Step.count()));
+        waited += Step;
+    }
+    return waited;
+}
+
 } // namespace
 
 int main()
@@ -68,32 +86,55 @@ int main()
 
     auto delayFired = false;
     auto timerFired = false;
-    loop.spawn(setFlagAfterDelay(&loop, &delayFired));
 
-    // Task B5's own half: a deadline with no frame behind it, on the same heap as the delay above,
-    // and it has to reach the host through the same armWakeAt.
-    auto const timer =
+    // ---- Phase 1: the frameless timer, ON ITS OWN. ----------------------------------------
+    //
+    // **The order here IS the test, and nothing may be armed before this.** A `spawn` wakes the
+    // backend, and the turn that wake buys ends in `armHostWake()`, which picks up every deadline
+    // in the heap -- including one that was filed without asking the host for anything. So a
+    // program that spawns first cannot tell whether `addTimer` reaches a host-driven backend or
+    // merely rode on the spawn's wake. This program did exactly that, and was green for that
+    // reason, until review C1.
+    //
+    // Reordering alone would not have fixed it: whichever is armed first, the spawn's wake still
+    // buys a turn that arms the host for both. Only a phase with NO spawn in it asks the question.
+    //
+    // **If you are tempted to move a `spawn` above this line for convenience, you are deleting a
+    // test, not tidying one.** The assertion will not change and the coverage will vanish.
+    [[maybe_unused]] auto const timer =
         core::net::DeadlineTimer { loop, loop.clock().now() + Deadline, &setFlag, &timerFired };
-    std::ignore = timer;
 
-    auto waited = 0ms;
-    while (!(delayFired && timerFired) && waited < Bound)
-    {
-        emscripten_sleep(static_cast<unsigned>(Step.count()));
-        waited += Step;
-    }
+    auto const timerWaited = waitForFlag(&timerFired);
 
-    auto const status = delayFired && timerFired ? 0 : 1;
+    // **Read at the end of phase 1, and the verdict below uses THIS, not `timerFired`.** Phase 2's
+    // spawn wakes the loop, and the turn that wake buys arms the host for every deadline still in
+    // the heap -- including this timer's, if phase 1 timed out waiting for it. So `timerFired` is
+    // true by the end of the program either way, and a verdict that read it there would pass while
+    // the timer fired two seconds late, for the wrong reason, because of the spawn. Measured: with
+    // the fix reverted this program printed `ok ... both fired within 2030 ms` until the flag was
+    // snapshotted here.
+    auto const timerFiredAlone = timerFired;
+
+    // ---- Phase 2: the coroutine deadline, once the loop is quiescent again. ----------------
+    // The dispatch's own scenario. Its `spawn` may wake whatever it likes now: phase 1 has
+    // already been answered, and phase 2 has a bound of its own so a phase-1 failure cannot
+    // starve it and make the message blame both mechanisms for one defect.
+    loop.spawn(setFlagAfterDelay(&loop, &delayFired));
+    auto const delayWaited = waitForFlag(&delayFired);
+
+    auto const status = delayFired && timerFiredAlone ? 0 : 1;
     if (status != 0)
-        std::printf("FAIL host-driven-timer: after %lld ms the coroutine delay %s and the "
-                    "DeadlineTimer %s -- the host never pumped the loop to its deadline\n",
-                    static_cast<long long>(waited.count()),
+        std::printf("FAIL host-driven-timer: the DeadlineTimer %s after %lld ms (armed alone, with "
+                    "nothing else on the loop) and the coroutine delay %s after %lld ms -- the host "
+                    "was never asked for the turn that would run it\n",
+                    timerFiredAlone ? "fired" : "did NOT fire",
+                    static_cast<long long>(timerWaited.count()),
                     delayFired ? "fired" : "did NOT fire",
-                    timerFired ? "fired" : "did NOT fire");
+                    static_cast<long long>(delayWaited.count()));
     else
         std::printf("ok host-driven-timer: a coroutine delay and a DeadlineTimer both fired within "
                     "%lld ms, driven only by the host\n",
-                    static_cast<long long>(waited.count()));
+                    static_cast<long long>((timerWaited + delayWaited).count()));
 
     // **This program's verdict is the line above, not the status below**, and that is why ctest
     // reads it with PASS_REGULAR_EXPRESSION -- see the reason, and the measurement, in

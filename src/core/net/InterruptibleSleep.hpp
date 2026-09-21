@@ -64,10 +64,12 @@ enum class WakeReason : std::uint8_t
 /// and keeps the argument would not get the fix.
 ///
 /// It carries no `[[deprecated]]` attribute, and that is a decision rather than an omission: this
-/// tree builds with warnings fatal and forbids the diagnostic pragma that would silence one, so
-/// the attribute would make the only call site that can test this overload a build failure — and
-/// an untested compatibility shim is worse than a warned-about one. The removal is recorded in
-/// `CHANGELOG.md` under Deprecated and in `tools/migrate/renames.json`.
+/// overload exists so a fastcached caller **compiles unchanged**, and the attribute under that
+/// consumer's own `-Werror` is precisely what would stop it doing so — it defeats the one thing
+/// the shim is for. The channel that reports a migration in this project is
+/// `tools/migrate/renames.json` and the codemods, not the compiler, and the row is already there;
+/// the migration is mechanical, being the removal of one argument. The removal of the overload
+/// itself is recorded in `CHANGELOG.md` under Deprecated.
 /// @param loop The loop to sleep on, or null.
 /// @param token The token that interrupts the sleep.
 /// @param deadline The absolute instant to wake at.

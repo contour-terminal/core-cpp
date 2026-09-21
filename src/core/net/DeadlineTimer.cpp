@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/DeadlineTimer.hpp>
 
+#include <cassert>
 #include <tuple>
 #include <utility>
 
@@ -13,6 +14,13 @@ DeadlineTimer::DeadlineTimer(EventLoop& loop,
                              void* state):
     _loop(&loop), _onExpired(onExpired), _state(state)
 {
+    // Checked HERE, where the mistake is. `addTimer` asserts its own callback, but the one it is
+    // handed is `&DeadlineTimer::fire`, which is never null -- so a null `onExpired` would sail
+    // past it and be called a turn later from inside `runOnce`, with nothing naming the
+    // construction site.
+    assert(onExpired != nullptr
+           && "DeadlineTimer with no callback: it would be armed, fired a turn later from inside "
+              "the loop's drain, and call through a null pointer there");
     _timer = loop.addTimer(deadline, &DeadlineTimer::fire, this);
 }
 

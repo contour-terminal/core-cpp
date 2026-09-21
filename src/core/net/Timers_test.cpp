@@ -8,6 +8,8 @@
 // and the measurement of what lazy pruning costs a loop that arms and cancels a deadline per
 // request (Task B4's report, concern 4).
 
+#include <core/async/Cancellation.hpp>
+#include <core/async/ParkedWork.hpp>
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/testing/ScriptedBackend.hpp>
@@ -22,10 +24,13 @@
 #include <ranges>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <vector>
 
+using core::async::OperationCancelled;
 using core::async::Task;
 using core::net::EventLoop;
+using core::net::ParkEntry;
 using core::net::TimerId;
 using core::net::testing::ScriptedBackend;
 using core::net::testing::TestLoop;
@@ -34,6 +39,18 @@ using namespace std::chrono_literals;
 
 namespace
 {
+
+// The half of `TimerId`'s reason that no runtime case can reach, checked by the compiler instead.
+// `cancelTimer` retires a callback and `requestCancel` unwinds a coroutine; only one of them is
+// meaningful for any given id, and the strong type is what stops them being handed each other's.
+// The program that would prove this by failing is the one that does not compile, so the assertion
+// has to live here rather than in a TEST_CASE -- and in prose it was load-bearing but unchecked.
+static_assert(std::is_invocable_v<decltype(&EventLoop::cancelTimer), EventLoop&, TimerId>,
+              "cancelTimer takes a TimerId");
+static_assert(!std::is_invocable_v<decltype(&EventLoop::cancelTimer), EventLoop&, core::net::ParkId>,
+              "a bare ParkId must not reach cancelTimer: it would name a park of the wrong kind");
+static_assert(!std::is_invocable_v<decltype(&EventLoop::requestCancel), EventLoop&, TimerId>,
+              "a TimerId must not reach requestCancel either -- the conversion goes neither way");
 
 /// What a timer callback did, so a case can assert the order rather than only the count.
 struct Trace
@@ -82,6 +99,29 @@ void reArmOnce(void* state)
     ++self->calls;
     if (self->calls == 1)
         std::ignore = self->loop->addTimer(self->clock->now() + 10ms, &reArmOnce, state);
+}
+
+/// Runs to completion the moment it is resumed, for a case that parks its handle by hand.
+/// @param ran Set when the body runs.
+Task<void> markRan(bool* ran)
+{
+    *ran = true;
+    co_return;
+}
+
+/// Parks on a deadline an hour out and records that it was CANCELLED rather than resumed.
+/// @param loop The loop to park on.
+/// @param cancelled Set when the flow unwinds through @c OperationCancelled.
+Task<void> recordCancellation(EventLoop* loop, bool* cancelled)
+{
+    try
+    {
+        co_await loop->delay(1h);
+    }
+    catch (OperationCancelled const&)
+    {
+        *cancelled = true;
+    }
 }
 
 /// Parks a flow on a deadline so a case has a coroutine timer beside its callback timers.
@@ -240,6 +280,35 @@ TEST_CASE("cancelTimer after the callback has run reports false", "[EventLoop][t
     CHECK(survivor == 1); // the stale cancel took nothing with it
 }
 
+TEST_CASE("cancelTimer refuses a TimerId that names a coroutine park", "[EventLoop][timer]")
+{
+    // **The arm the whole "TimerId is a distinct struct" argument rests on.** `TimerId` is an
+    // aggregate over a public `ParkId`, so `TimerId { somePark }` is one expression -- and
+    // `registerPark` is public, so a caller can hold a coroutine's park id. Without the kind
+    // check, `cancelTimer` would take that park: dropping it releases the claim its `parked`
+    // holds, so a suspended flow is either freed under its own feet or left parked forever with
+    // nothing able to resume it.
+    //
+    // Every other case here passes an id `addTimer` returned, so deleting the check reds only
+    // this one.
+    auto clock = ManualClock {};
+    auto loop = TestLoop { clock };
+
+    auto ran = false;
+    auto flow = markRan(&ran); // lazy: the body has not run, and this `Task` owns the frame
+    auto const park = loop.registerPark(
+        ParkEntry::onDeadline(core::async::ParkedWork { .resume = flow.handle() }, clock.now() + 10ms));
+    REQUIRE(static_cast<bool>(park));
+    REQUIRE(loop.pendingTimerCount() == 1);
+
+    CHECK_FALSE(loop.cancelTimer(TimerId { park }));
+    CHECK(loop.pendingTimerCount() == 1); // refused BEFORE the park was taken, so it is still here
+
+    clock.advance(10ms);
+    std::ignore = loop.drain();
+    CHECK(ran); // and the flow the id named still resumed
+}
+
 TEST_CASE("cancelTimer still prevents a callback whose deadline has fired but not yet run",
           "[EventLoop][timer]")
 {
@@ -301,19 +370,28 @@ TEST_CASE("A loop destroyed with a timer armed never runs it", "[EventLoop][time
 
 TEST_CASE("requestStop() cancels flows and leaves callback timers armed", "[EventLoop][timer]")
 {
-    // Stated rather than left to be discovered. `requestStop` exists to make parked FLOWS unwind
-    // through OperationCancelled, and a callback timer has no flow to unwind -- there is nothing
-    // to throw into and nobody to catch it. So it stays armed and still fires, and a consumer that
-    // wants it gone cancels it. Tasks B8 and B12 both stop loops with timers on them.
+    // Stated rather than left to be discovered, and BOTH clauses are exercised: `requestStop`
+    // exists to make parked FLOWS unwind through OperationCancelled, and a callback timer has no
+    // flow to unwind -- there is nothing to throw into and nobody to catch it. So it stays armed
+    // and still fires, and a consumer that wants it gone cancels it. Tasks B8 and B12 both stop
+    // loops with timers on them.
+    //
+    // `cancelled` is declared BEFORE the loop so it outlives it: ~EventLoop unwinds what is
+    // parked, and the unwinding writes here.
+    auto cancelled = false;
     auto clock = ManualClock {};
     auto loop = TestLoop { clock };
 
     auto calls = std::size_t { 0 };
     std::ignore = loop.addTimer(clock.now() + 10ms, &countCall, &calls);
+    loop.spawn(recordCancellation(&loop, &cancelled));
+    std::ignore = loop.drain();
+    REQUIRE(loop.pendingTimerCount() == 2); // the flow's hour-long deadline, and the timer
 
     loop.requestStop();
     std::ignore = loop.drain();
-    REQUIRE(loop.pendingTimerCount() == 1);
+    CHECK(cancelled);                       // the flow unwound
+    REQUIRE(loop.pendingTimerCount() == 1); // and the timer did not
 
     clock.advance(10ms);
     std::ignore = loop.drain();

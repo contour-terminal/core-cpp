@@ -150,10 +150,13 @@ struct RunOnceResult
 {
     /// What step 2 took off the ready queue: coroutines resumed, plus timer callbacks run.
     ///
-    /// One number for both, because step 2 is one step: a turn that ran a callback and resumed
-    /// nothing is not an idle turn, and a drain that stopped on "no coroutine resumed" would stop
-    /// having just handed control to a callback that may have queued more work.
-    std::size_t resumed = 0;
+    /// **Named for the queue rather than for the verb**, because the verb is only true of half of
+    /// it — a timer callback is called, not resumed — and one number has to cover both: a turn
+    /// that ran a callback and resumed nothing is not an idle turn, and @c idle is derived from
+    /// this, so a drain that stopped on "no coroutine resumed" would stop having just handed
+    /// control to a callback that may have queued more work. It sits beside @c dispatched, which
+    /// counts step 4 the same way.
+    std::size_t drained = 0;
 
     std::size_t dispatched = 0; ///< Readiness reports the backend delivered in step 4.
 
@@ -221,7 +224,8 @@ class EventLoop: public async::IExecutor
     RunOnceResult runOnce(std::optional<platform::SteadyDuration> maxWait = std::nullopt);
 
     /// Runs turns until one of them is idle.
-    /// @return How many coroutines were resumed in all.
+    /// @return How much every turn drained in all — coroutines resumed plus timer callbacks
+    ///         run; see @c RunOnceResult::drained.
     std::size_t runUntilIdle();
 
     /// Drives turns until @p task completes, then returns its result.
@@ -365,6 +369,11 @@ class EventLoop: public async::IExecutor
     /// G2: exactly one place resumes, and exactly one place hands control to code outside the
     /// loop). A deadline already in the past therefore fires on a turn rather than from this call,
     /// so a caller is never re-entered from its own arming.
+    ///
+    /// **Arming outside a turn asks the backend for one.** On a host-driven loop that is the only
+    /// thing that will: the host is armed at the end of a turn, and a quiescent host-driven loop
+    /// has nothing scheduled that would start one — so without it the park would be filed and
+    /// silently never fired. Inside a turn it is skipped, because the turn arms the host itself.
     ///
     /// Loop thread only, like @c registerPark and @c resumeSoon. From another thread,
     /// `post()` a call to it.

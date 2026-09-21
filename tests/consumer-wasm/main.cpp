@@ -107,6 +107,22 @@ void setFlag(void* state)
     *static_cast<bool*>(state) = true;
 }
 
+/// Yields to the host until @p flag is set, or until @c Bound elapses.
+///
+/// Yielding is the whole of what a WebAssembly consumer does differently: `emscripten_sleep`
+/// unwinds the C++ stack (which is what `-sASYNCIFY` is for), lets the host run its own callbacks
+/// — which is where the loop's turns happen — and rewinds.
+/// @param flag What to wait for.
+void waitForFlag(bool const* flag)
+{
+    auto waited = 0ms;
+    while (!*flag && waited < Bound)
+    {
+        emscripten_sleep(static_cast<unsigned>(Step.count()));
+        waited += Step;
+    }
+}
+
 /// core::net: a loop the host drives, which is the whole of how a browser consumer runs one.
 /// @param checks Where each step reports.
 void checkHostDrivenLoop(Checks& checks)
@@ -115,20 +131,23 @@ void checkHostDrivenLoop(Checks& checks)
 
     auto delayFired = false;
     auto timerFired = false;
-    loop.spawn(setFlagAfterDelay(&loop, &delayFired));
-    auto const timer =
+
+    // **The frameless timer FIRST and alone, and the order is the test.** A `spawn` wakes the
+    // backend, and the turn that wake buys arms the host for every deadline in the heap — so a
+    // check that spawned first could not tell whether arming a timer reaches a host-driven
+    // backend on its own, or merely rode on the spawn. Reordering would not be enough either:
+    // whichever is armed first, the spawn's wake still buys a turn that arms both. Only a phase
+    // with no spawn in it asks the question. **Moving a `spawn` above this line deletes a check
+    // without changing an assertion.**
+    [[maybe_unused]] auto const timer =
         core::net::DeadlineTimer { loop, loop.clock().now() + Deadline, &setFlag, &timerFired };
-    std::ignore = timer;
+    waitForFlag(&timerFired);
+    checks.expect(timerFired, "a DeadlineTimer alone on a host-driven loop fired within its bound");
 
-    auto waited = 0ms;
-    while (!(delayFired && timerFired) && waited < Bound)
-    {
-        emscripten_sleep(static_cast<unsigned>(Step.count()));
-        waited += Step;
-    }
-
+    // And then the coroutine half, whose spawn may wake whatever it likes now.
+    loop.spawn(setFlagAfterDelay(&loop, &delayFired));
+    waitForFlag(&delayFired);
     checks.expect(delayFired, "a coroutine delay on a host-driven loop resumed within its bound");
-    checks.expect(timerFired, "a DeadlineTimer on a host-driven loop fired within its bound");
 }
 
 /// core::net_types: the error vocabulary, which is header-only and links nothing.

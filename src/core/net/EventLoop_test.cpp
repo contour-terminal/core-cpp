@@ -960,7 +960,7 @@ TEST_CASE("A cross-thread cancel is resolved before the turn drains, so it unwin
     loop.spawn(parkForAnHour(&loop, &outcome));
 
     auto const parking = loop.runOnce();
-    REQUIRE(parking.resumed == 1);
+    REQUIRE(parking.drained == 1);
     REQUIRE(loop.pendingTimerCount() == 1);
     REQUIRE(outcome == 0);
 
@@ -973,7 +973,7 @@ TEST_CASE("A cross-thread cancel is resolved before the turn drains, so it unwin
     CHECK(loop.readyCount() == 0);
 
     auto const settled = loop.runOnce();
-    CHECK(settled.resumed == 1); // resolved in step 1, resumed in step 2, one turn
+    CHECK(settled.drained == 1); // resolved in step 1, resumed in step 2, one turn
     CHECK(outcome == 2);
     CHECK(loop.pendingTimerCount() == 0);
     CHECK(loop.spawnedCount() == 0);
@@ -994,12 +994,12 @@ TEST_CASE("A turn resumes at most its dispatch batch and leaves the rest queued"
     loop.spawn(yieldRepeatedly(&loop, &passes, 10));
 
     auto const first = loop.runOnce();
-    CHECK(first.resumed == 4);
+    CHECK(first.drained == 4);
     CHECK(passes == 4);
     CHECK(loop.readyCount() == 1); // queued again, not lost
 
     auto const second = loop.runOnce();
-    CHECK(second.resumed == 4);
+    CHECK(second.drained == 4);
     CHECK(passes == 8);
 
     std::ignore = loop.runUntilIdle();
@@ -1024,7 +1024,7 @@ TEST_CASE("IdlePolicy::Return never blocks inside a turn", "[EventLoop][turn]")
     loop.spawn(parkForAnHour(&loop, &outcome));
 
     auto const turn = loop.runOnce();
-    CHECK(turn.resumed == 1);
+    CHECK(turn.drained == 1);
     REQUIRE(source.waitCount() == 1);
     CHECK(timeoutMs(source.recordedTimeouts().back()) == 0);
 }
@@ -1170,7 +1170,7 @@ TEST_CASE("spawn at scale unlinks per completion rather than sweeping", "[EventL
     // One turn, and the count drops by exactly what that turn ran. A sweep at the top of the next
     // turn would leave all ten thousand here.
     auto const first = loop.runOnce();
-    CHECK(first.resumed == Batch);
+    CHECK(first.drained == Batch);
     CHECK(loop.spawnedCount() == Flows - Batch);
 
     std::ignore = loop.runUntilIdle();

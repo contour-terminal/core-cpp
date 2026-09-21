@@ -210,7 +210,7 @@ std::size_t EventLoop::runUntilIdle()
         // Zero, so this never blocks whatever the idle policy is: a caller asking the loop to run
         // out its queued work is not asking it to wait for more.
         auto const turn = runOnce(platform::SteadyDuration::zero());
-        total += turn.resumed;
+        total += turn.drained;
         if (turn.idle)
             return total;
     }
@@ -240,7 +240,7 @@ RunOnceResult EventLoop::turn(std::optional<platform::SteadyDuration> maxWait, s
     // THE one place a coroutine is resumed (guarantee G2). Readiness dispatched in step 4 and
     // deadlines fired in step 5 are resumed by the NEXT turn's step 2, which is what lets the
     // loop state G2 rather than trust each backend with it.
-    result.resumed = drainReadyQueue(_options.dispatchBatch);
+    result.drained = drainReadyQueue(_options.dispatchBatch);
 
     // Handles closed since the last turn. The backend cannot report these -- epoll drops a closed
     // descriptor from its set and kqueue drops its filters, both silently -- so the loop supplies
@@ -307,7 +307,7 @@ RunOnceResult EventLoop::turn(std::optional<platform::SteadyDuration> maxWait, s
     // whether work is still PARKED -- a flow waiting on a socket that never becomes readable
     // leaves a loop idle turn after turn, and a drain that waited for the park to go would never
     // return.
-    result.idle = !hadInbound && result.resumed == 0 && result.dispatched == 0 && fired == 0;
+    result.idle = !hadInbound && result.drained == 0 && result.dispatched == 0 && fired == 0;
 
     // A host-driven backend has no wait of its own, so the loop's next deadline reaches the host
     // instead. After every turn, because the turn is what changed the answer.
@@ -669,11 +669,36 @@ TimerId EventLoop::addTimer(platform::SteadyTimePoint deadline, TimerCallback on
               "run would be filed and fired into nothing");
     if (onExpired == nullptr)
         return TimerId::invalid();
-    return TimerId { registerPark(ParkEntry::onCallback(onExpired, state, deadline)) };
+    auto const timer = TimerId { registerPark(ParkEntry::onCallback(onExpired, state, deadline)) };
+
+    // **A timer armed outside a turn has to ask for one**, and on a host-driven backend that is
+    // the ONLY thing that will: `armHostWake` runs at the end of a turn, and a quiescent
+    // host-driven loop has nothing scheduled that would ever start one. The park would be filed,
+    // correct, and silently never fired -- which is how a browser event handler, a frame callback
+    // or a TUI input path arms one. Every other member that files work a turn must reach --
+    // `post`, `submit`, `schedule`, `spawn`, `requestCancel`, `stop` -- wakes for this reason;
+    // this one was the exception until it was not.
+    //
+    // `armHostWake()` rather than `wake()`, which is what `spawn` uses: a spawned flow means "as
+    // soon as you can" and has no deadline, while this one does, so the host is told WHEN instead
+    // of being asked for a pump it would spend finding nothing due. Inside a turn it is skipped,
+    // because the turn arms the host itself on its way out. A backend that is not host-driven
+    // ignores it, and correctly: nothing is driving such a loop off-turn (the assertion above says
+    // so), and the next turn computes its timeout from the same deadline heap in step 3.
+    if (!isOnWorkerThread())
+        armHostWake();
+    return timer;
 }
 
 bool EventLoop::cancelTimer(TimerId timer) noexcept
 {
+    // The same predicate `addTimer` asserts, and this is the half that needs it more: `addTimer`
+    // is called where the author of the timer chose, while this is reached from `~DeadlineTimer`
+    // -- wherever the object owning the timer happens to be destroyed. Unsynchronised it mutates
+    // the park map, the handle multimap and the deadline heap while a turn is reading them.
+    assert(teardownIsSerialisedWithDispatch()
+           && "EventLoop::cancelTimer from a second thread while another is driving this loop: "
+              "post() a call to it instead");
     if (!timer)
         return false;
 

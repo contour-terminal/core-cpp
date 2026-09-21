@@ -65,12 +65,12 @@ class TestLoop final: private detail::OwnedNullBackend, public EventLoop
     }
 
     /// Runs exactly one turn.
-    /// @return How many coroutines it resumed. Zero means the loop had nothing to do, which is
-    ///         what @c drain stops on.
-    std::size_t tick() { return runOnce(platform::SteadyDuration::zero()).resumed; }
+    /// @return How much this turn drained — coroutines resumed plus timer callbacks run. Zero
+    ///         means the loop had nothing to do, which is what @c drain stops on.
+    std::size_t tick() { return runOnce(platform::SteadyDuration::zero()).drained; }
 
     /// Runs turns until one of them does nothing.
-    /// @return How many coroutines were resumed in all.
+    /// @return How much every turn drained in all — coroutines resumed plus timer callbacks run.
     std::size_t drain() { return runUntilIdle(); }
 
     /// @return How many coroutines are queued for the next drain.

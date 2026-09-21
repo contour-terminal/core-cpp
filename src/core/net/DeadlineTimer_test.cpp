@@ -63,6 +63,30 @@ void destroySelf(void* state)
     owner->timer.reset(); // ~DeadlineTimer disarms, from inside the callback it is disarming
 }
 
+/// A killer timer and the timer it retires, for the cancellation window's real shape.
+struct SiblingKill
+{
+    std::unique_ptr<DeadlineTimer> victim; ///< Due in the same batch as its killer.
+    std::size_t killerCalls = 0;           ///< How many times the killer's callback ran.
+    std::size_t victimCalls = 0;           ///< How many times the victim's did. Must stay zero.
+};
+
+/// A @c DeadlineTimer::Callback that destroys a SIBLING timer already queued by the same step 5.
+/// @param state A @c SiblingKill, which must outlive the loop.
+void killSibling(void* state)
+{
+    auto* const pair = static_cast<SiblingKill*>(state);
+    ++pair->killerCalls;
+    pair->victim.reset(); // ~DeadlineTimer -> disarm() -> cancelTimer, from inside the drain
+}
+
+/// A @c DeadlineTimer::Callback that counts the victim's calls.
+/// @param state A @c SiblingKill, which must outlive the loop.
+void countVictim(void* state)
+{
+    ++static_cast<SiblingKill*>(state)->victimCalls;
+}
+
 } // namespace
 
 TEST_CASE("A DeadlineTimer fires its callback when the deadline arrives", "[DeadlineTimer]")
@@ -181,6 +205,38 @@ TEST_CASE("A DeadlineTimer may be destroyed from inside its own callback", "[Dea
     CHECK(loop.pendingTimerCount() == 0);
 }
 
+TEST_CASE("A timer callback may retire another timer already queued by the same turn", "[DeadlineTimer]")
+{
+    // **The shape the cancellation window exists for**, rather than `cancelTimer` called by hand
+    // between two ticks. Two deadlines fall due together, step 5 queues BOTH, and then the first
+    // callback destroys the second's `DeadlineTimer` -- so `~DeadlineTimer` reaches `cancelTimer`
+    // from inside the very drain that is about to reach the entry it retires. That is the path a
+    // real owner takes: one timeout firing and tearing down the object whose own timer is due in
+    // the same instant.
+    //
+    // Declared after the loop, so the victim is destroyed BEFORE it: a DeadlineTimer outliving
+    // its loop would reach `_loop->cancelTimer` through freed storage.
+    auto clock = ManualClock {};
+    auto loop = TestLoop { clock };
+    auto pair = SiblingKill {};
+
+    auto const due = clock.now() + 10ms;
+    auto const killer = DeadlineTimer { loop, due, &killSibling, &pair };
+    pair.victim = std::make_unique<DeadlineTimer>(loop, due, &countVictim, &pair);
+
+    clock.advance(10ms);
+    std::ignore = loop.tick(); // step 5 queues both, FIFO by arming order; neither has run
+    REQUIRE(loop.readyCount() == 2);
+    REQUIRE(pair.killerCalls == 0);
+
+    std::ignore = loop.drain();
+
+    CHECK(pair.killerCalls == 1);
+    CHECK(pair.victimCalls == 0); // retired from inside the window, before its entry was reached
+    CHECK(pair.victim == nullptr);
+    CHECK(killer.settled());
+}
+
 TEST_CASE("An armed DeadlineTimer bounds the turn's wait to its own deadline", "[DeadlineTimer]")
 {
     // The case that names what this task removed. Upstream's timer woke every
@@ -198,6 +254,7 @@ TEST_CASE("An armed DeadlineTimer bounds the turn's wait to its own deadline", "
     std::ignore = loop.runOnce();
 
     REQUIRE(backend.waitCount() == 1);
+    REQUIRE(backend.recordedTimeouts().size() == 1); // the container `.front()` below indexes
     CHECK(backend.recordedTimeouts().front() == std::optional { core::platform::SteadyDuration { 500ms } });
     CHECK_FALSE(timer.settled());
 }

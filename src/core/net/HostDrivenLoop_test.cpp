@@ -43,6 +43,13 @@ Task<void> delayThenFlag(EventLoop* loop, core::platform::SteadyDuration duratio
     *fired = true;
 }
 
+/// A @c core::net::TimerCallback that counts its calls.
+/// @param state A @c std::size_t counter, which must outlive the loop.
+void countCall(void* state)
+{
+    ++*static_cast<std::size_t*>(state);
+}
+
 /// @param host The host to ask.
 /// @return The delay of the host's soonest pending request, in milliseconds.
 [[nodiscard]] long long soonestDelayMs(ManualHostScheduler const& host)
@@ -116,6 +123,44 @@ TEST_CASE("A host-driven loop arms the host at its next deadline, and resumes wh
     // arming would keep the page's timer alive with no work behind it.
     host.pump();
     CHECK(host.pendingCount() == 0);
+}
+
+TEST_CASE("A timer armed on a quiescent host-driven loop asks the host for the turn that runs it",
+          "[EventLoop][hostdriven][timer]")
+{
+    // **`addTimer` files work that only a turn can reach, and on a host-driven loop nothing else
+    // will ever start one.** `armHostWake()` runs at the END of a turn, and a quiescent
+    // host-driven loop has nothing scheduled with the host, so there is no turn coming to arm the
+    // deadline this call just filed: the timer would be correct, filed, and silently never fired.
+    // `post`, `submit`, `schedule`, `spawn`, `requestCancel` and `stop` all wake for this reason.
+    //
+    // Armed from the loop's own thread but OUTSIDE a turn, which is legal by the documented
+    // contract -- `teardownIsSerialisedWithDispatch()` is true when nothing is driving -- and is
+    // how a DOM event handler, a frame callback or a TUI input path arms one.
+    auto calls = std::size_t { 0 };
+    auto clock = ManualClock {};
+    auto host = ManualHostScheduler {};
+    auto backend = HostDrivenBackend { host, clock };
+    auto loop = EventLoop { backend, clock };
+
+    // Quiescent, asserted rather than assumed: a pump pending from anything else is exactly what
+    // masked this in both WebAssembly programs, where a `spawn` preceded the timer and its wake
+    // bought the turn that picked the deadline up.
+    REQUIRE(host.pendingCount() == 0);
+
+    std::ignore = loop.addTimer(clock.now() + 50ms, &countCall, &calls);
+
+    // THE assertion. And the deadline itself, not merely that something was asked: a loop that
+    // asked for "as soon as you can" would spin the page's timer for fifty milliseconds.
+    REQUIRE(host.pendingCount() == 1);
+    CHECK(soonestDelayMs(host) == 50);
+
+    clock.advance(50ms);
+    host.pump(); // a turn: step 5 finds the deadline due and QUEUES the callback
+    CHECK(calls == 0);
+
+    host.pump(); // the next turn's step 2 runs it
+    CHECK(calls == 1);
 }
 
 TEST_CASE("A host-driven loop asks for one pump however many wakes it takes", "[EventLoop][hostdriven]")

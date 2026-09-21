@@ -445,7 +445,11 @@ workflow refuses one without a section here.
   its callback run against storage that is gone. `RunOnceResult::resumed` (and so
   `testing::TestLoop::tick()`) counts what step 2 took off the ready queue — coroutines resumed
   plus timer callbacks run — because a turn that ran a callback and resumed nothing is not an idle
-  turn, and `runUntilIdle()` would otherwise stop on one.
+  turn, and `runUntilIdle()` would otherwise stop on one. **That field is renamed `resumed` →
+  `drained`** while `RunOnceResult` is still unreleased: the old name is a verb that is false for
+  half of what it counts, since a timer callback is called rather than resumed. `TimerCallback`,
+  `ParkEntry::onCallback` and the diagnostic `EventLoop::pendingTimerSlotCount()` — the size of the
+  deadline heap including the stale slots lazy pruning is carrying — are public with it.
 
 - `core::net::DeadlineTimer` (`<core/net/DeadlineTimer.hpp>`): a deadline as an object, disarmed
   by `disarm()` or by destruction, and **destroyable from inside its own callback**. For a timeout
@@ -480,10 +484,10 @@ workflow refuses one without a section here.
 - `core::net::interruptibleSleepUntil(loop, token, deadline, wakeBound)`, the four-argument form,
   is kept for one release so a fastcached caller compiles unchanged, and **ignores `wakeBound`**.
   It named the longest uninterruptible step of a poll, and there is no poll left to bound. Drop the
-  argument. It carries no `[[deprecated]]` attribute deliberately: this tree builds with warnings
-  fatal and forbids the pragma that would silence one, so the attribute would make the only call
-  site that can test the overload a build failure, and an untested compatibility shim is worse than
-  a warned-about one.
+  argument. It carries no `[[deprecated]]` attribute deliberately: the overload exists so a
+  fastcached caller **compiles unchanged**, and the attribute under that consumer's own `-Werror`
+  is exactly what would stop it doing so. What reports a migration in this project is
+  `tools/migrate/renames.json` and the codemods, not the compiler, and the row is already there.
 
 ### Breaking
 

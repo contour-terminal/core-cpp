@@ -135,5 +135,9 @@ add_test(NAME consumer-wasm COMMAND "${CORE_CPP_NODE}" "$<TARGET_FILE:consumer-w
 # ctest read it.
 set_tests_properties(consumer-wasm PROPERTIES
     PASS_REGULAR_EXPRESSION "consumer-wasm: every check passed"
-    FAIL_REGULAR_EXPRESSION "check\(s\) failed"
+    # `[(]s[)]`, not `\(s\)`: CMake un-escapes the backslashes in a quoted argument, so the
+    # property CTest compiles would be `check(s) failed` -- a regex whose parentheses group,
+    # matching `checks failed`, which this program never prints. A bracket expression survives
+    # both passes.
+    FAIL_REGULAR_EXPRESSION "check[(]s[)] failed"
     TIMEOUT 120)

@@ -133,7 +133,7 @@ TEST_CASE("The turn refreshes its clock after the wait, so a deadline it reached
 
     auto const first = loop.runOnce();
 
-    CHECK(first.resumed == 1);            // the spawned flow ran to its park
+    CHECK(first.drained == 1);            // the spawned flow ran to its park
     CHECK(loop.pendingTimerCount() == 0); // and its deadline was found due by THIS turn
     CHECK(loop.readyCount() == 1);        // queued by step 5, for the next turn's step 2
     CHECK_FALSE(fired);                   // which has not happened yet: resumption is step 2's
