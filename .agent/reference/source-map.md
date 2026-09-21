@@ -47,17 +47,23 @@ src/core/
                             executors, AsyncQueue (planned, B1)
   net/                      core::net_types (NetError, IoResult; header-only, everywhere),
                             core::net (EventLoop over IoBackend, which DISPATCHES readiness to
-                            the handlers registered with it; sockets, AsyncBufferedReader,
-                            WriteQueue, WithTimeout, HttpServer, Diagnostics; native only),
+                            the handlers registered with it; PlatformLoop owns the default
+                            backend; sockets, AsyncBufferedReader, WriteQueue, WithTimeout,
+                            HttpServer, Diagnostics; native only),
                             core::net_tls (Tls, OpenSSL private); posix/ (PollBackend, sockets)
                             linux/ (EpollBackend) bsd/ (KqueueBackend) windows/ (WfmoBackend,
-                            sockets) emscripten/ (the browser as a host) detail/ are private, and
-                            each platform directory has the DefaultBackend.cpp CMake picks one of;
-                            testing/ holds the fakes (ScriptedBackend, NullBackend,
+                            sockets) emscripten/ (the browser as a host) detail/ are private but
+                            for ParkTable (ParkId, ParkEntry) and WorkerIdentity, which
+                            EventLoop.hpp names, and each platform directory has the
+                            DefaultBackend.cpp CMake picks one of;
+                            testing/ holds the fakes (ScriptedBackend, NullBackend, TestLoop,
                             ManualHostScheduler, makeSocketPair, BackendMatrix, CoroTestSupport),
-                            makeSocketPair's halves in testing/posix/ and testing/windows/. The
-                            WebAssembly subset is IoBackend, IHostScheduler and HostDrivenBackend;
-                            IOCP, the loop's own subset and dialling (planned, B4-B11)
+                            makeSocketPair's halves in testing/posix/ and testing/windows/.
+                            HostDrivenCanary.cpp is a process of its own: the host-driven loop's
+                            refusal of run() and blockOn() is an abort, which no Catch case can
+                            hold. The WebAssembly subset is IoBackend, IHostScheduler,
+                            HostDrivenBackend and EventLoop with PlatformLoop and TestLoop over
+                            it; IOCP, sockets and dialling (planned, B6-B11)
   tui/                      core::tui_output (endo: TerminalOutput, SyncGuard, SgrBuilder,
                             TerminalProtocols, CursorShape, Error; links base alone), and
                             core::tui (TerminalInput, VtParser, Terminal, Buffer, Canvas,

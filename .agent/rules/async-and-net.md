@@ -56,6 +56,110 @@ The contract is the spec's (Part I §2, rules 1 to 6), and it is short enough to
   closed listener) returns `NetErrorCode::Cancelled` as a value. If a receive already completed
   with bytes, the data wins.
 
+## The turn, and the orderings inside it
+
+Task B4 landed `runOnce`, and the order of its five steps is a contract rather than an
+arrangement. [`docs/design/threading.md`](../../docs/design/threading.md) states it for a reader;
+what follows is what a change to it must not break.
+
+- **One drain per turn, and it is step 2.** Readiness dispatched by the wait in step 4 and
+  deadlines fired in step 5 are resumed by the NEXT turn's step 2. That is guarantee **G2** --
+  every resumption happens in turn step 2 -- and it is stateable only because there is exactly one
+  place that resumes. A turn that drained again at its end would be a turn where a backend's walk
+  and a resumption share a stack, which is Rule 1 from the other side. Origin:
+  [fastcached#475](https://github.com/LASTRADA-Software/fastcached/issues/475).
+- **Cancel requests resolve in step 1, before the drain.** Resolving one is what queues the
+  cancelled flow; resolved after the drain it would sit in the ready queue while steps 3 and 4
+  computed a timeout and BLOCKED, so a cancel from another thread would take effect only when
+  something unrelated woke the loop. `EventLoop_test.cpp`'s *a cross-thread cancel is resolved
+  before the turn drains* asserts that one turn does both.
+- **A cancel from the loop's own thread resolves inline; from any other thread it queues.** The
+  predicate is `isOnWorkerThread()`, not "is anybody running": a park left live until the next
+  turn is one whose frame its OWNER may destroy in between -- a `whenAny` loser is freed the
+  moment the winner returns -- and the loop would then hold a handle into freed storage. `whenAny`
+  stops its losers from inside the drain that ran the winner, so that is the common path and it is
+  the inline one.
+- **Both `clock.refresh()` calls are load-bearing, and they fail differently.** Step 3's decides
+  the TIMEOUT the backend is given; step 5's decides which deadlines are due in this turn rather
+  than the next. `ClockRefresh_test.cpp` has one case per call, because the single case that
+  preceded it passed with either of them removed. A `SteadyClock` and a `ManualClock` both ignore
+  `refresh()`, so nothing else in the suite notices when a turn stops making either call -- which
+  is how fastcached's daemon came to serve a cache whose clock was frozen at the value
+  `CachedClock` sampled in its constructor.
+- **The turn is bounded (`EventLoopOptions::dispatchBatch`), and the remainder is kept.** Work
+  that re-queues itself -- a flow yielding in a loop, a consumer that waits again at once -- would
+  otherwise starve steps 4 and 5 entirely. Nothing is dropped: what the bound leaves is what the
+  next turn takes, and step 3 answers a timeout of zero while the queue is non-empty, so a full
+  ready queue is a poll rather than a block.
+- **The wait is skipped when nothing could come back from it.** A loop with no park and no closed
+  handle has nothing the backend can report. `run()` is the exception, and it is the whole of what
+  `IdlePolicy::Block` means: a loop that owns its thread and is idle BLOCKS, because another
+  thread may still `post` and the backend's wake channel is what ends that wait.
+- **A loop somebody else drives never blocks inside a turn** (`IdlePolicy::Return`): the caller is
+  what waits. `testing::TestLoop` is that policy plus `NullBackend`, and it is the real
+  `EventLoop` rather than a second implementation -- fastcached's `TestReactor` was a reactor of
+  its own, so every rule the platform reactors held had to be written twice and could differ.
+
+## Teardown, in six steps
+
+`~EventLoop` does six things in one order, and most of them are somebody's bug report.
+
+1. **Assert that teardown is serialised with dispatch** (`!running() || isOnWorkerThread()`,
+   guarantee G5). Origin:
+   [fastcached#668](https://github.com/LASTRADA-Software/fastcached/issues/668).
+2. **Request stop, THEN move the borrowed parks to the ready queue.** A waiter queued before the
+   stop was requested resumes on its normal path, into an owner that is already destroyed.
+3. **Bounded drain passes.** A cancelled awaitable commonly re-parks, so "drain until empty" spins
+   forever on exactly the shutdown it exists to make clean.
+4. **Abandon to a FIXPOINT**, over the ready queue, the park table and the inbound queue together.
+   Freeing a chain re-enters the loop -- a frame holding a deadline runs its disarm into
+   `cancelPending`, which reads the park table -- so a single pass leaves whatever that produced
+   for MEMBER destruction, and members die in reverse declaration order: a chain freed from the
+   later container then searches one whose destructor has already run. Origin:
+   [fastcached#1025](https://github.com/LASTRADA-Software/fastcached/issues/1025),
+   [fastcached#1054](https://github.com/LASTRADA-Software/fastcached/issues/1054).
+5. **Destroy the spawned roots**, after the abandonment and not before: a spawned flow's frame is
+   owned there, so destroying it first pulls the ground from under anything still parked on it.
+6. **Unregister the wake.** A host-driven backend holds a pointer to the loop and an armed host
+   timer; either outliving the loop is a call into freed storage on the host's next turn.
+
+- **What the loop OWNS is freed; what it BORROWS is resumed**, in both containers. A chain the
+  loop owns is a `DetachedTask`, which carries no stop token -- a detached flow has no awaiting
+  coroutine to inherit one from -- so resuming it would not cancel it, it would run the rest of
+  its body on a loop that is being destroyed. A chain the loop borrows belongs to a `Task`
+  somebody holds, that owner set a stop token, and resuming it is what makes the frame unwind and
+  run its cleanup. The question is answered by `ParkedWork::abandon` being non-empty, recorded
+  where the work is queued rather than asked of `detail::Parked`, which offers no accessor for it.
+- **`cancelPending`'s `true` is an ownership transfer, not a status**, so the claim it takes back
+  is DISARMED rather than released: releasing the last claim would free the very frame the caller
+  has just been handed. It searches the ready queue, the park table and the inbound queue, because
+  an answer that depended on which thread submitted is not a transfer anybody can rely on.
+- **`spawn` releases a finished flow in the turn that ran it**, in O(1), through a list node the
+  turn unlinks. contour swept every spawned flow at the top of each turn, which reclaimed a frame
+  one turn late and cost O(n) per turn to do it; a server spawning one flow per connection pays
+  that forever.
+
+## Thread affinity, asserted rather than documented
+
+- **G1: exactly one thread dequeues a loop.** `run()`, `runOnce()` and `blockOn()` each claim the
+  worker identity, and `runOnce` asserts that no OTHER thread already holds it. `run()` is not
+  virtual, and that is the obligation half: a loop that could enter its turn without claiming
+  would answer `teardownIsSerialisedWithDispatch()` with `true` from every thread -- the
+  false-safe direction, where every guard built on it stays green while checking nothing. Origin:
+  [fastcached#668](https://github.com/LASTRADA-Software/fastcached/issues/668).
+- **G2: every resumption happens in turn step 2.** Asserted from the FLOW's own frame, because the
+  loop asserting its own invariant would pass on a backend that never resumed anything at all:
+  `EventLoop_test.cpp` has a flow that records whether the backend was inside `wait()` at the
+  instant it resumed.
+- **G3: helper threads only post.** `post`, `submit`, `schedule`, `requestCancel` and `stop` hand
+  work to the inbound queue and wake the backend; step 1 is what runs it, on the loop's thread.
+  The work itself records which thread it ran on.
+- **A host-driven loop refuses `run()` and `blockOn()`**, and the refusal is COMPILED under
+  WebAssembly rather than removed: a consumer reaches it by mistake, not by design, and a symbol
+  simply absent there fails at link time in somebody else's build with nothing to say why.
+  `core-cpp.hostdriven-canary` drives both, registered `WILL_FAIL`; its SIGABRT handler exists
+  because ctest reads a signal as an exception and `WILL_FAIL` inverts only a return code.
+
 ## Task ownership
 
 These landed with Task B1, which merged fastcached's `Task.hpp`, `ParkedWork.hpp`, `IExecutor.hpp`,
