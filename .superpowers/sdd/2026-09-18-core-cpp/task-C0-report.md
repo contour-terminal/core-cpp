@@ -838,7 +838,7 @@ list the check needs; the guide says to keep that log in the pull request.
    to a blob, not what the file is now, and which was true when I first saw it and stale when I
    reported it. **Ask `git ls-files --eol`, not a warning line and not `grep`**: it answers the
    actual question and prints both sides plus the attributes in force. The controller's own
-   `grep -c $''` suggested the same wrong answer, so this is a trap that catches two readers in a
+   `grep -c $'\r'` suggested the same wrong answer, so this is a trap that catches two readers in a
    row.)
 
 ## CI
