@@ -170,6 +170,40 @@ DetachedTask joinOnPool(ThreadPoolExecutor* pool, std::size_t children, Arrivals
     joined->arrive();
 }
 
+/// A child that parks TWICE. The first `ResumeOn` suspends on the thread that started the join;
+/// the SECOND one suspends on whichever pool thread resumed it -- which is the only way this suite
+/// makes two threads take claims on one chain at the same moment. `claimOn` then runs concurrently
+/// with a sibling's `claimOn`, with `Parked::resume()`'s `disarm()`, and with the release of a
+/// claim whose `ParkedWork` is going out of scope on a third thread.
+/// @param pool Where to run.
+/// @param arrived Counted once both parks are behind it.
+Task<void> twiceParkedJob(ThreadPoolExecutor* pool, Arrivals* arrived)
+{
+    co_await ResumeOn { *pool };
+    co_await ResumeOn { *pool };
+    arrived->arrive();
+}
+
+/// Joins @p children twice-parking children under one detached root, so one AbandonState sees
+/// every claim, re-arm, disarm and release the pool can produce.
+/// @param pool Where the children run.
+/// @param children How many to join.
+/// @param arrived Counted per child.
+/// @param joined Counted once the join completes.
+DetachedTask joinTwiceParked(ThreadPoolExecutor* pool,
+                             std::size_t children,
+                             Arrivals* arrived,
+                             Arrivals* joined)
+{
+    auto tasks = std::vector<Task<void>> {};
+    tasks.reserve(children);
+    for ([[maybe_unused]] auto const index: std::views::iota(std::size_t { 0 }, children))
+        tasks.push_back(twiceParkedJob(pool, arrived));
+
+    co_await whenAll(std::move(tasks));
+    joined->arrive();
+}
+
 } // namespace
 
 // #1041 over the real pool. What genuinely closes the hazard is stronger than this line: both
@@ -284,5 +318,30 @@ TEST_CASE("A join whose children finish on a pool completes exactly once", "[Thr
     REQUIRE(settled);
     CHECK(arrived.count() == Children);
     // Exactly once: a lost decrement completes the join twice and resumes the root twice.
+    CHECK(joined.count() == 1);
+}
+
+TEST_CASE("Claims on one chain are taken and given back from several threads at once",
+          "[ThreadPoolExecutor][WhenAll]")
+{
+    // PROBE for the residual risk in R97's fix: `AbandonState::claim()` increments relaxed, and
+    // `Parked::resume()` disarms before resuming while its own claim is released afterwards. Every
+    // other case in the suite takes its claims on one thread, so neither had been exercised.
+    // Sixteen children each parking twice on four threads means `claimOn` -- `call_once`, `rearm`,
+    // `claim` -- runs concurrently with a sibling's `disarm` and a third claim's `release`, all on
+    // one AbandonState.
+    constexpr auto Children = std::size_t { 16 };
+
+    auto arrived = Arrivals {};
+    auto joined = Arrivals {};
+    auto pool = ThreadPoolExecutor { 4 }; // last, so it is joined first
+
+    joinTwiceParked(&pool, Children, &arrived, &joined);
+
+    auto const settled = joined.waitFor(1);
+    INFO("children past both parks: " << arrived.count() << " of " << Children
+                                      << "; joins completed: " << joined.count());
+    REQUIRE(settled);
+    CHECK(arrived.count() == Children);
     CHECK(joined.count() == 1);
 }
