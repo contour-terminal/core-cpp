@@ -1,0 +1,12 @@
+# The SDD workspace is scratch: ledgers, briefs, reports and review packages are
+# per-session working files and stay out of the repository.
+*
+# ...with one exception. global-constraints.md stopped being scratch hours into the
+# first session that used it: every dispatch cites it as binding, several lanes write
+# to it, and an untracked file has no index, no diff, no history and no protection
+# against a concurrent overwrite -- so none of the three shared-file rules it itself
+# states can apply to it. Tracking it turns that whole class of hazard back into the
+# one the rulebook already covers. `!*/` lets git descend; `*` still ignores the rest.
+!*/
+!.gitignore
+!global-constraints.md
