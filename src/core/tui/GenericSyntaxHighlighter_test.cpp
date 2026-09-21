@@ -1095,6 +1095,51 @@ TEST_CASE("GenericSyntaxHighlighter.builtin_language_list_is_the_shipped_set", "
     }
 }
 
+TEST_CASE("GenericSyntaxHighlighter.no_language_hides_above_Last", "[tui][highlight]")
+{
+    // Every other case in this file walks `[0, Last)` -- BuiltinLanguageTable, name(), the three
+    // golden tables -- so a language appended AFTER `Last` is invisible to all of them. Measured,
+    // with such an enumerator actually in the tree:
+    //
+    //   * appended alone, the build fails on `-Werror,-Wswitch`: highlightBuiltin()'s switch is
+    //     the one thing that notices, and it demands a case;
+    //   * appended together with the case the compiler just demanded, the build is clean and the
+    //     suite green at 3870 assertions in 1033 cases. builtinLanguageTableIsIndexedByLanguageId()
+    //     compares the table's size against `Last`, and appending after `Last` moves neither, so
+    //     it fires only once the table row is added -- once the mistake is half corrected.
+    //
+    // What is harmful is a hidden language that *works*: one the switch dispatches to a real
+    // highlighter, reachable through a table, or answering to a name. That is what this refuses,
+    // and it is the tui half of NetError_test.cpp's "No code hides above Last".
+    // `.agent/rules/design-principles.md` names the general version: a check anchored on an
+    // enumerator by name fires only when nothing is wrong.
+    //
+    // What it cannot see: an enumerator above `Last` whose switch case only breaks and which no
+    // table names. C++ cannot enumerate enumerators, so nothing can see that one -- but it is also
+    // unreachable, unnamed and inert, which is to say it is not yet a language.
+    auto const registry = SyntaxHighlighterRegistry {};
+    auto const probe = std::string_view { "int x; /* c */" };
+
+    for (auto const value: std::views::iota(static_cast<std::size_t>(std::to_underlying(LanguageId::Last)),
+                                            static_cast<std::size_t>(FirstRegisteredLanguageId)))
+    {
+        auto const language = static_cast<LanguageId>(static_cast<std::uint8_t>(value));
+        INFO("LanguageId value " << value);
+
+        // Nothing above the count highlights: all-Default is what an id with no language gives.
+        CHECK(highlightLine(probe, language).first == HighlightMap(probe.size(), HighlightCategory::Default));
+
+        // Nothing above the count is named, or reachable from any of the three built-in tables.
+        CHECK(registry.name(language).empty());
+        CHECK(std::ranges::find(ExtensionLanguageTable, language, &LanguageToken::language)
+              == ExtensionLanguageTable.end());
+        CHECK(std::ranges::find(FenceTagLanguageTable, language, &LanguageToken::language)
+              == FenceTagLanguageTable.end());
+        CHECK(std::ranges::find(FilenameLanguageTable, language, &LanguageToken::language)
+              == FilenameLanguageTable.end());
+    }
+}
+
 TEST_CASE("GenericSyntaxHighlighter.every_builtin_detects_from_extension_and_fence_tag", "[tui][highlight]")
 {
     auto registry = SyntaxHighlighterRegistry {};

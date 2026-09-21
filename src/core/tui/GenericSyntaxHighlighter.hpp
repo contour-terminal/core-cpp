@@ -62,11 +62,16 @@ enum class LanguageId : std::uint8_t
     Last, ///< Not a language: the number of languages above it, so a table or a test can cover
           ///< every one of them without restating the list. Never detected, never highlighted,
           ///< never returned by a registry. **A new language goes above it, never below**, and
-          ///< above it but below FirstRegisteredLanguageId, which is where registered ids start.
-          ///< One appended after `Last` still satisfies the switch in highlightLine() and still
-          ///< leaves `Last` looking like a count, and everything that walks `[0, Last)` —
-          ///< BuiltinLanguageTable, name() and the golden tests — would miss it;
-          ///< builtinLanguageTableIsIndexedByLanguageId() is what refuses that, at compile time.
+          ///< below FirstRegisteredLanguageId, which is where registered ids start. Appending one
+          ///< *after* `Last` is the mistake to avoid, and the guards catch it only in part, which
+          ///< is measured rather than assumed: `-Wswitch` demands a case in highlightBuiltin(),
+          ///< so the enumerator cannot be added silently, but once that case exists the build is
+          ///< clean — builtinLanguageTableIsIndexedByLanguageId() compares this table's size
+          ///< against `Last`, and appending after `Last` moves neither, so it fires only once the
+          ///< table row is added, which is to say once the mistake is half corrected. Everything
+          ///< that walks `[0, Last)` — BuiltinLanguageTable, name(), the three golden tests —
+          ///< misses it entirely. `GenericSyntaxHighlighter_test.cpp`'s
+          ///< "no_language_hides_above_Last" is what refuses a hidden language that *works*.
 };
 
 /// @brief The first id SyntaxHighlighterRegistry::registerLanguage() issues.

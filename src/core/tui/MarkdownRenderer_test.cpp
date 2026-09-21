@@ -2,6 +2,7 @@
 #include <core/tui/ImageProvider.hpp>
 #include <core/tui/MarkdownRenderer.hpp>
 #include <core/tui/TerminalOutput.hpp>
+#include <core/tui/Theme.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -1486,15 +1487,36 @@ class SpanRecordingOutput: public TerminalOutput
   public:
     std::vector<std::string> spans;
 
-    void writeText(std::string_view text, [[maybe_unused]] Style const& style) override
+    /// @brief The foreground each span was written with, parallel to @c spans.
+    ///
+    /// The colour is what tells the two fence-handling call sites apart: a line the fence lookup
+    /// never resolved is written with the theme's code-block style, where one that reached
+    /// renderHighlightedLine() carries a syntax-palette colour even when every character came back
+    /// Default.
+    std::vector<Color> foregrounds;
+
+    void writeText(std::string_view text, Style const& style) override
     {
         spans.emplace_back(text);
+        foregrounds.push_back(style.fg);
     }
 
     void writeRaw([[maybe_unused]] std::string_view text) override {}
 
     void flush() override {}
 };
+
+/// @brief A highlighter that classifies nothing, so every character comes back Default.
+///
+/// Its output is indistinguishable from no highlighting by span count, which is the point: the
+/// only trace it leaves is that renderHighlightedLine() ran at all, and that is exactly what the
+/// fence lookup controls.
+auto silentHighlighter() -> HighlightFunction
+{
+    return [](std::string_view line, HighlightState state) {
+        return std::pair { HighlightMap(line.size(), HighlightCategory::Default), state };
+    };
+}
 
 /// @brief A highlighter that marks the first character of a line and leaves the rest alone.
 auto firstCharacterHighlighter() -> HighlightFunction
@@ -1568,10 +1590,48 @@ TEST_CASE("MarkdownRenderer.a_builtin_fence_tag_still_highlights_beside_a_regist
     CHECK(output.spans.size() > 1);
 }
 
-TEST_CASE("MarkdownRenderer.stream.a_registered_fence_tag_highlights_its_code_block")
+// processStreamBuffer() is a second copy of the fence handling, reached only through
+// beginStream()/feedToken() and never by render(). It threads the registry through two call
+// sites, and the next two cases separate them -- one test that fails for two reasons names
+// neither. The sites are in series, so only the first can be isolated outright:
+//
+//   * "the_fence_lookup_consults_the_registry" fails ONLY when the detectLanguageFromFenceTag()
+//     site is broken. Its highlighter classifies nothing, so with the highlightLine() site broken
+//     the rendered colour is identical and the case still passes.
+//   * "the_highlight_call_consults_the_registry" fails when either site is broken, because a
+//     registered id can only come from the lookup. Read the two together: both red means the
+//     lookup, this one red alone means the dispatch.
+
+TEST_CASE("MarkdownRenderer.stream.the_fence_lookup_consults_the_registry")
 {
-    // processStreamBuffer() is a second copy of the fence handling, reached only through
-    // beginStream()/feedToken(), and render() never touches it.
+    auto registry = SyntaxHighlighterRegistry {};
+    REQUIRE(registry
+                .registerLanguage({ .name = "toy",
+                                    .extensions = { ".toy" },
+                                    .fenceTags = { "toy" },
+                                    .highlight = silentHighlighter() })
+                .has_value());
+
+    SpanRecordingOutput output;
+    MarkdownRenderer renderer(output, MarkdownRenderer::defaultTheme(), &registry);
+
+    renderer.beginStream();
+    renderer.feedToken("```toy\n");
+    renderer.feedToken("let x\n");
+    renderer.feedToken("```\n");
+    renderer.endStream();
+
+    // One span either way; the colour is what says the tag resolved. A fence that never resolved
+    // is written with the theme's code-block style, whose foreground is the default-constructed
+    // one, where anything that reached renderHighlightedLine() carries a syntax-palette colour.
+    REQUIRE(output.spans == std::vector<std::string> { "let x" });
+    REQUIRE(output.foregrounds.size() == 1);
+    CHECK(output.foregrounds[0] == Color { categoryColor(HighlightCategory::Default, currentTheme()) });
+    CHECK(output.foregrounds[0] != MarkdownRenderer::defaultTheme().codeBlock.fg);
+}
+
+TEST_CASE("MarkdownRenderer.stream.the_highlight_call_consults_the_registry")
+{
     auto registry = SyntaxHighlighterRegistry {};
     REQUIRE(registry
                 .registerLanguage({ .name = "toy",
@@ -1589,6 +1649,7 @@ TEST_CASE("MarkdownRenderer.stream.a_registered_fence_tag_highlights_its_code_bl
     renderer.feedToken("```\n");
     renderer.endStream();
 
+    // Split at the category boundary only the registered highlighter reports.
     CHECK(output.spans == std::vector<std::string> { "l", "et x" });
 }
 

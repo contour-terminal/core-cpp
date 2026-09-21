@@ -5916,7 +5916,7 @@
       "profiles": [
         "endo"
       ],
-      "note": "the process-wide registration callback is gone (Task B13a, core-cpp#24). The application owns a core::tui::SyntaxHighlighterRegistry, fills it once at startup and passes it to MarkdownRenderer, StyledText::fromMarkdown, detectLanguageFromPath and highlightLine, each of which takes it as a trailing argument defaulting to nullptr."
+      "note": "the process-wide registration callback is gone (Task B13a, core-cpp#24). The application owns one core::tui::SyntaxHighlighterRegistry, fills it once at startup and passes it to every entry point, each of which takes it as a trailing argument defaulting to nullptr: auto highlighters = core::tui::SyntaxHighlighterRegistry {}; auto const registered = highlighters.registerLanguage({.name=\"endo\", .extensions={\".endo\"}, .fenceTags={\"endo\"}, .highlight=highlightEndoLine}); auto renderer = core::tui::MarkdownRenderer {output, theme, &highlighters}; auto const styled = core::tui::StyledText::fromMarkdown(text, width, &theme, &highlighters); auto const detected = core::tui::detectLanguageFromPath(path, &highlighters); auto const [map, next] = core::tui::highlightLine(line, detected, state, &highlighters);"
     },
     {
       "kind": "removed",
