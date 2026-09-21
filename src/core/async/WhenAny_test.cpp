@@ -468,4 +468,19 @@ TEST_CASE("whenAny throws OperationCancelled when the awaiting flow is cancelled
     REQUIRE_FALSE(winner.has_value());
     REQUIRE_THROWS_AS(root.result(), OperationCancelled);
 }
+#else
+// The case above cannot be compiled here, so it SAYS so rather than vanishing. A compiled-out
+// case reports nothing at all: the Windows binary would list three fewer cases than the Linux one
+// with nothing to explain the gap, and `.agent/rules/testing.md` asks for a `SKIP` precisely so
+// that a case which could not run names itself and why. The `#ifndef` stays -- the reason for it
+// is sound -- and only the silence goes.
+TEST_CASE("whenAny surfaces the winning child's exception", "[whenAny]")
+{
+    SKIP("exception propagation through a coroutine frame crashes the Catch2 harness on MSVC");
+}
+
+TEST_CASE("whenAny throws OperationCancelled when the awaiting flow is cancelled", "[whenAny]")
+{
+    SKIP("exception propagation through a coroutine frame crashes the Catch2 harness on MSVC");
+}
 #endif
