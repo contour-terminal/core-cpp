@@ -89,20 +89,19 @@ namespace detail
         void release() noexcept
         {
             auto expected = _word.load(std::memory_order_relaxed);
-            for (;;)
+            auto takesTheRoot = false;
+            auto desired = std::uint64_t {};
+            do
             {
                 auto const next = expected - 1;
-                auto const takesTheRoot = (next & CountMask) == 0 && (next & ArmedBit) != 0;
-                auto const desired = takesTheRoot ? (next & ~ArmedBit) : next;
-                if (_word.compare_exchange_weak(
-                        expected, desired, std::memory_order_acq_rel, std::memory_order_relaxed))
-                {
-                    if (takesTheRoot)
-                        if (auto const root = std::exchange(_root, {}))
-                            root.destroy();
-                    return;
-                }
-            }
+                takesTheRoot = (next & CountMask) == 0 && (next & ArmedBit) != 0;
+                desired = takesTheRoot ? (next & ~ArmedBit) : next;
+            } while (!_word.compare_exchange_weak(
+                expected, desired, std::memory_order_acq_rel, std::memory_order_relaxed));
+
+            if (takesTheRoot)
+                if (auto const root = std::exchange(_root, {}))
+                    root.destroy();
         }
 
         /// Gives the chain back, for every holder at once: nothing frees it afterwards.
