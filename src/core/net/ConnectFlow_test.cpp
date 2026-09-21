@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/async/Task.hpp>
 #include <core/net/ConnectFlow.hpp>
+#include <core/net/EventLoop.hpp>
 #include <core/net/IAsyncAddressResolver.hpp>
 #include <core/net/IConnector.hpp>
 #include <core/net/SocketAddress.hpp>
