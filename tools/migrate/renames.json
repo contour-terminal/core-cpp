@@ -5510,12 +5510,11 @@
         "contour",
         "endo"
       ],
-      "status": "pending",
-      "task": "B6",
       "target": {
         "header": "core/net/IListener.hpp",
         "symbol": "core::net::IListener::boundPort"
-      }
+      },
+      "note": "Task B8 delivered it: IListener::boundPort. It is the port the listener GOT, which for a bind to 0 is not the port it asked for."
     },
     {
       "kind": "symbol",
@@ -6531,6 +6530,655 @@
         "fastcached"
       ],
       "note": "Task B6: fastcached's Detail::RetireParkedRead is not carried over. It was a template over an Impl exposing readOp and UpdateInterest, shared because EpollSocket and KqueueSocket spelled the retirement identically. core-cpp has ONE reactor socket, and its retirement also has to unregister a loop park and disarm a receive deadline, so the body lives in PosixSocket::takeRead and there is no second copy for a shared helper to prevent."
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/IConnector.hpp",
+      "to": "core/net/IConnector.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IConnector.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/ConnectFlow.hpp",
+      "to": "core/net/ConnectFlow.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ConnectFlow.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/KeepAlive.hpp",
+      "to": "core/net/KeepAlive.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/KeepAlive.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/SocketAddress.hpp",
+      "to": "core/net/SocketAddress.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SocketAddress.hpp"
+      },
+      "note": "the BIND half of the upstream header is not here; see the removed rows for BindAndListen and its neighbours"
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/IAsyncAddressResolver.hpp",
+      "to": "core/net/IAsyncAddressResolver.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IAsyncAddressResolver.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/ThreadedAddressResolver.hpp",
+      "to": "core/net/ThreadedAddressResolver.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ThreadedAddressResolver.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/IAdmissionControl.hpp",
+      "to": "core/net/IAdmissionControl.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IAdmissionControl.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/SocketDeadline.hpp",
+      "to": "core/net/SocketDeadline.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SocketDeadline.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/ReactorDial.hpp",
+      "to": "core/net/ReadinessDial.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ReadinessDial.hpp"
+      },
+      "note": "de-templatised: DialReadiness<Traits> is the free core::net::detail::dialReadiness"
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/PlatformConnector.hpp",
+      "to": "core/net/IConnector.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IConnector.hpp"
+      },
+      "note": "the #if ladder is gone: makeConnector(loop, resolver) is the one connector"
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/EpollConnector.hpp",
+      "to": "core/net/IConnector.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IConnector.hpp"
+      },
+      "note": "as PlatformConnector.hpp"
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/KqueueConnector.hpp",
+      "to": "core/net/IConnector.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IConnector.hpp"
+      },
+      "note": "as PlatformConnector.hpp"
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/IocpConnector.hpp",
+      "to": "core/net/IConnector.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IConnector.hpp"
+      },
+      "note": "as PlatformConnector.hpp"
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::IConnector",
+      "to": "core::net::IConnector",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IConnector.hpp",
+        "symbol": "core::net::IConnector"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::DialOptions",
+      "to": "core::net::DialOptions",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IConnector.hpp",
+        "symbol": "core::net::DialOptions"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::KeepAlive",
+      "to": "core::net::KeepAlive",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/KeepAlive.hpp",
+        "symbol": "core::net::KeepAlive"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::KeepAliveSettings",
+      "to": "core::net::KeepAliveSettings",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/KeepAlive.hpp",
+        "symbol": "core::net::KeepAliveSettings"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::IAddressResolver",
+      "to": "core::net::IAddressResolver",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SocketAddress.hpp",
+        "symbol": "core::net::IAddressResolver"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::SystemAddressResolver",
+      "to": "core::net::SystemAddressResolver",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SocketAddress.hpp",
+        "symbol": "core::net::SystemAddressResolver"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::ResolvedEndpoint",
+      "to": "core::net::ResolvedEndpoint",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SocketAddress.hpp",
+        "symbol": "core::net::ResolvedEndpoint"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::DefaultAddressResolver",
+      "to": "core::net::defaultAddressResolver",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SocketAddress.hpp",
+        "symbol": "core::net::defaultAddressResolver"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::FormatPeerAddress",
+      "to": "core::net::formatPeerAddress",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SocketAddress.hpp",
+        "symbol": "core::net::formatPeerAddress"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::IAsyncAddressResolver",
+      "to": "core::net::IAsyncAddressResolver",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IAsyncAddressResolver.hpp",
+        "symbol": "core::net::IAsyncAddressResolver"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::InlineAddressResolver",
+      "to": "core::net::InlineAddressResolver",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IAsyncAddressResolver.hpp",
+        "symbol": "core::net::InlineAddressResolver"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::ResolveResult",
+      "to": "core::net::ResolveResult",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IAsyncAddressResolver.hpp",
+        "symbol": "core::net::ResolveResult"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::ResolveFailure",
+      "to": "core::net::resolveFailure",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IAsyncAddressResolver.hpp",
+        "symbol": "core::net::resolveFailure"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::ThreadedAddressResolver",
+      "to": "core::net::ThreadedAddressResolver",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ThreadedAddressResolver.hpp",
+        "symbol": "core::net::ThreadedAddressResolver"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::ThreadedResolverOptions",
+      "to": "core::net::ThreadedResolverOptions",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ThreadedAddressResolver.hpp",
+        "symbol": "core::net::ThreadedResolverOptions"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::IAdmissionControl",
+      "to": "core::net::IAdmissionControl",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IAdmissionControl.hpp",
+        "symbol": "core::net::IAdmissionControl"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::CountingAdmissionControl",
+      "to": "core::net::CountingAdmissionControl",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IAdmissionControl.hpp",
+        "symbol": "core::net::CountingAdmissionControl"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::SocketDeadlineTarget",
+      "to": "core::net::SocketDeadlineTarget",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SocketDeadline.hpp",
+        "symbol": "core::net::SocketDeadlineTarget"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::ArmSocketDeadline",
+      "to": "core::net::armSocketDeadline",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SocketDeadline.hpp",
+        "symbol": "core::net::armSocketDeadline"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::Detail::IsNumericHost",
+      "to": "core::net::detail::isNumericHost",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SocketAddress.hpp",
+        "symbol": "core::net::detail::isNumericHost"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::Detail::EndpointFromSockaddr",
+      "to": "core::net::detail::endpointFromSockaddr",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SocketAddress.hpp",
+        "symbol": "core::net::detail::endpointFromSockaddr"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::Detail::PortOfSockaddr",
+      "to": "core::net::detail::portOfSockaddr",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SocketAddress.hpp",
+        "symbol": "core::net::detail::portOfSockaddr"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::Detail::RunConnectFlow",
+      "to": "core::net::detail::runConnectFlow",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ConnectFlow.hpp",
+        "symbol": "core::net::detail::runConnectFlow"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::Detail::DialStep",
+      "to": "core::net::detail::DialStep",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ConnectFlow.hpp",
+        "symbol": "core::net::detail::DialStep"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::Detail::DialReadiness",
+      "to": "core::net::detail::dialReadiness",
+      "profiles": [
+        "fastcached"
+      ],
+      "apply": "manual",
+      "note": "de-templatised: the {Reactor, Handler, Socket} traits plus Traits::Settle have nothing left to vary over once there is one EventLoop over an IoBackend",
+      "target": {
+        "header": "core/net/ReadinessDial.hpp",
+        "symbol": "core::net::detail::dialReadiness"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::PlatformConnector",
+      "to": "core::net::makeConnector",
+      "profiles": [
+        "fastcached"
+      ],
+      "apply": "manual",
+      "note": "a type alias selected by an #if ladder becomes a factory: makeConnector(loop, resolver)",
+      "target": {
+        "header": "core/net/IConnector.hpp",
+        "symbol": "core::net::makeConnector"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Connect",
+      "to": "connect",
+      "apply": "semantic",
+      "scope": "FastCache::IConnector",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IConnector.hpp",
+        "symbol": "core::net::IConnector::connect"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "AllowAccept",
+      "to": "allowAccept",
+      "apply": "semantic",
+      "scope": "FastCache::IAdmissionControl",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IAdmissionControl.hpp",
+        "symbol": "core::net::IAdmissionControl::allowAccept"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "OnConnectionStarted",
+      "to": "onConnectionStarted",
+      "apply": "semantic",
+      "scope": "FastCache::IAdmissionControl",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IAdmissionControl.hpp",
+        "symbol": "core::net::IAdmissionControl::onConnectionStarted"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "OnConnectionEnded",
+      "to": "onConnectionEnded",
+      "apply": "semantic",
+      "scope": "FastCache::IAdmissionControl",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IAdmissionControl.hpp",
+        "symbol": "core::net::IAdmissionControl::onConnectionEnded"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "InFlight",
+      "to": "inFlight",
+      "apply": "semantic",
+      "scope": "FastCache::CountingAdmissionControl",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IAdmissionControl.hpp",
+        "symbol": "core::net::CountingAdmissionControl::inFlight"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "SetMax",
+      "to": "setMax",
+      "apply": "semantic",
+      "scope": "FastCache::CountingAdmissionControl",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IAdmissionControl.hpp",
+        "symbol": "core::net::CountingAdmissionControl::setMax"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Offloaded",
+      "to": "offloaded",
+      "apply": "semantic",
+      "scope": "FastCache::ThreadedAddressResolver",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ThreadedAddressResolver.hpp",
+        "symbol": "core::net::ThreadedAddressResolver::offloaded"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Refused",
+      "to": "refused",
+      "apply": "semantic",
+      "scope": "FastCache::ThreadedAddressResolver",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ThreadedAddressResolver.hpp",
+        "symbol": "core::net::ThreadedAddressResolver::refused"
+      }
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::EpollConnector",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "never imported, and the gate keeps it that way: core-cpp has a single EventLoop over an IoBackend, so the epoll and kqueue connectors -- whose bodies were identical but for the reactor type they named -- have nothing left to differ in. Use makeConnector(loop, resolver)."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::KqueueConnector",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "as EpollConnector: never imported."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::IocpConnector",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "as EpollConnector: never imported. The Windows dial goes through WSAEventSelect readiness, which is what WindowsSocket already is; the ConnectEx form needs an IocpSocket, which Task B7b owns."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::detail::ConnectOp",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "the IOCP dial op (Net/IocpDial.hpp) is not imported: it issues ConnectEx against an IocpSocket this tree does not have. core::net::detail::dialReadiness serves Windows too."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::detail::bindAndListen",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "core-cpp listeners own their own bind sequence (PosixListener::bind, WindowsListener::bind), so a second one would be a second answer to who owns an address. listen(loop, ListenOptions) is the entry point."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::detail::BoundListener",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "the return type of BindAndListen; see that row."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::detail::boundPortOf",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "IListener::boundPort answers this for a listener, and adoptListener asks getsockname for an adopted handle. There is no caller left holding a bare socket to ask about."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::detail::peerAddressOf",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "ISocket::peerAddress answers it; the sockets capture the peer when they are constructed."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::ReusePort",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "SO_REUSEPORT is not imported: nothing in core-cpp binds one port from several loops yet, and an option that is never exercised is an option that is never right. ListenOptions is where it would go."
     }
   ]
 }

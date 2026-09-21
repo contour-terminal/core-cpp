@@ -263,7 +263,7 @@ TEST_CASE("TLS completes a two-reactor handshake under concurrent client I/O", "
                           core::net::IListener* acceptor,
                           core::net::ITlsContext* ctx,
                           bool* ok) -> Task<void> {
-        auto connected = co_await core::net::connect(loop, "127.0.0.1", acceptor->localPort());
+        auto connected = co_await core::net::connect(loop, "127.0.0.1", acceptor->boundPort());
         if (!connected)
         {
             releaseServer(remote, acceptor); // else the join below waits on a parked accept
@@ -342,7 +342,7 @@ TEST_CASE("a cancelled TLS handshake releases the coroutines parked on it", "[ne
                           core::net::IListener* acceptor,
                           core::net::ITlsContext* ctx,
                           bool* ok) -> Task<void> {
-        auto connected = co_await core::net::connect(loop, "127.0.0.1", acceptor->localPort());
+        auto connected = co_await core::net::connect(loop, "127.0.0.1", acceptor->boundPort());
         if (!connected)
         {
             releaseServer(remote, acceptor); // else the join below waits on a parked accept

@@ -601,9 +601,41 @@ get right, and each one is a defect that has already happened.
   it connects" is true of the caller and false of the thread, which serves every other
   connection. fastcached paid for the opposite decision with a thread per peer and a shutdown
   that hung forever inside `send`.
-- **DNS never runs on the loop.** `getaddrinfo` takes no timeout, so a wedged resolver blocks
-  everything behind it. `ThreadedAddressResolver` runs it on a small fixed pool whose queue is
-  bounded and refused rather than waited on, and a literal address never reaches the pool.
+- **A name is never resolved on a loop thread, and the SEAM is what enforces it rather than the
+  thread.** `getaddrinfo` takes no timeout, so a wedged resolver stalls everything behind it for as
+  long as the platform's resolver library feels like — on an event loop that is every coroutine on
+  it, including the ones with nothing to do with the network. Every dial therefore goes through an
+  injected `IAsyncAddressResolver`; `ThreadedAddressResolver` is merely the implementation that
+  ships, with a fixed pool of two (one would let a single five-second SERVFAIL head-of-line-block
+  every dial behind it), a bounded queue that answers `WouldBlock` rather than waiting for room,
+  and a fast path that never hands a LITERAL address to a thread at all. **A null loop means
+  resolve inline** — with nowhere to submit a result back to, offloading would park a coroutine
+  nothing could resume — which is also what keeps an inline resolver drivable by
+  `core::async::syncRun`. The seam is the deliverable because it is what makes the rule TESTABLE:
+  an injected resolver records the thread it was called on, and `Connector_test` asserts that
+  thread is not the loop's. Origin:
+  [fastcached `Net/IAsyncAddressResolver.hpp` at 0708dd54](https://github.com/LASTRADA-Software/fastcached/blob/0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21/src/FastCache/Net/IAsyncAddressResolver.hpp).
+- **A dial checks `SO_ERROR`; it never trusts which callback fired** (Ruling R101). Readiness is
+  not success: a refused connect makes the socket ready too, and `getsockopt(SO_ERROR)` is the only
+  thing that says which happened. This is not defensive coding, it is the portable connect idiom —
+  and the failure mode is platform-specific and silent. On Linux a failed connect can reach
+  `onError` with neither direction set; on macOS the kqueue write filter fires with `EV_EOF`, the
+  backend reports `Writable`, and a dial that read that as success hands its caller a socket whose
+  FIRST WRITE fails, days later, on one platform. A parity suite that stops at "the dial returned"
+  cannot see it, which is why `ReadinessDial_test` and `Connector_test` assert `ConnRefused`
+  against a closed port on every backend the platform builds. The same sentence generalises and is
+  worth keeping in that form: **you never learn what went wrong from the readiness bits — you do
+  the `read`, the `write` or the `getsockopt`, and let that report.** Origin:
+  [fastcached `Net/ReactorDial.hpp` at 0708dd54](https://github.com/LASTRADA-Software/fastcached/blob/0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21/src/FastCache/Net/ReactorDial.hpp),
+  and [core-cpp ruling R101](https://github.com/contour-terminal/core-cpp/blob/master/.superpowers/sdd/2026-09-18-core-cpp/task-B3-fixround2.md).
+- **A dial's per-attempt state lives in the dialling coroutine's own frame**, not in the connector.
+  Its address is stable for exactly as long as the loop can reach it and it disappears with the
+  attempt, where a connector holding a slot per dial would let a dial that timed out while still in
+  flight tie one up. The corollary is the ordering every settle obeys: retire the park FIRST — a
+  level-triggered backend still reporting the handle would otherwise dispatch, be ignored, and
+  report again on every wait, which is a busy loop rather than a leak — and resume LAST, touching
+  nothing afterwards, because the resumed coroutine may run to its end and destroy the frame the
+  state lives in.
 - **A socket option that bounds a blocking call is inert on a socket whose reads suspend.**
   `SO_RCVTIMEO` belongs to the blocking transports only; a loop caller arms a deadline that
   closes the socket, which also bounds a peer dribbling one byte at a time.

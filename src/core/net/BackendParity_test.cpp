@@ -118,7 +118,7 @@ Task<void> echoOverListener(EventLoop* loop, core::net::IListener* listener, std
 /// hang just as surely as a REQUIRE here would (.agent/rules/testing.md).
 Task<void> connectAndSend(EventLoop* loop, core::net::IListener* listener)
 {
-    auto connected = co_await core::net::connect(loop, "127.0.0.1", listener->localPort());
+    auto connected = co_await core::net::connect(loop, "127.0.0.1", listener->boundPort());
     if (!connected.has_value())
     {
         listener->close();
@@ -487,7 +487,7 @@ TEST_CASE("every backend serves a loopback listener", "[net][backend][parity]")
             auto loop = EventLoop { *backend };
             auto listener = core::net::listen(loop, "127.0.0.1", 0);
             REQUIRE(listener.has_value());
-            auto const port = (*listener)->localPort();
+            auto const port = (*listener)->boundPort();
             REQUIRE(port != 0);
 
             // accept() and connect() park on opposite readiness directions, so this
@@ -1606,7 +1606,7 @@ TEST_CASE("the default backend drives the scenarios Socket_test pins to one back
         auto loop = EventLoop { *backend };
         auto listener = core::net::listen(loop, "127.0.0.1", 0);
         REQUIRE(listener.has_value());
-        auto const port = (*listener)->localPort();
+        auto const port = (*listener)->boundPort();
         REQUIRE(port != 0);
 
         auto got = std::string {};

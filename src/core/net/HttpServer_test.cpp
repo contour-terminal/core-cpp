@@ -571,7 +571,7 @@ TEST_CASE("serve dispatches a request through a handler and closes", "[net][http
     auto loop = EventLoop { *source };
     auto listener = core::net::listen(loop, "127.0.0.1", 0);
     REQUIRE(listener.has_value());
-    auto const port = (*listener)->localPort();
+    auto const port = (*listener)->boundPort();
     REQUIRE(port != 0);
 
     auto seenPath = std::string {};
@@ -617,7 +617,7 @@ TEST_CASE("serve answers 500 when a handler throws rather than dying", "[net][ht
     auto loop = EventLoop { *source };
     auto listener = core::net::listen(loop, "127.0.0.1", 0);
     REQUIRE(listener.has_value());
-    auto const port = (*listener)->localPort();
+    auto const port = (*listener)->boundPort();
     REQUIRE(port != 0);
 
     auto handler = core::net::HttpHandler { [](HttpRequest const&) -> HttpResponse {

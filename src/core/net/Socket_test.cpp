@@ -96,7 +96,7 @@ Task<void> echoServer(core::net::IListener* listener, bool* served)
 /// (.agent/rules/testing.md).
 Task<void> echoClient(EventLoop* loop, core::net::IListener* listener, bool* matched)
 {
-    auto connected = co_await core::net::connect(loop, "127.0.0.1", listener->localPort());
+    auto connected = co_await core::net::connect(loop, "127.0.0.1", listener->boundPort());
     if (!connected.has_value())
     {
         listener->close();
@@ -157,7 +157,7 @@ Task<void> connectSequentially(EventLoop* loop, core::net::IListener* listener, 
 {
     for ([[maybe_unused]] auto const attempt: std::views::iota(0, count))
     {
-        auto sock = co_await core::net::connect(loop, "127.0.0.1", listener->localPort());
+        auto sock = co_await core::net::connect(loop, "127.0.0.1", listener->boundPort());
         if (!sock.has_value())
         {
             listener->close(); // release the accept parked behind us rather than hang
@@ -362,7 +362,7 @@ TEST_CASE("listen + connect + accept echo a request over loopback", "[net]")
 
             auto listener = core::net::listen(loop, "127.0.0.1", 0);
             REQUIRE(listener.has_value());
-            REQUIRE((*listener)->localPort() != 0);
+            REQUIRE((*listener)->boundPort() != 0);
 
             auto served = false;
             auto matched = false;
@@ -669,7 +669,7 @@ Task<void> duplexBulk(EventLoop* loop,
                      std::size_t bytes,
                      std::size_t* got,
                      bool* sent) -> Task<void> {
-        auto connected = co_await core::net::connect(innerLoop, "127.0.0.1", acceptor->localPort());
+        auto connected = co_await core::net::connect(innerLoop, "127.0.0.1", acceptor->boundPort());
         if (!connected)
         {
             acceptor->close();

@@ -58,15 +58,26 @@ class WindowsListener final: public IListener
     [[nodiscard]] static std::expected<std::unique_ptr<WindowsListener>, NetError> bindUnix(
         EventLoop& loop, std::string_view path, int backlog = 128);
 
+    /// Adopts an already-bound, already-listening socket; @see core::net::adoptListener.
+    ///
+    /// It creates and associates the readiness event this listener needs, which also puts the
+    /// socket into non-blocking mode — a socket handed over by another process was created for
+    /// one that blocked on `accept`.
+    /// @param loop The loop whose backend drives accept readiness (not owned).
+    /// @param socket The listening socket; ownership transfers to the returned listener.
+    /// @return The adopted listener, or a @c NetError if the socket could not be prepared.
+    [[nodiscard]] static std::expected<std::unique_ptr<WindowsListener>, NetError> adopt(EventLoop& loop,
+                                                                                         SOCKET socket);
+
     [[nodiscard]] async::Task<AcceptResult> accept() override;
 
-    [[nodiscard]] std::uint16_t localPort() const noexcept override { return _localPort; }
+    [[nodiscard]] std::uint16_t boundPort() const noexcept override { return _boundPort; }
 
     void close() noexcept override;
 
   private:
     WindowsListener(
-        EventLoop& loop, SOCKET socket, WSAEVENT event, std::uint16_t localPort, std::string path) noexcept;
+        EventLoop& loop, SOCKET socket, WSAEVENT event, std::uint16_t boundPort, std::string path) noexcept;
 
     /// Closes the listening socket and its event (and removes the socket file),
     /// telling the loop first so a parked accept is resumed rather than left
@@ -79,7 +90,7 @@ class WindowsListener final: public IListener
     EventLoop& _loop;
     SOCKET _socket;
     WSAEVENT _event;
-    std::uint16_t _localPort;
+    std::uint16_t _boundPort;
     /// The AF_UNIX socket file this listener owns, removed by close(); empty for a TCP
     /// listener, which owns no path.
     std::string _path;

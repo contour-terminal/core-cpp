@@ -9,6 +9,7 @@ Run with the whole migration suite:
 from __future__ import annotations
 
 import io
+import json
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -321,13 +322,39 @@ class TheToolReportsAndStaysInsideItsPath(unittest.TestCase):
             self.assertIn("1 file changed", printed)
 
     def test_a_pending_row_is_applied_and_said_out_loud(self) -> None:
-        # `boundPort` is Task B6's; running before it lands must not be silent.
+        # A row whose target a task still owes is rewritten anyway, and the run says so.
+        #
+        # **The table is the case's own, not `renames.json`.** It used to borrow whichever row
+        # happened to be pending there -- `localPort` -> `boundPort`, task B6's -- and the day
+        # Task B8 delivered that rename this case failed, having asserted a warning about a row
+        # that no longer needed one. The behaviour is the tool's; a live table that happens to
+        # have nothing pending is not evidence that the tool stopped warning.
+        table = {
+            "version": 1,
+            "profiles": {"contour": "a consumer, for this case alone"},
+            "rows": [
+                {
+                    "kind": "member",
+                    "from": "localPort",
+                    "to": "boundPort",
+                    "profiles": ["contour"],
+                    "status": "pending",
+                    "task": "B6",
+                    "target": {
+                        "header": "core/net/IListener.hpp",
+                        "symbol": "core::net::IListener::boundPort",
+                    },
+                }
+            ],
+        }
         with TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "Serve.cpp").write_text("auto const p = listener.localPort();\n", encoding="utf-8")
+            pending = root / "pending.json"
+            pending.write_text(json.dumps(table), encoding="utf-8")
             output = io.StringIO()
             with redirect_stdout(output):
-                rewrite.main(["--profile", "contour", str(root)])
+                rewrite.main(["--profile", "contour", "--table", str(pending), str(root)])
             self.assertIn("boundPort", (root / "Serve.cpp").read_text(encoding="utf-8"))
             self.assertIn("warning: applied", output.getvalue())
             self.assertIn("task B6 still owes", output.getvalue())

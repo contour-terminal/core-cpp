@@ -56,7 +56,7 @@ class UnixListener final: public IListener
     [[nodiscard]] async::Task<AcceptResult> accept() override;
 
     /// AF_UNIX endpoints have no port; always 0.
-    [[nodiscard]] std::uint16_t localPort() const noexcept override { return 0; }
+    [[nodiscard]] std::uint16_t boundPort() const noexcept override { return 0; }
 
     /// @return The socket file path this listener is bound to.
     [[nodiscard]] std::filesystem::path const& path() const noexcept { return _path; }

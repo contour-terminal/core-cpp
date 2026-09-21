@@ -66,7 +66,7 @@ struct Exchange
 /// @param out Where the observations go.
 Task<void> halfCloseExchange(EventLoop* loop, IListener* listener, Exchange* out)
 {
-    auto connected = co_await core::net::connect(loop, "127.0.0.1", listener->localPort());
+    auto connected = co_await core::net::connect(loop, "127.0.0.1", listener->boundPort());
     if (!connected.has_value())
         co_return;
     auto peer = std::move(*connected);
@@ -107,7 +107,7 @@ TEST_CASE("An accepted socket's shutdownWrite reaches its peer as EOF, and its o
             auto loop = EventLoop { *source };
             auto listener = core::net::listen(loop, "127.0.0.1", 0);
             REQUIRE(listener.has_value());
-            REQUIRE((*listener)->localPort() != 0);
+            REQUIRE((*listener)->boundPort() != 0);
 
             auto exchange = Exchange {};
             loop.blockOn(halfCloseExchange(&loop, listener->get(), &exchange));

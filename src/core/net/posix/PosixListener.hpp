@@ -36,14 +36,25 @@ class PosixListener final: public IListener
                                                                                       std::uint16_t port,
                                                                                       int backlog = 128);
 
+    /// Adopts an already-bound, already-listening descriptor; @see core::net::adoptListener.
+    ///
+    /// It makes the descriptor non-blocking and close-on-exec, because the reactor requires the
+    /// first and an inherited descriptor has neither — a listener handed over by a supervisor was
+    /// created for a process that blocked on `accept`.
+    /// @param loop The loop whose backend drives accept readiness (not owned).
+    /// @param fd The listening descriptor; ownership transfers to the returned listener.
+    /// @return The adopted listener, or a @c NetError if the descriptor could not be prepared.
+    [[nodiscard]] static std::expected<std::unique_ptr<PosixListener>, NetError> adopt(EventLoop& loop,
+                                                                                       int fd);
+
     [[nodiscard]] async::Task<AcceptResult> accept() override;
 
-    [[nodiscard]] std::uint16_t localPort() const noexcept override { return _localPort; }
+    [[nodiscard]] std::uint16_t boundPort() const noexcept override { return _boundPort; }
 
     void close() noexcept override;
 
   private:
-    PosixListener(EventLoop& loop, int fd, std::uint16_t localPort) noexcept;
+    PosixListener(EventLoop& loop, int fd, std::uint16_t boundPort) noexcept;
 
     /// Closes the listening fd, telling the loop first so a parked accept is
     /// resumed rather than left waiting on a descriptor the poller can no longer
@@ -56,7 +67,7 @@ class PosixListener final: public IListener
 
     EventLoop& _loop;
     int _fd;
-    std::uint16_t _localPort;
+    std::uint16_t _boundPort;
     bool _closed = false;
 };
 

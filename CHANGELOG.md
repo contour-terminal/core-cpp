@@ -11,6 +11,34 @@ workflow refuses one without a section here.
 
 ### Added
 
+- **The dial, and the seam that keeps DNS off an event loop's thread** (`<core/net/IConnector.hpp>`,
+  `<core/net/IAsyncAddressResolver.hpp>`, `<core/net/ThreadedAddressResolver.hpp>`,
+  `<core/net/SocketAddress.hpp>`, `<core/net/ConnectFlow.hpp>`, `<core/net/ReadinessDial.hpp>`,
+  `<core/net/KeepAlive.hpp>`, `<core/net/SocketDeadline.hpp>`, `<core/net/IAdmissionControl.hpp>`).
+  `makeConnector(loop, resolver)` builds an `IConnector` whose sockets are pinned to `loop`;
+  `connect(host, port, DialOptions)` resolves through the injected `IAsyncAddressResolver`, budgets
+  the whole call, tries every candidate address in preference order and reports the last failure.
+  `ThreadedAddressResolver` is the shipped resolver: a fixed pool of two threads, a bounded queue
+  that is refused rather than waited on, and a fast path that never hands a LITERAL address to a
+  thread at all -- so a process that only dials literals creates no thread.
+
+  **The seam is the deliverable, not the thread.** A test injects an `IAddressResolver` and can say
+  what resolution costs and observe which thread paid for it; `InlineAddressResolver` is the
+  never-suspending implementation for a caller already on a thread that may block.
+
+- **A dial checks `SO_ERROR`, and never which callback fired.** Readiness is not success: a refused
+  connect also makes a socket ready, and which of readable, writable or failed the kernel reports is
+  not portable -- on Linux a failure can arrive with neither direction set, while on macOS the write
+  filter fires with `EV_EOF` and the backend reports the socket WRITABLE. A dial that trusted the
+  callback would hand its caller a socket whose first write fails, on one platform only.
+  `ReadinessDial_test` and `Connector_test` assert a refusal reaches the caller as
+  `NetErrorCode::ConnRefused` on every backend the platform builds.
+
+- `listen(loop, ListenOptions)`, the named form of the bind, and `adoptListener(loop, handle)` for a
+  listening socket this process did not create -- one inherited from a supervisor, or one a test
+  bound for itself. It prepares the handle (non-blocking and close-on-exec on POSIX, a readiness
+  event on Windows) and asks the kernel which port it is on, rather than taking one on trust.
+
 - `core::tui::runtime::InputSource`, the TUI runtime's one dependency-injection seam now that the
   waiting is `core::net::EventLoop`'s: it names the handles to watch and decodes what is ready
   behind them, and has no `wait()`. `TerminalInputSource` is the production implementation over a
@@ -607,6 +635,34 @@ workflow refuses one without a section here.
   `tools/migrate/renames.json` and the codemods, not the compiler, and the row is already there.
 
 ### Breaking
+
+- **`core::net::connect()` no longer resolves a name on the calling thread**, and callers of
+  contour's `connect(loop, host, port)` inherit that without a source change. The body called
+  `getaddrinfo` inline, which on an event loop is a stall of unbounded length: a lookup with a dead
+  resolver is seconds, and every coroutine on that loop waits for it, including the ones with
+  nothing to do with the network. It is now `makeConnector` plus `defaultAsyncResolver()`, whose
+  pool starts on first use and is never touched by a dial to a literal address.
+
+  Migrations:
+
+  - **Nothing to change for the common call.** `co_await core::net::connect(&loop, host, port)`
+    keeps its signature and its result type.
+  - **Anything that assumed resolution happened INLINE is now wrong.** A dial to a name may suspend
+    before it reaches a descriptor, so a caller that counted turns, or that relied on `connect`
+    having touched the network by the time the first `co_await` returned, has to be re-read. A dial
+    to a literal still never suspends for resolution.
+  - **Injecting a resolver, a budget or keepalive** uses the new overload:
+    `connect(&loop, host, port, resolver, DialOptions { .connectTimeout = …, .keepAlive = … })`,
+    or `makeConnector(loop, resolver)` where one connector serves many dials.
+  - **Stop the resolver before the loops it hands results back to.** `defaultAsyncResolver()` is a
+    process singleton and joins at exit; a resolver a consumer owns must be stopped while the loops
+    it was given are still able to run a turn, or a queued lookup's hand-back is a leaked frame.
+
+- **`IListener::localPort()` is `IListener::boundPort()`.** Mechanical: `tools/migrate/renames.json`
+  carries the row and `tools/migrate/rewrite.py` applies it. The name says what the value is -- a
+  bind to port 0 means "pick a free one", so the number a caller needs is the one the kernel chose
+  and not the one that was asked for. `AcceptResult` is now an alias of `SocketResult` rather than a
+  second spelling of the same type; nothing a caller writes changes.
 
 - **`core::tui::runtime::TuiRuntime` is composed on `core::net::EventLoop`, and the project no
   longer carries a second scheduler.** The runtime had its own ready queue, timer min-heap, park

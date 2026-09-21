@@ -108,23 +108,32 @@ endif()
 core_cpp_add_module(net KIND STATIC
     HEADERS
         AsyncBufferedReader.hpp
+        ConnectFlow.hpp
         DeadlineTimer.hpp
         Diagnostics.hpp
         EventLoop.hpp
         HostDrivenBackend.hpp
         HttpServer.hpp
+        IAdmissionControl.hpp
+        IAsyncAddressResolver.hpp
         ICompletionPort.hpp
+        IConnector.hpp
         IHostScheduler.hpp
         IListener.hpp
         InterruptibleSleep.hpp
         IoAwaitable.hpp
         IoBackend.hpp
         ISocket.hpp
+        KeepAlive.hpp
         PlatformLoop.hpp
+        ReadinessDial.hpp
+        SocketAddress.hpp
         SocketContract.hpp
+        SocketDeadline.hpp
         SleepUntil.hpp
         Sockets.hpp
         SplitSocket.hpp
+        ThreadedAddressResolver.hpp
         WithTimeout.hpp
         WriteQueue.hpp
         detail/ParkTable.hpp
@@ -140,19 +149,27 @@ core_cpp_add_module(net KIND STATIC
     SOURCES
         ${_coreCppNetSubset}
         AsyncBufferedReader.cpp
+        ConnectFlow.cpp
+        Connector.cpp
         Diagnostics.cpp
         HttpServer.cpp
         ISocket.cpp
         IoAwaitable.cpp
+        ReadinessDial.cpp
+        SocketAddress.cpp
         SocketContract.cpp
+        Sockets.cpp
+        ThreadedAddressResolver.cpp
         WriteQueue.cpp
         ${_coreCppNetDefaultBackend}
+        detail/DialPrimitives.hpp
         detail/PeerAddress.hpp
         detail/WaitChunking.hpp
         detail/WakeupChannel.hpp
     SOURCES_POSIX
         detail/WouldBlock.hpp
         posix/AcceptLoop.cpp
+        posix/DialPrimitives.cpp
         posix/AcceptLoop.hpp
         posix/FdUtils.hpp
         posix/PollBackend.cpp
@@ -173,6 +190,7 @@ core_cpp_add_module(net KIND STATIC
         bsd/KqueueBackend.hpp
     SOURCES_WINDOWS
         testing/windows/InMemoryTransport.cpp
+        windows/DialPrimitives.cpp
         windows/IocpBackend.cpp
         windows/IocpBackend.hpp
         windows/NetworkEvents.cpp
@@ -230,11 +248,16 @@ core_cpp_add_test(net
         AsyncBufferedReader_test.cpp
         BackendParity_test.cpp
         ClockRefresh_test.cpp
+        ConnectFlow_test.cpp
+        Connector_test.cpp
         EventLoop_test.cpp
         HttpServer_test.cpp
         IoAwaitable_test.cpp
         LoopTeardown_test.cpp
+        ReadinessDial_test.cpp
+        SocketAddress_test.cpp
         Socket_test.cpp
+        ThreadedAddressResolver_test.cpp
         WaitReadable_test.cpp
         WriteQueue_test.cpp
         testing/TestLoop_test.cpp
@@ -244,13 +267,23 @@ core_cpp_add_test(net
     # override -- retiring its park needs a handle on it that a coroutine awaiting the loop does not
     # have, and Task B7 replaces that class with an IOCP socket that owns its operations. The gap is
     # stated on `WindowsSocket` itself; this is where it costs coverage.
+    #
+    # `posix/AdoptListener_test` is the exception to that sentence: it is NOT a POSIX-only
+    # BEHAVIOUR, it is a POSIX-only way to ARRANGE one. `adoptListener` exists for a listening
+    # handle this library did not make, so the case has to make one with the platform's own API --
+    # `::socket`/`::bind`/`::listen` here, the Winsock spelling in
+    # `windows/AdoptListener_test.cpp` -- and the two files assert the same three things. A
+    # portable file would have had to carry both spellings behind an `#ifdef`, which is the shape
+    # Ruling R40 keeps out of this module.
     SOURCES_POSIX
         CancelRead_test.cpp
         ReactorSocket_test.cpp
         SocketDecorator_test.cpp
+        posix/AdoptListener_test.cpp
         posix/FdPassing_test.cpp
         posix/UnixSocket_test.cpp
     SOURCES_WINDOWS
+        windows/AdoptListener_test.cpp
         windows/IocpBackend_test.cpp
         windows/NetworkEvents_test.cpp
         windows/WfmoBackend_test.cpp

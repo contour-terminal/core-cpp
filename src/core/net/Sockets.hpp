@@ -9,9 +9,12 @@
 
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
+#include <core/net/IAsyncAddressResolver.hpp>
+#include <core/net/IConnector.hpp>
 #include <core/net/IListener.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/IoResult.hpp>
+#include <core/platform/Types.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -23,8 +26,38 @@
 namespace core::net
 {
 
-/// Binds a TCP listener on @p host : @p port driven by @p loop's reactor.
-/// @param loop The loop whose reactor drives accept readiness (not owned).
+/// What one `listen` asks for.
+///
+/// **A named descriptor rather than positional parameters**, for the reason @c DialOptions gives:
+/// the bind side is already three values, two of them integers, and a caller that transposes
+/// `port` and `backlog` gets a listener on a port it did not choose with no diagnostic at all.
+/// It is also the shape the design spec's rename map asks for, in place of each platform
+/// listener's own `Bind`.
+struct ListenOptions
+{
+    /// The bind address: "127.0.0.1", "0.0.0.0", "::". Empty means the wildcard address.
+    std::string_view host = {};
+
+    /// The bind port; 0 requests an OS-assigned ephemeral one, which
+    /// @c IListener::boundPort then reports.
+    std::uint16_t port = 0;
+
+    /// The `::listen` backlog.
+    int backlog = 128;
+};
+
+/// Binds a TCP listener as @p options asks, driven by @p loop's backend.
+/// @param loop The loop whose backend drives accept readiness (not owned).
+/// @param options The bind address, port and backlog.
+/// @return The bound listener, or a @c NetError on failure.
+[[nodiscard]] std::expected<std::unique_ptr<IListener>, NetError> listen(EventLoop& loop,
+                                                                         ListenOptions options);
+
+/// Binds a TCP listener on @p host : @p port.
+///
+/// The positional spelling, kept because it is what contour's callers write. It forwards to the
+/// @c ListenOptions overload, which is the one a new caller should use.
+/// @param loop The loop whose backend drives accept readiness (not owned).
 /// @param host The bind address ("127.0.0.1", "0.0.0.0", "::").
 /// @param port The bind port; 0 requests an OS-assigned ephemeral port.
 /// @param backlog The listen backlog.
@@ -34,16 +67,51 @@ namespace core::net
                                                                          std::uint16_t port,
                                                                          int backlog = 128);
 
-/// Connects a TCP client socket to @p host : @p port, parking the caller until the
-/// connection completes.
-/// @param loop The loop whose reactor drives connect readiness (not owned; a
-///        pointer, since coroutine reference parameters can dangle).
-/// @param host The remote host ("127.0.0.1", a hostname).
+/// Adopts an already-bound, already-listening handle as an @c IListener driven by @p loop.
+///
+/// For a socket this process did not create: one inherited from a supervisor (systemd socket
+/// activation passes descriptor 3), or one a test bound for itself. Ownership of @p handle
+/// transfers to the returned listener, which closes it.
+///
+/// **It does not bind and does not listen.** A handle that is merely open, or open and bound but
+/// not listening, is adopted successfully and then accepts nothing — the kernel is the only thing
+/// that knows, and neither platform offers a portable way to ask.
+/// @param loop The loop whose backend drives accept readiness (not owned).
+/// @param handle The listening socket handle (a descriptor on POSIX, a `SOCKET` on Windows).
+/// @return The adopted listener, or a @c NetError if the handle could not be prepared.
+[[nodiscard]] std::expected<std::unique_ptr<IListener>, NetError> adoptListener(
+    EventLoop& loop, platform::NativeHandle handle);
+
+/// Connects a TCP client socket to @p host : @p port, parking the caller until the connection
+/// completes.
+///
+/// **Name resolution does not run on @p loop's thread.** It goes to @c defaultAsyncResolver,
+/// whose pool starts on first use and is never touched by a dial to a literal address. This is
+/// the behaviour change contour's callers inherit: the call looks the same and no longer stalls
+/// every other coroutine on the loop for the length of a DNS lookup.
+/// @param loop The loop whose backend drives connect readiness (not owned; a pointer, since
+///        coroutine reference parameters can dangle).
+/// @param host The remote host ("127.0.0.1", a hostname), unbracketed.
 /// @param port The remote port.
 /// @return A task resolving to the connected socket, or a @c NetError on failure.
-[[nodiscard]] async::Task<std::expected<std::unique_ptr<ISocket>, NetError>> connect(EventLoop* loop,
-                                                                                     std::string_view host,
-                                                                                     std::uint16_t port);
+[[nodiscard]] async::Task<SocketResult> connect(EventLoop* loop, std::string_view host, std::uint16_t port);
+
+/// Connects through an injected resolver, with a per-call budget and keepalive.
+///
+/// The form to use where the process resolver is not what you want: a test that must observe
+/// which thread resolved, a consumer with its own cache, a caller that needs the dial bounded.
+/// @param loop The loop whose backend drives connect readiness (not owned).
+/// @param host The remote host, unbracketed.
+/// @param port The remote port.
+/// @param resolver The name-resolution seam (not owned; a pointer, since coroutine reference
+///        parameters can dangle — the same reason @p loop is one). Must outlive the returned task.
+/// @param options The budget, and whether the connection carries keepalive.
+/// @return A task resolving to the connected socket, or a @c NetError on failure.
+[[nodiscard]] async::Task<SocketResult> connect(EventLoop* loop,
+                                                std::string_view host,
+                                                std::uint16_t port,
+                                                IAsyncAddressResolver* resolver,
+                                                DialOptions options);
 
 /// Binds an AF_UNIX listener on the socket file @p path, hardening its parent
 /// directory first (see UnixListener::bind for the exact policy).

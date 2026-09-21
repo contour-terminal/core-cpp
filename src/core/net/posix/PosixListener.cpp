@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/posix/PosixListener.hpp>
 
+#include <core/net/SocketAddress.hpp>
 #include <core/net/posix/AcceptLoop.hpp>
 #include <core/net/posix/FdUtils.hpp>
 
 #include <sys/socket.h>
 
 #include <cerrno>
+#include <cstdint>
+#include <memory>
+#include <string>
 #include <utility>
 
 #include <netdb.h>
@@ -18,8 +22,8 @@
 namespace core::net
 {
 
-PosixListener::PosixListener(EventLoop& loop, int fd, std::uint16_t localPort) noexcept:
-    _loop(loop), _fd(fd), _localPort(localPort)
+PosixListener::PosixListener(EventLoop& loop, int fd, std::uint16_t boundPort) noexcept:
+    _loop(loop), _fd(fd), _boundPort(boundPort)
 {
 }
 
@@ -124,6 +128,27 @@ std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::bind(Even
     }
 
     return std::unique_ptr<PosixListener>(new PosixListener(loop, fd, actualPort));
+}
+
+std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::adopt(EventLoop& loop, int fd)
+{
+    if (fd < 0)
+        return std::unexpected(makeNetError(NetErrorCode::BadHandle, EBADF, "adoptListener"));
+
+    // The reactor requires non-blocking I/O, and an inherited descriptor has neither flag: a
+    // listener handed over by a supervisor was created for a process that blocked on `accept`.
+    if (!makeNonBlockingCloexec(fd))
+        return std::unexpected(makeNetError(NetErrorCode::SystemError, errno, "fcntl"));
+
+    // The port is asked of the KERNEL rather than taken on trust: the caller adopting a
+    // descriptor is exactly the caller that does not know which port it is.
+    auto bound = sockaddr_storage {};
+    auto boundLen = socklen_t { sizeof(bound) };
+    auto port = std::uint16_t { 0 };
+    if (::getsockname(fd, reinterpret_cast<sockaddr*>(&bound), &boundLen) == 0)
+        port = detail::portOfSockaddr(&bound, static_cast<std::uint32_t>(boundLen));
+
+    return std::unique_ptr<PosixListener>(new PosixListener(loop, fd, port));
 }
 
 async::Task<AcceptResult> PosixListener::accept()

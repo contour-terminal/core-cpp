@@ -41,93 +41,30 @@ namespace
     }
 } // namespace
 
+std::expected<std::unique_ptr<IListener>, NetError> listen(EventLoop& loop, ListenOptions options)
+{
+    platform::ensureWinsockInitialized();
+    return PosixListener::bind(loop, options.host, options.port, options.backlog)
+        .transform(
+            [](std::unique_ptr<PosixListener> listener) -> std::unique_ptr<IListener> { return listener; });
+}
+
 std::expected<std::unique_ptr<IListener>, NetError> listen(EventLoop& loop,
                                                            std::string_view host,
                                                            std::uint16_t port,
                                                            int backlog)
 {
-    platform::ensureWinsockInitialized();
-    return PosixListener::bind(loop, host, port, backlog)
-        .transform(
-            [](std::unique_ptr<PosixListener> listener) -> std::unique_ptr<IListener> { return listener; });
+    return listen(loop, ListenOptions { .host = host, .port = port, .backlog = backlog });
 }
 
-async::Task<std::expected<std::unique_ptr<ISocket>, NetError>> connect(EventLoop* loop,
-                                                                       std::string_view host,
-                                                                       std::uint16_t port)
+std::expected<std::unique_ptr<IListener>, NetError> adoptListener(EventLoop& loop,
+                                                                  platform::NativeHandle handle)
 {
-    platform::ensureWinsockInitialized();
-    auto hints = addrinfo {};
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_NUMERICSERV;
-
-    auto const hostStr = std::string { host };
-    auto const portStr = std::to_string(port);
-
-    addrinfo* resolved = nullptr;
-    auto const rc = ::getaddrinfo(hostStr.c_str(), portStr.c_str(), &hints, &resolved);
-    if (rc != 0 || resolved == nullptr)
-        co_return std::unexpected(makeNetError(NetErrorCode::AddressError, rc, "getaddrinfo"));
-
-    NetError lastError = makeNetError(NetErrorCode::AddressError, 0, "no usable address");
-    auto const* next = resolved;
-    while (next != nullptr)
-    {
-        // Step to the next candidate first, so every `continue` below moves on to it.
-        auto const* ai = std::exchange(next, next->ai_next);
-        auto const fd = makeStreamSocket(ai->ai_family, ai->ai_protocol);
-        if (fd < 0)
-        {
-            lastError = makeNetError(NetErrorCode::SystemError, errno, "socket");
-            continue;
-        }
-
-        auto const rcConnect = ::connect(fd, ai->ai_addr, ai->ai_addrlen);
-        if (rcConnect == 0)
-        {
-            ::freeaddrinfo(resolved);
-            co_return std::unique_ptr<ISocket>(new PosixSocket(*loop, fd));
-        }
-        if (errno == EINPROGRESS)
-        {
-            // Non-blocking connect in progress: park until writable, then check the
-            // pending socket error to learn whether it succeeded.
-            try
-            {
-                co_await loop->waitWritable(fd);
-            }
-            catch (async::OperationCancelled const&)
-            {
-                discardSocket(loop, fd);
-                ::freeaddrinfo(resolved);
-                co_return std::unexpected(makeNetError(NetErrorCode::Cancelled, 0, "connect cancelled"));
-            }
-
-            int soError = 0;
-            auto soLen = socklen_t { sizeof(soError) };
-            ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soError, &soLen);
-            if (soError == 0)
-            {
-                ::freeaddrinfo(resolved);
-                co_return std::unique_ptr<ISocket>(new PosixSocket(*loop, fd));
-            }
-            lastError =
-                makeNetError(soError == ECONNREFUSED ? NetErrorCode::ConnRefused : NetErrorCode::SystemError,
-                             soError,
-                             "connect");
-        }
-        else
-        {
-            lastError =
-                makeNetError(errno == ECONNREFUSED ? NetErrorCode::ConnRefused : NetErrorCode::SystemError,
-                             errno,
-                             "connect");
-        }
-        discardSocket(loop, fd);
-    }
-    ::freeaddrinfo(resolved);
-    co_return std::unexpected(lastError);
+    if (handle < 0)
+        return std::unexpected(makeNetError(NetErrorCode::BadHandle, EBADF, "adoptListener"));
+    return PosixListener::adopt(loop, handle)
+        .transform(
+            [](std::unique_ptr<PosixListener> listener) -> std::unique_ptr<IListener> { return listener; });
 }
 
 std::expected<std::unique_ptr<IListener>, NetError> listenUnix(EventLoop& loop,

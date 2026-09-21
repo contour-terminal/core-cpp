@@ -10,11 +10,14 @@
 
 #include <core/net/windows/WindowsListener.hpp>
 
+#include <core/net/SocketAddress.hpp>
 #include <core/net/detail/PeerAddress.hpp>
 #include <core/net/windows/NetworkEvents.hpp>
 #include <core/net/windows/WindowsSocket.hpp>
 
+#include <cstdint>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -87,8 +90,8 @@ namespace
 } // namespace
 
 WindowsListener::WindowsListener(
-    EventLoop& loop, SOCKET socket, WSAEVENT event, std::uint16_t localPort, std::string path) noexcept:
-    _loop(loop), _socket(socket), _event(event), _localPort(localPort), _path(std::move(path))
+    EventLoop& loop, SOCKET socket, WSAEVENT event, std::uint16_t boundPort, std::string path) noexcept:
+    _loop(loop), _socket(socket), _event(event), _boundPort(boundPort), _path(std::move(path))
 {
 }
 
@@ -211,6 +214,38 @@ std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bind(
     return std::unique_ptr<WindowsListener>(new WindowsListener(loop, sock, event, actualPort, {}));
 }
 
+std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::adopt(EventLoop& loop,
+                                                                                 SOCKET socket)
+{
+    if (socket == INVALID_SOCKET)
+        return std::unexpected(makeNetError(NetErrorCode::BadHandle, 0, "adoptListener"));
+
+    // The event, not the socket, is what an accept registers with the loop — and associating it
+    // also puts the socket into non-blocking mode, which a socket handed over by another process
+    // will not be.
+    auto const event = WSACreateEvent();
+    if (event == WSA_INVALID_EVENT || WSAEventSelect(socket, event, FD_ACCEPT) == SOCKET_ERROR)
+    {
+        auto const err = WSAGetLastError();
+        if (event != WSA_INVALID_EVENT)
+            WSACloseEvent(event);
+        closesocket(socket);
+        return std::unexpected(makeNetError(NetErrorCode::SystemError, err, "WSAEventSelect"));
+    }
+
+    // The port is asked of the KERNEL rather than taken on trust: the caller adopting a socket is
+    // exactly the caller that does not know which port it is.
+    auto bound = sockaddr_storage {};
+    auto boundLen = int { sizeof(bound) };
+    auto port = std::uint16_t { 0 };
+    if (::getsockname(socket, reinterpret_cast<sockaddr*>(&bound), &boundLen) == 0)
+        port = detail::portOfSockaddr(&bound, static_cast<std::uint32_t>(boundLen));
+
+    // An adopted listener owns no socket file: this process did not create one, so removing a
+    // path on close would delete somebody else's.
+    return std::unique_ptr<WindowsListener>(new WindowsListener(loop, socket, event, port, {}));
+}
+
 std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bindUnix(EventLoop& loop,
                                                                                     std::string_view path,
                                                                                     int backlog)
@@ -253,7 +288,7 @@ std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bindU
     }
 
     return std::unique_ptr<WindowsListener>(
-        new WindowsListener(loop, sock, event, /*localPort=*/0, pathString));
+        new WindowsListener(loop, sock, event, /*boundPort=*/0, pathString));
 }
 
 async::Task<AcceptResult> WindowsListener::accept()
