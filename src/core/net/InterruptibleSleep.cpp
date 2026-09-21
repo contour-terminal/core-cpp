@@ -3,6 +3,7 @@
 
 #include <core/async/Cancellation.hpp>
 #include <core/async/ParkedWork.hpp>
+#include <core/net/detail/ScopeGuard.hpp>
 
 #include <coroutine>
 #include <functional>
@@ -61,10 +62,35 @@ namespace
                 _flowToken = awaiting.promise().stopToken();
             if (_token.stop_requested() || _flowToken.stop_requested())
                 return false;
+            // The park is filed BEFORE either stop callback exists, and nothing unregisters it if
+            // an emplace below throws: `await_suspend` exiting by exception unwinds the awaiting
+            // frame through its `co_await` without ever running `await_resume`, which is the only
+            // other caller of `unregisterPark`. The loop would then hold a park naming storage
+            // that is being destroyed. `ScopeGuard` has no dismiss, so the flag is what makes this
+            // fire on the exceptional exit alone, and it is set after the LAST emplace because
+            // this awaiter has two; `unregisterPark` on an invalid id is a no-op, which covers a
+            // throw from `registerPark` itself.
+            //
+            // `noexcept` on the lambda is required, not decorative: `ScopeGuard`'s constraint is
+            // `is_nothrow_invocable_v<Callable&>`, and an unmarked lambda fails it as a deduction
+            // failure with no viable constructor rather than as a readable message.
+            // `unregisterPark` is itself `noexcept`, so the marking is honest.
+            //
+            // **Unreachable on both mainline toolchains**, and this closes it rather than fixes a
+            // live defect: each closure is an `EventLoop*` plus a `ParkId`, sixteen bytes, inside
+            // the small-buffer optimisation of libstdc++'s and libc++'s `std::function`, so no
+            // allocation happens and the throw cannot occur. Matched to `DelayAwaiter`'s guard in
+            // `EventLoop.hpp` so the two cannot drift.
+            auto registered = false;
+            auto const undo = detail::ScopeGuard { [&]() noexcept {
+                if (!registered)
+                    _loop.unregisterPark(_park);
+            } };
             _park =
                 _loop.registerPark(ParkEntry::onDeadline(async::detail::parkedWorkFor(awaiting), _deadline));
             _tokenReg.emplace(_token, [&loop = _loop, park = _park] { loop.requestCancel(park); });
             _flowReg.emplace(_flowToken, [&loop = _loop, park = _park] { loop.requestCancel(park); });
+            registered = true;
             return true;
         }
 
