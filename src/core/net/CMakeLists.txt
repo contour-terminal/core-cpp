@@ -45,7 +45,10 @@ set(_coreCppNetSubset
     HostDrivenBackend.cpp
     detail/ReadyBatch.hpp
     detail/WaitTimeout.hpp)
-set(_coreCppNetSubsetTests HostDrivenBackend_test.cpp IoBackend_test.cpp)
+set(_coreCppNetSubsetTests
+    HostDrivenBackend_test.cpp
+    IoBackend_test.cpp
+    testing/ScriptedBackend_test.cpp)
 #
 # Exactly one DefaultBackend.cpp is compiled, and it is the whole of how a platform picks its
 # backend — no `#ifdef` chooses one (Ruling R40). It cannot simply be listed per directory the way

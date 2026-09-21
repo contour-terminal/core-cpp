@@ -93,6 +93,9 @@ class ScriptedBackend: public IoBackend
             return std::unexpected { makeNetError(
                 NetErrorCode::SystemError, 0, "ScriptedBackend::attach: refused on request") };
         }
+        if (_byHandler.contains(&handler))
+            return std::unexpected { makeNetError(
+                NetErrorCode::BadHandle, 0, "ScriptedBackend::attach: handler is already attached") };
         auto const id = HandlerId { ++_nextId };
         _live.emplace(id, &handler);
         _byHandler.emplace(&handler, id);
@@ -155,7 +158,8 @@ class ScriptedBackend: public IoBackend
         _script.pop_front();
         if (step.id)
             if (auto const found = _live.find(step.id); found != _live.end())
-                _batch.add(*found->second, step.observed);
+                if (auto const observed = observableBy(step.id, step.observed); observed != Readiness::None)
+                    _batch.add(*found->second, observed);
         return WaitResult { .dispatched = _batch.dispatch() };
     }
 
@@ -226,6 +230,39 @@ class ScriptedBackend: public IoBackend
     /// @}
 
   private:
+    /// What a registration watching @c interestOf(id) would actually be told about
+    /// @p observed, which is how a script stops being able to say something no kernel
+    /// would say.
+    ///
+    /// A double is only useful while a case written against it would also pass on a
+    /// real backend. Two rules every real backend keeps, and this one did not:
+    /// `Interest::None` is silent (poll clears the pollfd, epoll drops the
+    /// registration, kqueue deletes both filters, Wfmo skips the entry), and a
+    /// direction that was never asked for is never reported. A muted or wrong-direction
+    /// step therefore dispatches nothing — the wait still CONSUMES it, because a wait
+    /// did happen and the kernel simply had nothing for this registration.
+    ///
+    /// A failure is the deliberate exception: `POLLERR`, `POLLHUP` and `POLLNVAL`
+    /// arrive whether or not they were asked for, so @c Readiness::Failed survives the
+    /// direction filter. It does not survive muting, because a muted registration is
+    /// not in the wait set to fail.
+    /// @param id The registration the step names.
+    /// @param observed What the step says happened.
+    /// @return The part of @p observed a real backend would report, possibly
+    ///         @c Readiness::None.
+    [[nodiscard]] Readiness observableBy(HandlerId id, Readiness observed) const noexcept
+    {
+        auto const interest = interestOf(id);
+        if (interest == Interest::None)
+            return Readiness::None;
+        auto kept = hasReadiness(observed, Readiness::Failed) ? Readiness::Failed : Readiness::None;
+        if (hasInterest(interest, Interest::Read) && hasReadiness(observed, Readiness::Readable))
+            kept = kept | Readiness::Readable;
+        if (hasInterest(interest, Interest::Write) && hasReadiness(observed, Readiness::Writable))
+            kept = kept | Readiness::Writable;
+        return kept;
+    }
+
     /// One scripted wait: which registration became ready, and how.
     struct Step
     {
