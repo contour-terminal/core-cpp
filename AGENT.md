@@ -128,7 +128,12 @@ Tests sit next to their sources (`Foo_test.cpp`) and are registered with `core_c
 one binary per module linked to `core::testing_main` (async has a second, over the StopToken
 fallback). Exit codes: 0 pass, 1 failure, 77 all
 skipped, 2 nothing ran. Labels: `core-cpp`, the module, `hygiene`, `canary`, `loopback`,
-`no-tsan`. `ctest -L hygiene` runs the checks over the tree and the build contract.
+`no-tsan`, `tree-level`. `ctest -L hygiene` runs the checks over the tree and the build contract,
+and still runs every one of them: **`tree-level` marks the checks whose input is the source tree, so
+their answer cannot differ between platforms.** CI's per-job `ctest` excludes that label and the
+`style` job runs exactly those, once — before it, one violated provenance row reported as 22 failed
+jobs out of 24, which buries the leg that has a real platform bug. Adding a `tree-level` check means
+adding a `style` step for it, or it runs nowhere in CI.
 
 ## Documentation
 

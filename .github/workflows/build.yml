@@ -104,11 +104,35 @@ jobs:
           cmake -DROOT="$GITHUB_WORKSPACE" -DWORK_DIR="$RUNNER_TEMP/layering"
           -P tests/cmake/check-layering.cmake
 
-      # The rename table of tools/migrate/ against the headers this tree actually delivers. Every
-      # build runs it as ctest core-cpp.migrate-renames; here it runs before anything is configured,
-      # so a table that has drifted is the first thing a pull request is told.
+      # The rename table of tools/migrate/ against the headers this tree actually delivers. This is
+      # the only job that runs it: it is `tree-level`, so the build jobs exclude it (Ruling R96).
+      # Running here, before anything is configured, means a table that has drifted is the first
+      # thing a pull request is told rather than the twenty-second.
       - name: Consumer rename table matches the delivered headers
         run: python tools/migrate/check-renames.py --root "$GITHUB_WORKSPACE"
+
+      # The provenance table's upstream side (Task B12b). This is the one tree-level check that
+      # cannot give its real answer on a runner: it reads the contour, endo and fastcached
+      # checkouts, which exist on no CI machine, and exits 77 -- ctest's skip code -- without them.
+      # It runs anyway, and says WHY it skipped. Leaving it out would make "never ran" and "ran and
+      # found nothing" look identical, and a gate that does not report reads as passed
+      # (.agent/rules/build-and-toolchain.md). Any exit status other than 0 or 77 is a real defect
+      # in the table and fails this job.
+      - name: Upstream drift (reports; skips without the sibling checkouts)
+        run: |
+          set +e
+          python scripts/check-upstream-drift.py --no-fetch
+          status=$?
+          set -e
+          if [ "$status" -eq 77 ]; then
+            echo "::notice::upstream-drift skipped: no upstream checkouts on this runner (exit 77)"
+            exit 0
+          fi
+          exit "$status"
+
+      # Its self-test needs only git, so unlike the checker itself this one answers for real here.
+      - name: Upstream drift self-test
+        run: python scripts/check-upstream-drift-selftest.py
 
       # libclang's Python bindings are optional, so semantic_rename.py's cases skip wherever they are
       # missing -- and a suite whose only untested tool always skips is an untested tool. This is the
@@ -242,7 +266,7 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
 
       - name: Test
-        run: ctest --preset ${{ matrix.preset }}
+        run: ctest --preset ${{ matrix.preset }} -LE tree-level
 
   # ---------------------------------------------------------------------------------------------
   macos:
@@ -307,7 +331,7 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
 
       - name: Test
-        run: ctest --preset ${{ matrix.preset }}
+        run: ctest --preset ${{ matrix.preset }} -LE tree-level
 
   # ---------------------------------------------------------------------------------------------
   windows:
@@ -414,7 +438,7 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
 
       - name: Test
-        run: ctest --preset ${{ matrix.preset }}
+        run: ctest --preset ${{ matrix.preset }} -LE tree-level
 
   # ---------------------------------------------------------------------------------------------
   sanitizers:
@@ -466,7 +490,7 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
 
       - name: Test
-        run: ctest --preset ${{ matrix.preset }} ${{ matrix.ctest_args }}
+        run: ctest --preset ${{ matrix.preset }} -LE tree-level ${{ matrix.ctest_args }}
 
   # ---------------------------------------------------------------------------------------------
   clang-tidy:
@@ -593,7 +617,7 @@ jobs:
         run: cmake --build --preset emscripten
 
       - name: Test (under node)
-        run: ctest --preset emscripten
+        run: ctest --preset emscripten -LE tree-level
 
   # ---------------------------------------------------------------------------------------------
   # Proves core-cpp builds through fastcache-cc when it is available: the launcher is fetched and
@@ -681,7 +705,7 @@ jobs:
 
       # A replayed object is only as good as what it runs: the tests run on the cache's objects.
       - name: Test the replayed build
-        run: ctest --preset "$PRESET"
+        run: ctest --preset "$PRESET" -LE tree-level
 
   # ---------------------------------------------------------------------------------------------
   # core-cpp inside someone else's build, which is the only place it ever runs. Each leg is a
@@ -838,7 +862,7 @@ jobs:
       - name: Test
         run: |
           mkdir -p out/build/clang-coverage/profiles
-          LLVM_PROFILE_FILE="$PWD/out/build/clang-coverage/profiles/%m-%p.profraw" ctest --preset clang-coverage
+          LLVM_PROFILE_FILE="$PWD/out/build/clang-coverage/profiles/%m-%p.profraw" ctest --preset clang-coverage -LE tree-level
 
       - name: Report
         run: |

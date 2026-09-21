@@ -31,6 +31,30 @@
 #
 # migrate-renames, migrate-codemods and the Windows dialog canaries already set their own below.
 
+# THE `tree-level` LABEL (Ruling R96). A check carries it when its input is the source tree, so its
+# answer cannot differ between platforms: it reads files, parses tables, or runs a cmake -P script
+# over a tree it writes itself. Nothing it does asks a compiler, a linker or an operating system a
+# question.
+#
+# Such a check does not need asking 24 times. Every build job runs `ctest --preset <p>`, so before
+# this label one violated provenance row reported as 22 failed jobs out of 24 -- correct behaviour
+# and unusable triage, because a total outage is indistinguishable from a real platform bug and
+# buries whichever leg has one. CI's per-job ctest now excludes this label and the `style` job runs
+# exactly these, once. `ctest -L hygiene` locally still runs every one of them, which is the point:
+# a developer's command does not change.
+#
+# Two checks here deliberately do NOT carry it, and both build something:
+#   core-cpp.exit-codes        builds a fixture and runs it through CMAKE_CROSSCOMPILING_EMULATOR,
+#                              so the exit status it asserts IS the platform's answer.
+#   core-cpp.async-link-smoke  (src/core/async/CMakeLists.txt) links a binary, and answers for the
+#                              one toolchain that linked it.
+#
+# core-cpp.vendor-selftest is the borderline one. Its subject is the tree, but it copies and hashes
+# FILE BYTES, which is where line endings differ between platforms -- so of everything labelled here
+# it has the largest platform dimension. It carries the label because `.gitattributes` pins the tree
+# to LF, the `style` job has a CR-byte check of its own, and it passes identically on both hosts;
+# revisit that if either of those stops being true.
+
 # The exit-code contract of core::testing_main, asserted from outside the binary: the fixture has one
 # tag per outcome, and check-exit-codes.cmake runs it once per tag.
 add_executable(core-cpp-exit-code-fixture ExitCodeFixture.cpp)
@@ -55,7 +79,7 @@ add_test(NAME core-cpp.cmake-hygiene-selftest
                  "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/cmake-hygiene-selftest"
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-cmake-hygiene-selftest.cmake")
 set_tests_properties(core-cpp.cmake-hygiene core-cpp.cmake-hygiene-selftest PROPERTIES
-    LABELS "core-cpp;hygiene"
+    LABELS "core-cpp;hygiene;tree-level"
     TIMEOUT 180)
 
 # Which of a module's source lists each platform compiles, Emscripten included (Part I §1).
@@ -63,7 +87,7 @@ add_test(NAME core-cpp.platform-sources
          COMMAND "${CMAKE_COMMAND}"
                  "-DTARGETS=${CORE_CPP_SOURCE_DIR}/cmake/CoreCppTargets.cmake"
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-platform-sources.cmake")
-set_tests_properties(core-cpp.platform-sources PROPERTIES LABELS "core-cpp;hygiene" TIMEOUT 60)
+set_tests_properties(core-cpp.platform-sources PROPERTIES LABELS "core-cpp;hygiene;tree-level" TIMEOUT 60)
 
 # What each row of the module table lets its target link, and that a link or a row outside it is
 # refused by name. Each scenario configures a project of its own, with no language enabled.
@@ -74,7 +98,7 @@ add_test(NAME core-cpp.layering
                  "-DGENERATOR=${CMAKE_GENERATOR}"
                  "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-layering.cmake")
-set_tests_properties(core-cpp.layering PROPERTIES LABELS "core-cpp;hygiene" TIMEOUT 120)
+set_tests_properties(core-cpp.layering PROPERTIES LABELS "core-cpp;hygiene;tree-level" TIMEOUT 120)
 
 # A release tag must name the tree it releases (Part I §4). The release workflow runs
 # check-release.cmake on the pushed tag; this proves that it accepts a matching tree and refuses
@@ -84,7 +108,7 @@ add_test(NAME core-cpp.check-release-selftest
                  "-DCHECKER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-release.cmake"
                  "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/check-release-selftest"
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-release-selftest.cmake")
-set_tests_properties(core-cpp.check-release-selftest PROPERTIES LABELS "core-cpp;hygiene" TIMEOUT 60)
+set_tests_properties(core-cpp.check-release-selftest PROPERTIES LABELS "core-cpp;hygiene;tree-level" TIMEOUT 60)
 
 # The vendoring tool exports the file set of Part I §5 byte for byte, and refuses each way a copy
 # can stop being verbatim. Every case builds a git repository of its own; the tool's MODE=check
@@ -104,7 +128,7 @@ add_test(NAME core-cpp.vendor-selftest
 set_tests_properties(core-cpp.vendor-selftest PROPERTIES
     SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
     SKIP_REGULAR_EXPRESSION "check-vendor-selftest: SKIPPED"
-    LABELS "core-cpp;hygiene"
+    LABELS "core-cpp;hygiene;tree-level"
     TIMEOUT 600)
 
 # The migration tooling of tools/migrate/: the rename table every consumer pull request reads, the
@@ -135,7 +159,7 @@ else()
         SKIP_REGULAR_EXPRESSION "SKIPPED")
 endif()
 set_tests_properties(core-cpp.migrate-renames core-cpp.migrate-codemods PROPERTIES
-    LABELS "core-cpp;hygiene"
+    LABELS "core-cpp;hygiene;tree-level"
     TIMEOUT 300)
 
 # Which provenance rows have an upstream that moved since they were synced (Task B12b), and the
@@ -143,9 +167,14 @@ set_tests_properties(core-cpp.migrate-renames core-cpp.migrate-codemods PROPERTI
 #
 # The checker runs with --no-fetch here: a test that reaches the network is a test that fails for
 # reasons that have nothing to do with the tree. Answering "has upstream moved" for real means
-# fetching first, which is what a person or a nightly does by running it without that flag; what
-# this registration gates is the part that needs no network -- a row whose SHA, whose upstream path
-# or whose core-cpp path is wrong, which is a defect in the table itself.
+# fetching first, which is what a person or a nightly does by running it without that flag.
+#
+# What this registration gates is narrower than it once was. The defects that need no checkout --
+# a short row, a SHA that is not 40 hex characters, a pattern upstream path, a core-cpp path that
+# is gone -- moved to check-cmake-hygiene's `provenance` rule under Ruling R86, because that gate
+# runs where these checkouts do not exist. They are still printed here, under OTHER GATE, but they
+# no longer set the exit status: one defect reddening two gates gets both of them ignored. What
+# reddens here is what only a checkout can answer.
 #
 # It SKIPS (77) where the upstream checkouts are absent, which is every CI runner: there it reports
 # which upstream it could not read rather than reporting nothing and reading as a pass.
@@ -160,13 +189,13 @@ if(Python3_Interpreter_FOUND)
                      --no-fetch)
     set_tests_properties(core-cpp.upstream-drift PROPERTIES
         SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
-        LABELS "core-cpp;hygiene"
+        LABELS "core-cpp;hygiene;tree-level"
         TIMEOUT 600)
     add_test(NAME core-cpp.upstream-drift-selftest
              COMMAND "${Python3_EXECUTABLE}"
                      "${CORE_CPP_SOURCE_DIR}/scripts/check-upstream-drift-selftest.py")
     set_tests_properties(core-cpp.upstream-drift-selftest PROPERTIES
-        LABELS "core-cpp;hygiene"
+        LABELS "core-cpp;hygiene;tree-level"
         TIMEOUT 120)
 else()
     # Same reasoning as the migrate checks above: say why it did not run rather than registering
@@ -177,7 +206,7 @@ else()
              "core-cpp.upstream-drift-selftest: SKIPPED -- no Python 3 interpreter was found at configure time")
     set_tests_properties(core-cpp.upstream-drift core-cpp.upstream-drift-selftest PROPERTIES
         SKIP_REGULAR_EXPRESSION "SKIPPED"
-        LABELS "core-cpp;hygiene"
+        LABELS "core-cpp;hygiene;tree-level"
         TIMEOUT 60)
 endif()
 
