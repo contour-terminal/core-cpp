@@ -78,8 +78,27 @@ third canary mode is infrastructure, not a timer fix**.
 `addTimer` and `cancelTimer` are loop-thread-only and say so with `assert`. **An `assert` cannot be
 observed from inside a Catch2 case — it aborts the binary**, so the case that would prove the
 assertion fires is the case that takes the whole test run down with it. The tree's existing answer
-to that shape is a separate `WILL_FAIL` canary process (`HostDrivenCanary.cpp`, and the Windows
+to that shape is a separate canary process (`HostDrivenCanary.cpp`, and the Windows
 dialog canary before it), which is why this is yours: adding a third canary mode is gate work.
+
+**`WILL_FAIL` is gone from every registration in this tree, removed by `a48e727` — do not
+reintroduce it.** A canary is now judged by a **marker it prints immediately before the forbidden
+operation**, matched with `PASS_REGULAR_EXPRESSION`, plus `FAIL_REGULAR_EXPRESSION` for the case
+where it continued past that operation. Three things you will otherwise get wrong, each measured
+rather than reasoned:
+
+- **`PASS_REGULAR_EXPRESSION` ignores the exit code**, so it *replaces* `WILL_FAIL` rather than
+  accompanying it — and `SKIP_RETURN_CODE` still survives beside it, so Release legs abstain rather
+  than fail. That last one was an open question until a throwaway ctest project answered it.
+- **The marker goes to `stderr`.** The `onAbort` handler calls `_Exit`, which flushes nothing, so a
+  `stdout` marker is lost on exactly the abort path it exists to prove.
+- **Both regex properties are defeated by a raw `SIGABRT`**, so the `onAbort` handler converting it
+  to `_Exit(1)` is load-bearing rather than tidiness. Both canary sources now say so beside the
+  handler; keep that note if you touch them.
+
+**Read the registrations `a48e727` left in `tests/CMakeLists.txt` and `src/core/net/CMakeLists.txt`
+rather than this paragraph** — it is a description, and a description of an artifact decays while
+the artifact does not.
 
 Two facts from B4's round that bear on how you build it:
 
@@ -88,9 +107,13 @@ Two facts from B4's round that bear on how you build it:
   `add_test()` never sees that gate, so a CPM or vendored consumer got a red naming an executable
   their build never made. **Whatever you add must go through `core_cpp_add_test`.**
 - **A canary must be proved able to die.** `216d1d1` fixed a Windows canary that **hung** instead of
-  failing, because it did not link `core::testing_dialogs`. A `WILL_FAIL` test that hangs reads as a
-  timeout, and a `WILL_FAIL` test that cannot fail reads as a pass. Prove the death before trusting
-  the green — core-cpp#11 asks for exactly this on the `cl-debug` leg.
+  failing, because it did not link `core::testing_dialogs`. A canary that hangs reads as a timeout,
+  and one that cannot reach its mechanism reads as a pass under any exit-code scheme. **Prove it by
+  mutation, on the real binary**: remove the marker with the assertion intact and confirm
+  *"Required regular expression not found"*, then restore and confirm the source is byte-identical.
+  A throwaway project shaped like the real one proves the ctest semantics, not that your binary
+  reaches its mechanism — those are different claims and both are owed.
+  core-cpp#11 asks for exactly this on the `cl-debug` leg.
 
 Under `NDEBUG` the assertions vanish, so the canary skips on Release presets. **`SKIP`, never
 `SUCCEED`** — `clangcl-release` already skips the existing canaries for this reason.
@@ -101,14 +124,36 @@ Under `NDEBUG` the assertions vanish, so the canary skips on Release presets. **
 
 B5's sharpening of B4's adjacency rule, which is better than the rule:
 
-> **`post`, `submit`, `schedule`, `spawn`, `requestCancel` and `stop` all wake the backend.
-> `addTimer` was the sixth member of that family and the only one that did not.**
+> **A member that files work asks the backend for the turn that will run it.**
 
-B4 framed it as documentation — *an invariant visible in five sibling implementations and absent in
-the sixth, needing no comment to state.* **It goes one step further: that is a test, not a comment.**
+**That sentence reached this brief in a form that was false, and it is the fourth copy of the same
+false list.** It read *"`post`, `submit`, `schedule`, `spawn`, `requestCancel` and `stop` all wake
+the backend; `addTimer` was the sixth member of that family and the only one that did not."*
+`registerPark`, `resumeSoon` and `requestStop` did not either, and `registerPark` is `addTimer`'s
+own implementation path — so the enumeration was wrong, the fix it recorded sat one level above the
+primitive, and the wrong list propagated from the rulebook into a code comment, then into two task
+briefs. **Every copy read exactly like an audit.**
 
-**Six entry points, one parameterised case**, a `HostDrivenBackend` over `testing::ManualHostScheduler`:
-call each and assert the host is asked for a turn.
+**What is true on master**, and the shape your case must encode:
+
+- **Ready work that carries no time wakes** — `post`, `submit`, `spawn`, `stop`, `requestStop`,
+  `requestCancel`, `resumeSoon` call `_backend.wake()`.
+- **A park filed with a time arms** — `registerPark` calls `armHostWake()`, and `addTimer`, `delay`
+  and `sleepUntil` inherit it through that one primitive. `wake()` is `scheduleAt(now)`, so waking
+  for a park would discard its deadline; that is not a style choice and a test caught it as
+  `0 == 50`.
+- **`schedule` off the loop's thread wakes, and that is the rule rather than an exception**: what it
+  filed is an inbound entry and the turn draining it is ready now.
+- **`notifyHandleClosing` files work and asks for nothing**, soundly — the turn exchanges
+  `_closedParks` before the wait. It is the one exception and your case should assert it
+  deliberately rather than omit it.
+
+**So: derive the family from `EventLoop.cpp` yourself before you write the case, and say in your
+report what you found.** If it disagrees with the four bullets above, the bullets are what is
+wrong — that has now been true four times. **One parameterised case** over a `HostDrivenBackend`
+with `testing::ManualHostScheduler`: call each member and assert the host is asked for a turn, with
+the arming members asserting the *deadline* they armed for rather than merely that something was
+asked.
 
 **B4's caution, which the next writer would not derive:** `spawn` wakes the backend but is
 **loop-thread-only** and now asserts `teardownIsSerialisedWithDispatch()`. *"Call each from off the

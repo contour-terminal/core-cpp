@@ -102,7 +102,14 @@ the platform that has to fake it, the exact defect the ruling removed from poll 
 The spec's five thread-affinity guarantees are **asserted, not documented**:
 
 - **G1: exactly one thread dequeues the port.** A second thread calling `wait()` is an assert, and
-  it gets a test — a `canary`, Debug, `WILL_FAIL`. IOCP will happily let you dequeue from four
+  it gets a test — a `canary`, Debug. **Not `WILL_FAIL`: `a48e727` removed it from every
+  registration in this tree.** A canary is now judged by a **marker it printed immediately before
+  the forbidden operation**, matched with `PASS_REGULAR_EXPRESSION`, with `FAIL_REGULAR_EXPRESSION`
+  for the continued-past-it case. `WILL_FAIL` inverts *any* non-zero exit, so it passes a canary
+  that died for an unrelated reason — including one whose constructor threw before reaching the
+  mechanism, a path no negative alternation can reach. The marker must go to **`stderr`**, because
+  the `onAbort` handler calls `_Exit` and flushes nothing. Copy the shape from the registrations
+  `a48e727` left, and read `tests/CMakeLists.txt` rather than this paragraph. IOCP will happily let you dequeue from four
   threads; that is its selling point elsewhere and it is forbidden here, because Rule 1 says the
   loop resumes and there is one loop.
 - **G3: helper threads only post.** Your threadpool wait callbacks are helper threads. They call
