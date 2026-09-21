@@ -19,7 +19,6 @@
 #include <core/platform/Clock.hpp>
 
 #include <memory>
-#include <utility>
 
 namespace core::net
 {
@@ -36,14 +35,15 @@ namespace detail
     /// needs and the only one the language will give.
     class OwnedBackend
     {
-      protected:
-        OwnedBackend(): _ownedBackend { makeDefaultBackend() } {}
-        ~OwnedBackend() = default;
-
+      public:
         OwnedBackend(OwnedBackend const&) = delete;
         OwnedBackend(OwnedBackend&&) = delete;
         OwnedBackend& operator=(OwnedBackend const&) = delete;
         OwnedBackend& operator=(OwnedBackend&&) = delete;
+
+      protected:
+        OwnedBackend(): _ownedBackend { makeDefaultBackend() } {}
+        ~OwnedBackend() = default;
 
         /// Never null: @c makeDefaultBackend throws instead. Named apart from @c EventLoop's own
         /// `_backend`, because a name found in two base classes is ambiguous whatever its access.
@@ -64,8 +64,8 @@ class PlatformLoop final: private detail::OwnedBackend, public EventLoop
     /// @param clock The monotonic time source for deadlines (not owned; outlives the loop).
     /// @param options The loop's configuration; see @c EventLoopOptions.
     explicit PlatformLoop(platform::IClock& clock = platform::defaultSteadyClock(),
-                          EventLoopOptions options = {}):
-        detail::OwnedBackend {}, EventLoop { *_ownedBackend, clock, std::move(options) }
+                          EventLoopOptions const& options = {}):
+        detail::OwnedBackend {}, EventLoop { *_ownedBackend, clock, options }
     {
     }
 

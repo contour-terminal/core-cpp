@@ -21,7 +21,6 @@
 #include <core/platform/Clock.hpp>
 
 #include <cstddef>
-#include <utility>
 
 namespace core::net::testing
 {
@@ -34,14 +33,15 @@ namespace detail
     /// base, and @c EventLoop is a base.
     class OwnedNullBackend
     {
-      protected:
-        OwnedNullBackend() = default;
-        ~OwnedNullBackend() = default;
-
+      public:
         OwnedNullBackend(OwnedNullBackend const&) = delete;
         OwnedNullBackend(OwnedNullBackend&&) = delete;
         OwnedNullBackend& operator=(OwnedNullBackend const&) = delete;
         OwnedNullBackend& operator=(OwnedNullBackend&&) = delete;
+
+      protected:
+        OwnedNullBackend() = default;
+        ~OwnedNullBackend() = default;
 
         /// Accepts registrations, reports nothing, never blocks. Named apart from @c EventLoop's
         /// own `_backend`, because a name found in two base classes is ambiguous whatever its access.
@@ -59,8 +59,8 @@ class TestLoop final: private detail::OwnedNullBackend, public EventLoop
     /// @param options The loop's configuration. The idle policy is forced to
     ///        @c IdlePolicy::Return whatever is passed: this loop has no thread of its own to
     ///        block, and a turn that blocked would block the case driving it.
-    explicit TestLoop(platform::IClock& clock, EventLoopOptions options = {}):
-        detail::OwnedNullBackend {}, EventLoop { _ownedBackend, clock, returning(std::move(options)) }
+    explicit TestLoop(platform::IClock& clock, EventLoopOptions const& options = {}):
+        detail::OwnedNullBackend {}, EventLoop { _ownedBackend, clock, returning(options) }
     {
     }
 
@@ -85,10 +85,11 @@ class TestLoop final: private detail::OwnedNullBackend, public EventLoop
   private:
     /// @param options What the caller asked for.
     /// @return The same options with the idle policy forced; see the constructor.
-    [[nodiscard]] static EventLoopOptions returning(EventLoopOptions options) noexcept
+    [[nodiscard]] static EventLoopOptions returning(EventLoopOptions const& options) noexcept
     {
-        options.idle = IdlePolicy::Return;
-        return options;
+        auto forced = options;
+        forced.idle = IdlePolicy::Return;
+        return forced;
     }
 };
 

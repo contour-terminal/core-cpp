@@ -42,11 +42,11 @@ class WorkerIdentity
     {
       public:
         /// @param identity The identity to claim for the calling thread.
-        explicit Scope(WorkerIdentity& identity) noexcept: _identity { identity }
+        explicit Scope(WorkerIdentity& identity) noexcept:
+            _identity { identity }, _outermost { identity._depth == 0 }
         {
             // An inner scope must not re-publish the thread id: it is already this thread's, and
             // a store here would race a reader that is mid-comparison for no gain.
-            _outermost = _identity._depth == 0;
             if (_outermost)
             {
                 _identity._workerThread.store(std::this_thread::get_id(), std::memory_order_relaxed);
@@ -69,7 +69,7 @@ class WorkerIdentity
 
       private:
         WorkerIdentity& _identity;
-        bool _outermost = false;
+        bool _outermost; ///< Whether this scope is the one that claimed, and so the one to release.
     };
 
     /// Whether a thread is currently driving the loop.
