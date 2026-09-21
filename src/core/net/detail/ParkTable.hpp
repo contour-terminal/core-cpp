@@ -383,10 +383,15 @@ namespace detail
         /// behind the live root* is the measurement, and without this it could not be made.
         [[nodiscard]] std::size_t timerSlotCount() const noexcept { return _timers.size(); }
 
-        /// @return How many of them hold a handle registration. One per registration the backend
-        ///         has on this table's account, including a park whose waiter has been queued and
-        ///         not yet resumed — that park is still attached, and a count that dropped it
-        ///         would read zero while the backend still holds it.
+        /// @return How many parks still hold a handle key — INCLUDING one whose waiter has been
+        ///         queued and not yet resumed, which was the count's defect before.
+        ///
+        /// Not "one per backend registration", which it used to say and does not mean:
+        /// `notifyHandleClosing`, `resolveCancel` and `unparkEverything` each detach a park and
+        /// clear `Park::attached` while leaving it in the table, so in those windows this exceeds
+        /// what the backend holds. `Park::attached` is the attachment; this is the key. The
+        /// over-count is the safe direction — a "no registration leaked" assertion now fails
+        /// loudly rather than reading zero while a registration is live.
         [[nodiscard]] std::size_t readinessCount() const noexcept { return _byHandle.size(); }
 
         /// @return The soonest deadline any park is waiting on, or nullopt if none is.

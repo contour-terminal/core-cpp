@@ -89,21 +89,33 @@ EventLoop::~EventLoop()
     // **The inbound queue is NOT swept, and that is a decision rather than an omission.** Work
     // handed over and not yet accepted by a turn is DROPPED: never resumed, never unwound.
     //
-    // Resuming it was tried and is wrong. `submit(std::coroutine_handle<>)` borrows a bare
-    // handle, and the loop cannot ask a type-erased handle whether it names a suspended flow that
-    // would unwind or a never-started lazy `Task` that would RUN -- resuming the second starts a
-    // coroutine on a loop that is being destroyed. Even a genuine `ResumeOn` continuation is no
-    // better: `ResumeOn::await_resume()` is noexcept and returns rather than throwing, so
-    // resuming one runs its body here too, and a body that re-enters the loop segfaults.
-    // `LoopTeardown_test`'s "work somebody else owns is left alone" and `TestLoop_test`'s "stop
-    // short-circuits run()" are the two cases that say so, and the second says it with a SIGSEGV.
+    // **The discriminator is the CONTAINER, and it is worth saying plainly rather than dressing
+    // up.** The ready queue holds work this loop put there -- unparked waiters, spawned roots,
+    // continuations a turn queued -- and not resuming it strands flows the loop is itself
+    // responsible for. The inbound queue holds what another thread handed over and no turn has
+    // taken up. Both are drawn at the container, not at any property of the work.
     //
-    // What makes the ready queue different is not which container it is but what being in it
-    // MEANS: a turn accepted that work and the loop owes its resumption. A submission still in
-    // the inbound queue is an offer no turn has taken up, so the loop never took the obligation
-    // on. The consequence is real and belongs in the open: a cross-thread `ResumeOn { loop }`
-    // whose loop dies before the next turn leaves its awaiting flow suspended forever. An owner
-    // that needs it delivered runs one more turn before destroying the loop.
+    // The hazard is real in BOTH and is therefore not the reason for the split: `submit(
+    // std::coroutine_handle<>)` takes a bare handle, so a suspended flow that would unwind and a
+    // never-started lazy `Task` that would RUN are the same type, and `ResumeOn::await_resume()`
+    // is noexcept, so even a genuine continuation runs its body rather than unwinding. Resuming
+    // the ready queue can start a lazy task too. What the hazard argues is that the boundary must
+    // be a FIXED one rather than a judgement per item -- the loop cannot inspect a handle to
+    // decide, so it decides by where the handle is.
+    //
+    // Resuming the inbound queue as well was tried and reverted: `LoopTeardown_test`'s "work
+    // somebody else owns is left alone" and `TestLoop_test`'s "stop short-circuits run()" both
+    // failed, the second with a SIGSEGV.
+    //
+    // **The consequence is worse than a stranded flow and belongs in the open.** Stranding is the
+    // benign ordering -- the hand-off reached the queue before the destructor. The other ordering
+    // is the likelier one: a thread that has not submitted YET calls `ResumeOn::await_suspend`
+    // afterwards, which reads `_worker`, locks `_inboundMutex` and calls `_backend.wake()` on
+    // destroyed storage. **G5 does not cover it**, because a thread holding a handle it intends
+    // to submit is not driving anything, so `teardownIsSerialisedWithDispatch()` answers true.
+    // A loop other threads have been handing work to is quiesced before it is destroyed -- their
+    // hand-offs joined, or one more turn run -- and neither this rule nor that assertion is what
+    // makes that safe.
     _rootStop.request_stop();
     unparkEverything();
 
@@ -280,7 +292,12 @@ RunOnceResult EventLoop::turn(std::optional<platform::SteadyDuration> maxWait, s
     // that owns its thread and has nothing to do BLOCKS, because another thread may still `post`
     // and the backend's wake channel is what ends that wait. A loop somebody else drives a turn at
     // a time must not, because the caller is what waits.
-    auto const idleWait = _inRun && _options.idle == IdlePolicy::Block;
+    //
+    // `blockOn` waits for the same reason and it is not a special case: it OWNS the calling
+    // thread for the duration, so an idle turn there has a caller who asked to block. The flow it
+    // is driving may be running on another executor right now, in which case nothing is queued,
+    // nothing is parked, and the hand-off back is what wakes this wait.
+    auto const idleWait = (_inRun || static_cast<bool>(until)) && _options.idle == IdlePolicy::Block;
     // And skipped for `blockOn` the moment the flow it exists to finish HAS finished. That drive
     // is bounded by one flow rather than by a stop, so a wait entered after step 2 completed it
     // could only end on a deadline or a wake belonging to work nobody is waiting for -- and on a
@@ -537,6 +554,11 @@ void EventLoop::schedule(platform::SteadyTimePoint deadline, async::ParkedWork w
 
 bool EventLoop::cancelPending(std::coroutine_handle<> handle) noexcept
 {
+    // The same predicate the turn and the destructor use: this loop's own thread, or nobody
+    // driving it. Anywhere else, this writes scheduler state beside a turn that is reading it.
+    assert(teardownIsSerialisedWithDispatch()
+           && "EventLoop::cancelPending from a second thread while another is driving this loop: "
+              "post() a call to it instead");
     if (!handle)
         return false;
 
@@ -895,6 +917,14 @@ void EventLoop::queueParkedWaiter(ParkId park)
 
 void EventLoop::notifyHandleClosing(platform::NativeHandle handle, FdWakePolicy policy)
 {
+    // Reached from every socket and listener `close()` and destructor in the tree, which is
+    // why it is worth asserting rather than trusting: a socket is destroyed in more places
+    // than a timer is, and a destructor runs wherever its owner happens to die.
+    // The same predicate the turn and the destructor use: this loop's own thread, or nobody
+    // driving it. Anywhere else, this writes scheduler state beside a turn that is reading it.
+    assert(teardownIsSerialisedWithDispatch()
+           && "EventLoop::notifyHandleClosing from a second thread while another is driving this loop: "
+              "post() a call to it instead");
     if (handle == platform::InvalidHandle)
         return;
 
@@ -958,11 +988,6 @@ bool EventLoop::hasInbound() const
 {
     auto const lock = std::scoped_lock { _inboundMutex };
     return !_inbound.empty();
-}
-
-bool EventLoop::hasPendingWork() const
-{
-    return !_ready.empty() || _parks.size() != 0 || !_closedParks.empty() || hasInbound();
 }
 
 DelayAwaiter EventLoop::delay(platform::SteadyDuration duration) noexcept

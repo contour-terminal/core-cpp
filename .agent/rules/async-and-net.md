@@ -126,14 +126,17 @@ what follows is what a change to it must not break.
    timer; either outliving the loop is a call into freed storage on the host's next turn.
 
 - **What the loop OWNS is freed; what it BORROWS is resumed** -- in the ready queue and the park
-  table, which hold work a turn has ACCEPTED. **The inbound queue is dropped, deliberately**: a
-  submission still sitting there is an offer no turn took up, and the loop cannot ask a borrowed
-  `std::coroutine_handle<>` what it names. A suspended flow that would unwind and a never-started
-  lazy `Task` that would RUN are the same type, and `ResumeOn::await_resume()` is noexcept, so
-  resuming even a genuine continuation runs its body against a dying loop. Resuming it was tried
-  and reverted: one pre-existing case failed and one segfaulted. The cost -- a cross-thread
-  `ResumeOn { loop }` whose loop dies first strands its flow forever -- is paid by running one
-  more turn before destroying such a loop. A chain the
+  table. **The inbound queue is dropped, deliberately, and the discriminator is the CONTAINER.**
+  The ready queue holds work this loop put there, so not resuming it strands flows the loop is
+  responsible for; the inbound queue holds what another thread handed over and no turn took up.
+  **The "cannot ask a borrowed handle what it names" hazard is NOT the reason** -- it is equally
+  true of the ready queue, which teardown does resume, and a lazy `Task` submitted from inside a
+  turn is started by the destructor either way. What that hazard argues is that the boundary must
+  be a FIXED one rather than a judgement per item: the loop cannot inspect a handle to decide, so
+  it decides by where the handle is. Resuming the inbound queue as well was tried and reverted:
+  one pre-existing case failed and one segfaulted. The cost -- a cross-thread `ResumeOn { loop }`
+  whose loop dies first strands its flow forever -- is paid by running one more turn before
+  destroying such a loop. A chain the
   loop owns is a `DetachedTask`, which carries no stop token -- a detached flow has no awaiting
   coroutine to inherit one from -- so resuming it would not cancel it, it would run the rest of
   its body on a loop that is being destroyed. A chain the loop borrows belongs to a `Task`

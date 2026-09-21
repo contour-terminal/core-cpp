@@ -23,11 +23,13 @@
 #include <core/net/testing/ManualHostScheduler.hpp>
 #include <core/platform/Clock.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 #include <tuple>
 
 // Everything below is what a build WITH assertions needs, and nothing else compiles it: with
@@ -65,12 +67,20 @@ core::async::Task<void> parkForever(core::net::EventLoop* loop)
     co_await loop->delay(std::chrono::hours { 1 });
 }
 
+/// A flow that does nothing, for the thread-affinity mode: what is spawned does not matter, only
+/// which thread spawns it.
+/// @return A task that completes at once.
+core::async::Task<void> doNothing()
+{
+    co_return;
+}
+
 } // namespace
 
 #endif
 
 /// @param argc The argument count.
-/// @param argv `run` or `blockOn`, naming which refusal to provoke.
+/// @param argv `run`, `blockOn` or `spawnOffThread`, naming which refusal to provoke.
 /// @return Never, in a build with assertions: the refusal aborts.
 int main(int argc, char** argv)
 {
@@ -105,6 +115,37 @@ int main(int argc, char** argv)
     {
         loop.blockOn(parkForever(&loop));
         std::fputs("hostdriven-canary: blockOn() returned on a host-driven loop\n", stderr);
+        return 0;
+    }
+
+    if (std::strcmp(argv[1], "spawnOffThread") == 0)
+    {
+        // The thread-affinity family (G1/G5), proved to FIRE rather than merely to exist. Six
+        // members assert `teardownIsSerialisedWithDispatch()` and nothing drove any of them into
+        // its assertion, so a predicate inverted by a later edit would have gone unnoticed.
+        //
+        // A NATIVE backend, not the host-driven one above: this mode is about which thread calls,
+        // not about who owns the wait, and `run()` on a host-driven loop refuses for a different
+        // reason entirely -- which would make this mode pass for that reason instead.
+        auto const native = core::net::makeDefaultBackend();
+        auto nativeLoop = core::net::EventLoop { *native };
+
+        auto entered = std::atomic<bool> { false };
+        nativeLoop.post([&entered] { entered.store(true, std::memory_order_release); });
+        auto worker = std::thread { [&nativeLoop] { nativeLoop.run(); } };
+
+        // Spawning before the loop is genuinely running is the LEGITIMATE call, so waiting for a
+        // turn to have happened is what makes this the violation rather than a race.
+        while (!entered.load(std::memory_order_acquire))
+            std::this_thread::yield();
+
+        nativeLoop.spawn(doNothing());
+
+        // Unreachable where assertions are on. Reaching it means the predicate answered true from
+        // a second thread while another was driving, which is the defect.
+        nativeLoop.stop();
+        worker.join();
+        std::fputs("hostdriven-canary: spawn() from a second thread was accepted\n", stderr);
         return 0;
     }
 

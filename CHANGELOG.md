@@ -562,17 +562,14 @@ workflow refuses one without a section here.
     named the type changes the name.
   - `delay()` takes a `core::platform::SteadyDuration` rather than `std::chrono::milliseconds`. A
     `5ms` argument converts; a caller that stored the parameter type changes it.
-  - **`blockOn()` throws `std::logic_error` when its flow cannot advance**, rather than spinning
-    at full CPU forever
+  - **`blockOn()` drives its task to completion, blocking the calling thread while the loop is
+    idle, and returns only when the task finishes.** An idle turn waits on the backend rather
+    than polling, so a flow that `co_await ResumeOn { pool }`s and comes back completes here —
+    and a flow nothing will ever advance waits rather than burning a core
     ([core-cpp#17](https://github.com/contour-terminal/core-cpp/issues/17), which Task B12 had
-    been carrying for the TUI runtime). "Cannot advance" means the loop has nothing queued,
-    nothing parked and nothing handed over, and the root has not finished — a flow suspended on
-    something this loop does not drive, such as an `AsyncQueue` wired to another executor or a
-    `co_await ResumeOn { pool }` that is live on a pool thread. The refusal is the loop's, not
-    `Task`'s: `Task::result()` is unchanged, because `blockOn` is the only place that holds both
-    "the root is unfinished" and "nothing can finish it". The frame is destroyed as the exception
-    unwinds, so anything still holding a handle to it holds a dangling one — the throw reports a
-    program that was already broken, it does not repair it.
+    been carrying for the TUI runtime). On an `IdlePolicy::Return` loop, which is one somebody
+    else drives a turn at a time, the wait cannot block and such a flow still spins;
+    `testing::TestLoop` forces that policy, so drive it with `runOnce()` or `runUntilIdle()`.
   - **A coroutine resumed by readiness or by a deadline resumes one turn later**, in the next
     turn's step 2, because there is exactly one place a loop resumes and that is what makes
     guarantee G2 stateable. A test that counted waits, or that used `blockOn(trivialTask())` as
@@ -588,6 +585,15 @@ workflow refuses one without a section here.
   - `IoBackend` gains `setPump(HostCallback, void*)`, defaulted to a no-op beside `isHostDriven()`
     and `armWakeAt()`. A backend outside this repository need not implement it; a host-driven one
     that wants a loop to pump must.
+  - **Six loop-thread-only members now assert their thread affinity** — `spawn`, `resumeSoon`,
+    `requestStop`, `registerPark`, `unregisterPark`, `wakeReasonOf`, plus `cancelPending` and
+    `notifyHandleClosing`. They mutate the loop's own containers with no lock and no inbound
+    queue to hand to, so a call from a second thread while another drives tears a `std::list` or
+    rehashes a map underneath a turn. `spawn` is the one to check first when migrating from
+    `submit`: it looks like it and is not. `core-cpp.hostdriven-canary.spawnOffThread` proves the
+    family fires. `resumeSoon`'s documentation previously named thread-pool callbacks among its
+    callers, which the assert aborts — use `submit(async::ParkedWork)`, the same operation with
+    the cross-thread hand-off.
   - `FdRegistrationFailed` gains a `NetError reason` member carrying what the backend refused
     with. `attach()` and `setInterest()` both return the kernel's reason so it is never swallowed,
     and the loop was flattening both to `bool`: a consumer debugging descriptor exhaustion could

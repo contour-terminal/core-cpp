@@ -270,15 +270,21 @@ if(CORE_CPP_TESTING AND NOT EMSCRIPTEN)
     # library on every platform and a no-op off Windows.
     target_link_libraries(core-cpp-hostdriven-canary PRIVATE core::net core::testing_dialogs)
     core_cpp_apply_toolchain(core-cpp-hostdriven-canary)
-    foreach(mode IN ITEMS run blockOn)
+    foreach(mode IN ITEMS run blockOn spawnOffThread)
         add_test(NAME core-cpp.hostdriven-canary.${mode}
                  COMMAND core-cpp-hostdriven-canary ${mode})
         # SKIP_RETURN_CODE takes precedence over WILL_FAIL, so a build with assertions compiled out
         # reports a skip rather than the defect the canary exists to catch.
+        # WILL_FAIL inverts ANY non-zero exit, so it reports "Passed" for a canary that never
+        # reached its assertion -- an unknown mode exits 2 and looks identical to the refusal
+        # firing. Measured: `bogusMode` exits 2 and ctest calls it a pass. FAIL_REGULAR_EXPRESSION
+        # is what distinguishes them, by naming the three ways this binary can exit non-zero or
+        # zero WITHOUT the assertion having fired.
         set_tests_properties(core-cpp.hostdriven-canary.${mode} PROPERTIES
             WILL_FAIL TRUE
             TIMEOUT 60
             SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
+            FAIL_REGULAR_EXPRESSION "unknown mode;was accepted;returned on a host-driven loop"
             LABELS "core-cpp;net;canary")
     endforeach()
 endif()

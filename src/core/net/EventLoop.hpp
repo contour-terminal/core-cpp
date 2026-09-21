@@ -64,7 +64,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <stdexcept>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
@@ -231,23 +230,33 @@ class EventLoop: public async::IExecutor
 
     /// Drives turns until @p task completes, then returns its result.
     ///
-    /// On an @c IdlePolicy::Return loop this POLLS. Such a loop is one somebody else drives a turn
-    /// at a time, so step 4 never blocks (see @c computeTimeout) — and a `blockOn` on it therefore
-    /// turns at full speed for as long as anything is parked. @c testing::TestLoop forces that
-    /// policy, so a case that blocks on a flow parked on a deadline no test advances the clock
-    /// past burns a core until ctest's backstop. Drive such a loop with @c runOnce or
-    /// @c runUntilIdle instead, and let the case decide when time passes.
+    /// **It returns only when @p task is done.** An idle turn waits on the backend rather than
+    /// giving up, because a flow that has hopped to another executor leaves this loop with
+    /// nothing to see and is not finished — so a flow that `co_await ResumeOn { pool }`s and
+    /// comes back completes here, which is the ordinary reason to have both a loop and a pool.
+    /// The cost is that a flow nothing will ever advance HANGS, in the backend's wait, at no CPU.
+    ///
+    /// **On an @c IdlePolicy::Return loop it POLLS instead, and that is the same question
+    /// answered the other way — stated here rather than eight lines away, because the two halves
+    /// were previously separated and read as unrelated.** Such a loop is one somebody else drives
+    /// a turn at a time, so @c computeTimeout forces a zero timeout and the wait above cannot
+    /// block. A flow nothing can advance therefore SPINS there at full CPU rather than waiting
+    /// at none: [core-cpp#17](https://github.com/contour-terminal/core-cpp/issues/17)'s exact
+    /// shape, in the one configuration this design does not cover.
+    ///
+    /// @c testing::TestLoop forces that policy, so `testLoop.blockOn(flowParkedOnADeadline())`
+    /// with a `ManualClock` nobody advances burns a core until ctest's backstop. **Drive such a
+    /// loop with @c runOnce or @c runUntilIdle** and let the case decide when time passes. This
+    /// is documented rather than asserted because a flow that finishes within a turn never
+    /// reaches the idle wait at all, and refusing those would forbid the ordinary use.
     ///
     /// @pre The backend is not host-driven, for @c run()'s reason.
     /// @param task The root flow to run (its frame is kept alive for the call).
     /// @return The value produced by @p task (or void).
-    /// @throws std::logic_error if @p task can no longer be advanced — nothing is queued, nothing
-    ///         is parked, and it has not finished. That is a deadlocked flow, and answering with
-    ///         a value it never produced would hide it; a loop that kept turning would spin at
-    ///         full CPU instead, which is what this replaces. The frame is destroyed as this
-    ///         unwinds, so anything still holding a handle to it — a queue's waiter slot, a
-    ///         sibling in a join — holds a dangling one: the throw reports a program that was
-    ///         already broken, it does not repair it.
+    /// @throws Whatever @p task's body threw, rethrown by @c async::Task::result(). An exception
+    ///         escaping a TURN — a `post` callback, an allocation — propagates too, and on that
+    ///         path @p task's frame is released rather than destroyed: it may be queued on
+    ///         another executor, and freeing it would hand that executor dead storage.
     template <typename T>
     T blockOn(async::Task<T> task)
     {
@@ -261,26 +270,45 @@ class EventLoop: public async::IExecutor
         // person will trust, and a second site writing the same value by hand is how the two
         // answers start to differ.
         queueReady(async::ParkedWork { .resume = task.handle() });
-        while (!task.done())
+        // **The ONLY exit is `task.done()`.** An empty loop -- nothing queued, nothing parked,
+        // nothing inbound -- does not mean the flow cannot advance: between `co_await ResumeOn {
+        // pool }` and the `ResumeOn { loop }` that brings it back, the flow is running on
+        // somebody else's thread and this loop can see none of it. A drive that gave up there
+        // would answer about a flow that is running, and then destroy its frame under the thread
+        // running it. So an idle turn WAITS, and the backend's wake channel is what ends the
+        // wait: the hand-off calls `submit`, which wakes it.
+        //
+        // A flow nothing will ever advance therefore hangs -- parked in the backend's wait, at no
+        // CPU cost, with one stack that says exactly that. That is worse than a diagnostic and
+        // better than the alternatives: the loop cannot distinguish it from the case above
+        // without knowing what every other thread intends, and both answers it could give
+        // instead -- a value the flow never produced, or a throw about a flow that is running --
+        // are wrong in the case the other one gets right.
+        // **An exception out of a turn is an exit with the task unfinished**, and `turn()` is not
+        // `noexcept`: a `TimerCallback` may throw by design, a posted `std::function` is user
+        // code, and a resumed bare handle need not be a `Task`'s. On that path the root frame is
+        // still NAMED by this loop -- a `Park` in the table, a `_byWaiter` entry keyed on its
+        // address, an entry in the ready queue -- so destroying it leaves the next turn calling
+        // `done()` on freed storage. Reachable with one `addTimer` whose callback throws under a
+        // `blockOn` whose root is parked on a `delay`: single-threaded, no pool.
+        //
+        // `cancelPending` is the retrieval, and it searches all three containers and DISARMS
+        // rather than releases -- so the frame stops being named and stays owned by `task`, which
+        // then destroys it normally. `core::async::syncRunWith` leaks instead, for the principle
+        // *a leak report names the coroutine that parked, and a use-after-free names nothing*;
+        // it leaks because it has nothing that can retrieve the park. **Disarm beats leak where
+        // disarming is available**, and here it is.
+        //
+        // What this cannot retrieve is a frame parked on something that is not this loop -- an
+        // `AsyncQueue`, another executor. That is C1's case and it is why the drive waits rather
+        // than giving up, above.
         {
-            // Refused HERE, because this is the only place both facts exist. `hasPendingWork()`
-            // answers whether THIS LOOP can advance anything; `task.done()` answers whether the
-            // root has finished. `Task` knows nothing about executors and cannot tell "not
-            // finished because something is still running it" from "not finished and nothing ever
-            // will", so a check pushed down there would be a branch on every result path in six
-            // consumers to catch one caller's bug.
-            //
-            // Returning instead would read `Task<T>`'s result optional while it is still
-            // disengaged: an indeterminate value for a non-void T, and a silent success for void.
-            // Before this loop existed the same program hung, which was loud and attributable;
-            // answering with a value the flow never produced would be strictly worse.
-            if (!hasPendingWork())
-                throw std::logic_error {
-                    "core::net::EventLoop::blockOn: the task can no longer be advanced -- nothing "
-                    "is queued, nothing is parked, and it has not finished. A flow suspended on "
-                    "something this loop does not drive cannot be completed by driving this loop."
-                };
-            std::ignore = turn(std::nullopt, task.handle());
+            auto const undo = detail::ScopeGuard { [&]() noexcept {
+                if (!task.done())
+                    std::ignore = cancelPending(task.handle());
+            } };
+            while (!task.done())
+                std::ignore = turn(std::nullopt, task.handle());
         }
         return task.result();
     }
@@ -417,8 +445,10 @@ class EventLoop: public async::IExecutor
     ///         `Timers_test.cpp` measures it rather than arguing about it.
     [[nodiscard]] std::size_t pendingTimerSlotCount() const noexcept { return _parks.timerSlotCount(); }
 
-    /// @return The number of readiness parks the loop still holds — one per registration it has
-    ///         with the backend. The same invariant as @c pendingTimerCount, for the other kind of
+    /// @return The number of readiness parks the loop still holds — one per park with a handle
+    ///         key, which is NOT the same as one per backend registration: a park detached at
+    ///         close or cancel stays here until it is taken. See @c detail::ParkTable::
+    ///         readinessCount. The same invariant as @c pendingTimerCount, for the other kind of
     ///         park.
     [[nodiscard]] std::size_t parkedWaiterCount() const noexcept { return _parks.readinessCount(); }
 
@@ -505,8 +535,15 @@ class EventLoop: public async::IExecutor
     /// Called by the loop's own awaitables and by the socket layer built on it.
     /// @{
 
-    /// Queues @p work for resumption in the next drain. What every backend, completion, stop and
-    /// thread-pool callback reaches, and it ENQUEUES — it never resumes. Loop thread only.
+    /// Queues @p work for resumption in the next drain. It ENQUEUES — it never resumes.
+    ///
+    /// **Loop thread only, and the assert enforces it.** An earlier version of this line named
+    /// "thread-pool callback" among its callers, which the assert aborts: a pool thread must use
+    /// @c submit(async::ParkedWork), which is this operation plus the hand-off through the
+    /// inbound queue. The two are the same operation with different thread affinity, so a doc
+    /// advertising the laxer one's callers on the stricter one is how the next off-thread caller
+    /// gets written. What legitimately reaches this is the loop's own awaiters, a backend's
+    /// readiness dispatch and a stop callback resolved on the loop thread.
     /// @param work The coroutine to resume, and the chain root to free if it is not.
     void resumeSoon(async::ParkedWork work);
 
@@ -514,9 +551,16 @@ class EventLoop: public async::IExecutor
     /// it has one, and files it so a cancel can find it by id.
     /// @param entry What to park; see @c ParkEntry.
     /// @param refusal Where the backend's reason is written when the registration is refused, or
-    ///        null where the caller has nowhere to report it. An out-parameter rather than an
-    ///        `expected` return so that the callers who only want a @c ParkId — a timer has no
-    ///        handle and cannot be refused this way — are unchanged.
+    ///        null where the caller has nowhere to report it.
+    ///
+    ///        **An out-parameter, which this project's own rule says a fallible API should not
+    ///        be** — `std::expected` is the form everywhere else. The deviation is deliberate and
+    ///        recorded here rather than left to be rediscovered: the return is a @c ParkId and
+    ///        the great majority of calls cannot be refused this way at all (a deadline has no
+    ///        handle), so `expected<ParkId, NetError>` would put a `.value()` or a monadic chain
+    ///        on every one of them to carry a reason only the readiness path can produce. If a
+    ///        second fallible reason ever appears here, that trade stops holding and the return
+    ///        type should change.
     /// @return The park's id, or @c ParkId::invalid() if the backend refused the registration —
     ///         which it does for an invalid handle, and for a kernel that would not arm the
     ///         interest. A refusal leaves nothing registered.
@@ -662,10 +706,6 @@ class EventLoop: public async::IExecutor
     /// @param park The park to cancel.
     void resolveCancel(ParkId park);
 
-    /// @return Whether anything could still advance a flow: queued work, a park, or something
-    ///         another thread has handed over.
-    [[nodiscard]] bool hasPendingWork() const;
-
     /// @return Whether anything is waiting in the inbound queue.
     [[nodiscard]] bool hasInbound() const;
 
@@ -798,7 +838,13 @@ class DelayAwaiter
         // caller of `unregisterPark`. The loop would then hold a park naming storage that is
         // being destroyed. `ScopeGuard` has no dismiss, so the flag is what makes this fire on
         // the exceptional exit alone; `unregisterPark` on an invalid id is a no-op, which covers
-        // a throw from `registerPark` itself.
+        // a throw from `registerPark` before it files anything.
+        //
+        // **THREE awaiters have this shape**, and an earlier version of this comment named two --
+        // which read as an audit that had been done. They are `DelayAwaiter` (here),
+        // `WaitHandleAwaiter` below, and `TokenDelayAwaiter` in `InterruptibleSleep.cpp`. The
+        // third is the one that matters: its park holds a live backend registration rather than a
+        // heap slot. A new awaiter that parks before arming a stop callback belongs on that list.
         auto registered = false;
         // `noexcept` on the lambda is required, not decorative: `ScopeGuard`'s constraint is
         // `is_nothrow_invocable_v<Callable&>`, and an unmarked lambda fails it -- as a deduction
@@ -874,6 +920,21 @@ class WaitHandleAwaiter
             _token = awaiting.promise().stopToken();
         if (_token.stop_requested())
             return false;
+        // The park-then-arm window, and THIS is the site where it hurts. `DelayAwaiter` and
+        // `TokenDelayAwaiter` leak a heap slot if the emplace below throws; this park holds a
+        // live backend REGISTRATION whose `ReadinessHandler` names the awaiting frame -- so a
+        // frame unwound out of `await_suspend` leaves the kernel side attached to storage that is
+        // being destroyed, and the next readiness on that descriptor queues a dead handle.
+        //
+        // `noexcept` on the lambda is required rather than decorative: `ScopeGuard`'s constraint
+        // is `is_nothrow_invocable_v<Callable&>`, which an unmarked lambda fails as a deduction
+        // error that never names the requirement. `unregisterPark` is itself `noexcept`, and it
+        // detaches the handler before freeing the park, which is the whole point here.
+        auto registered = false;
+        auto const undo = detail::ScopeGuard { [&]() noexcept {
+            if (!registered)
+                _loop.unregisterPark(_park);
+        } };
         _park = _loop.registerPark(
             ParkEntry::onReadiness(async::detail::parkedWorkFor(awaiting), _handle, _kind, _interest),
             &_refusal);
@@ -882,6 +943,7 @@ class WaitHandleAwaiter
         // If the token is stopped while parked (a whenAny/withTimeout sibling won), cancel the
         // park promptly so the flow unwinds instead of waiting for readiness that may never come.
         _cancelReg.emplace(_token, [&loop = _loop, park = _park] { loop.requestCancel(park); });
+        registered = true;
         return true;
     }
 

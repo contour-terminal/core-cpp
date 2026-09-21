@@ -4,6 +4,7 @@
 #include <core/async/IExecutor.hpp>
 #include <core/async/ResumeOn.hpp>
 #include <core/async/Task.hpp>
+#include <core/async/ThreadPoolExecutor.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/IoBackend.hpp>
 #include <core/net/WithTimeout.hpp>
@@ -19,6 +20,7 @@
 #include <atomic>
 #include <chrono>
 #include <coroutine>
+#include <expected>
 #include <optional>
 #include <ranges>
 #include <stdexcept>
@@ -146,40 +148,67 @@ Task<void> justReturn()
     co_return;
 }
 
-/// An executor that accepts work and never runs it.
+/// Wraps a real backend and records the timeout each `wait()` was ASKED for.
 ///
-/// What `blockOn`'s refusal is about is a flow suspended on something the loop does not drive,
-/// so the queue in those cases is wired HERE rather than to the loop: the park is then genuinely
-/// unreachable from any turn, which is the condition under test, and the case can clear the
-/// queue's waiter slot afterwards without anything resuming a frame the refusal has destroyed.
-class InertExecutor final: public core::async::IExecutor
+/// The property under test is what `blockOn` REQUESTS, which is a fact about the argument rather
+/// than about what the backend does with it. Neither double in the tree can answer it: a
+/// `ScriptedBackend` never really waits, so `blockOn` burns a script step per turn and the run
+/// ends in "script exhausted"; and `runOnce` records nothing at all, because it never asks. So a
+/// real backend, whose wait genuinely blocks on its wake channel, with the argument captured on
+/// the way through.
+///
+/// Thread safety: `wait()` is called only by the loop thread, and `wake()` — the one member
+/// another thread reaches — touches nothing recorded here. The vector is read after `blockOn`
+/// has returned, on the thread that ran the loop, so nothing is appending by then.
+class RecordingBackend final: public core::net::IoBackend
 {
   public:
-    using core::async::IExecutor::submit;
+    /// @param inner The backend to delegate to; must outlive this.
+    explicit RecordingBackend(core::net::IoBackend& inner) noexcept: _inner(inner) {}
 
-    void submit(std::coroutine_handle<> /*handle*/) override {}
+    [[nodiscard]] core::net::BackendKind kind() const noexcept override { return _inner.kind(); }
 
-    /// Takes the work and drops it. The `ParkedWork` destructs here, which releases whatever
-    /// claim it carried — an executor that never runs its work still owes that much.
-    void submit(core::async::ParkedWork /*work*/) override {}
+    [[nodiscard]] std::expected<void, core::net::NetError> attach(
+        core::net::ReadinessHandler& handler) override
+    {
+        return _inner.attach(handler);
+    }
+
+    [[nodiscard]] std::expected<void, core::net::NetError> setInterest(core::net::ReadinessHandler& handler,
+                                                                       core::net::Interest interest) override
+    {
+        return _inner.setInterest(handler, interest);
+    }
+
+    void detach(core::net::ReadinessHandler& handler) noexcept override { _inner.detach(handler); }
+
+    [[nodiscard]] core::net::WaitResult wait(std::optional<core::platform::SteadyDuration> timeout) override
+    {
+        _timeouts.push_back(timeout);
+        return _inner.wait(timeout);
+    }
+
+    void wake() noexcept override { _inner.wake(); }
+
+    [[nodiscard]] bool isHostDriven() const noexcept override { return _inner.isHostDriven(); }
+
+    void armWakeAt(std::optional<core::platform::SteadyTimePoint> deadline) noexcept override
+    {
+        _inner.armWakeAt(deadline);
+    }
+
+    void setPump(core::net::HostCallback pump, void* state) noexcept override { _inner.setPump(pump, state); }
+
+    /// @return Every timeout `wait()` was given, in order. Read only after the drive has returned.
+    [[nodiscard]] std::vector<std::optional<core::platform::SteadyDuration>> const& timeouts() const noexcept
+    {
+        return _timeouts;
+    }
+
+  private:
+    core::net::IoBackend& _inner;
+    std::vector<std::optional<core::platform::SteadyDuration>> _timeouts;
 };
-
-/// Parks on a queue nothing will ever push to, producing a value it can never produce.
-/// @param queue The queue to pop from; never null.
-Task<int> popOne(core::async::AsyncQueue<int>* queue)
-{
-    auto const item = co_await queue->pop();
-    co_return item.value_or(-1);
-}
-
-/// The `Task<void>` arm of the same flow: the one where a `blockOn` that returned would report
-/// success, because `result()` on a void task only rethrows and there is nothing stored to
-/// rethrow.
-/// @param queue The queue to pop from; never null.
-Task<void> popAndDiscard(core::async::AsyncQueue<int>* queue)
-{
-    std::ignore = co_await queue->pop();
-}
 
 /// Hands itself to @p loop and records that it got there.
 ///
@@ -191,6 +220,21 @@ Task<void> handOverToLoop(EventLoop* loop, bool* resumed)
 {
     co_await core::async::ResumeOn { *loop };
     *resumed = true;
+}
+
+/// Hops to a pool, works there, and hops back to the loop.
+///
+/// The shape `ResumeOn` exists for, and the one where the loop is momentarily empty while the
+/// flow is very much alive: between the two `co_await`s nothing is queued, nothing is parked and
+/// nothing is inbound, because the flow is running on somebody else's thread.
+/// @param loop The loop to come back to; never null.
+/// @param pool The executor to hop onto; never null.
+Task<int> hopToPoolAndBack(EventLoop* loop, core::async::IExecutor* pool)
+{
+    co_await core::async::ResumeOn { *pool };
+    std::this_thread::sleep_for(std::chrono::milliseconds { 40 });
+    co_await core::async::ResumeOn { *loop };
+    co_return 7;
 }
 
 /// Sets *destroyed = true when its frame unwinds (RAII), so a test can prove a
@@ -1186,43 +1230,6 @@ TEST_CASE("spawn at scale unlinks per completion rather than sweeping", "[EventL
     CHECK(loop.spawnedCount() == 0);
 }
 
-TEST_CASE("blockOn refuses a flow it cannot advance rather than reading an unfinished result",
-          "[EventLoop][blockOn]")
-{
-    // `hasPendingWork()` asks whether THIS LOOP can advance anything — not whether the root can.
-    // A flow suspended on something else leaves all four of its sources empty, and a `blockOn`
-    // that answered by returning would read `Task<T>`'s result optional while it is still
-    // disengaged: an indeterminate value for a non-void T, and a silent success for void. The
-    // frame is destroyed on the way out either way, so the caller has to learn that the flow never
-    // finished — and the only place both facts exist is here.
-    auto idle = InertExecutor {};
-    auto queue = core::async::AsyncQueue<int> { idle, {} };
-
-    auto source = ScriptedBackend {};
-    auto loop = EventLoop { source };
-
-    // CHECK rather than REQUIRE, so that a regression reports as a failed assertion and still
-    // reaches the cleanup below. A REQUIRE here unwinds past it, and the queue then destructs
-    // with a consumer still parked on it — which aborts the binary on an assertion about the
-    // test's own hygiene, burying the one this case is about.
-    SECTION("a flow producing a value")
-    {
-        CHECK_THROWS_AS(loop.blockOn(popOne(&queue)), std::logic_error);
-    }
-
-    SECTION("a flow producing nothing")
-    {
-        CHECK_THROWS_AS(loop.blockOn(popAndDiscard(&queue)), std::logic_error);
-    }
-
-    // The refusal destroyed the frame that was parked here, so this queue now names a consumer
-    // that no longer exists. close() takes that waiter out and hands it to the executor above,
-    // which never runs it: the slot is clear for ~AsyncQueue's "destroyed with a consumer still
-    // parked" assertion, and nothing ever touches the frame.
-    queue.close();
-    CHECK_FALSE(queue.hasWaiter());
-}
-
 TEST_CASE("a readiness park dispatched but not yet resumed is still detached at close",
           "[EventLoop][fd][closehang]")
 {
@@ -1264,6 +1271,10 @@ TEST_CASE("a readiness park dispatched but not yet resumed is still detached at 
 
     loop.notifyHandleClosing((*pipe)->readFd(), core::net::FdWakePolicy::Resume);
     CHECK(source.attachedCount() == 0); // detached at close, not at the resume a turn later
+    // And the park is STILL COUNTED here, which is what `parkedWaiterCount` means: one per park
+    // holding a handle key, not one per backend registration. The two differ in exactly this
+    // window, and the case stopping before this line is what let the doc claim otherwise.
+    CHECK(loop.parkedWaiterCount() == 1);
 }
 
 TEST_CASE("teardown drops borrowed work still waiting in the inbound queue", "[EventLoop][teardown]")
@@ -1302,4 +1313,42 @@ TEST_CASE("teardown drops borrowed work still waiting in the inbound queue", "[E
 
     // Still false, and the frame is still suspended. Destroying `flow` below is what frees it.
     CHECK_FALSE(resumed);
+}
+
+TEST_CASE("blockOn completes a flow that leaves the loop and comes back", "[EventLoop][blockOn]")
+{
+    // While the flow is on the pool, the loop has nothing queued, nothing parked and nothing
+    // inbound -- and a `blockOn` that reads that instant as "this can no longer advance" answers
+    // about a flow that is RUNNING, then destroys its frame under the thread running it.
+    //
+    // The loop's own wake channel is what makes waiting correct rather than optimistic: the
+    // pool's `ResumeOn { loop }` calls `submit`, which wakes the backend, which ends the wait.
+    // Nothing here depends on the 40ms elapsing -- it exists only to make the window wide enough
+    // that the loop is certainly idle inside it.
+    auto pool = core::async::ThreadPoolExecutor { 2 };
+    auto const backend = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *backend };
+
+    auto const result = loop.blockOn(hopToPoolAndBack(&loop, &pool));
+    CHECK(result == 7);
+}
+
+TEST_CASE("blockOn asks for an indefinite wait rather than polling", "[EventLoop][blockOn]")
+{
+    // core-cpp#17 was filed about the SPIN, and this is the property that answers it: while the
+    // flow is on the pool, the loop has nothing to do and must ask to SLEEP, not to poll. The
+    // assertion is on the argument `wait()` received, because that is what `blockOn` controls.
+    auto pool = core::async::ThreadPoolExecutor { 1 };
+    auto const inner = core::net::makeDefaultBackend();
+    auto recording = RecordingBackend { *inner };
+    auto loop = EventLoop { recording };
+
+    auto const result = loop.blockOn(hopToPoolAndBack(&loop, &pool));
+    REQUIRE(result == 7);
+
+    // Read after the drive returned, on the thread that ran it: see RecordingBackend's note.
+    auto const& asked = recording.timeouts();
+    REQUIRE_FALSE(asked.empty());
+    // At least one indefinite wait. A poll-forever loop records only zeros.
+    CHECK(std::ranges::any_of(asked, [](auto const& t) { return !t.has_value(); }));
 }
