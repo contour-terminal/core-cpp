@@ -80,6 +80,24 @@ presets, scripts and paths.
   `#deps 0` is the tell. Origin:
   [fastcached#1531](https://github.com/LASTRADA-Software/fastcached/issues/1531), fixed by
   [fastcached#1533](https://github.com/LASTRADA-Software/fastcached/pull/1533).
+- **The incremental run produces a plausible GREEN, not an error, so nothing prompts you to
+  remember the rule above. The step count is the only tell.** Measured on 2026-09-21: after a
+  change to `EventLoop.hpp`, `clangcl-release` rebuilt **7 steps** and reported `ctest 33/33`;
+  `--clean-first` rebuilt **517 steps** and reported the same `33/33`. **A seven-step build cannot
+  have rebuilt that header's dependents, so the pass was inherited — and the verdict was identical
+  either way.** Report the step count beside every `clangcl-*` pass; a pass alone cannot say which
+  of the two runs produced it. This also narrows what was *analysed*: ninja skipping a statement
+  skips the `CODE_CHECK` inside it, so an inherited object is an unanalysed one, and `--clean-first`
+  restores analysed surface rather than only object correctness.
+- **A near-zero work count means three different things, and the third is this one.** It is the
+  verdict for an **analyser** gate (worthless — what you are measuring sits *inside* the statement
+  ninja skipped). It is **not** the verdict for a **compile-and-test** gate (legitimate — ninja's
+  currency check verified every object is newer than its inputs, and ctest then ran those
+  binaries). **Unless the currency check is itself unsound, in which case it is the verdict again,
+  for the opposite reason**: the graph it answered from was missing edges. `clangcl-*` on a
+  fastcache-cc older than `ca8dfc32` is a live instance of the third case — the depfile is never
+  reproduced, so the header edge does not exist, so "up to date" is an answer from an incomplete
+  graph rather than a check that passed.
 
 ## `NDEBUG` is not optimisation, and only the compiler can say which build this is
 
