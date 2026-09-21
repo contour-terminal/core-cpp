@@ -14,10 +14,16 @@
 /// in this order, and the reason for each is written beside it in `EventLoop.cpp`:
 ///
 ///   1. swap the inbound queue: run posts, then resolve cancel requests by live @c ParkId;
-///   2. drain the ready queue — **the one place a coroutine is resumed**;
+///   2. drain the ready queue — **the one place a coroutine is resumed, and the one place a timer
+///      callback is called**;
 ///   3. `clock.refresh()`, then compute the timeout;
 ///   4. `backend.wait(timeout)`;
 ///   5. `clock.refresh()`, then fire expired deadlines, FIFO by sequence.
+///
+/// **There is one deadline mechanism, not two.** `delay()` parks a coroutine and `addTimer()`
+/// parks a callback, in the same table, on the same heap, with the same never-reused ids; step 5
+/// fires both and step 2 runs both. Nothing polls, because the loop already knows its next
+/// deadline and that is what bounds the wait in step 3.
 ///
 /// Readiness dispatched in step 4 and deadlines fired in step 5 are RESUMED in the next turn's
 /// step 2, which is what makes guarantee G2 — every resumption happens in turn step 2 — a thing
@@ -136,7 +142,13 @@ struct EventLoopOptions
 /// What one turn of @c EventLoop::runOnce did.
 struct RunOnceResult
 {
-    std::size_t resumed = 0;    ///< Coroutines resumed in step 2.
+    /// What step 2 took off the ready queue: coroutines resumed, plus timer callbacks run.
+    ///
+    /// One number for both, because step 2 is one step: a turn that ran a callback and resumed
+    /// nothing is not an idle turn, and a drain that stopped on "no coroutine resumed" would stop
+    /// having just handed control to a callback that may have queued more work.
+    std::size_t resumed = 0;
+
     std::size_t dispatched = 0; ///< Readiness reports the backend delivered in step 4.
 
     /// Whether this turn found nothing at all to do: nothing posted, nothing ready, nothing
@@ -300,6 +312,48 @@ class EventLoop: public async::IExecutor
     /// @param task The flow to run.
     void spawn(async::Task<void> task);
 
+    /// Arms @p onExpired to run on the loop's thread once the clock reaches @p deadline.
+    ///
+    /// **A timer with no coroutine behind it, and no second scheduler behind that.** It is filed
+    /// in the same park table as @c delay() and fired by the same turn step, so the loop has one
+    /// answer to "when is the next deadline" and one firing order across both kinds. Nothing
+    /// polls: an armed timer is what bounds the next wait, which is why this can replace a
+    /// `DeadlineTimer` that woke every 50ms to notice it had been disarmed.
+    ///
+    /// The callback runs in turn step 2 — the turn AFTER the one whose step 5 found it due, which
+    /// is the same one-turn latency a `co_await delay()` has, and for the same reason (guarantee
+    /// G2: exactly one place resumes, and exactly one place hands control to code outside the
+    /// loop). A deadline already in the past therefore fires on a turn rather than from this call,
+    /// so a caller is never re-entered from its own arming.
+    ///
+    /// Loop thread only, like @c registerPark and @c resumeSoon. From another thread,
+    /// `post()` a call to it.
+    /// @param deadline When to run @p onExpired, on this loop's clock.
+    /// @param onExpired What to run; must not be null.
+    /// @param state An opaque pointer handed to @p onExpired. Borrowed: it must outlive the timer,
+    ///        or the timer must be cancelled before it goes.
+    /// @return The timer's id, for @c cancelTimer, or @c TimerId::invalid() if @p onExpired was
+    ///         null.
+    [[nodiscard]] TimerId addTimer(platform::SteadyTimePoint deadline, TimerCallback onExpired, void* state);
+
+    /// Retires @p timer so its callback does not run.
+    ///
+    /// **`true` means THIS call prevented the callback**, which is the only useful reading: it
+    /// also covers the window between step 5 finding a timer due and step 2 running it, where the
+    /// timer is queued but has not fired. Without that, an owner destroyed in that window — a
+    /// @c DeadlineTimer is typically a member of the thing its callback touches — would have its
+    /// callback run against storage that is gone, and "already fired" would mean "no longer
+    /// cancellable and not yet harmless".
+    ///
+    /// `false` means there was nothing to prevent: the callback has already run, the timer was
+    /// cancelled before, or @p timer never named a timer of this loop. Generation-checked, so a
+    /// stale id can never retire a timer armed since — ids are never reused.
+    ///
+    /// Idempotent, and loop thread only.
+    /// @param timer The timer to retire.
+    /// @return Whether this call is what stopped the callback from running.
+    [[nodiscard]] bool cancelTimer(TimerId timer) noexcept;
+
     /// @return The number of spawned background flows whose frames are still held.
     [[nodiscard]] std::size_t spawnedCount() const noexcept { return _roots.size(); }
 
@@ -307,6 +361,11 @@ class EventLoop: public async::IExecutor
     ///         a leaked entry after a `whenAny`/`withTimeout` loser unwinds is observable as a
     ///         nonzero count — the invariant the cancellation path must preserve.
     [[nodiscard]] std::size_t pendingTimerCount() const noexcept { return _parks.timerCount(); }
+
+    /// @return How many slots the deadline heap holds, live and stale together. A diagnostic: the
+    ///         difference from @c pendingTimerCount is exactly what lazy pruning is carrying, and
+    ///         `Timers_test.cpp` measures it rather than arguing about it.
+    [[nodiscard]] std::size_t pendingTimerSlotCount() const noexcept { return _parks.timerSlotCount(); }
 
     /// @return The number of readiness parks the loop still holds — one per registration it has
     ///         with the backend. The same invariant as @c pendingTimerCount, for the other kind of
@@ -509,6 +568,17 @@ class EventLoop: public async::IExecutor
     /// @return How many were queued.
     std::size_t fireExpiredTimers();
 
+    /// Runs the callback of the timer park @p park, if it is still there.
+    ///
+    /// Reached from the drain, so a timer callback runs where a coroutine resumption runs and
+    /// nowhere else. The park is taken out of the table BEFORE the callback is invoked, for two
+    /// reasons at once: a @c cancelTimer from inside the callback must find nothing (the timer has
+    /// fired), and the callback is allowed to destroy whatever owns it, so nothing may be read
+    /// back out of the table afterwards.
+    /// @param park The callback park to fire. A park that is gone — cancelled between step 5 and
+    ///        here — is skipped, which is what makes that window cancellable.
+    void runDueCallback(ParkId park);
+
     /// Queues the coroutine parked at @p park for resumption, and takes it out of the scheduling
     /// indices. What a backend's readiness callback reaches, and it ENQUEUES. Idempotent per park
     /// within one turn: the second call finds the waiter already taken and does nothing.
@@ -565,6 +635,14 @@ class EventLoop: public async::IExecutor
     {
         async::detail::Parked parked {}; ///< The coroutine, and what to free if it is not resumed.
         bool ownedByLoop = false;        ///< Whether @c parked carried a claim when it was queued.
+
+        /// The callback timer this entry is due to run, or @c ParkId::invalid() for a coroutine.
+        ///
+        /// **The id rather than the callback**, so that a `cancelTimer` between step 5 queueing a
+        /// due timer and step 2 running it is O(1) and needs no scan of this queue: taking the
+        /// park out of the table is what makes this entry resolve to nothing. It is the same
+        /// generation check every other cancellation path uses, reused rather than re-invented.
+        ParkId callbackPark {};
     };
 
     /// Coroutines ready to resume now, each owning whatever chain nothing else can free.
@@ -614,32 +692,54 @@ class EventLoop: public async::IExecutor
 /// the deadline (a `whenAny`/`withTimeout` sibling won), the park is cancelled promptly and the
 /// coroutine unwinds via @c async::OperationCancelled rather than lingering until the deadline
 /// elapses. Its park is removed when it is cancelled, so no handle dangles once the frame unwinds.
+///
+/// **The loop is nullable**, which is what the free @c sleepUntil(EventLoop*, tp) needs: a caller
+/// with no loop behind it — an in-memory transport, a test double with no deadline mechanism —
+/// passes null and the awaitable resolves inline without ever suspending. It is a pointer rather
+/// than two types because the alternative is a second awaitable with the same three members and
+/// one fewer reason to exist.
 class DelayAwaiter
 {
   public:
     /// @param loop The loop whose clock and deadline heap this parks on.
     /// @param deadline When to resume.
     DelayAwaiter(EventLoop& loop, platform::SteadyTimePoint deadline) noexcept:
-        _loop(loop), _deadline(deadline)
+        _loop(&loop), _deadline(deadline)
     {
     }
 
-    /// @return True when the deadline has already passed, so the flow never suspends.
-    [[nodiscard]] bool await_ready() const noexcept { return _deadline <= _loop.clock().now(); }
+    /// @param loopOrNull The loop to park on, or null to resolve inline without suspending.
+    /// @param deadline When to resume.
+    DelayAwaiter(EventLoop* loopOrNull, platform::SteadyTimePoint deadline) noexcept:
+        _loop(loopOrNull), _deadline(deadline)
+    {
+    }
+
+    /// @return True when there is no loop, or the deadline has already passed — either way the
+    ///         flow never suspends.
+    [[nodiscard]] bool await_ready() const noexcept
+    {
+        return _loop == nullptr || _deadline <= _loop->clock().now();
+    }
 
     /// Parks the awaiting coroutine on the deadline, unless it is already cancelled.
     /// @tparam Promise The awaiting coroutine's promise type.
     /// @param awaiting The coroutine performing the `co_await`.
     /// @return False (resume now) if already cancelled; true to park.
+    /// @pre There is a loop, which @c await_ready has already established (it answers true for a
+    ///      null one, so this is never reached with one).
     template <typename Promise>
     [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting)
     {
+        assert(_loop != nullptr
+               && "DelayAwaiter::await_suspend with no loop: await_ready answers "
+                  "true for a null loop, so this is unreachable");
         if constexpr (requires { awaiting.promise().stopToken(); })
             _token = awaiting.promise().stopToken();
         if (_token.stop_requested())
             return false;
-        _park = _loop.registerPark(ParkEntry::onDeadline(async::detail::parkedWorkFor(awaiting), _deadline));
-        _cancelReg.emplace(_token, [&loop = _loop, park = _park] { loop.requestCancel(park); });
+        _park = _loop->registerPark(ParkEntry::onDeadline(async::detail::parkedWorkFor(awaiting), _deadline));
+        _cancelReg.emplace(_token, [loop = _loop, park = _park] { loop->requestCancel(park); });
         return true;
     }
 
@@ -647,14 +747,15 @@ class DelayAwaiter
     void await_resume()
     {
         _cancelReg.reset();
-        _loop.unregisterPark(_park);
+        if (_loop != nullptr)
+            _loop->unregisterPark(_park);
         if (_token.stop_requested())
             throw async::OperationCancelled {};
     }
 
   private:
     std::optional<async::StopCallback<std::function<void()>>> _cancelReg;
-    EventLoop& _loop;
+    EventLoop* _loop;
     platform::SteadyTimePoint _deadline;
     ParkId _park {};
     async::StopToken _token;

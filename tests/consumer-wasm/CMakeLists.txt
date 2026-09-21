@@ -11,11 +11,14 @@
 # -pthread, so no SharedArrayBuffer is forced on the page that loads it), with CORE_CPP_WITH_TUI
 # off and CORE_CPP_FETCH_DEPS off, so the configure resolves every dependency without a fetch.
 #
-# Today the subset it links is core::base, core::async and core::net_types. core::net has a
-# WebAssembly subset of its own as of Task B3 -- the IoBackend contract and the host-driven backend
-# -- but nothing here awaits anything yet, so there is no consumer-visible behaviour to prove.
-# Task B5 extends this program to await a coroutine `delay` on a host-driven loop under
-# -sASYNCIFY, and links core::net here.
+# The subset it links is core::base, core::async, core::net_types and -- since Task B5 --
+# core::net, whose WebAssembly subset is the IoBackend contract, the host-driven backend and the
+# event loop. What that buys is the scenario a browser consumer actually writes: a PlatformLoop
+# with no thread behind it, advanced only by the host's own timer, with a coroutine `delay` and a
+# frameless `DeadlineTimer` both parked on it. `-sASYNCIFY` is added HERE and not by core-cpp: it
+# rewrites every instrumented function so a C++ stack can be unwound at `emscripten_sleep`, which
+# costs code size and start-up time, and core-cpp adds no link flag to its consumers (Part I §3).
+# A consumer that never blocks does not need it.
 cmake_minimum_required(VERSION 3.25...3.31)
 project(core-cpp-consumer-wasm VERSION 1.0.0 LANGUAGES CXX)
 
@@ -57,7 +60,7 @@ CPMAddPackage(
 
 # The subset, behind the one library the rest of the project links (morph's shape).
 add_library(consumer-wasm-core INTERFACE)
-target_link_libraries(consumer-wasm-core INTERFACE core::base core::async core::net_types)
+target_link_libraries(consumer-wasm-core INTERFACE core::base core::async core::net_types core::net)
 
 ## @brief Appends every target defined under directory @p dir, and under its subdirectories, to
 ## the list named by @p outVar.
@@ -110,6 +113,10 @@ message(STATUS "consumer-wasm: ${inTreeCount} core-cpp target(s), none of them l
 
 add_executable(consumer-wasm main.cpp)
 target_link_libraries(consumer-wasm PRIVATE consumer-wasm-core)
+# The consumer's own flag, for the consumer's own program: main() below yields to the host with
+# emscripten_sleep while a loop it owns runs to a deadline, and ASYNCIFY is what makes that stack
+# unwindable. See the note at the head of this file.
+target_link_options(consumer-wasm PRIVATE -sASYNCIFY)
 set_target_properties(consumer-wasm PROPERTIES SUFFIX ".js")
 
 find_program(CORE_CPP_NODE NAMES node nodejs)
@@ -117,4 +124,16 @@ if(NOT CORE_CPP_NODE)
     message(FATAL_ERROR "consumer-wasm: node was not found, and it is what runs the program.")
 endif()
 add_test(NAME consumer-wasm COMMAND "${CORE_CPP_NODE}" "$<TARGET_FILE:consumer-wasm>")
-set_tests_properties(consumer-wasm PROPERTIES TIMEOUT 120)
+# PASS_REGULAR_EXPRESSION, because a WebAssembly program that owns an event loop cannot rely on its
+# exit status. A pending `emscripten_async_call` -- which an armed deadline always leaves, that
+# call being how the host is asked for its next turn -- takes an Emscripten runtime keepalive, so
+# `main` returning is an IMPLICIT exit while the runtime is kept alive: the status is recorded and
+# never published, and node exits 0. Measured on core-cpp's own
+# `tests/wasm/HostDrivenTimer_smoke.cpp`, whose failing run printed FAIL and exited 0; neither
+# `-sEXIT_RUNTIME=1` nor `emscripten_force_exit()` is a good fix, and the reasons are written out
+# there. This is the shape a consumer should copy: say what happened on the last line, and have
+# ctest read it.
+set_tests_properties(consumer-wasm PROPERTIES
+    PASS_REGULAR_EXPRESSION "consumer-wasm: every check passed"
+    FAIL_REGULAR_EXPRESSION "check\(s\) failed"
+    TIMEOUT 120)

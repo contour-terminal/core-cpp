@@ -139,6 +139,63 @@ what follows is what a change to it must not break.
   one turn late and cost O(n) per turn to do it; a server spawning one flow per connection pays
   that forever.
 
+## Timers: one mechanism, and it does not poll
+
+Task B5. Every rule here is a wake-up somebody paid for.
+
+- **A timer does not poll; the loop already knows its next deadline.** fastcached's `DeadlineTimer`
+  woke every 50ms and `InterruptibleSleepUntil` woke every `wakeBound`, and both had the same
+  cause: `IReactor::Schedule` could not be taken back, so a wait that ALSO had to be woken by
+  something else re-read its own condition in steps. `EventLoop` can take a deadline back by id
+  (`cancelTimer`, `cancelPending`, `requestCancel`), so both park ONCE and are woken, and the armed
+  deadline is what bounds the wait in turn step 3. Origin:
+  [fastcached#1025](https://github.com/LASTRADA-Software/fastcached/issues/1025), whose leak was
+  the frame a poll interval left parked after the wait had already ended.
+  `DeadlineTimer_test.cpp`'s *An armed DeadlineTimer bounds the turn's wait to its own deadline* is
+  the case upstream could not have written.
+- **A callback timer is a park, in the same table as a coroutine deadline** — same heap, same
+  sequence counter, same never-reused ids. Not because sharing is tidy, but because two mechanisms
+  would each answer "when is the next deadline" and the answers would drift; the symptom of that
+  drift is a wait that is too long, which is a hang rather than a failure. The frameless kind is a
+  `Park` whose `parked` is empty and whose `onExpired` is set, and step 5 queues both kinds into
+  one ready queue, so their firing order across the two is the heap's.
+- **A timer callback runs in turn step 2, where a coroutine resumes, and nowhere else.** Step 5
+  could call it the moment it finds the deadline due; then user code would run at a second point in
+  the turn, outside `dispatchBatch`, outside the assertion that no backend dispatch is in flight,
+  and after the drain rather than in it. It also makes the window between "due" and "run"
+  cancellable, which is the next rule.
+- **`cancelTimer`'s `true` means THIS call prevented the callback**, including in the window
+  between step 5 queueing a due timer and step 2 running it. Without that, an owner destroyed in
+  that window — a `DeadlineTimer` is typically a member of the thing its callback touches — would
+  have its callback run against storage that is gone, and "already fired" would mean "no longer
+  cancellable and not yet harmless". It costs no scan: the ready entry names the `ParkId`, so
+  taking the park out of the table is what makes it resolve to nothing.
+- **A timer marks itself settled BEFORE its callback runs.** The callback is allowed to destroy the
+  timer, and the destructor it triggers must find nothing left to retire. `DeadlineTimer::fire`
+  reads the callback and its state into locals first, because after the call `*this` may not exist.
+- **Teardown drops a queued timer callback rather than running it.** It is not work to unwind and
+  not a frame to free; it is a call into an owner that is being destroyed with the loop.
+- **Lazy pruning of the deadline heap is enough, and here is the measurement.** A cancelled
+  deadline leaves a stale slot until the heap ROOT reaches it (Task B4's report, concern 4). The
+  bound is not "deadlines ever armed": pruning walks from the root while the root is stale, so what
+  accumulates is only what was armed and cancelled BEHIND the current live root — and the root is
+  by definition the soonest live deadline, so the turn that fires it reclaims them all.
+  `Timers_test.cpp`'s *Lazy timer pruning is bounded by the deadlines armed behind the live root*
+  measures exactly that: 1000 arm/cancel pairs with no live root leave 0 slots after one turn, the
+  same 1000 behind a live root leave 1001, and firing the root takes it back to 0. Eager
+  erase-and-reheap would report 1 in the middle case and be O(n) per cancel, which is what made a
+  loop with many deadlines quadratic upstream.
+- **A WebAssembly program's exit status does not survive the host.** A loop with an armed deadline
+  leaves a pending `emscripten_async_call` — that call IS how the host is asked for its next turn —
+  and Emscripten takes a runtime keepalive per pending timer, so `main` returning is an IMPLICIT
+  exit while the runtime is kept alive: the status is recorded, never published, and node exits 0.
+  Measured: `tests/wasm/HostDrivenTimer_smoke.cpp` printed `FAIL ... did NOT fire` and exited 0.
+  `-sEXIT_RUNTIME=1` does not fix it (the exit path reads the keepalive counter, not
+  `noExitRuntime`), and `emscripten_force_exit()` publishes the status but zeroes that counter, so
+  the pending timer's later `runtimeKeepalivePop` aborts with exit 7. **A WebAssembly test says
+  what happened on its last line and ctest reads it** (`PASS_REGULAR_EXPRESSION`), which is also
+  what `tests/consumer-wasm` had to do.
+
 ## Thread affinity, asserted rather than documented
 
 - **G1: exactly one thread dequeues a loop.** `run()`, `runOnce()` and `blockOn()` each claim the

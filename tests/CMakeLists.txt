@@ -308,3 +308,7 @@ if(WIN32)
             LABELS "core-cpp;canary")
     endforeach()
 endif()
+
+# The WebAssembly smoke, which is a program rather than a Catch2 binary and needs a link flag of
+# its own. Its own directory, so that flag reaches nothing else. Empty off Emscripten.
+add_subdirectory(wasm)

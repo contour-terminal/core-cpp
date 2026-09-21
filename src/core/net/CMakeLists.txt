@@ -45,17 +45,26 @@ endif()
 # them through a consumer's mistake and a symbol simply absent there fails at link time in somebody
 # else's build. The test doubles are header-only and need no row here.
 set(_coreCppNetSubset
+    DeadlineTimer.cpp
     EventLoop.cpp
     HostDrivenBackend.cpp
+    InterruptibleSleep.cpp
     detail/ParkTable.hpp
     detail/ReadyBatch.hpp
     detail/ScopeGuard.hpp
     detail/WaitTimeout.hpp
     detail/WorkerIdentity.hpp)
+# The timer cases join the subset binary rather than the module's own: they drive a TestLoop and a
+# ManualClock and touch no descriptor, so they are cases the browser can run -- and the browser is
+# what Task B5's deadlines exist for.
 set(_coreCppNetSubsetTests
+    DeadlineTimer_test.cpp
     HostDrivenBackend_test.cpp
     HostDrivenLoop_test.cpp
+    InterruptibleSleep_test.cpp
     IoBackend_test.cpp
+    SleepUntil_test.cpp
+    Timers_test.cpp
     testing/ScriptedBackend_test.cpp)
 #
 # Exactly one DefaultBackend.cpp is compiled, and it is the whole of how a platform picks its
@@ -99,15 +108,18 @@ endif()
 core_cpp_add_module(net KIND STATIC
     HEADERS
         AsyncBufferedReader.hpp
+        DeadlineTimer.hpp
         Diagnostics.hpp
         EventLoop.hpp
         HostDrivenBackend.hpp
         HttpServer.hpp
         IHostScheduler.hpp
         IListener.hpp
+        InterruptibleSleep.hpp
         IoBackend.hpp
         ISocket.hpp
         PlatformLoop.hpp
+        SleepUntil.hpp
         Sockets.hpp
         SplitSocket.hpp
         WithTimeout.hpp

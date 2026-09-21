@@ -6,7 +6,7 @@ directory `src/core/net/`. Three targets:
 | Target | Kind | What it has | Builds |
 |---|---|---|---|
 | `core::net_types` | header-only | `NetError`, `NetErrorCode`, `IoResult` | everywhere, Emscripten included |
-| `core::net` | static | everything else below | Linux, macOS, the BSDs, Windows; under single-threaded WebAssembly, the `IoBackend` contract and the host-driven backend |
+| `core::net` | static | everything else below | Linux, macOS, the BSDs, Windows; under single-threaded WebAssembly, the `IoBackend` contract, the host-driven backend, the event loop and its timers |
 | `core::net_tls` | static | `ITlsContext` and the TLS socket | with `CORE_CPP_WITH_TLS`, natively |
 
 !!! note "Status"
@@ -14,13 +14,16 @@ directory `src/core/net/`. Three targets:
     [platform](platform.md) in place of contour's `net/platform/`, and being merged with
     fastcached's async and networking layer by Phase B of the
     [implementation plan](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/plans/2026-09-18-core-cpp.md).
-    Done so far: Task B2's merged error vocabulary, and Task B3's `IoBackend`, which replaces
+    Done so far: Task B2's merged error vocabulary; Task B3's `IoBackend`, which replaces
     `EventSource` — a backend dispatches readiness to the callbacks a caller registers, instead of
-    reporting tokens for the caller to route. Still to come: IOCP as the Windows default,
-    fastcached's sockets and dialler, and the event loop and its timers joining the WebAssembly
-    subset (Tasks B4 to B11). Under Emscripten `core::net_types` and Task B3's WebAssembly
-    subset — `IoBackend`, `IHostScheduler`, `HostDrivenBackend` and the test doubles — build; the
-    loop, its timers and the sockets do not yet.
+    reporting tokens for the caller to route; Task B4's `EventLoop`, `PlatformLoop` and
+    `testing::TestLoop`; and Task B5's timers. Still to come: IOCP as the Windows default, and
+    fastcached's sockets and dialler (Tasks B6 to B11). Under Emscripten `core::net_types` builds,
+    and so does the WebAssembly subset of `core::net`: `IoBackend`, `IHostScheduler`,
+    `HostDrivenBackend`, the test doubles, and — since Tasks B4 and B5 — the event loop and its
+    timers. The sockets do not. A loop there has no thread to block and no descriptor to poll, so
+    it is PUMPED by the host and neither `run()` nor `blockOn()` may be called on it; both assert.
+    `tests/wasm/HostDrivenTimer_smoke.cpp` is that path run under node.
 
 ## What it has
 
@@ -28,7 +31,10 @@ directory `src/core/net/`. Three targets:
 |---|---|
 | `<core/net/NetError.hpp>` | `NetErrorCode` and its `toString()`, the predicate `isDeadlineExpiry()`, `NetError` (a category, the OS error number and a context string) and `makeNetError()` |
 | `<core/net/IoResult.hpp>` | `IoResult`, `std::expected<std::size_t, NetError>`: what every byte transfer returns |
-| `<core/net/EventLoop.hpp>` | `EventLoop`: the single-threaded driver that resumes coroutines on descriptor readiness and timers; `blockOn()`, `spawn()`, `post()` (the one member other threads may call), `requestStop()`, `delay()`, `sleepUntil()`, `waitReadable()`, `waitWritable()`, `notifyHandleClosing()`; `pollUntil()` |
+| `<core/net/EventLoop.hpp>` | `EventLoop`: the single-threaded driver that resumes coroutines on descriptor readiness and timers; `run()`, `runOnce()`, `runUntilIdle()`, `blockOn()`, `spawn()`, `post()`, `submit()`, `schedule()`, `cancelPending()` (the thread-safe members), `stop()`, `requestStop()`, `delay()`, `sleepUntil()`, `addTimer()`/`cancelTimer()` and `TimerId`, `waitReadable()`, `waitWritable()`, `notifyHandleClosing()`; `pollUntil()` |
+| `<core/net/SleepUntil.hpp>` | `sleepUntil(EventLoop*, tp)`, the free form for a caller whose loop may be null — a null loop or a deadline already gone resolves inline, without suspending; and `nextWakeStep()`, the arithmetic of a bounded wait, which core-cpp itself no longer needs |
+| `<core/net/InterruptibleSleep.hpp>` | `interruptibleSleepUntil()` and `WakeReason`: sleep to a deadline or until a stop token is stopped, whichever comes first. It parks ONCE and the stop callback wakes it; the wait does not poll |
+| `<core/net/DeadlineTimer.hpp>` | `DeadlineTimer`: a deadline as an object, disarmed by `disarm()` or by destruction, for a timeout that has to tear an operation down rather than merely stop waiting for it. No coroutine frame, no allocation and no poll interval — an armed timer is what bounds the loop's next wait |
 | `<core/net/IoBackend.hpp>` | `IoBackend`, the injected blocking wait the loop drives and the readiness dispatcher behind it: `ReadinessHandler` (a handle, an owner and the callbacks a backend invokes), `Interest`, `HandleKind`, `Readiness`, `selectReadinessCallback()`, `BackendKind`, `WaitResult`; and the factories `makeDefaultBackend()`, `makeBackend(BackendKind)` and `preferredBackendKind()`. Every backend's own header is private, so the factories are how a program gets one: poll(2) on POSIX, epoll on Linux, kqueue on macOS and the BSDs, `WSAEventSelect` + `WaitForMultipleObjects` on Windows |
 | `<core/net/IHostScheduler.hpp>` | `IHostScheduler::callAfter()`, the one thing a host event loop has to lend core-cpp's, and `HostCallback` |
 | `<core/net/HostDrivenBackend.hpp>` | `HostDrivenBackend`: the backend for a loop that is PUMPED rather than one that blocks. It has no readiness (`attach` and `setInterest` answer `Unsupported`), its `wait()` never blocks, `wake()` and `armWakeAt()` ask the host for a pump and coalesce, and `isHostDriven()` is true. Portable, and the browser is only one of its hosts |

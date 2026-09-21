@@ -1,23 +1,35 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // What a WebAssembly consumer runs under node: a coroutine chain from core::async resumed by the
-// program itself (there is no event loop in the subset yet), a value from core::base, and the
-// error vocabulary of core::net_types, which is the part of core::net that builds everywhere.
+// program itself, a value from core::base, the error vocabulary of core::net_types, and -- since
+// Task B5 -- a `core::net::PlatformLoop` advanced by nothing but the host's own timer, with a
+// coroutine `delay` and a frameless `DeadlineTimer` parked on it.
 //
-// Task B5 replaces the hand-resumed root task here with a `delay` awaited on a host-driven loop
-// under -sASYNCIFY, which is what a browser or node actually yields to.
+// That last step is the one a consumer cannot write from the documentation alone, and the one no
+// native preset can run: a WebAssembly loop has no thread to block and no descriptor to poll, so
+// neither `run()` nor `blockOn()` may be called on it. What a program does instead is yield to the
+// host -- here with `emscripten_sleep`, which needs `-sASYNCIFY` in the CONSUMER's link line --
+// and let the loop be pumped between the yields.
 //
 // Every step reports through Checks, so a failure names the step rather than only an exit code.
 
 #include <core/Base64.hpp>
 #include <core/async/Task.hpp>
+#include <core/net/DeadlineTimer.hpp>
+#include <core/net/EventLoop.hpp>
 #include <core/net/NetError.hpp>
+#include <core/net/PlatformLoop.hpp>
 
+#include <chrono>
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <tuple>
+
+#include <emscripten.h>
 
 using core::async::Task;
+using namespace std::chrono_literals;
 
 namespace
 {
@@ -68,6 +80,57 @@ void checkBase(Checks& checks)
     checks.expect(core::base64::decode(encoded) == "core-cpp", "core::base64 round-tripped a string");
 }
 
+/// How long the loop's two deadlines are set for.
+constexpr auto Deadline = 20ms;
+
+/// How long the program gives the host before it reports the step failed. Bounded, and it says
+/// which arm did not fire: a deadline that never arrives would otherwise hang this program for
+/// ctest's whole timeout with nothing on stdout.
+constexpr auto Bound = 2000ms;
+
+/// One step of the host's own loop, which is what `emscripten_sleep` yields for.
+constexpr auto Step = 10ms;
+
+/// Parks on the loop's deadline and records that it resumed.
+/// @param loop The loop to park on.
+/// @param fired Set once the delay elapses.
+Task<void> setFlagAfterDelay(core::net::EventLoop* loop, bool* fired)
+{
+    co_await loop->delay(Deadline);
+    *fired = true;
+}
+
+/// What a `DeadlineTimer` runs: a callback, with no coroutine frame behind it.
+/// @param state A `bool*` set when the deadline arrives.
+void setFlag(void* state)
+{
+    *static_cast<bool*>(state) = true;
+}
+
+/// core::net: a loop the host drives, which is the whole of how a browser consumer runs one.
+/// @param checks Where each step reports.
+void checkHostDrivenLoop(Checks& checks)
+{
+    auto loop = core::net::PlatformLoop {};
+
+    auto delayFired = false;
+    auto timerFired = false;
+    loop.spawn(setFlagAfterDelay(&loop, &delayFired));
+    auto const timer =
+        core::net::DeadlineTimer { loop, loop.clock().now() + Deadline, &setFlag, &timerFired };
+    std::ignore = timer;
+
+    auto waited = 0ms;
+    while (!(delayFired && timerFired) && waited < Bound)
+    {
+        emscripten_sleep(static_cast<unsigned>(Step.count()));
+        waited += Step;
+    }
+
+    checks.expect(delayFired, "a coroutine delay on a host-driven loop resumed within its bound");
+    checks.expect(timerFired, "a DeadlineTimer on a host-driven loop fired within its bound");
+}
+
 /// core::net_types: the error vocabulary, which is header-only and links nothing.
 void checkNetTypes(Checks& checks)
 {
@@ -85,12 +148,23 @@ int main()
     checkCoroutines(checks);
     checkBase(checks);
     checkNetTypes(checks);
+    checkHostDrivenLoop(checks);
 
-    if (checks.failed() != 0)
-    {
+    auto const status = checks.failed() != 0 ? 1 : 0;
+    if (status != 0)
         std::cout << checks.failed() << " check(s) failed\n";
-        return 1;
-    }
-    std::cout << "consumer-wasm: every check passed\n";
-    return 0;
+    else
+        std::cout << "consumer-wasm: every check passed\n";
+
+    // **The line above is this program's verdict, and its exit status is not**, now that it owns
+    // an event loop. A loop with an armed deadline leaves a pending `emscripten_async_call`
+    // behind -- that call is how the host is asked for its next turn -- and Emscripten takes a
+    // runtime keepalive per pending timer, so `main` returning is an IMPLICIT exit while the
+    // runtime is kept alive: the status is recorded and never published, and node exits 0.
+    // Measured on `tests/wasm/HostDrivenTimer_smoke.cpp`, whose failing run printed FAIL and
+    // exited 0. That is why the `add_test` for this program reads its OUTPUT
+    // (PASS_REGULAR_EXPRESSION) -- which is what a WebAssembly consumer has to do too, and the
+    // reason this program has said `every check passed` on its last line since before it had a
+    // loop.
+    return status;
 }

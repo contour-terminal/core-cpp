@@ -37,8 +37,9 @@ loop's thread.
 
 1. Swap the inbound queue: run the posted functions and submissions, then resolve cancellation
    requests by live `ParkId`.
-2. Drain the ready queue — **this is the one place a coroutine resumes**, and it is bounded by
-   `EventLoopOptions::dispatchBatch` so work that re-queues itself cannot starve the rest.
+2. Drain the ready queue — **this is the one place a coroutine resumes, and the one place a timer
+   callback is called**, and it is bounded by `EventLoopOptions::dispatchBatch` so work that
+   re-queues itself cannot starve the rest.
 3. Refresh the clock, then compute how long to wait.
 4. Wait on the backend, which dispatches readiness.
 5. Refresh the clock, then fire the expired deadlines, soonest first and FIFO on a tie.
@@ -46,6 +47,13 @@ loop's thread.
 Readiness dispatched in step 4 and deadlines fired in step 5 are **resumed by the next turn's step
 2**. That is what makes G2 a thing the loop can state rather than a thing each backend has to be
 trusted with.
+
+**There is one deadline mechanism, not two.** `delay()` parks a coroutine and `addTimer()` parks a
+callback with no frame behind it, in the same park table, on the same heap, with ids from the same
+never-reused counter; step 5 fires both and step 2 runs both, so their order across the two kinds
+is the heap's — soonest first, then by arming sequence. Nothing polls: an armed timer is what
+bounds the wait computed in step 3, which is why `DeadlineTimer` and `interruptibleSleepUntil` cost
+one wake-up each rather than one per poll interval.
 
 Two orderings in that list are load-bearing rather than incidental:
 

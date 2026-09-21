@@ -4918,6 +4918,39 @@
     },
     {
       "kind": "include",
+      "from": "FastCache/Async/SleepUntil.hpp",
+      "to": "core/net/SleepUntil.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SleepUntil.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Async/InterruptibleSleep.hpp",
+      "to": "core/net/InterruptibleSleep.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/InterruptibleSleep.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Async/DeadlineTimer.hpp",
+      "to": "core/net/DeadlineTimer.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/DeadlineTimer.hpp"
+      }
+    },
+    {
+      "kind": "include",
       "from": "FastCache/Net/ISocket.hpp",
       "to": "core/net/ISocket.hpp",
       "profiles": [
@@ -5976,7 +6009,11 @@
       "profiles": [
         "fastcached"
       ],
-      "note": "a shape change, not a rename: the awaitable aggregate SleepUntil{&reactor, tp} becomes a call on the loop"
+      "note": "a shape change, not a rename: the awaitable aggregate SleepUntil{&reactor, tp} becomes loop.sleepUntil(tp), or the free core::net::sleepUntil(&loop, tp) where the loop may be null -- the nullable-reactor contract upstream had. Task B5",
+      "target": {
+        "header": "core/net/SleepUntil.hpp",
+        "symbol": "core::net::sleepUntil"
+      }
     },
     {
       "kind": "symbol",
@@ -5986,7 +6023,95 @@
       "profiles": [
         "fastcached"
       ],
-      "note": "a shape change: the aggregate takes the loop, the stop token and the deadline as arguments"
+      "note": "a shape change: the aggregate takes the loop, the stop token and the deadline as arguments. Task B5: the wait no longer polls, so the fourth argument (wakeBound) is ignored -- the four-argument overload is kept for one release and then goes",
+      "target": {
+        "header": "core/net/InterruptibleSleep.hpp",
+        "symbol": "core::net::interruptibleSleepUntil"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::WakeReason",
+      "to": "core::net::WakeReason",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/InterruptibleSleep.hpp",
+        "symbol": "core::net::WakeReason"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::NextWakeStep",
+      "to": "core::net::nextWakeStep",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SleepUntil.hpp",
+        "symbol": "core::net::nextWakeStep"
+      },
+      "note": "Task B5. The arithmetic survives the rename; what it MEANS does not. Upstream called it the one place the polling rule is written down, and core-cpp no longer polls: interruptibleSleepUntil and DeadlineTimer park once and are woken. It is kept for a consumer still carrying a bounded wait of its own (RaftDriver, ExpiryReaper), and it goes when they do."
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::SleepFor",
+      "to": "loop.delay(duration)",
+      "apply": "manual",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "a shape change: SleepFor(reactor, delay) is the relative form, which is EventLoop::delay on the loop itself. Task B5"
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::DeadlineTimer",
+      "to": "core::net::DeadlineTimer",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/DeadlineTimer.hpp",
+        "symbol": "core::net::DeadlineTimer"
+      },
+      "note": "Task B5. The type survives; its implementation does not. Upstream was a detached coroutine polling a disarm flag over a shared_ptr<State> that outlived the timer so a late fire read live memory. EventLoop::cancelTimer retires the deadline by id, so there is no late fire, no shared state, no frame and no poll interval."
+    },
+    {
+      "kind": "member",
+      "from": "Disarm",
+      "to": "disarm",
+      "apply": "semantic",
+      "scope": "FastCache::DeadlineTimer",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/DeadlineTimer.hpp",
+        "symbol": "core::net::DeadlineTimer::disarm"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "IsSettled",
+      "to": "settled",
+      "apply": "semantic",
+      "scope": "FastCache::DeadlineTimer",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/DeadlineTimer.hpp",
+        "symbol": "core::net::DeadlineTimer::settled"
+      }
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::DeadlineTimer::DefaultPollInterval",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "there is no poll to set an interval on (Task B5). Upstream's timer slept in 50ms steps re-reading a disarm flag, because a scheduled resumption could not be taken back; here an armed timer is what BOUNDS the loop's next wait, and disarming retires it. A caller passing the fifth constructor argument drops it; a caller that tuned it wanted a shorter reclaim latency, which is now zero turns."
     },
     {
       "kind": "member",

@@ -71,10 +71,19 @@ EventLoop::~EventLoop()
     // resume a flow on its normal path, which is right while the loop runs (the owner just called
     // close) and wrong now. unparkEverything still finds every such waiter, because
     // notifyHandleClosing leaves the park in place.
+    //
+    // A due TIMER CALLBACK is in neither queue: it is dropped. It is not work to unwind and not a
+    // frame to free -- it is a call into a `DeadlineTimer`'s owner, and that owner is being
+    // destroyed with this loop or is already gone. Running it here would be the one path on which
+    // a callback reaches an object whose loop has stopped existing.
     auto ownedQueue = std::deque<ReadyEntry> {};
     auto borrowedQueue = std::deque<ReadyEntry> {};
     for (auto& entry: _ready)
+    {
+        if (entry.callbackPark)
+            continue;
         (entry.ownedByLoop ? ownedQueue : borrowedQueue).push_back(std::move(entry));
+    }
     _ready = std::move(borrowedQueue);
 
     _rootStop.request_stop();
@@ -335,6 +344,19 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
     {
         auto entry = std::move(_ready.front());
         _ready.pop_front();
+
+        // A due timer callback runs HERE, where a coroutine resumption runs, and nowhere else.
+        // Step 5 could have called it the moment it found the deadline due -- and then user code
+        // would run at a second point in the turn, outside the bound, outside the one assertion
+        // that says no backend dispatch is in flight, and after the drain rather than in it. One
+        // place that hands control outside the loop is worth the extra queue hop.
+        if (entry.callbackPark)
+        {
+            runDueCallback(entry.callbackPark);
+            ++resumed;
+            continue;
+        }
+
         auto const handle = entry.parked.handle();
 
         // Looked up BEFORE the resume. A spawned flow's frame is owned by _roots and survives its
@@ -398,10 +420,32 @@ std::size_t EventLoop::fireExpiredTimers()
     auto fired = std::size_t { 0 };
     for (auto const park: _parks.takeExpired(_clock.now()))
     {
-        queueParkedWaiter(park);
+        // Two kinds of park come back from one heap, in one order: a coroutine to resume, and a
+        // callback to call. Both are QUEUED here and run by the next turn's drain, which is what
+        // makes the order between them the heap's -- soonest first, then by arming sequence --
+        // rather than an artefact of which mechanism got to fire first.
+        auto const* const entry = _parks.find(park);
+        if (entry != nullptr && entry->onExpired != nullptr)
+            _ready.push_back(ReadyEntry { .parked = {}, .ownedByLoop = false, .callbackPark = park });
+        else
+            queueParkedWaiter(park);
         ++fired;
     }
     return fired;
+}
+
+void EventLoop::runDueCallback(ParkId park)
+{
+    // Taken out of the table BEFORE the call, and that is what makes two things true at once: a
+    // `cancelTimer` from inside the callback finds nothing (this timer HAS fired), and the
+    // callback may destroy whatever owns it, because nothing here reads the table afterwards.
+    //
+    // A park that is already gone is a timer cancelled between step 5 queueing it and this drain
+    // reaching it -- the window `cancelTimer` documents -- and skipping it is what closes it.
+    auto const entry = _parks.take(park);
+    if (!entry || entry->onExpired == nullptr)
+        return;
+    entry->onExpired(entry->callbackState);
 }
 
 void EventLoop::armHostWake()
@@ -581,6 +625,40 @@ void EventLoop::spawn(async::Task<void> task)
         _backend.wake();
 }
 
+TimerId EventLoop::addTimer(platform::SteadyTimePoint deadline, TimerCallback onExpired, void* state)
+{
+    // The same predicate the turn and the destructor use: the loop's own thread, or nobody
+    // driving. Anywhere else this would write the park table beside a turn that is reading it.
+    assert(teardownIsSerialisedWithDispatch()
+           && "EventLoop::addTimer from a second thread while another is driving this loop: "
+              "post() a call to it instead");
+    assert(onExpired != nullptr
+           && "EventLoop::addTimer with no callback: a timer with nothing to "
+              "run would be filed and fired into nothing");
+    if (onExpired == nullptr)
+        return TimerId::invalid();
+    return TimerId { registerPark(ParkEntry::onCallback(onExpired, state, deadline)) };
+}
+
+bool EventLoop::cancelTimer(TimerId timer) noexcept
+{
+    if (!timer)
+        return false;
+
+    // Looked up before it is taken, and the kind is checked: a `ParkId` that named a COROUTINE
+    // park would otherwise be unparked here -- silently freeing a flow's park and leaving it
+    // waiting forever -- by a caller who only had the wrong strong type to begin with.
+    auto const* const entry = _parks.find(timer.park);
+    if (entry == nullptr || entry->onExpired == nullptr)
+        return false;
+
+    // The park goes; any ReadyEntry naming it resolves to nothing when the drain reaches it. That
+    // is the generation check doing the work, and it is why cancelling a timer that step 5 has
+    // already queued costs no scan of the ready queue.
+    std::ignore = _parks.take(timer.park);
+    return true;
+}
+
 void EventLoop::resumeSoon(async::ParkedWork work)
 {
     if (!work.resume)
@@ -597,13 +675,17 @@ void EventLoop::queueReady(async::ParkedWork work)
 
 ParkId EventLoop::registerPark(ParkEntry entry)
 {
-    if (!entry.work.resume)
+    // A park is a coroutine to resume OR a callback to call; one without either would be filed,
+    // indexed and fired into nothing.
+    if (!entry.work.resume && entry.onExpired == nullptr)
         return ParkId::invalid();
 
     auto park = std::make_unique<detail::Park>();
     park->loop = this;
     park->handle = entry.handle;
     park->deadline = entry.deadline;
+    park->onExpired = entry.onExpired;
+    park->callbackState = entry.callbackState;
     park->ownedByLoop = static_cast<bool>(entry.work.abandon);
     park->parked = async::detail::Parked { std::move(entry.work) };
 
@@ -767,6 +849,9 @@ void EventLoop::unparkEverything()
     // nothing left for it to park on and its owner already gone. So it is left where it is and
     // freed by step 4, which is what
     // [fastcached#1025](https://github.com/LASTRADA-Software/fastcached/issues/1025) concluded.
+    // A CALLBACK park is neither, and it falls out of the `!entry->parked` test below: there is no
+    // frame to unwind and nothing to free, and calling it would reach an owner that is being
+    // destroyed. It is left for the table to drop, which teardown step 4 does.
     for (auto const park: _parks.ids())
     {
         auto* const entry = _parks.find(park);

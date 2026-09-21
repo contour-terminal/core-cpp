@@ -433,6 +433,58 @@ workflow refuses one without a section here.
   B4 and B5. `core-cpp.net_backend` is the test binary that runs everywhere, Emscripten included;
   `core-cpp.net` keeps the cases that need a loop, a socket or a descriptor.
 
+- **Callback timers on `core::net::EventLoop`, and nothing in core-cpp polls for a deadline any
+  more.** `addTimer(deadline, callback, state) -> TimerId` and `cancelTimer(TimerId) -> bool` arm
+  and retire a deadline with no coroutine frame behind it. A callback timer is a park in the SAME
+  table as a `co_await delay()` — one heap, one sequence counter, one never-reused id space — so
+  the loop has a single answer to "when is the next deadline" and a single firing order across the
+  two kinds. Step 5 of the turn queues both; step 2 runs both, which keeps the one place that
+  resumes a coroutine also the one place that calls out to a timer callback. `cancelTimer`
+  answering `true` means *this call prevented the callback*, which includes the window between a
+  deadline firing and its callback running: an owner destroyed in that window would otherwise have
+  its callback run against storage that is gone. `RunOnceResult::resumed` (and so
+  `testing::TestLoop::tick()`) counts what step 2 took off the ready queue — coroutines resumed
+  plus timer callbacks run — because a turn that ran a callback and resumed nothing is not an idle
+  turn, and `runUntilIdle()` would otherwise stop on one.
+
+- `core::net::DeadlineTimer` (`<core/net/DeadlineTimer.hpp>`): a deadline as an object, disarmed
+  by `disarm()` or by destruction, and **destroyable from inside its own callback**. For a timeout
+  that has to tear an operation down rather than merely stop waiting for it — a dial that only
+  stopped waiting leaves the connect attempt in flight for the kernel's own retry schedule. Ported
+  from fastcached, without its coroutine frame, its `shared_ptr` state or its 50ms poll interval:
+  those existed because a scheduled resumption could not be taken back, and here it can.
+
+- `core::net::interruptibleSleepUntil(loop, token, deadline)` and `core::net::WakeReason`
+  (`<core/net/InterruptibleSleep.hpp>`): sleep to a deadline or until a stop token is stopped,
+  whichever comes first. It parks **once** and the stop callback wakes it, where upstream slept in
+  steps of `wakeBound` and re-read the token at each one. The supplied token is reported as
+  `WakeReason::Cancelled`; the awaiting flow's OWN token throws `core::async::OperationCancelled`,
+  as every loop awaitable does — and where they are the same token, the reported answer wins.
+
+- `core::net::sleepUntil(EventLoop*, deadline)` and `core::net::nextWakeStep()`
+  (`<core/net/SleepUntil.hpp>`). The free `sleepUntil` takes a **nullable** loop, for a caller with
+  no deadline mechanism behind it (an in-memory transport): a null loop or a deadline already gone
+  resolves inline, without suspending. `core::net::DelayAwaiter` gains a constructor taking
+  `EventLoop*` for it; the existing `EventLoop&` one is unchanged.
+
+- `tests/wasm/HostDrivenTimer_smoke.cpp`, run under node in the `emscripten` job on both emsdk
+  versions: a `PlatformLoop` on a real host, with a coroutine `delay` and a `DeadlineTimer` parked
+  on it, advanced by nothing but `emscripten_sleep` yielding to the host. `tests/consumer-wasm`
+  runs the same scenario as a consumer and links `core::net`. Both are judged by their OUTPUT
+  rather than their exit status, because a WebAssembly program that leaves a pending
+  `emscripten_async_call` behind — which an armed deadline always does — exits 0 whatever `main`
+  returned; the reasoning, and the two fixes that do not work, are in `tests/wasm/CMakeLists.txt`.
+
+### Deprecated
+
+- `core::net::interruptibleSleepUntil(loop, token, deadline, wakeBound)`, the four-argument form,
+  is kept for one release so a fastcached caller compiles unchanged, and **ignores `wakeBound`**.
+  It named the longest uninterruptible step of a poll, and there is no poll left to bound. Drop the
+  argument. It carries no `[[deprecated]]` attribute deliberately: this tree builds with warnings
+  fatal and forbids the pragma that would silence one, so the attribute would make the only call
+  site that can test the overload a build failure, and an untested compatibility shim is worse than
+  a warned-about one.
+
 ### Breaking
 
 - **`core::net::EventLoop` is the merged reactor contract: a five-step turn, a six-step teardown,

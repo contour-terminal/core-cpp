@@ -84,11 +84,46 @@ namespace core::net
 
 class EventLoop;
 
+/// What @c EventLoop::addTimer runs when its deadline arrives.
+///
+/// A function pointer and a `void*` rather than a `std::function`, matching @c ReadinessCallback:
+/// it is the house shape for a loop-side callback, and it allocates nothing on a path a server
+/// runs once per request. Invoked on the loop's thread, in turn step 2, at most once.
+///
+/// **Not `noexcept`**, because the coroutine resumptions it is queued beside are not either: an
+/// exception leaving one propagates out of the turn and out of `run()`. The exception is a
+/// host-driven loop, whose pump is `noexcept` — there an escaping exception terminates, which is
+/// the same trade @c async::DetachedTask makes and for the same reason.
+using TimerCallback = void (*)(void* state);
+
+/// Names one callback timer armed on an @c EventLoop.
+///
+/// **It is a park, and this is a distinct type over the same table.** A callback timer is filed in
+/// the park table beside the coroutine deadlines, so it inherits the generation check for free —
+/// ids come from the one never-reused counter, so a cancel naming a timer that has already run
+/// resolves to nothing. What the wrapper buys over using @c ParkId directly is that
+/// @c EventLoop::cancelTimer and @c EventLoop::requestCancel cannot be handed each other's
+/// arguments: the first retires a callback, the second unwinds a coroutine, and only one of them
+/// is meaningful for any given id.
+struct TimerId
+{
+    ParkId park {}; ///< The park this timer is filed as; @c ParkId::invalid() means none.
+
+    /// @return True if two ids name the same timer.
+    [[nodiscard]] friend constexpr bool operator==(TimerId, TimerId) noexcept = default;
+
+    /// @return True if this id names a timer that was armed (non-zero).
+    [[nodiscard]] constexpr explicit operator bool() const noexcept { return static_cast<bool>(park); }
+
+    /// @return The sentinel for no timer, which is what a refused arming reports.
+    [[nodiscard]] static constexpr TimerId invalid() noexcept { return TimerId {}; }
+};
+
 /// What a flow hands @c EventLoop::registerPark to park itself.
 ///
 /// One shape for every kind of park, because the cancellation path is one path: a readiness park
-/// names a handle and an interest, a timer park names a deadline, and a park that is only waiting
-/// for the next turn names neither.
+/// names a handle and an interest, a timer park names a deadline, a callback park names a deadline
+/// and what to call, and a park that is only waiting for the next turn names neither.
 struct ParkEntry
 {
     /// The coroutine to resume, and — where that chain belongs to nobody — the root the loop may
@@ -106,6 +141,13 @@ struct ParkEntry
     /// When this park is due, or nullopt for a park with no deadline.
     std::optional<platform::SteadyTimePoint> deadline;
 
+    /// What to call when the deadline arrives, for a park with no coroutine behind it; null for
+    /// every other kind. Exactly one of @c work and this is set.
+    TimerCallback onExpired = nullptr;
+
+    /// The opaque pointer handed to @c onExpired. Borrowed: it must outlive the park.
+    void* callbackState = nullptr;
+
     /// @param work The coroutine to resume, and what to free if it is never resumed.
     /// @param deadline When to resume it.
     /// @return A park waiting on a deadline and nothing else.
@@ -115,7 +157,26 @@ struct ParkEntry
                            .handle = platform::InvalidHandle,
                            .kind = DefaultHandleKind,
                            .interest = Interest::None,
-                           .deadline = deadline };
+                           .deadline = deadline,
+                           .onExpired = nullptr,
+                           .callbackState = nullptr };
+    }
+
+    /// @param onExpired What to call when @p deadline arrives; must not be null.
+    /// @param state The opaque pointer handed to @p onExpired; must outlive the park.
+    /// @param deadline When to call it.
+    /// @return A park waiting on a deadline with no coroutine behind it.
+    [[nodiscard]] static ParkEntry onCallback(TimerCallback onExpired,
+                                              void* state,
+                                              platform::SteadyTimePoint deadline)
+    {
+        return ParkEntry { .work = {},
+                           .handle = platform::InvalidHandle,
+                           .kind = DefaultHandleKind,
+                           .interest = Interest::None,
+                           .deadline = deadline,
+                           .onExpired = onExpired,
+                           .callbackState = state };
     }
 
     /// @param work The coroutine to resume, and what to free if it is never resumed.
@@ -132,7 +193,9 @@ struct ParkEntry
                            .handle = handle,
                            .kind = kind,
                            .interest = interest,
-                           .deadline = std::nullopt };
+                           .deadline = std::nullopt,
+                           .onExpired = nullptr,
+                           .callbackState = nullptr };
     }
 };
 
@@ -157,6 +220,15 @@ namespace detail
         void* waiterKey = nullptr;
 
         bool attached = false; ///< Whether @c handler is registered with the backend.
+
+        /// What to call when this park's deadline arrives, for a callback timer; null for a park
+        /// with a coroutine behind it. **This is the whole of how a frameless timer joins the
+        /// table**: a callback park is a park whose @c parked is empty and whose deadline names
+        /// this instead, so the heap, the sequence numbers, the ids and the turn step are shared
+        /// rather than duplicated. See @c EventLoop::addTimer.
+        TimerCallback onExpired = nullptr;
+
+        void* callbackState = nullptr; ///< The opaque pointer handed to @c onExpired. Borrowed.
 
         /// Whether the chain parked here belongs to the LOOP — that is, whether `ParkedWork`
         /// carried a claim on it. Recorded at registration, because the answer decides what
@@ -300,6 +372,14 @@ namespace detail
 
         /// @return How many of them are waiting on a deadline.
         [[nodiscard]] std::size_t timerCount() const noexcept { return _liveTimers; }
+
+        /// @return How many slots the deadline heap holds, live and stale together.
+        ///
+        /// A diagnostic, and it exists because the difference from @c timerCount is the whole of
+        /// what lazy pruning costs: a cancelled deadline leaves its slot until the heap ROOT
+        /// reaches it. `Timers_test.cpp`'s *Lazy timer pruning is bounded by the deadlines armed
+        /// behind the live root* is the measurement, and without this it could not be made.
+        [[nodiscard]] std::size_t timerSlotCount() const noexcept { return _timers.size(); }
 
         /// @return How many of them are waiting on handle readiness.
         [[nodiscard]] std::size_t readinessCount() const noexcept { return _byHandle.size(); }
