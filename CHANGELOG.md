@@ -11,6 +11,18 @@ workflow refuses one without a section here.
 
 ### Added
 
+- **Every public header is self-contained, and the build now proves it.** Each header in a
+  module's `FILE_SET HEADERS` is compiled as the first and only include of a translation unit of
+  its own, so a header that needs a neighbour included first fails the build naming itself and
+  what it needed. `.agent/rules/cpp-guidelines.md` has always required this and nothing enforced
+  it: all eighteen hygiene rules read text, none compiled anything, so such a header passed every
+  check and broke only for whoever included it first — which in a library is a consumer
+  ([core-cpp#31](https://github.com/contour-terminal/core-cpp/issues/31)). The list comes from the
+  build rather than a glob, so a header added later is covered without anyone remembering, and one
+  a platform excludes from its file set is excluded here too. Private headers (`detail/`, `posix/`,
+  `windows/` and the other platform directories) are in no file set and stay out of scope: an
+  implementation header may assume its includer.
+
 - The CMake framework: a module table that enforces the layering between modules, a dependency
   table resolved from the parent project, then `find_package`, then CPM, per-target toolchain
   tables (pedantic warnings, `CORE_CPP_WERROR`, sanitizers, coverage, clang-tidy), and no global

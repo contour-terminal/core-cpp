@@ -241,14 +241,3 @@ has the measurement that made this a rule.
 - **[core-cpp#10](https://github.com/contour-terminal/core-cpp/issues/10)** — document the
   public API the Doxyfile selects, then set `WARN_AS_ERROR = FAIL_ON_WARNINGS` so an
   undocumented declaration fails the Docs workflow.
-- **[core-cpp#31](https://github.com/contour-terminal/core-cpp/issues/31)** — nothing enforces
-  "every header is self-contained". The rule is stated above and `check-cmake-hygiene.cmake` has
-  eighteen rules, all of which read text; **none of them compiles anything**, so a header that
-  needs another included first passes every check this tree has. It only breaks for whoever
-  includes it first, which in a library is a consumer. The gap surfaced the way an unenforced
-  rule usually does — Task B1's dispatch told that lane to exclude a header from "the header
-  self-check", an instruction it could satisfy by doing nothing, because there is no such check
-  to be excluded from. Enforcing it means compiling each `FILE_SET HEADERS` entry as a
-  translation unit of its own, which is a build-time check rather than a `cmake -P` scan, so it
-  is a per-leg test and not a `tree-level` one: whether a header is self-contained is a question
-  for each toolchain.

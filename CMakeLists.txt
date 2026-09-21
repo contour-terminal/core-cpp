@@ -25,6 +25,7 @@ include("${CORE_CPP_SOURCE_DIR}/cmake/CoreCppToolchain.cmake")
 include("${CORE_CPP_SOURCE_DIR}/cmake/CoreCppTargets.cmake")
 include("${CORE_CPP_SOURCE_DIR}/cmake/CoreCppDependencies.cmake")
 include("${CORE_CPP_SOURCE_DIR}/cmake/CoreCppModules.cmake")
+include("${CORE_CPP_SOURCE_DIR}/cmake/CoreCppHeaderSelfCheck.cmake")
 
 configure_file("${CORE_CPP_SOURCE_DIR}/src/core/Config.hpp.in"
                "${CORE_CPP_GENERATED_INCLUDE_DIR}/core/Config.hpp" @ONLY)
@@ -36,6 +37,10 @@ if(CORE_CPP_TESTING)
 endif()
 
 core_cpp_add_modules()
+
+# After every module, because it reads their FILE_SET HEADERS; before tests/, so a header that
+# cannot stand alone fails the build rather than a test binary that includes it sideways.
+core_cpp_add_header_self_check()
 
 if(CORE_CPP_TESTING)
     add_subdirectory(tests)

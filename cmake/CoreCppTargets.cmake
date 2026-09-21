@@ -271,6 +271,15 @@ function(core_cpp_add_module name)
         # (cmake/CoreCppOptions.cmake). Test binaries are not here: a parent does not build them.
         set_property(GLOBAL APPEND PROPERTY CORE_CPP_TARGETS ${target})
     endif()
+
+    # Every target that publishes headers, INTERFACE ones included -- which is why this is a list
+    # of its own rather than CORE_CPP_TARGETS, whose members are the COMPILED libraries a parent
+    # instruments. core::async is INTERFACE and publishes twenty of them, so a header self-check
+    # reading CORE_CPP_TARGETS would silently cover no part of that module
+    # (cmake/CoreCppHeaderSelfCheck.cmake, core-cpp#31).
+    if(arg_HEADERS)
+        set_property(GLOBAL APPEND PROPERTY CORE_CPP_HEADER_TARGETS ${target})
+    endif()
 endfunction()
 
 function(core_cpp_add_test module)

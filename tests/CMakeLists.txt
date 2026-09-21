@@ -29,7 +29,8 @@
 # builds a git repository per case and hashes a tree, so it is both the slowest and the most
 # variable (84s and 93s across the two runs above).
 #
-# migrate-renames, migrate-codemods and the Windows dialog canaries already set their own below.
+# migrate-renames, migrate-codemods, header-self-check-selftest and the Windows dialog canaries
+# already set their own below, each beside the measurement it came from.
 
 # THE `tree-level` LABEL (Ruling R96). A check carries it when its input is the source tree, so its
 # answer cannot differ between platforms: it reads files, parses tables, or runs a cmake -P script
@@ -109,6 +110,27 @@ add_test(NAME core-cpp.check-release-selftest
                  "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/check-release-selftest"
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-release-selftest.cmake")
 set_tests_properties(core-cpp.check-release-selftest PROPERTIES LABELS "core-cpp;hygiene;tree-level" TIMEOUT 60)
+
+# That core_cpp_add_header_self_check() refuses a header needing a neighbour and passes one that
+# does not (core-cpp#31). The check itself IS the build -- if the generated object libraries
+# compile, every public header stood alone -- so what needs a test is the generator, and each case
+# here configures and builds a fixture project of its own.
+#
+# NOT `tree-level`, deliberately: it compiles, so its answer is the toolchain's. Running it once on
+# the style runner would say nothing about MSVC, which is the compiler most likely to disagree
+# about what a header drags in (Ruling R96).
+#
+# Bound from measurement, worst of the two: 7.2s under WSL clang, 1.7s on MSVC. It configures and
+# builds two tiny projects, so most of that is CMake and compiler startup rather than work.
+add_test(NAME core-cpp.header-self-check-selftest
+         COMMAND "${CMAKE_COMMAND}"
+                 "-DMODULE=${CORE_CPP_SOURCE_DIR}/cmake/CoreCppHeaderSelfCheck.cmake"
+                 "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/header-self-check-selftest"
+                 "-DGENERATOR=${CMAKE_GENERATOR}"
+                 "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+                 "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-header-self-check-selftest.cmake")
+set_tests_properties(core-cpp.header-self-check-selftest PROPERTIES LABELS "core-cpp;hygiene" TIMEOUT 120)
 
 # The vendoring tool exports the file set of Part I §5 byte for byte, and refuses each way a copy
 # can stop being verbatim. Every case builds a git repository of its own; the tool's MODE=check
