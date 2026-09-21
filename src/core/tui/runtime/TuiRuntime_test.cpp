@@ -44,6 +44,7 @@ using core::tui::KeyEvent;
 using core::tui::runtime::ActivityKind;
 using core::tui::runtime::TuiRuntime;
 using core::tui::runtime::TuiRuntimeOptions;
+using core::tui::runtime::testing::HandleFor;
 using core::tui::runtime::testing::ScriptedInputSource;
 
 // On registration ids: the runtime's input flow is the first thing to park, and a source with no
@@ -448,12 +449,17 @@ TEST_CASE("An agent message posted while a flow is parked resumes it", "[TuiRunt
     auto source = ScriptedInputSource { pipes[0].get() };
     auto runtime = TuiRuntime { loop, source };
 
-    auto worker = std::jthread { [&loop, &runtime] {
+    // `std::thread` with an explicit join rather than `std::jthread`: AppleClang's libc++ has no
+    // `<stop_token>`, so it has no `jthread` either, and this file has to build there. Nothing a
+    // Windows or Linux preset runs can catch that -- CI's macOS leg is what did.
+    auto worker = std::thread { [&loop, &runtime] {
         std::this_thread::sleep_for(20ms);
         loop.post([&runtime] { runtime.notifyAgentReady(); });
     } };
 
-    REQUIRE(runtime.blockOn(awaitAgentReady(&runtime)));
+    auto const ready = runtime.blockOn(awaitAgentReady(&runtime));
+    worker.join();
+    REQUIRE(ready);
 }
 
 TEST_CASE("Non-input activity resolves a timed waiter but never a plain nextEvent", "[TuiRuntime]")
@@ -511,12 +517,15 @@ TEST_CASE("Input arriving while the loop waits resumes the flow on the loop thre
 
             auto const driver = std::this_thread::get_id();
             auto resumedOn = std::thread::id {};
-            auto writer = std::jthread { [&source] {
+            // `std::thread` with an explicit join, for `jthread`'s absence on AppleClang.
+            auto writer = std::thread { [&source] {
                 std::this_thread::sleep_for(30ms);
                 source.pushEvents({ InputEvent { keyOf(U'w') } });
             } };
 
-            REQUIRE(runtime.blockOn(awaitOneKeyOnThread(&runtime, &resumedOn)) == U'w');
+            auto const key = runtime.blockOn(awaitOneKeyOnThread(&runtime, &resumedOn));
+            writer.join();
+            REQUIRE(key == U'w');
             REQUIRE(resumedOn == driver);
         }
     }
@@ -544,7 +553,8 @@ TEST_CASE("A pending delay bounds the wait and fires when the clock crosses it",
     auto clock = ManualClock {};
     auto backend = ClockAdvancingBackend { clock, 40ms };
     auto loop = EventLoop { backend, clock };
-    auto source = ScriptedInputSource {};
+    auto source = ScriptedInputSource { nullptr, nullptr, HandleFor::Input };
+    REQUIRE(source.inputHandle() != core::platform::InvalidHandle); // the premise, now checkable
     auto runtime = TuiRuntime { loop, source };
     for ([[maybe_unused]] auto const step: std::views::iota(0, 6))
         backend.pushTimeout();
@@ -559,6 +569,52 @@ TEST_CASE("A pending delay bounds the wait and fires when the clock crosses it",
     REQUIRE(std::chrono::duration_cast<std::chrono::milliseconds>(*backend.recordedTimeouts().front())
             == 100ms);
     REQUIRE(backend.waitCount() == 3);
+    REQUIRE(loop.pendingTimerCount() == 0);
+}
+
+TEST_CASE("A read that decodes to nothing is flushed once its escape deadline elapses",
+          "[TuiRuntime][clock][escape]")
+{
+    // The defect the CHANGELOG claims: a lone ESC is a prefix of every arrow key, so a decoder
+    // cannot tell Escape from an unfinished sequence without a clock -- and the old runtime called
+    // the parser's timeout hook only when its multiplexed wait timed out, which for a flow parked
+    // on `nextEvent()` with no timer pending meant an indefinite wait and a hook that never ran.
+    auto clock = ManualClock {};
+    auto backend = ClockAdvancingBackend { clock, 40ms };
+    auto loop = EventLoop { backend, clock };
+    auto source = ScriptedInputSource { nullptr, nullptr, HandleFor::Input };
+    REQUIRE(source.inputHandle() != core::platform::InvalidHandle); // the premise, now checkable
+    // Bytes arrive and decode to nothing -- no scripted read -- and THEN the flush completes them.
+    source.pushFlush({ InputEvent { keyOf(U'\x1b') } });
+    auto runtime = TuiRuntime { loop, source };
+
+    backend.pushReadable(HandlerId { 1 }); // the input handle becomes readable
+    for ([[maybe_unused]] auto const step: std::views::iota(0, 6))
+        backend.pushTimeout(); // each wait advances the clock 40ms, so 50ms is crossed on the second
+
+    REQUIRE(runtime.blockOn(awaitOneKeyCodepoint(&runtime)) == U'\x1b');
+    REQUIRE(source.flushCount() == 1);
+    // The flush timer is the runtime's and keyed on `this`, so it must not outlive the delivery.
+    REQUIRE(loop.pendingTimerCount() == 0);
+}
+
+TEST_CASE("A read that decodes to something arms no escape flush", "[TuiRuntime][clock][escape]")
+{
+    // The other branch, and the one that decides whether an ordinary keystroke leaves a 50ms timer
+    // behind on every single read.
+    auto clock = ManualClock {};
+    auto backend = ScriptedBackend {};
+    auto loop = EventLoop { backend, clock };
+    auto source = ScriptedInputSource { nullptr, nullptr, HandleFor::Input };
+    REQUIRE(source.inputHandle() != core::platform::InvalidHandle); // the premise, now checkable
+    source.pushEvents({ InputEvent { keyOf(U'a') } });
+    auto runtime = TuiRuntime { loop, source };
+
+    backend.pushReadable(HandlerId { 1 });
+    backend.pushTimeout();
+
+    REQUIRE(runtime.blockOn(awaitOneKeyCodepoint(&runtime)) == U'a');
+    REQUIRE(source.flushCount() == 0);
     REQUIRE(loop.pendingTimerCount() == 0);
 }
 
@@ -763,7 +819,8 @@ TEST_CASE("core-cpp#17: a turn with nothing ready waits rather than spinning", "
     // wait was given: indefinite, because nothing bounds it.
     auto backend = ScriptedBackend {};
     auto loop = EventLoop { backend };
-    auto source = ScriptedInputSource {};
+    auto source = ScriptedInputSource { nullptr, nullptr, HandleFor::Input };
+    REQUIRE(source.inputHandle() != core::platform::InvalidHandle); // the premise, now checkable
     source.pushEvents({ InputEvent { keyOf(U'q') } });
     auto runtime = TuiRuntime { loop, source };
 
@@ -828,6 +885,37 @@ TEST_CASE("core-cpp#18: the input slot is free again for the next flow", "[TuiRu
 // ---------------------------------------------------------------------------------------------
 // Teardown.
 // ---------------------------------------------------------------------------------------------
+
+TEST_CASE("A runtime destroyed before its first turn leaves the loop holding nothing",
+          "[TuiRuntime][teardown]")
+{
+    // **A source flow has three states at teardown, not two**, and this is the third: SUBMITTED
+    // AND NEVER STARTED. `core::async::Task` is lazy, so between the constructor and the first
+    // turn every source flow sits at its initial suspend point with its body not yet entered.
+    //
+    // Every other case in this file calls `blockOn` or `runOnce` before the runtime dies, so every
+    // other case observes a flow that has at least reached its first park. That is why six
+    // configurations and both sanitizers were green over a destructor that mishandled this one:
+    // the state was unreachable from the suite, not absent from the program. An error-return path
+    // between construction and the first turn reaches it, and so does constructing and destroying
+    // a runtime inside a single turn.
+    auto const pipes = openPipes(1);
+    REQUIRE(pipes.size() == 1);
+    auto const backend = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *backend };
+    auto source = ScriptedInputSource { pipes[0].get() };
+    {
+        auto runtime = TuiRuntime { loop, source };
+        // Deliberately no turn of any kind.
+    }
+
+    // Nothing may be left naming a runtime that is gone. A park here would be worse than a leak:
+    // its handler points into a coroutine frame that `_sources` has just destroyed, so the next
+    // readiness on that handle -- or `~EventLoop` -- resumes freed storage.
+    REQUIRE(loop.parkedWaiterCount() == 0);
+    REQUIRE(loop.readyCount() == 0);
+    REQUIRE(loop.pendingTimerCount() == 0);
+}
 
 TEST_CASE("Destroying the runtime leaves the loop holding nothing of it", "[TuiRuntime][teardown]")
 {

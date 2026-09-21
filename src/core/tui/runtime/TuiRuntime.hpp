@@ -465,9 +465,25 @@ class NextInputEventAwaiter
             return false;
         _waiter = awaiting;
         _runtime.parkOnInput(awaiting, InputWake::EventOnly, std::nullopt);
-        // Armed AFTER the park, and the order is the opposite of the loop's awaitables' for the
-        // opposite reason: there is nothing to unwind here if the emplace throws. The park is a
-        // slot in this runtime, not a kernel registration, and the destructor clears it.
+        // **Armed AFTER the park, which is the opposite of what `.agent/rules/async-and-net.md`
+        // prescribes, so here is the argument on that rule's own terms.** The rule guards one
+        // hazard: a token that is ALREADY stopped runs the callback inside the `StopCallback`
+        // constructor, on this thread, and if the park is already published that callback hands
+        // the handle to an executor which may resume a coroutine whose `await_suspend` has not
+        // returned.
+        //
+        // Neither half of that can happen here. The already-stopped case never reaches this
+        // line: every awaiter in this file tests `_token.stop_requested()` and returns false
+        // before it parks or emplaces, so the constructor cannot run the callback. And a stop
+        // arriving later reaches `requestCancelWaiter`, which ENQUEUES through `handToLoop` ->
+        // `resumeSoon` and never resumes inline, so no callback of ours can resume a frame
+        // mid-`await_suspend` whatever the ordering. A cross-thread stop trips that function's
+        // own thread assertion rather than racing this.
+        //
+        // What the order buys is the converse obligation: the park is a slot in this runtime
+        // rather than a kernel registration, so a throwing emplace leaves nothing attached that
+        // the destructor does not already clear. The three awaiters below take this order for
+        // the same reasons.
         _cancelReg.emplace(_token,
                            [&runtime = _runtime, awaiting] { runtime.requestCancelWaiter(awaiting); });
         return true;

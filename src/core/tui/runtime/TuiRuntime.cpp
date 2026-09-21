@@ -44,17 +44,37 @@ TuiRuntime::~TuiRuntime()
     unwindParkedWaiters();
     retireTimer(_escapeFlush);
 
-    // The source flows. Each frame names THIS object, and the loop is holding it -- parked on a
-    // handle, or already queued to resume -- so a readiness dispatched after this object is gone
-    // would resume one into freed storage.
+    // The source flows. Each frame names THIS object, and the loop is holding it, so a resumption
+    // after this object is gone reaches freed storage. `cancelPending` is the retrieval, and its
+    // answer is an ownership transfer rather than a status: true means the loop no longer has it
+    // and this call may resume or destroy it.
     //
-    // `cancelPending` is the retrieval, and its answer is an ownership transfer rather than a
-    // status: true means the loop no longer has it and this call may resume or destroy it. Both
-    // cases it covers need the same thing next. A PARKED flow comes back with its backend
-    // registration already detached, and a QUEUED one does not -- only `await_resume` unregisters,
-    // and for a queued flow that has not run yet. So each is resumed exactly once more: the
-    // awaiter unregisters its park, `_stopping` is what stops the body from carrying on, and the
-    // frame completes rather than being destroyed mid-await with a registration still live.
+    // **A flow is in one of THREE states here, and `cancelPending` answers true for all three.**
+    // They are enumerated rather than tested, because an earlier version of this comment named two
+    // and the missing one was the state every flow passes through first:
+    //
+    //   1. SUBMITTED, NEVER STARTED. `async::Task` is lazy, so between the constructor and the
+    //      first turn the frame sits at its initial suspend point in the inbound queue, body not
+    //      entered. Resuming it runs that body FROM THE TOP.
+    //   2. PARKED on a handle. `cancelPending` takes the park and detaches the registration, so
+    //      nothing of it is left with the backend.
+    //   3. QUEUED after readiness. The waiter was taken, but `await_resume` has not run, so the
+    //      park is still filed AND still attached -- only `await_resume` unregisters it. That is
+    //      [core-cpp#41](https://github.com/contour-terminal/core-cpp/issues/41), and the resume
+    //      below is a WORKAROUND for it: when `cancelPending` learns to unregister the park on a
+    //      ready-queue hit, state 3 stops needing a resume and this loop should be revisited.
+    //
+    // One action serves all three, and it works because of the flows' SHAPE rather than because of
+    // a test on the state -- which is what makes it survive a fourth state being added. Resume
+    // once, and let `_stopping` end the body at its first statement: state 1 enters its loop,
+    // finds `_stopping` and returns without ever awaiting; state 3 runs `await_resume`, which
+    // unregisters the park, then finds `_stopping`; state 2 runs `await_resume` against an id
+    // already taken -- both calls are no-ops -- then finds `_stopping`.
+    //
+    // The shape that makes that true is `while (!_stopping)` in each flow, and it is load-bearing
+    // for state 1 alone: the guard must precede the first `co_await`, because `EventLoop`'s
+    // awaiter knows nothing about this runtime and parks a flow that starts during teardown. That
+    // park would name a frame `_sources` is about to destroy, and `~EventLoop` would resume it.
     for (auto& source: _sources)
     {
         if (source.done())
@@ -134,7 +154,10 @@ void TuiRuntime::startSourceFlow(async::Task<void> flow)
 
 async::Task<void> TuiRuntime::inputFlow()
 {
-    while (true)
+    // `!_stopping` rather than `true`, and it is checked BEFORE the first `co_await`: the
+    // destructor resumes a flow that may never have started, and this is what stops that
+    // resumption from parking on the loop. See ~TuiRuntime.
+    while (!_stopping)
     {
         try
         {
@@ -168,7 +191,10 @@ async::Task<void> TuiRuntime::inputFlow()
 
 async::Task<void> TuiRuntime::resizeFlow()
 {
-    while (true)
+    // `!_stopping` rather than `true`, and it is checked BEFORE the first `co_await`: the
+    // destructor resumes a flow that may never have started, and this is what stops that
+    // resumption from parking on the loop. See ~TuiRuntime.
+    while (!_stopping)
     {
         try
         {
@@ -196,7 +222,10 @@ async::Task<void> TuiRuntime::resizeFlow()
 
 async::Task<void> TuiRuntime::interruptFlow()
 {
-    while (true)
+    // `!_stopping` rather than `true`, and it is checked BEFORE the first `co_await`: the
+    // destructor resumes a flow that may never have started, and this is what stops that
+    // resumption from parking on the loop. See ~TuiRuntime.
+    while (!_stopping)
     {
         try
         {
@@ -226,7 +255,10 @@ async::Task<void> TuiRuntime::interruptFlow()
 
 async::Task<void> TuiRuntime::signalFlow()
 {
-    while (true)
+    // `!_stopping` rather than `true`, and it is checked BEFORE the first `co_await`: the
+    // destructor resumes a flow that may never have started, and this is what stops that
+    // resumption from parking on the loop. See ~TuiRuntime.
+    while (!_stopping)
     {
         try
         {
@@ -325,14 +357,20 @@ void TuiRuntime::releaseInputWaiter(std::coroutine_handle<> waiter) noexcept
     if (!waiter)
         return;
     // Idempotent, and usually a no-op on the slot: the resumption that brought this flow back is
-    // what emptied it. What is not a no-op is the deadline -- a waiter resumed by an EVENT still
-    // owns the timer its timeout armed, and leaving it would fire into an empty slot later.
+    // what emptied it.
+    //
+    // **The deadline is retired where the waiter LEAVES the slot, not here.** `takeInputWaiter` is
+    // that place and every path goes through it, so by the time this runs `_inputDeadline` may
+    // already belong to a DIFFERENT flow -- one that parked while this one was queued. Retiring it
+    // here disarmed that flow's timeout without firing it, so a `nextEventFor` or `nextActivity`
+    // waited forever on a deadline it had asked for and silently lost. Retired only in the branch
+    // where the slot still holds us, which is the only case in which it is ours.
     if (_inputWaiter == waiter)
     {
         _inputWaiter = {};
         _inputWake = InputWake::EventOnly;
+        retireTimer(_inputDeadline);
     }
-    retireTimer(_inputDeadline);
     forgetHandedToLoop(waiter);
 }
 

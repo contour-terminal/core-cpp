@@ -1100,6 +1100,26 @@ workflow refuses one without a section here.
     (`detail/WaitChunking.hpp`). Held by a case that parks 70 concurrent handle waits and requires
     every one to resolve.
 
+- **`~TuiRuntime` handled two states of a source flow and there were three.** A `core::async::Task`
+  is lazy, so between the constructor and the first turn every source flow sits at its initial
+  suspend point with its body not yet entered — and the destructor resumed it, which ran that body
+  from the top and parked it on the loop, after which the frame was destroyed underneath the park.
+  `~EventLoop` then resumed freed storage. Each flow's loop now guards on the teardown flag
+  **before** its first `co_await`, so a flow started during teardown returns without parking, and
+  the destructor's comment enumerates all three states rather than branching on two.
+
+  Reachable by constructing a runtime and destroying it with no turn in between — an error-return
+  path, or construction and destruction inside one turn. **No case in the suite reached it**,
+  because every one drives the loop first, which is why seven configurations and both sanitizers
+  were green over it. A case that constructs and destroys with no turn now holds it.
+
+- **A timed input wait could silently lose its timeout.** `releaseInputWaiter` retired
+  `_inputDeadline` unconditionally, but a waiter's deadline is retired where it leaves the slot, so
+  by the time a queued waiter's `await_resume` ran the slot could already hold a *different* flow
+  and its timer. `nextEventFor`/`nextActivity` then waited forever on a deadline they had asked for
+  and never got. The deadline is now retired only in the branch where the slot still holds the
+  resuming waiter.
+
 - **A focus change no longer closes an open modal.** The runtime woke its input waiter for any
   non-input activity, including a dispatched focus report -- but a `nextEvent()` awaiter can only
   yield an event or throw, so it threw `OperationCancelled`, and `runModal` catches that and

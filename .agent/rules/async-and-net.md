@@ -684,8 +684,13 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   are not the same underneath. A PARKED flow comes back with its backend registration already
   detached; a QUEUED one -- readiness dispatched, not yet drained -- does not, since only
   `await_resume` unregisters a park, and a frame destroyed mid-await leaves the loop watching a
-  handle for an object that is gone. The last resumption runs `await_resume` and then finds a flag
-  the destructor set, so it returns instead of re-entering a body whose object is going away.
+  handle for an object that is gone -- which is
+  [core-cpp#41](https://github.com/contour-terminal/core-cpp/issues/41): the ready-queue branch of
+  `cancelPending` returns before the branch that detaches. **When that is fixed, the extra resume
+  prescribed here for a QUEUED waiter stops being needed, and its owner should delete it rather
+  than leave a workaround asserting what the primitive now guarantees.** The last resumption runs
+  `await_resume` and then finds a flag the destructor set, so it returns instead of re-entering a
+  body whose object is going away.
   `core::tui::runtime::TuiRuntime` is the first such object; its four source flows are one per
   handle. Origin: Task B12.
 - **A derived interface that re-declares one overload hides every other overload of that name.**

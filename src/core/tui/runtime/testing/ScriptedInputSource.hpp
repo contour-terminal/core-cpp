@@ -22,6 +22,7 @@
 #include <core/tui/runtime/InputSource.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <optional>
@@ -33,6 +34,25 @@
 namespace core::tui::runtime::testing
 {
 
+/// What a source with no pipe behind it reports as its input handle.
+///
+/// **Stated rather than implied.** This used to answer `platform::standardInput()` unconditionally,
+/// so five cases silently depended on the test process having a usable stdin — and on Windows,
+/// where `standardInput()` asks the OS rather than returning a constant, a closed stdin made the
+/// runtime start no input flow at all and the case HUNG instead of failing. Which of the two a case
+/// wants is a property of the case, so the case says it.
+enum class HandleFor : std::uint8_t
+{
+    /// No input channel. The runtime starts no input flow, which is the headless case: a runtime
+    /// whose input can only arrive through @c pushPending.
+    Nothing,
+
+    /// A handle that is merely NON-INVALID, so the runtime starts an input flow and the backend
+    /// has a registration to name. Only meaningful with @c core::net::testing::ScriptedBackend,
+    /// which never looks at the value; a real backend would refuse or watch the real stdin.
+    Input,
+};
+
 /// An @c InputSource that returns a pre-written sequence of decoded events.
 class ScriptedInputSource: public InputSource
 {
@@ -42,9 +62,11 @@ class ScriptedInputSource: public InputSource
     ///        source, and the runtime reads its handle once.
     /// @param resize The pipe whose readiness stands in for a terminal resize, or null for a
     ///        source with no resize channel. Not owned.
+    /// @param withoutPipe What @c inputHandle answers when @p input is null; see @c HandleFor.
     explicit ScriptedInputSource(platform::SystemPipe* input = nullptr,
-                                 platform::SystemPipe* resize = nullptr) noexcept:
-        _input(input), _resize(resize)
+                                 platform::SystemPipe* resize = nullptr,
+                                 HandleFor withoutPipe = HandleFor::Nothing) noexcept:
+        _input(input), _resize(resize), _withoutPipe(withoutPipe)
     {
     }
 
@@ -121,7 +143,9 @@ class ScriptedInputSource: public InputSource
 
     [[nodiscard]] platform::NativeHandle inputHandle() const noexcept override
     {
-        return _input != nullptr ? _input->waitHandle() : platform::standardInput();
+        if (_input != nullptr)
+            return _input->waitHandle();
+        return _withoutPipe == HandleFor::Input ? platform::standardInput() : platform::InvalidHandle;
     }
 
     [[nodiscard]] platform::NativeHandle resizeHandle() const noexcept override
@@ -222,6 +246,7 @@ class ScriptedInputSource: public InputSource
 
     platform::SystemPipe* _input;  ///< Input readiness, or null for a scripted backend.
     platform::SystemPipe* _resize; ///< Resize readiness, or null for no resize channel.
+    HandleFor _withoutPipe;        ///< What @c inputHandle answers when there is no pipe.
 
     std::deque<std::vector<InputEvent>> _reads;   ///< One entry per scripted read.
     std::deque<std::vector<InputEvent>> _flushes; ///< One entry per scripted partial-escape flush.

@@ -50,8 +50,8 @@ class TerminalInput
     ///
     /// A terminal query reads input while it waits for its reply, and whatever it read that was
     /// not the reply comes back here. So a key typed while a probe was in flight still reaches the
-    /// application: @c poll() and the runtime's @c TerminalEventSource deliver pending events first,
-    /// without waiting.
+    /// application: @c poll() delivers pending events first, without waiting, and the coroutine
+    /// runtime takes them through @c core::tui::runtime::InputSource::takePending.
     /// @param events Events in arrival order, appended after any already pending.
     void unread(std::vector<InputEvent> events)
     {
