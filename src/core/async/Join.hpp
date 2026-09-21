@@ -249,9 +249,11 @@ class JoinAwaiter
     /// A move is only expressible *before* the awaiter suspends, because from `await_suspend` on
     /// it is a temporary of one `co_await` expression that nothing else can name. Nothing points
     /// back at it either: the runners hold the shared state, and the state holds the awaiting
-    /// coroutine, so no member is an address of `*this`. Deleting the move made
-    /// `auto helper(...) { return whenAll(...); }` ill-formed for no benefit, and guaranteed
-    /// copy-elision hid it from every call this repository writes.
+    /// coroutine, so no member is an address of `*this`. Deleting the move made anything that
+    /// passes one on ill-formed for no benefit — `auto h() { auto a = whenAll(…); return a; }`,
+    /// or a container of them — while guaranteed copy-elision kept `co_await whenAll(…)` and
+    /// `auto a = whenAll(…)` compiling, which is every call this repository writes. That is why
+    /// nothing noticed.
     JoinAwaiter(JoinAwaiter&&) noexcept = default;
     JoinAwaiter& operator=(JoinAwaiter&&) noexcept = default;
     JoinAwaiter(JoinAwaiter const&) = delete;
