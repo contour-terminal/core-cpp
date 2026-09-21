@@ -28,6 +28,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -1039,9 +1040,13 @@ TEST_CASE("a muted registration is dispatched to by no backend", "[net][backend]
     }
 }
 
-#ifndef _WIN32
 TEST_CASE("a muted registration stays silent when its peer hangs up", "[net][backend][parity]")
 {
+#ifdef _WIN32
+    SKIP("no portable way to hang up one end of a waitable channel: platform::SystemPipe owns both ends. The "
+         "Windows backend excludes a muted registration from its wait set outright, which the portable "
+         "muting case above covers");
+#else
     // Where the backends actually diverged. poll(2) and epoll report HUP/ERR for a
     // registered descriptor whatever interest was asked for, so a muted descriptor
     // whose peer hung up was routed as a failure and woke the flow the caller had
@@ -1076,10 +1081,15 @@ TEST_CASE("a muted registration stays silent when its peer hangs up", "[net][bac
             ::close(sv[0]);
         }
     }
+#endif
 }
 
 TEST_CASE("a hangup over buffered data wakes the reader on every backend", "[net][backend][parity]")
 {
+#ifdef _WIN32
+    SKIP("needs socketpair(2) and a peer that can be closed independently; SystemPipe owns both ends on "
+         "Windows");
+#else
     // Ruling R101's property, and the one nothing asserted before it. A peer that
     // writes and then closes leaves a socket that is BOTH readable and hung up:
     // POLLIN|POLLHUP on poll and epoll, EVFILT_READ carrying EV_EOF with data on
@@ -1119,10 +1129,15 @@ TEST_CASE("a hangup over buffered data wakes the reader on every backend", "[net
             ::close(sv[0]);
         }
     }
+#endif
 }
 
 TEST_CASE("a hangup with nothing buffered still wakes somebody", "[net][backend][parity]")
 {
+#ifdef _WIN32
+    SKIP("needs socketpair(2) and a peer that can be closed independently; SystemPipe owns both ends on "
+         "Windows");
+#else
     // The other half, and the limit of what is portable. With no data to collect, the
     // backends differ in what they report -- poll and epoll set POLLHUP with no POLLIN,
     // kqueue delivers a readable EV_EOF -- so which CALLBACK fires is a divergence and
@@ -1153,8 +1168,8 @@ TEST_CASE("a hangup with nothing buffered still wakes somebody", "[net][backend]
             ::close(sv[0]);
         }
     }
-}
 #endif
+}
 
 TEST_CASE("two registrations on one handle are accepted by every backend", "[net][backend][parity]")
 {
@@ -1207,9 +1222,11 @@ TEST_CASE("two registrations on one handle are accepted by every backend", "[net
     }
 }
 
-#ifndef _WIN32
 TEST_CASE("a registration does not keep a closed descriptor's connection alive", "[net][backend][parity]")
 {
+#ifdef _WIN32
+    SKIP("asks about a raw descriptor closed behind the backend's back, which has no Winsock equivalent");
+#else
     for (auto const& entry: BackendMatrix)
     {
         auto const backend = core::net::makeBackend(entry.kind);
@@ -1242,12 +1259,14 @@ TEST_CASE("a registration does not keep a closed descriptor's connection alive",
             ::close(sv[1]);
         }
     }
-}
 #endif
+}
 
-#ifndef _WIN32
 TEST_CASE("setInterest reports the kernel's refusal when descriptors run out", "[net][backend][parity]")
 {
+#ifdef _WIN32
+    SKIP("needs RLIMIT_NOFILE to make the kernel refuse a registration; Windows has no equivalent knob");
+#else
     // fastcached#1054 and #1057, from the side a caller feels. `attach` answers that
     // the handler and the backend are usable together; whether the KERNEL accepted the
     // registration is what `setInterest` answers, and only that — which is why it
@@ -1329,8 +1348,8 @@ TEST_CASE("setInterest reports the kernel's refusal when descriptors run out", "
             backend->detach(first.handler);
         }
     }
-}
 #endif
+}
 
 TEST_CASE("an invalid handle is refused by every backend", "[net][backend][parity]")
 {
@@ -1666,6 +1685,73 @@ TEST_CASE("the preferred backend is constructible on this platform, and names it
     auto const byDefault = core::net::makeDefaultBackend();
     REQUIRE(byDefault != nullptr);
     CHECK(byDefault->kind() == preferred);
+}
+
+TEST_CASE("this platform builds every backend the parity matrix expects of it", "[net][backend]")
+{
+    // What a green parity run does NOT otherwise tell you. The 29 cases that loop
+    // BackendMatrix skip a kind this platform does not build -- `if (!backend)
+    // continue;` -- which is right, because the matrix names every kind that exists
+    // anywhere. But it means a platform that STOPPED building one would run all 29
+    // against a smaller matrix, touch nothing it used to, and stay green. A vacuous
+    // run and a real one are indistinguishable from the outside.
+    //
+    // That is not a general worry here, it is the specific evidence Ruling R101 rests
+    // on. R101 says a watched direction beats onError BECAUSE poll and epoll were
+    // wrong and kqueue was right; a macOS run that exercised only poll would confirm
+    // nothing about that claim and would look exactly like one that confirmed it.
+    //
+    // `the preferred backend is constructible on this platform` already REQUIREs ONE
+    // non-null entry, which keeps the 29 from being vacuous outright. "At least one"
+    // is not the question. This case asks which.
+    //
+    // Named, never counted: a threshold weakens silently when nobody bumps it, while a
+    // named kind that stops building fails here and says so.
+    struct Expected
+    {
+        BackendKind kind;
+        std::string_view why;
+    };
+
+#ifdef _WIN32
+    // Task B7 makes IOCP the Windows default and keeps Wfmo as its fallback, so this
+    // row is EXPECTED to change then -- see the message below.
+    auto const expected = std::array<Expected, 1> { {
+        { BackendKind::Wfmo, "Windows' readiness backend: WSAEventSelect + WaitForMultipleObjects" },
+    } };
+#elifdef __linux__
+    auto const expected = std::array<Expected, 2> { {
+        { BackendKind::Poll, "poll(2), the portable fallback every POSIX platform builds" },
+        { BackendKind::Epoll, "epoll(7), Linux's own" },
+    } };
+#else
+    auto const expected = std::array<Expected, 2> { {
+        { BackendKind::Poll, "poll(2), the portable fallback every POSIX platform builds" },
+        { BackendKind::Kqueue,
+          "kqueue(2) -- the backend Ruling R101 says is RIGHT where poll and "
+          "epoll were wrong, so a run without it cannot confirm R101" },
+    } };
+#endif
+
+    for (auto const& entry: expected)
+    {
+        INFO("expected backend: " << core::net::toString(entry.kind) << " -- " << entry.why);
+        INFO("If this fails, the set of backends this platform builds has CHANGED. That is not "
+             "necessarily a defect -- Task B7 adding IOCP will change the Windows row on purpose -- "
+             "but until this table is updated, every case that loops BackendMatrix is covering less "
+             "than its name claims, silently. Update the table here, then check what the parity "
+             "cases still exercise.");
+        CHECK(core::net::makeBackend(entry.kind) != nullptr);
+    }
+
+    // And the matrix really does offer them: a kind built here but missing from
+    // BackendMatrix would be a backend no parity case ever reaches.
+    for (auto const& entry: expected)
+    {
+        INFO("built but absent from BackendMatrix: " << core::net::toString(entry.kind));
+        CHECK(std::ranges::any_of(core::net::testing::BackendMatrix,
+                                  [&entry](auto const& row) { return row.kind == entry.kind; }));
+    }
 }
 
 TEST_CASE("makeBackend answers null for a kind this platform does not build", "[net][backend]")
