@@ -133,7 +133,10 @@ skipped, 2 nothing ran. Labels: `core-cpp`, the module, `hygiene`, `canary`, `lo
 ## Documentation
 
 Factual, no marketing: what the code does, its limits and its current state. The site is
-`mkdocs.yml` plus `docs/`; `mkdocs build --strict` must pass, and CI deploys it with the Doxygen
+`mkdocs.yml` plus `docs/` **and three files that live outside it**: `CHANGELOG.md`,
+`CONTRIBUTING.md` and `.agent/rules/cpp-guidelines.md` are each rendered as a page by a one-line
+`--8<--` snippet, so editing one of them edits the site without touching `docs/`.
+`mkdocs build --strict` must pass, and CI deploys it with the Doxygen
 API reference to <https://contour-terminal.github.io/core-cpp/>.
 
 ## Releasing
@@ -151,6 +154,8 @@ refuses otherwise. Use the `/draft-release` skill, then `/publish-release`. Deta
 3. `clang-debug`, then `gcc-release`; on Windows `cl-debug` and `clangcl-release`
    (`--clean-first` on a cache-populated clang-cl tree if fastcache-cc predates fastcached
    ca8dfc32).
-4. `mkdocs build --strict` if `docs/`, `mkdocs.yml` or a public header's comments changed.
+4. `mkdocs build --strict`. That is every change in practice, not a conditional to evaluate: step 5
+   means every change edits `CHANGELOG.md`, which the site renders as a page. It takes under a
+   second, and the condition it replaces is one you cannot check without reading `mkdocs.yml`.
 5. A CHANGELOG entry under `[Unreleased]`.
 6. "Consumer impact" in the pull request body.
