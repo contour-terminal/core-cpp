@@ -12,6 +12,7 @@
 /// kernel in it, so a fidelity rule it keeps is one every platform can check.
 
 #include <core/net/testing/ScriptedBackend.hpp>
+#include <core/platform/Types.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -37,7 +38,7 @@ struct Probe
 
     Probe() noexcept
     {
-        handler = ReadinessHandler { .handle = nullptr,
+        handler = ReadinessHandler { .handle = core::platform::InvalidHandle,
                                      .kind = core::net::DefaultHandleKind,
                                      .owner = this,
                                      .onReadable = &Probe::onReadableCallback,
