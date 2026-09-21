@@ -141,7 +141,8 @@ core::async::Task<void> writeForever(core::net::ISocket* sock, std::vector<std::
 #endif
 
 /// @param argc The argument count.
-/// @param argv `read-slot`, `write-slot` or `empty-read-buffer`, naming which guard to provoke.
+/// @param argv `read-slot`, `write-slot`, `write-slot-inline` or `empty-read-buffer`,
+///        naming which guard to provoke.
 /// @return Never, in a build with assertions: the guard aborts.
 int main(int argc, char** argv)
 {
@@ -156,7 +157,8 @@ int main(int argc, char** argv)
 #else
     if (argc != 2)
     {
-        std::fputs("usage: core-cpp-socket-contract-canary <read-slot|write-slot|empty-read-buffer>\n",
+        std::fputs("usage: core-cpp-socket-contract-canary "
+                   "<read-slot|write-slot|write-slot-inline|empty-read-buffer>\n",
                    stderr);
         return 2;
     }
@@ -222,6 +224,37 @@ int main(int argc, char** argv)
         auto const second = sock->write(std::span<std::byte const> { payload });
         std::ignore = second.await_ready();
         survived("write() armed over a parked write");
+        return 0;
+    }
+
+    if (std::strcmp(argv[1], "write-slot-inline") == 0)
+    {
+        // **The other branch of the same verb, and the one that had no tripwire on it.**
+        // `write-slot` above drives parked -> PARKED: `trySend` answers `nullopt`, the operation
+        // goes on to arm, and the guard sits on that path. This mode drives parked -> INLINE,
+        // where `trySend` answers immediately and the verb returns without ever arming. That is
+        // the likelier of the two in production -- a write parks only when the send window is full
+        // and unparks when it drains -- and the version reviewed in round 1 ran `_write = {}` on
+        // it, dropping the parked awaitable and leaking its park while telling the caller the
+        // write had succeeded.
+        auto const payload = std::vector<std::byte>(UnsendablePayload, std::byte { 0xA5 });
+        loop.spawn(writeForever(sock, &payload));
+        std::ignore = loop.runOnce();
+        if (loop.parkedWaiterCount() == 0)
+        {
+            std::fputs("socket-contract-canary: the write did not park, so nothing was tested\n", stderr);
+            return 2;
+        }
+
+        // Half-close, so the NEXT send fails at once with EPIPE rather than blocking on a window
+        // that is still full. That is what forces the inline-completion branch deterministically:
+        // draining the peer instead would race the loop's own pump for the freed window.
+        sock->shutdownWrite();
+
+        announce("write-slot-inline", "a write completing INLINE over a parked write");
+        auto const second = sock->write(std::span<std::byte const> { payload });
+        std::ignore = second.await_ready();
+        survived("write() completed inline over a parked write");
         return 0;
     }
 

@@ -314,6 +314,13 @@ RunOnceResult EventLoop::turn(std::optional<platform::SteadyDuration> maxWait, s
     // The closed handles first, as one more source of readiness. After the wait, so a park the
     // backend also reported is queued exactly once -- the first queueing takes its waiter, and a
     // park with no waiter left is skipped.
+    //
+    // **That idempotence covers a park with a WAITER, and no longer covers every park.** Task B6's
+    // frameless readiness park has no waiter to take, so `queueParkedWaiter` pushes a `ReadyEntry`
+    // for it unconditionally and a park reported by both the wait and `_closedParks` is dispatched
+    // twice. It is harmless as built -- the owner's callback re-checks its own slot, and a stale
+    // park id resolves to nothing -- but it is NOT the invariant the paragraph above states, and
+    // the next thing written against that sentence would be written against a false premise.
     for (auto const park: closed)
         queueParkedWaiter(park);
 

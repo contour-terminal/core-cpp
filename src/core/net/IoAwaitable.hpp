@@ -29,9 +29,9 @@
 #include <core/async/Cancellation.hpp>
 #include <core/async/StopToken.hpp>
 #include <core/async/Task.hpp>
-#include <core/net/EventLoop.hpp>
 #include <core/net/IoResult.hpp>
 #include <core/net/NetError.hpp>
+#include <core/net/detail/ParkTable.hpp>
 
 #include <cassert>
 #include <coroutine>
@@ -43,6 +43,26 @@
 
 namespace core::net
 {
+
+/// The loop, named but not included.
+///
+/// `ISocket.hpp` includes this header, so whatever this header includes lands in every translation
+/// unit that touches a socket. `<core/net/EventLoop.hpp>` was that, for ONE call --
+/// `requestCancel` on the stop path below -- and `SocketContract.hpp` goes to the trouble of
+/// forward-declaring the same class for the same reason. Measured: the loop's header is 138k
+/// preprocessed lines against `detail/ParkTable.hpp`'s 130k, which is what is left once `ParkId`
+/// still has to be a complete type here.
+class EventLoop;
+
+/// Requests cancellation of @p park on @p loop, out of line so this header need not include the
+/// loop's.
+///
+/// Safe from any thread, which is the property the stop path needs: @c EventLoop::requestCancel is
+/// generation-checked, so a request naming an operation that has already finished resolves to
+/// nothing rather than to whatever took its place.
+/// @param loop The loop the park belongs to.
+/// @param park The park to cancel.
+void requestCancelOn(EventLoop& loop, ParkId park) noexcept;
 
 /// The result of one socket operation: a value, or why it could not be produced.
 ///
@@ -87,7 +107,15 @@ class ResultAwaitable
     /// @param arm Called from `await_suspend`; must not be null.
     /// @param retire Called if the flow unwinds while the operation is still armed; must not be
     ///        null.
-    /// @param owner The opaque pointer both are handed. Must outlive the await.
+    /// @param owner The opaque pointer both are handed. **Must outlive this AWAITABLE, not merely
+    ///        the await.** The destructor retires an unsettled operation, so `retire(owner, this)`
+    ///        runs even for an operation that was created and never awaited — which is reachable
+    ///        through @c core::async::asTask, whose whole purpose is to let a caller hold one. A
+    ///        connection struct that stores such a task and destroys its `unique_ptr<ISocket>`
+    ///        first hands a dangling owner to the retire hook: the socket's destructor cannot
+    ///        neutralise an operation it has no handle on, because nothing was ever written into
+    ///        its slot. **So the order is the contract: destroy every operation on a socket before
+    ///        the socket**, which for a struct member means declaring the task after the socket.
     ResultAwaitable(ArmCallback arm, RetireCallback retire, void* owner) noexcept:
         _arm(arm), _retire(retire), _owner(owner)
     {
@@ -360,7 +388,7 @@ class ResultAwaitable
     void onStop() const noexcept
     {
         if (_loop != nullptr && _park)
-            _loop->requestCancel(_park);
+            requestCancelOn(*_loop, _park);
     }
 
     /// Defaults to a cancellation rather than to a value: an awaitable resumed without its owner

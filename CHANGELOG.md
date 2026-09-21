@@ -716,9 +716,17 @@ workflow refuses one without a section here.
   and — unlike a timer park — SURVIVES its own dispatch, so its owner can run a retry loop across
   many wakes and retire it with `unregisterPark`. It is what makes a socket operation frame-free,
   and it is a park in the same table as every other kind, so it inherits `notifyHandleClosing`,
-  `requestCancel`'s generation check, `registerPark`'s host-wake arming, the turn's decision to
-  enter the backend wait, and the teardown. Nothing existing changes shape: a `ParkEntry` built
-  through `onDeadline`, `onCallback` or `onReadiness` behaves exactly as before.
+  `requestCancel`'s generation check, `registerPark`'s host-wake arming and the turn's decision to
+  enter the backend wait. Nothing existing changes shape: a `ParkEntry` built through `onDeadline`,
+  `onCallback` or `onReadiness` behaves exactly as before.
+
+  **It does NOT inherit `~EventLoop`'s teardown, and an earlier version of this entry said it
+  did.** A callback park has no coroutine to resume, so teardown step 2 skips it and
+  `unparkEverything` excludes it by its `!entry->parked` test — both deliberately, because calling
+  it would reach an owner that is being destroyed. The consequence for a caller: **a socket
+  operation still parked when its loop is destroyed is neither completed nor abandoned, and the
+  awaiting coroutine is never resumed and never unwinds.** So destroy sockets before the loop they
+  were created on, which is already the documented ordering for every loop-owned object.
 
 
 - **`core::net::EventLoop` is the merged reactor contract: a five-step turn, a six-step teardown,

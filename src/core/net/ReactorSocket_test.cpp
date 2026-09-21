@@ -20,6 +20,7 @@
 #include <core/net/EventLoop.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/NetError.hpp>
+#include <core/net/Sockets.hpp>
 #include <core/net/posix/PosixSocket.hpp>
 #include <core/net/testing/BackendMatrix.hpp>
 #include <core/net/testing/CoroTestSupport.hpp>
@@ -35,8 +36,11 @@
 #include <ranges>
 #include <span>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
+
+#include <unistd.h>
 
 using core::async::OperationCancelled;
 using core::async::Task;
@@ -431,6 +435,86 @@ TEST_CASE("A receive deadline bounds one read, on the loop's own timer heap",
     }
 }
 
+TEST_CASE("A non-positive receive deadline removes the bound", "[net][socket][reactor][deadline]")
+{
+    // `SO_RCVTIMEO` reads zero as "never times out" (man 7 socket), and this interface follows it.
+    // The version reviewed in round 1 documented and implemented the opposite -- zero left the
+    // current setting alone -- which left a caller no way to LIFT a deadline it had set: a
+    // connection bounding negotiation at 5s and then upgrading to a long poll had to rebuild the
+    // socket.
+    //
+    // **Two assertions, because "the read did not time out" alone does not distinguish removed from
+    // never-armed.** The timer count while parked is what says the deadline is gone rather than
+    // merely long: a socket that clamped a cleared deadline to some default would still show one.
+    for (auto const& backend: BackendMatrix)
+    {
+        auto source = core::net::makeBackend(backend.kind);
+        if (!source)
+            continue;
+        // Both spellings of "no bound" get their OWN section, rather than sharing one through a
+        // loop or a GENERATE. Measured, not stylistic: with both in one section the `REQUIRE`
+        // below aborts it on the first failure, so the -5ms spelling ran only when everything
+        // already passed -- it was covered exactly when it could not matter. A generator has the
+        // opposite problem here, re-entering the whole case and re-running the backend loop.
+        for (auto const cleared: { std::chrono::milliseconds { 0 }, std::chrono::milliseconds { -5 } })
+        {
+            DYNAMIC_SECTION("backend=" << backend.name << " cleared=" << cleared.count() << "ms")
+            {
+                auto loop = EventLoop { *source };
+                auto pair = core::net::testing::makeSocketPair(loop);
+                REQUIRE(pair.has_value());
+
+                // Set one, then lift it. Setting first is the whole point: clearing a deadline that was
+                // never armed would pass against an implementation that ignores the verb entirely.
+                pair->first->setReceiveDeadline(std::chrono::milliseconds { 20 });
+                pair->first->setReceiveDeadline(cleared);
+
+                auto outcome = Outcome {};
+                auto timersWhileParked = std::size_t { 1 };
+                loop.blockOn([](EventLoop* l,
+                                ISocket* reader,
+                                ISocket* writer,
+                                Outcome* o,
+                                std::size_t* timers) -> Task<void> {
+                    auto const payload = std::array<std::byte, 2> { std::byte { 7 }, std::byte { 8 } };
+                    co_await core::async::whenAll(
+                        readOnce(reader, o),
+                        [](EventLoop* pump, ISocket* w, std::array<std::byte, 2> const* p, std::size_t* seen)
+                            -> Task<void> {
+                            // The wait is split, and each half makes one assertion load-bearing.
+                            // BEFORE the 20ms bound: the read is parked and, had the bound
+                            // survived, its timer would still be pending -- so the count
+                            // distinguishes lifted from expired. Measured both ways: with the
+                            // count taken AFTER 20ms the deadline has already fired and been
+                            // removed, and the count reads 0 against the broken behaviour too.
+                            co_await pump->delay(std::chrono::milliseconds { 5 });
+                            *seen = pump->pendingTimerCount();
+
+                            // PAST the 20ms bound: had it survived, the read has reported Timeout
+                            // by now and never sees these bytes. That is what makes the byte
+                            // assertion catch the defect rather than decorate the case -- at 5ms
+                            // the writer beat the deadline either way and it passed against the
+                            // very behaviour it exists to catch.
+                            co_await pump->delay(std::chrono::milliseconds { 55 });
+                            std::ignore = co_await w->write(std::span<std::byte const> { *p });
+                        }(l, writer, &payload, timers));
+                }(&loop, pair->first.get(), pair->second.get(), &outcome, &timersWhileParked));
+
+                // One: no timer belongs to the read. The writer's own `delay` has already fired by the
+                // time it takes this count, so a non-zero value here is the read's deadline.
+                CHECK(timersWhileParked == 0);
+
+                // Two: the read answered with BYTES rather than expiring, which it could not have
+                // done had the 20ms bound survived -- the bytes are sent at 60ms.
+                REQUIRE(outcome.resolved);
+                CHECK_FALSE(outcome.threw);
+                REQUIRE(outcome.hasValue);
+                CHECK(outcome.count == 2);
+            }
+        }
+    }
+}
+
 TEST_CASE("A read that answers cancels the deadline it armed", "[net][socket][reactor][deadline]")
 {
     // The other direction, and the one whose absence is a slow leak rather than a failure: a
@@ -544,6 +628,110 @@ TEST_CASE("A socket operation created and never awaited leaves the socket safe t
                 REQUIRE(outcome.hasValue);
                 CHECK(outcome.count == 1);
             }
+        }
+    }
+}
+
+TEST_CASE("waitReadable on an adopted pipe parks and counts, before any read",
+          "[net][socket][reactor][waitreadable]")
+{
+    // `net::adoptFd` takes a PTY master or a pipe end, and `waitReadable` is documented to be
+    // callable BEFORE the first read. The version reviewed in round 1 could not serve that pairing
+    // in either state: with `_plainFd` unset the probe reached `::recv(MSG_PEEK)` on a non-socket,
+    // got `ENOTSOCK`, and resolved `SystemError` on a perfectly healthy descriptor without ever
+    // waiting; once `_plainFd` was set it answered a flat `1` with no readiness check at all, so
+    // the watch never suspended and a loop holding one spun.
+    //
+    // **Three assertions, and the first is the one the old code passed by accident.** "It answered
+    // 1" is true of a spin as well as of a wait, so the case asserts that the watch actually
+    // PARKED -- and separately that EOF still reads as 0, which FIONREAD alone cannot tell from
+    // "nothing yet".
+    for (auto const& backend: BackendMatrix)
+    {
+        auto source = core::net::makeBackend(backend.kind);
+        if (!source)
+            continue;
+        DYNAMIC_SECTION("backend=" << backend.name)
+        {
+            auto fds = std::array<int, 2> { -1, -1 };
+            REQUIRE(::pipe(fds.data()) == 0);
+
+            auto loop = EventLoop { *source };
+            auto adopted = core::net::adoptFd(loop, fds[0]);
+            REQUIRE(adopted.has_value());
+
+            auto outcome = Outcome {};
+            auto parked = false;
+            loop.blockOn(
+                [](EventLoop* l, ISocket* sock, int writeEnd, Outcome* o, bool* sawPark) -> Task<void> {
+                    co_await core::async::whenAll(
+                        [](ISocket* s, Outcome* out) -> Task<void> {
+                            auto const got = co_await s->waitReadable();
+                            out->resolved = true;
+                            out->hasValue = got.has_value();
+                            if (got.has_value())
+                                out->count = *got;
+                            else
+                                out->code = got.error().code;
+                        }(sock, o),
+                        [](EventLoop* pump, int fd, bool* seenPark) -> Task<void> {
+                            // A turn, so the watch above is parked rather than merely created. This is
+                            // what a spin fails: it would have resolved before this ever ran.
+                            co_await pump->delay(std::chrono::milliseconds { 10 });
+                            *seenPark = pump->parkedWaiterCount() > 0;
+                            auto const byte = std::byte { 0x5A };
+                            std::ignore = ::write(fd, &byte, 1);
+                        }(l, writeEnd, sawPark));
+                }(&loop, adopted->get(), fds[1], &outcome, &parked));
+
+            CHECK(parked); // it WAITED; a flat `1` would have answered before the writer ran
+            REQUIRE(outcome.resolved);
+            REQUIRE(outcome.hasValue); // not SystemError from a peek on a non-socket
+            CHECK(outcome.count == 1);
+
+            ::close(fds[1]);
+        }
+    }
+}
+
+TEST_CASE("waitReadable on an adopted pipe reports EOF as zero", "[net][socket][reactor][waitreadable]")
+{
+    // The other half of the probe's contract, and the one FIONREAD cannot answer on its own: a
+    // writer that has gone and a writer that has not written yet both leave zero bytes readable.
+    // POLLHUP is what separates them, and without it this case hangs rather than fails.
+    for (auto const& backend: BackendMatrix)
+    {
+        auto source = core::net::makeBackend(backend.kind);
+        if (!source)
+            continue;
+        DYNAMIC_SECTION("backend=" << backend.name)
+        {
+            auto fds = std::array<int, 2> { -1, -1 };
+            REQUIRE(::pipe(fds.data()) == 0);
+
+            auto loop = EventLoop { *source };
+            auto adopted = core::net::adoptFd(loop, fds[0]);
+            REQUIRE(adopted.has_value());
+
+            auto outcome = Outcome {};
+            loop.blockOn([](EventLoop* l, ISocket* sock, int writeEnd, Outcome* o) -> Task<void> {
+                co_await core::async::whenAll(
+                    [](ISocket* s, Outcome* out) -> Task<void> {
+                        auto const got = co_await s->waitReadable();
+                        out->resolved = true;
+                        out->hasValue = got.has_value();
+                        if (got.has_value())
+                            out->count = *got;
+                    }(sock, o),
+                    [](EventLoop* pump, int fd) -> Task<void> {
+                        co_await pump->delay(std::chrono::milliseconds { 10 });
+                        ::close(fd); // the writer goes away having written nothing
+                    }(l, writeEnd));
+            }(&loop, adopted->get(), fds[1], &outcome));
+
+            REQUIRE(outcome.resolved);
+            REQUIRE(outcome.hasValue);
+            CHECK(outcome.count == 0); // EOF, not "nothing yet"
         }
     }
 }

@@ -143,6 +143,7 @@ core_cpp_add_module(net KIND STATIC
         Diagnostics.cpp
         HttpServer.cpp
         ISocket.cpp
+        IoAwaitable.cpp
         SocketContract.cpp
         WriteQueue.cpp
         ${_coreCppNetDefaultBackend}
@@ -401,7 +402,7 @@ if(CORE_CPP_TESTING AND NOT EMSCRIPTEN AND NOT WIN32)
     add_executable(core-cpp-socket-contract-canary SocketContractCanary.cpp)
     target_link_libraries(core-cpp-socket-contract-canary PRIVATE core::net core::testing_dialogs)
     core_cpp_apply_toolchain(core-cpp-socket-contract-canary)
-    foreach(guard IN ITEMS read-slot write-slot empty-read-buffer)
+    foreach(guard IN ITEMS read-slot write-slot write-slot-inline empty-read-buffer)
         add_test(NAME core-cpp.socket-contract-canary.${guard}
                  COMMAND core-cpp-socket-contract-canary ${guard})
         set_tests_properties(core-cpp.socket-contract-canary.${guard} PROPERTIES

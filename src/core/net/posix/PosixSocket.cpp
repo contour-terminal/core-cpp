@@ -5,6 +5,7 @@
 #include <core/net/detail/WouldBlock.hpp>
 #include <core/net/posix/FdUtils.hpp> // MSG_NOSIGNAL fallback, makeNonBlockingCloexec
 
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
 
@@ -16,6 +17,7 @@
 #include <utility>
 
 #include <fcntl.h>
+#include <poll.h>
 #include <unistd.h>
 
 // macOS / BSD also lack MSG_CMSG_CLOEXEC (atomic close-on-exec for received descriptors); there
@@ -155,10 +157,11 @@ void PosixSocket::shutdownWrite() noexcept
 
 void PosixSocket::setReceiveDeadline(std::chrono::milliseconds deadline) noexcept
 {
-    // Non-positive leaves the current setting alone, matching SO_RCVTIMEO's own reading of zero.
-    if (deadline <= std::chrono::milliseconds::zero())
-        return;
-    _receiveDeadline = deadline;
+    // Non-positive REMOVES the bound, which is SO_RCVTIMEO's own reading of zero: "If the timeout
+    // is set to zero (the default), then the operation will never timeout" (man 7 socket). Storing
+    // it is the whole of the removal -- `armRead` arms a timer only for a positive value -- and a
+    // read already parked keeps the timer it armed, which is what the interface says.
+    _receiveDeadline = std::max(deadline, std::chrono::milliseconds::zero());
 }
 
 // ---- The read side ----------------------------------------------------------------------------
@@ -275,17 +278,54 @@ std::optional<std::expected<ReadWithFd, NetError>> PosixSocket::tryReadWithFd(st
     }
 }
 
-std::optional<IoResult> PosixSocket::tryProbe() const
+std::optional<IoResult> PosixSocket::tryProbe()
 {
+    // A PTY master or pipe end cannot be peeked, so it is probed rather than peeked: FIONREAD says
+    // how many bytes are readable now, and POLLHUP distinguishes "nothing yet" from "the writer is
+    // gone". Both are non-destructive, which is what `waitReadable` promises.
+    //
+    // The version reviewed in round 1 answered a flat `1` here without consulting the descriptor at
+    // all, so a `waitReadable` on a PTY never suspended and a watchdog loop holding one became a
+    // turn-free spin.
+    if (_plainFd)
+    {
+        auto pending = 0;
+        if (::ioctl(_fd, FIONREAD, &pending) < 0)
+        {
+            auto const err = errno;
+            if (isWouldBlock(err) || err == EINTR)
+                return std::nullopt;
+            if (err == EIO)
+                return IoResult { std::size_t { 0 } }; // a PTY master reports child exit as EIO
+            return IoResult { std::unexpected(fromErrno(err, "ioctl(FIONREAD)")) };
+        }
+        if (pending > 0)
+            return IoResult { std::size_t { 1 } };
+
+        // Nothing pending. POLLHUP is the only non-destructive way to tell a writer that has gone
+        // from one that has simply not written yet, and answering the second as EOF would report a
+        // healthy descriptor dead.
+        auto watch = pollfd { .fd = _fd, .events = POLLIN, .revents = 0 };
+        if (::poll(&watch, 1, 0) > 0 && (watch.revents & POLLHUP) != 0)
+            return IoResult { std::size_t { 0 } };
+        return std::nullopt;
+    }
+
     // A one-byte MSG_PEEK: `0` is EOF and `>0` is data pending, which is the whole of
     // `waitReadable`'s contract. It consumes nothing, so a probe can be retried and retired freely.
     auto probe = std::array<std::byte, 1> {};
-    auto const got = _plainFd ? ssize_t { 1 } // a PTY/pipe cannot be peeked; treat readiness as data
-                              : ::recv(_fd, probe.data(), probe.size(), MSG_PEEK);
+    auto const got = ::recv(_fd, probe.data(), probe.size(), MSG_PEEK);
     if (got >= 0)
         return IoResult { got == 0 ? std::size_t { 0 } : std::size_t { 1 } };
 
     auto const err = errno;
+    if (err == ENOTSOCK)
+    {
+        // An adopted PTY master or pipe end, discovered HERE rather than by a preceding read --
+        // `waitReadable` is documented to be callable first, so there need not have been one.
+        _plainFd = true;
+        return tryProbe();
+    }
     if (isWouldBlock(err) || err == EINTR)
         return std::nullopt;
 
@@ -311,6 +351,13 @@ IoAwaitable PosixSocket::read(std::span<std::byte> buffer)
     _read.buffer = buffer;
     return IoAwaitable { [](void* owner, IoAwaitable& self) {
                             auto* const socket = static_cast<PosixSocket*>(owner);
+                            // **The claim is HERE, because this is where the slot is actually taken.** The
+                            // verb's guard is the early, friendlier diagnostic; it cannot see two operations
+                            // created through `core::async::asTask` and awaited afterwards, because neither
+                            // has armed when the second verb runs -- and the second arm then overwrites this
+                            // slot and the park id, leaving the first park registered on a socket that will
+                            // be freed under it.
+                            contract::claimReadSlot(socket->_read.awaitable);
                             socket->_read.awaitable = &self;
                             if (!socket->armRead(Interest::Read))
                             {
@@ -338,6 +385,7 @@ ResultAwaitable<ReadWithFd> PosixSocket::readWithFd(std::span<std::byte> buffer)
     _read.buffer = buffer;
     return ResultAwaitable<ReadWithFd> { [](void* owner, ResultAwaitable<ReadWithFd>& self) {
                                             auto* const socket = static_cast<PosixSocket*>(owner);
+                                            contract::claimReadSlot(socket->_read.awaitable);
                                             socket->_read.awaitable = &self;
                                             if (!socket->armRead(Interest::Read))
                                             {
@@ -364,6 +412,7 @@ IoAwaitable PosixSocket::waitReadable()
     _read.buffer = {};
     return IoAwaitable { [](void* owner, IoAwaitable& self) {
                             auto* const socket = static_cast<PosixSocket*>(owner);
+                            contract::claimReadSlot(socket->_read.awaitable);
                             socket->_read.awaitable = &self;
                             if (!socket->armRead(Interest::Read))
                             {
@@ -645,26 +694,32 @@ std::optional<IoResult> PosixSocket::trySendSegments(WriteOperation& operation)
 
 IoAwaitable PosixSocket::write(std::span<std::byte const> buffer)
 {
+    // **The guard comes before `_write` is touched, and the attempt runs on a TEMPORARY.** The
+    // first version of this verb wrote the new cursor into `_write`, called `trySend`, and reached
+    // the guard only on the parking branch -- so a second write issued while one was parked
+    // clobbered the parked operation's cursor, and on the inline-completion branch ran `_write = {}`
+    // and returned success having silently dropped the parked awaitable and leaked its park, with
+    // no assertion on that path in Debug or Release. Nothing owns `_write` until the operation is
+    // known to park.
+    contract::claimWriteSlot(_write.awaitable);
+
     if (_closed || _fd < 0)
         return IoAwaitable { std::unexpected(closedSocket("write")) };
 
-    _write.remaining = buffer;
-    _write.segments = {};
-    _write.segmentIndex = 0;
-    _write.segmentOffset = 0;
-    _write.written = 0;
-    _write.keepAlive = {};
-    if (auto const done = trySend(_write); done.has_value())
-    {
-        auto const result = *done;
-        _write = {};
-        return IoAwaitable { result };
-    }
+    auto pending = WriteOperation {};
+    pending.remaining = buffer;
+    if (auto const done = trySend(pending); done.has_value())
+        return IoAwaitable { *done };
 
-    contract::claimWriteSlot(_write.awaitable);
+    _write = std::move(pending);
     return IoAwaitable {
         [](void* owner, IoAwaitable& self) {
             auto* const socket = static_cast<PosixSocket*>(owner);
+            // **The claim is HERE, because this is where the slot is actually taken.** The verb's
+            // guard above is the early, friendlier diagnostic; it cannot see two operations created
+            // through `core::async::asTask` and awaited afterwards, because neither has armed when
+            // the second verb runs.
+            contract::claimWriteSlot(socket->_write.awaitable);
             socket->_write.awaitable = &self;
             socket->_write.park = socket->_loop.registerPark(ParkEntry::onReadyCallback(
                 &PosixSocket::onWriteWake, socket, socket->_fd, DefaultHandleKind, Interest::Write));
@@ -684,26 +739,23 @@ IoAwaitable PosixSocket::write(std::span<std::byte const> buffer)
 IoAwaitable PosixSocket::writeVectored(std::span<std::span<std::byte const> const> segments,
                                        std::shared_ptr<void const> keepAlive)
 {
+    // Guard first, attempt on a temporary -- see `write` above for what the other order cost.
+    contract::claimWriteSlot(_write.awaitable);
+
     if (_closed || _fd < 0)
         return IoAwaitable { std::unexpected(closedSocket("write")) };
 
-    _write.remaining = {};
-    _write.segments = segments;
-    _write.segmentIndex = 0;
-    _write.segmentOffset = 0;
-    _write.written = 0;
-    _write.keepAlive = std::move(keepAlive);
-    if (auto const done = trySend(_write); done.has_value())
-    {
-        auto const result = *done;
-        _write = {};
-        return IoAwaitable { result };
-    }
+    auto pending = WriteOperation {};
+    pending.segments = segments;
+    pending.keepAlive = std::move(keepAlive);
+    if (auto const done = trySend(pending); done.has_value())
+        return IoAwaitable { *done };
 
-    contract::claimWriteSlot(_write.awaitable);
+    _write = std::move(pending);
     return IoAwaitable {
         [](void* owner, IoAwaitable& self) {
             auto* const socket = static_cast<PosixSocket*>(owner);
+            contract::claimWriteSlot(socket->_write.awaitable);
             socket->_write.awaitable = &self;
             socket->_write.park = socket->_loop.registerPark(ParkEntry::onReadyCallback(
                 &PosixSocket::onWriteWake, socket, socket->_fd, DefaultHandleKind, Interest::Write));

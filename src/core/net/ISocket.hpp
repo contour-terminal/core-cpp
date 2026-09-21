@@ -124,10 +124,16 @@ class ISocket
 
     /// Performs any transport-level handshake required before application I/O.
     ///
-    /// Plaintext sockets need none, so the default resolves immediately; a TLS decorator overrides
-    /// it to drive the handshake. An accept loop awaits this once before protocol autodetection, so
-    /// it stays transport-agnostic and a slow handshake runs on the per-connection flow rather than
-    /// blocking the accept loop.
+    /// Plaintext sockets need none, so the default resolves immediately. An accept loop awaits this
+    /// once before protocol autodetection, so it stays transport-agnostic and a slow handshake runs
+    /// on the per-connection flow rather than blocking the accept loop.
+    ///
+    /// **No transport in this tree overrides it yet, including `TlsSocket`** — an earlier version
+    /// of this comment said a TLS decorator did, which was a description of the intended design
+    /// rather than of the shipped code. `TlsSocket` drives its handshake lazily inside its read and
+    /// write paths instead, so no bytes are lost today; what an accept loop does NOT get is the
+    /// handshake completing before it begins autodetection, which is the whole reason this verb
+    /// exists. Task B11 owns that file.
     /// @return Nothing on success, or a @c NetError.
     [[nodiscard]] virtual ResultAwaitable<void> handshakeIfNeeded();
 
@@ -145,9 +151,13 @@ class ISocket
     /// reported opposite numbers on Windows and Linux for the same event. The kernel draws the
     /// distinction and the probe already computes it; only the reporting threw it away.
     ///
-    /// **The default answers `1`, and that is the fail-safe direction.** A transport that cannot
-    /// tell must not claim EOF: a false `>0` costs one `read` that discovers the truth, while a
-    /// false `0` tells a caller its peer is gone.
+    /// **The default answers `1`, and that is the fail-safe direction FOR THE ANSWER, not for the
+    /// wait.** A transport that cannot tell must not claim EOF: a false `>0` costs one `read` that
+    /// discovers the truth, while a false `0` tells a caller its peer is gone. But the default also
+    /// never SUSPENDS, so a transport that inherits it turns a parked watch into a spin — a
+    /// watchdog loop of the shape @c cancelRead documents would then burn a core rather than wait.
+    /// **A transport whose reads can block owes an override**, and `TlsSocket` currently does not
+    /// have one (Task B11 owns that file); `PosixSocket` and `WindowsSocket` both do.
     ///
     /// **"Consumes nothing" is about bytes the CALLER could have read**, not about the transport's
     /// own buffering. A decorator may have to consume and decode raw bytes to answer at all — a TLS
@@ -204,9 +214,16 @@ class ISocket
     ///
     /// Idempotent, and not a @c close: reads keep working and @c isClosed stays false. A caller
     /// that wants both calls both.
+    ///
+    /// **A decorator whose framing is protocol-level cannot express this verb correctly, and
+    /// `TlsSocket` does not override it.** A clean TLS half-close is a `close_notify` record that
+    /// must be written and flushed, which this synchronous `void` signature cannot await; simply
+    /// forwarding to the inner socket would deliver a FIN with no `close_notify`, which a strict
+    /// peer reads as a truncation rather than as an orderly end. So the gap is real and the
+    /// signature is part of it. Task B11 owns `Tls.cpp`.
     virtual void shutdownWrite() noexcept {}
 
-    /// Re-arms how long a single read may wait before it reports a deadline expiry.
+    /// Sets, or removes, how long a single read may wait before it reports a deadline expiry.
     ///
     /// Exists so a caller can hold **two** different bounds over one connection: *how long may this
     /// peer stay silent before it asks anything* and *how long may one read take once it has
@@ -214,14 +231,26 @@ class ISocket
     /// of them wrong
     /// ([fastcached#828](https://github.com/LASTRADA-Software/fastcached/issues/828)).
     ///
+    /// **A non-positive duration REMOVES the bound**, which is `SO_RCVTIMEO`'s own reading of zero:
+    /// *"If the timeout is set to zero (the default), then the operation will never timeout"*
+    /// (`man 7 socket`). An earlier version of this interface documented the opposite — that zero
+    /// left the current setting alone — which left a caller no way to lift a deadline it had set.
+    /// A connection that bounds negotiation at 5s and then upgrades to a long poll has to be able
+    /// to say so without rebuilding the socket. A NEGATIVE duration removes it too, and does not
+    /// expire immediately: a bound that is already in the past can only mean a caller computed one,
+    /// and failing every read is the more damaging of the two readings.
+    ///
+    /// **It governs reads that START after it**, not one that is already parked: an in-flight read
+    /// keeps the timer it armed. So a caller that must bound a read it has already issued cancels
+    /// it (@c cancelRead) rather than re-timing it.
+    ///
     /// **The default does nothing, and unlike @c cancelRead's that is safe.** A transport that
     /// cannot re-arm keeps whatever bound it already had, so the behaviour degrades to exactly what
     /// it was before this existed — a weaker bound, never a wrong one.
     ///
     /// A reactor socket implements it over its loop's timers, so it costs no wait of its own: there
     /// is ONE deadline mechanism in this library and a receive deadline is a consumer of it.
-    /// @param deadline How long a read may wait. Non-positive leaves the current setting alone,
-    ///        matching `SO_RCVTIMEO`'s own reading of zero.
+    /// @param deadline How long a read may wait; non-positive removes the bound entirely.
     virtual void setReceiveDeadline(std::chrono::milliseconds deadline) noexcept;
 
     /// @return The remote peer's printable address ("127.0.0.1", "::1"), or "" if unknown (an

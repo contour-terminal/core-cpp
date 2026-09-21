@@ -145,13 +145,17 @@ class PosixSocket final: public ISocket
     [[nodiscard]] std::optional<std::expected<ReadWithFd, NetError>> tryReadWithFd(
         std::span<std::byte> buffer);
 
-    /// Attempts the `MSG_PEEK` probe behind @c waitReadable, consuming nothing.
+    /// Attempts the readability probe behind @c waitReadable, consuming nothing.
     ///
-    /// `const` because it genuinely is: the probe takes no bytes, so there is no EOF to latch and
-    /// no `_plainFd` to discover -- a descriptor that cannot be peeked was already found to be one
-    /// by the read that preceded it.
+    /// **Not `const`, and the earlier justification for making it so had the dependency backwards.**
+    /// It read: *"a descriptor that cannot be peeked was already found to be one by the read that
+    /// preceded it"* -- but @c waitReadable exists precisely to be called BEFORE the first read, so
+    /// there may be no preceding read to have discovered it. On an adopted PTY master or pipe end
+    /// (@c net::adoptFd) that left the probe reporting @c SystemError on a healthy descriptor, and
+    /// once `_plainFd` was set it answered a flat `1` with no readiness check at all, which turned
+    /// a parked watch into a turn-free spin.
     /// @return `0` for EOF, `>0` for pending data, an error, or nullopt to park.
-    [[nodiscard]] std::optional<IoResult> tryProbe() const;
+    [[nodiscard]] std::optional<IoResult> tryProbe();
 
     /// Attempts to send whatever @p operation still owes, advancing its cursor.
     ///
