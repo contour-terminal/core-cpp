@@ -816,6 +816,18 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- **`core::async`: a use-after-free when a chain parks again while an earlier park is being
+  released.** `detail::claimOn()` armed the chain's abandon state and then took its claim as two
+  separate atomic stores, so a concurrent `AbandonClaim` release could observe a state that never
+  existed as a whole — armed by the new park, count zero because that park had not been counted yet
+  — conclude the chain was abandoned, and destroy a coroutine frame that was live. It fires
+  wherever several children of one detached flow park on an executor at once, which is exactly what
+  `whenAll` and `whenAny` over a `ThreadPoolExecutor` do: measured at 36 crashes in 1920 runs of the
+  async suite at 32-way concurrency, and at 15 and 14 for the two combinators individually. The
+  park count and the armed flag are now one atomic word, with claim-and-arm and
+  decrement-and-claim-the-destroy each a single compare-exchange, so *armed* is never observable
+  without the claim that accompanies it. No API changed.
+
 - A module-table row whose `WHEN` names an undeclared variable is refused where it is declared,
   instead of silently removing its target. `core_cpp_row_builds()` evaluates
   `if(when AND NOT ${when})`, so `WHEN CORE_CPP_WITH_TSL` expanded to `NOT` an undefined variable —

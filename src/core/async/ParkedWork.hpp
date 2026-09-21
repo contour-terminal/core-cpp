@@ -21,6 +21,7 @@
 
 #include <atomic>
 #include <coroutine>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <type_traits>
@@ -53,45 +54,78 @@ namespace detail
         AbandonState& operator=(AbandonState&&) = delete;
         ~AbandonState() = default;
 
-        /// Records one more park on this chain.
-        void claim() noexcept { _parks.fetch_add(1, std::memory_order_relaxed); }
-
-        /// Gives up one park's claim, freeing the chain if it was the last one and the chain is still
-        /// there to free.
+        /// Records one more park on this chain, for a claim copied from one that already exists.
         ///
-        /// The thread whose `fetch_sub` returns 1 is the only one that touches anything afterwards,
-        /// which is what lets two threads release concurrently.
+        /// Relaxed, and safe for the same reason `shared_ptr`'s increment is: a copy is only made
+        /// by a thread that already holds a claim, so the state is already visible to it. It never
+        /// touches @c ArmedBit, so it cannot manufacture the state `claimAndArm` exists to prevent.
+        void claim() noexcept { _word.fetch_add(1, std::memory_order_relaxed); }
+
+        /// Takes a claim for a NEW park and arms the chain, **in one step**.
+        ///
+        /// The two halves were once two stores, and that was a use-after-free: `rearm()` published
+        /// *armed* before the claim published *counted*, so a concurrent `release()` could observe
+        /// a state that never existed as a whole -- armed by this park, count zero because this
+        /// park had not been counted yet -- conclude the chain was abandoned, and destroy a frame
+        /// that was being parked. Measured at 15 crashes in 640 runs with the window widened by
+        /// 200us, against 0 in 640 with the same delay moved one line earlier.
+        ///
+        /// One compare-exchange makes *armed* unobservable without the claim that accompanies it.
+        void claimAndArm() noexcept
+        {
+            auto expected = _word.load(std::memory_order_relaxed);
+            while (!_word.compare_exchange_weak(
+                expected, (expected + 1) | ArmedBit, std::memory_order_acq_rel, std::memory_order_relaxed))
+            {
+            }
+        }
+
+        /// Gives up one park's claim, freeing the chain where this was the last claim on an armed
+        /// chain -- decided, and claimed, in one step.
+        ///
+        /// The same compare-exchange that takes the count to zero also clears @c ArmedBit, so the
+        /// right to destroy is claimed rather than merely observed and exactly one thread can hold
+        /// it. Acquire-release, so that thread sees everything every other claim released.
         void release() noexcept
         {
-            if (_parks.fetch_sub(1, std::memory_order_acq_rel) != 1)
-                return;
-            if (!_armed.load(std::memory_order_acquire))
-                return;
-            if (auto const root = std::exchange(_root, {}))
-                root.destroy();
+            auto expected = _word.load(std::memory_order_relaxed);
+            for (;;)
+            {
+                auto const next = expected - 1;
+                auto const takesTheRoot = (next & CountMask) == 0 && (next & ArmedBit) != 0;
+                auto const desired = takesTheRoot ? (next & ~ArmedBit) : next;
+                if (_word.compare_exchange_weak(
+                        expected, desired, std::memory_order_acq_rel, std::memory_order_relaxed))
+                {
+                    if (takesTheRoot)
+                        if (auto const root = std::exchange(_root, {}))
+                            root.destroy();
+                    return;
+                }
+            }
         }
 
         /// Gives the chain back, for every holder at once: nothing frees it afterwards.
         ///
         /// Resuming ONE park of a chain hands the whole chain back to whoever owns it, so a sibling
-        /// still queued must not free what is running again.
-        void disarm() noexcept { _armed.store(false, std::memory_order_release); }
-
-        /// Takes the chain back, because it has parked again.
-        ///
-        /// Without this, `disarm()` would be permanent: a chain resumed off one executor and then
-        /// parked on a second would be one the second may never free, so destroying it would leak
-        /// the chain rather than free it. Every fresh claim re-arms (`claimOn`), which is exactly
-        /// the moment the question becomes live again.
-        void rearm() noexcept { _armed.store(true, std::memory_order_release); }
+        /// still queued must not free what is running again. Arming again is `claimAndArm`'s job
+        /// and never a step of its own -- see the note there for what a bare re-arm cost.
+        void disarm() noexcept { _word.fetch_and(~ArmedBit, std::memory_order_release); }
 
         /// @return Whether the chain is still this state's to free.
-        [[nodiscard]] bool armed() const noexcept { return _armed.load(std::memory_order_acquire); }
+        [[nodiscard]] bool armed() const noexcept
+        {
+            return (_word.load(std::memory_order_acquire) & ArmedBit) != 0;
+        }
 
       private:
+        /// The park count and the armed flag, in one word because they answer one question
+        /// together. Bit 63 is armed; the rest is the count.
+        static constexpr std::uint64_t ArmedBit = std::uint64_t { 1 } << 63U;
+        static constexpr std::uint64_t CountMask = ~ArmedBit;
+
         std::coroutine_handle<> _root;
-        std::atomic<std::size_t> _parks { 0 };
-        std::atomic<bool> _armed { true };
+        std::atomic<std::uint64_t> _word { ArmedBit };
     };
 
     /// One park's claim on the root of a chain nobody owns: copyable, and the last one to go frees it.
@@ -105,6 +139,20 @@ namespace detail
         {
             if (_state)
                 _state->claim();
+        }
+
+        /// Tag for the constructor that takes over a claim already counted by `claimAndArm`.
+        struct Adopt
+        {
+        };
+
+        /// Takes over a claim the caller has already counted, rather than counting another.
+        ///
+        /// `claimOn` has to count and arm in one atomic step, so it does that on the state and
+        /// hands the result here; a constructor that claimed again would count the same park twice.
+        /// @param state The chain's shared state; its count already includes this claim.
+        AbandonClaim(Adopt /*adopt*/, std::shared_ptr<AbandonState> state) noexcept: _state(std::move(state))
+        {
         }
 
         AbandonClaim(AbandonClaim const& other) noexcept: _state(other._state)
@@ -232,9 +280,11 @@ namespace detail
         std::call_once(promise.abandonOnce,
                        [&promise, root] { promise.abandonState = std::make_shared<AbandonState>(root); });
         // A chain that parks again is one an executor may once more have to free, so a fresh claim
-        // undoes whatever an earlier resumption disarmed.
-        promise.abandonState->rearm();
-        return AbandonClaim { promise.abandonState };
+        // undoes whatever an earlier resumption disarmed -- and takes the count with it, in the
+        // same atomic step, because a chain that is armed but uncounted reads as abandoned to a
+        // concurrent `release()`.
+        promise.abandonState->claimAndArm();
+        return AbandonClaim { AbandonClaim::Adopt {}, promise.abandonState };
     }
 
     /// How a coroutine parks itself on an @c IExecutor.

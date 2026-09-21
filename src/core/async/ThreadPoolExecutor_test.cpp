@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/async/AsyncQueue.hpp>
+#include <core/async/Cancellation.hpp>
 #include <core/async/DetachedTask.hpp>
 #include <core/async/ParkedWork.hpp>
 #include <core/async/ResumeOn.hpp>
 #include <core/async/Task.hpp>
 #include <core/async/ThreadPoolExecutor.hpp>
 #include <core/async/WhenAll.hpp>
+#include <core/async/WhenAny.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -12,6 +15,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <memory>
 #include <mutex>
 #include <ranges>
 #include <thread>
@@ -23,6 +27,8 @@ using core::async::ResumeOn;
 using core::async::Task;
 using core::async::ThreadPoolExecutor;
 using core::async::whenAll;
+using core::async::whenAny;
+using Queue = core::async::AsyncQueue<int>;
 using namespace std::chrono_literals;
 
 namespace
@@ -204,6 +210,63 @@ DetachedTask joinTwiceParked(ThreadPoolExecutor* pool,
     joined->arrive();
 }
 
+/// A loser: hops onto the pool, then parks on a queue that never delivers, so the only way it ever
+/// finishes is the cancellation `whenAny` requests once a sibling wins.
+Task<void> queueParkedRacer(ThreadPoolExecutor* pool, Queue* queue, Arrivals* unwound)
+{
+    co_await ResumeOn { *pool };
+    try
+    {
+        static_cast<void>(co_await queue->pop());
+    }
+    catch (core::async::OperationCancelled const&)
+    {
+        unwound->arrive();
+        throw;
+    }
+}
+
+/// The winner: hops onto the pool and returns, which is what requests the stop.
+Task<void> poolWinner(ThreadPoolExecutor* pool, Arrivals* arrived)
+{
+    co_await ResumeOn { *pool };
+    arrived->arrive();
+}
+
+/// Races one winner against @p losers queue-parked children, all on the pool.
+DetachedTask raceOnPool(ThreadPoolExecutor* pool,
+                        std::vector<std::unique_ptr<Queue>>* queues,
+                        Arrivals* arrived,
+                        Arrivals* unwound,
+                        Arrivals* raced)
+{
+    auto tasks = std::vector<Task<void>> {};
+    tasks.reserve(queues->size() + 1);
+    for (auto& queue: *queues)
+        tasks.push_back(queueParkedRacer(pool, queue.get(), unwound));
+    tasks.push_back(poolWinner(pool, arrived));
+
+    static_cast<void>(co_await whenAny(std::move(tasks)));
+    raced->arrive();
+}
+
+/// Structurally identical to joinOnPool, but raced rather than joined: same child count, same
+/// single ResumeOn hop, same detached root. The only difference is the combinator, which is what
+/// makes it a fair comparison.
+DetachedTask raceOnPoolMirror(ThreadPoolExecutor* pool,
+                              std::size_t children,
+                              Arrivals* arrived,
+                              Arrivals* raced)
+{
+    auto tasks = std::vector<Task<void>> {};
+    tasks.reserve(children);
+    for ([[maybe_unused]] auto const index: std::views::iota(std::size_t { 0 }, children))
+        tasks.push_back(joinedJob(pool, arrived));
+
+    static_cast<void>(co_await whenAny(std::move(tasks)));
+    raced->arrive();
+}
+
 } // namespace
 
 // #1041 over the real pool. What genuinely closes the hazard is stronger than this line: both
@@ -344,4 +407,54 @@ TEST_CASE("Claims on one chain are taken and given back from several threads at 
     REQUIRE(settled);
     CHECK(arrived.count() == Children);
     CHECK(joined.count() == 1);
+}
+
+TEST_CASE("A race whose children park on a pool completes exactly once", "[ThreadPoolExecutor][WhenAny]")
+{
+    // The whenAny half of the cross-thread join, and the only case anywhere that covers a
+    // cancellation whose losers are parked ON A POOL: they sit on a stop-aware `pop` at the moment
+    // the winner requests the stop.
+    //
+    // WHAT IT CANNOT CATCH, measured rather than assumed. This case does NOT reproduce the
+    // `claimOn` use-after-free that `ParkedWork.hpp` documents -- 0 crashes in 1920 runs where the
+    // mirror case below gives 14 and the whenAll join gives 15. Its parks are created one at a
+    // time on pool threads; the precondition for that defect is a BURST of parks from the start
+    // loop while workers release. It is the richer test of what `whenAny` is for and the blind one
+    // for how its ownership breaks, which is why the mirror below exists beside it: a case that
+    // mirrors the SUBJECT can be clean while a case that mirrors the STRUCTURE reproduces.
+    constexpr auto Losers = std::size_t { 4 };
+
+    auto arrived = Arrivals {};
+    auto unwound = Arrivals {};
+    auto raced = Arrivals {};
+    auto queues = std::vector<std::unique_ptr<Queue>> {};
+    auto pool = ThreadPoolExecutor { 4 }; // last, so it is joined first
+
+    for ([[maybe_unused]] auto const index: std::views::iota(std::size_t { 0 }, Losers))
+        queues.push_back(std::make_unique<Queue>(pool, core::async::AsyncQueueOptions {}));
+
+    raceOnPool(&pool, &queues, &arrived, &unwound, &raced);
+
+    auto const settled = raced.waitFor(1);
+    INFO("winner arrived: " << arrived.count() << "; losers unwound: " << unwound.count() << " of " << Losers
+                            << "; races completed: " << raced.count());
+    REQUIRE(settled);
+    CHECK(raced.count() == 1);
+}
+
+TEST_CASE("A race of pool-hopping children, mirroring the join", "[ThreadPoolExecutor][WhenAny]")
+{
+    constexpr auto Children = std::size_t { 8 };
+
+    auto arrived = Arrivals {};
+    auto raced = Arrivals {};
+    auto pool = ThreadPoolExecutor { 4 }; // last, so it is joined first
+
+    raceOnPoolMirror(&pool, Children, &arrived, &raced);
+
+    auto const settled = raced.waitFor(1);
+    INFO("children on the pool: " << arrived.count() << " of " << Children
+                                  << "; races completed: " << raced.count());
+    REQUIRE(settled);
+    CHECK(raced.count() == 1);
 }
