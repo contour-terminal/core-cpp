@@ -524,9 +524,19 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
 
       # ONE -LE, and it must stay one. ctest ANDs repeated -LE options: a test is excluded only if
-      # it matches EVERY one of them, so `-LE tree-level -LE no-tsan` excluded nothing at all and
-      # this leg silently ran the whole suite (core-cpp#32). To exclude another label here, extend
-      # this regex -- `-LE 'tree-level|other'` -- never add a second flag.
+      # it matches EVERY one of them, so `-LE tree-level -LE no-tsan` excluded nothing at all --
+      # no test carried both labels -- and this leg ran the whole suite, 28 tests where the other
+      # legs ran 16 (core-cpp#32).
+      #
+      # WHICH DIRECTION IT BROKE, because the sentence above reads alarming and should not: it ran
+      # MORE than intended, never less. No green was ever false; every test that ran, passed. What
+      # it cost was that R96's claim -- tree-level checks are asked once -- was untrue for this one
+      # leg out of seven, that CI spent time asking twenty-five questions with one answer, and that
+      # a failing tree-level check would have reddened this leg too, which is the noise R96 exists
+      # to remove.
+      #
+      # To exclude another label here, extend this regex -- `-LE 'tree-level|other'` -- and never
+      # add a second flag.
       - name: Test
         run: ctest --preset ${{ matrix.preset }} -LE tree-level
 
