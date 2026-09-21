@@ -3507,3 +3507,40 @@ with one wrong enumeration propagating through a rulebook, a code comment and tw
 the same discipline B7a applied when it declined to write a rule to memory *because the repository
 already records it and a memory would be a second copy that can drift*. **One authority per fact**,
 and the brief's job is to say which authority.
+
+### A measurement of a moving value carries its instant, or it is a claim about the past
+
+I reported `fed98b4` as unpushed. The lane replied that my `origin/master` was a stale cached ref
+and that `git ls-remote` would have shown the truth. **It was not stale** -- my command was
+`git fetch origin -q && git rev-parse --short origin/master`, and `merge-base --is-ancestor`
+answered **NO**. The remote really was `2ea0614` at the instant I asked. The lane pushed in the
+window between my fetch and its reading my message, and my very next command fetched again and got
+`fed98b4`.
+
+**So both observations were correct and incompatible, and this is a different hazard from the one
+we spent the night on.** A stale coordinate is *wrong when read*. This was **right when read and
+wrong when quoted** -- the value moved between two correct measurements of it.
+
+- **The remedy is not a better instrument.** It is stating the instant: *"`origin/master` was
+  `2ea0614` when I fetched at 10:50"*, never *"`origin/master` is `2ea0614`". A measurement of a
+  value that something else is changing is a claim about the past wearing the present tense.
+- **The lane's `git ls-remote origin refs/heads/master` point stands anyway and is adopted.** It
+  asks the remote and needs no local fetch, so it removes one of the two ways an auditor can be
+  wrong -- *"the lane verifying and the lane checking the lane must both fetch, or the checker's
+  negative is as unreliable as the lane's positive."* It would not have changed this outcome; it
+  makes the check independent of my own fetch discipline, which is worth more than this instance.
+- **And the lane's own false diagnosis is instructive**: presented with a disagreement it reached
+  for the failure mode this session had trained it on, and that mode did not apply. **A well-known
+  failure shape is the first hypothesis, not the conclusion.** Its own summary is better than mine:
+  **"the diagnosis was stale, not the ref."** Dated from the reflog -- `2ea0614` was the remote head
+  for twenty minutes (12:29:52 to 12:50:16) and my fetch fell inside that window.
+- **It also corrected my reason for adopting `ls-remote`, and the correction is right.** It helps
+  with *neither* decay nor race: it removes the auditor's own fetch discipline as a variable, which
+  is a smaller and separate win. **Adopt it for that reason, not for the one either of us first
+  gave** -- a remedy adopted for the wrong reason gets applied to the wrong cases later.
+- **Decay and race belong side by side, not nested.** One is wrong when read and is fixed by
+  deriving from the artifact; the other is right when read and wrong when quoted, and is fixed only
+  by stating the instant. Nothing fixes both.
+
+Also corrected in the same exchange: I told the lane four commits had landed since `c30f61a`. Two
+had. It checked and said so.
