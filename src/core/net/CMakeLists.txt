@@ -237,7 +237,12 @@ core_cpp_add_test(net NAME net_tls SOURCES Tls_test.cpp LABELS loopback TIMEOUT 
 # Not under Emscripten, where a bare executable is a node invocation that core_cpp_add_test's
 # wrapper exists to arrange; the refusal is compiled there (the net_backend binary instantiates
 # both), and driving it under node is what Task B5's wasm smoke leg adds.
-if(NOT EMSCRIPTEN)
+# CORE_CPP_TESTING as well as the platform, and the second half is what a consumer needs: every
+# other test here goes through core_cpp_add_test, which returns early without it, so a CPM consumer
+# builds core-cpp and registers none of core-cpp's tests. A bare add_test() bypasses that gate --
+# the test lands in the CONSUMER's ctest naming an executable their build never made, and reports
+# "Not Run" in somebody else's suite.
+if(CORE_CPP_TESTING AND NOT EMSCRIPTEN)
     add_executable(core-cpp-hostdriven-canary HostDrivenCanary.cpp)
     # core::testing_dialogs, and it is load-bearing rather than tidiness: a failed assert() in an
     # MSVC Debug build opens a message box and WAITS, so the canary times out instead of failing,

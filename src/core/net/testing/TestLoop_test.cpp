@@ -373,7 +373,9 @@ TEST_CASE("TestLoop accepts submit and schedule from many threads", "[TestLoop]"
 
     auto start = std::barrier { static_cast<std::ptrdiff_t>(Producers) };
     {
-        auto threads = std::vector<std::jthread> {};
+        // `std::thread` with an explicit join rather than `std::jthread`: AppleClang's libc++ has
+        // no `<stop_token>`, so it has no `jthread` either, and this file has to build there.
+        auto threads = std::vector<std::thread> {};
         threads.reserve(Producers);
         for (auto const producer: std::views::iota(std::size_t { 0 }, Producers))
         {
@@ -392,6 +394,8 @@ TEST_CASE("TestLoop accepts submit and schedule from many threads", "[TestLoop]"
                 }
             });
         }
+        for (auto& thread: threads)
+            thread.join();
     } // every producer joined
 
     CHECK(loop.drain() == static_cast<std::size_t>(Producers * PerProducer));
