@@ -75,6 +75,19 @@ else()
     set(_coreCppNetDefaultBackend posix/DefaultBackend.cpp)
 endif()
 
+# The `else()` arm above is the only platform branch in this repository that NO configuration we
+# run takes: it needs a POSIX platform that is not Linux, not a BSD, not Apple, not Windows and not
+# Emscripten -- Solaris, AIX, illumos. So `posix/DefaultBackend.cpp` was compiled by nothing at all,
+# and a rename or a dropped include would have broken it silently until somebody ported core-cpp.
+# Everywhere else, it is parsed for diagnostics only. Read
+# core_cpp_add_unbuilt_source_check()'s comment before trusting a green result: it proves the file
+# still PARSES against the host's headers, not that it is correct on the platform that takes it.
+if(NOT _coreCppNetDefaultBackend STREQUAL "posix/DefaultBackend.cpp")
+    core_cpp_add_unbuilt_source_check(net-default-backend
+        SOURCES posix/DefaultBackend.cpp
+        USAGE core::net_types core::async core::platform)
+endif()
+
 # The module's root holds only platform-independent code. What one platform needs lives in posix/,
 # linux/ (epoll), bsd/ (kqueue, for Apple and the BSDs) and windows/, and the source lists below
 # choose it, so no file there guards itself with an #ifdef of its platform. contour's

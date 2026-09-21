@@ -133,3 +133,68 @@ function(core_cpp_header_include_path header baseDirs outVar)
         return()
     endforeach()
 endfunction()
+
+# ---------------------------------------------------------------------------------------------
+# core_cpp_add_unbuilt_source_check()
+#
+# Syntax-checks a source file that THIS configuration does not otherwise compile, so that a
+# platform arm nothing builds still has to parse.
+#
+# WHY. `src/core/net/CMakeLists.txt` picks one `DefaultBackend.cpp` from five, and its `else()` arm
+# -- `posix/` -- is reached only on a POSIX platform that is not Linux, not a BSD, not Apple, not
+# Windows and not Emscripten. No CI leg and no local preset is one, so that file was compiled by
+# nothing at all: a rename, a changed signature or a dropped include would have broken it silently
+# and been found by whoever ported core-cpp to Solaris. It is the only such arm in the tree today
+# (every other platform branch is two-way with both sides covered), which is why this is a named
+# list and not a scan.
+#
+# WHAT IT PROVES, AND THE THREE LIMITS THAT MATTER MORE THAN WHAT IT PROVES. A green check says the
+# file still PARSES and is warning-clean. It does not say it is correct:
+#
+#   1. It compiles against the HOST's headers, not the target's. `posix/DefaultBackend.cpp` checked
+#      here against glibc or MSVC says nothing about Solaris's libc.
+#   2. There is NO LINK STEP. A missing or misnamed symbol does not show.
+#   3. It catches BIT-ROT -- a rename, a signature change, a removed include -- and nothing else.
+#      A wrong implementation passes.
+#
+# The third limit is the one to keep in view, because the check's existence suggests a larger claim
+# than it makes: green here means the fallback still compiles, NOT that it does the right thing on
+# the platform that takes it. That platform remains untested.
+#
+# A NOTE ON THE OTHER HALF OF THIS GAP. The same mechanism hides test cases: a source list that
+# omits a file registers none of its cases, and the report cannot say so because they never
+# existed. `.agent/rules/testing.md`'s `SKIP` rule is the answer there. This check asks whether
+# uncompiled code still parses; that rule asks whether the report admits the cases are gone.
+# Neither is the other, and neither alone closes it.
+
+## @brief Compiles @p sources for diagnostics only, with @p usageTarget's usage requirements.
+## @param name A suffix for the generated object library's name.
+function(core_cpp_add_unbuilt_source_check name)
+    if(NOT CORE_CPP_TESTING)
+        return()
+    endif()
+    cmake_parse_arguments(arg "" "USAGE" "SOURCES" ${ARGN})
+    if(NOT arg_SOURCES OR NOT arg_USAGE)
+        message(FATAL_ERROR "core_cpp_add_unbuilt_source_check(${name}): SOURCES and USAGE required")
+    endif()
+    foreach(source IN LISTS arg_SOURCES)
+        if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${source}")
+            message(FATAL_ERROR
+                "core_cpp_add_unbuilt_source_check(${name}): ${source} does not exist. If the file "
+                "moved or was deleted, update the call -- this list is maintained by hand because "
+                "there is one entry in the whole tree.")
+        endif()
+    endforeach()
+
+    set(checkTarget "core-cpp-unbuilt-${name}")
+    add_library(${checkTarget} OBJECT ${arg_SOURCES})
+    # Never linked into anything, so the duplicate definitions it necessarily contains -- it is the
+    # OTHER arm of a factory the real build already picked one of -- cannot collide.
+    target_link_libraries(${checkTarget} PRIVATE ${arg_USAGE})
+    core_cpp_apply_toolchain(${checkTarget})
+    set_target_properties(${checkTarget} PROPERTIES CXX_CLANG_TIDY "")
+    set_target_properties(${checkTarget} PROPERTIES FOLDER "core-cpp/unbuilt-source-check")
+    list(LENGTH arg_SOURCES count)
+    message(STATUS "[core-cpp] unbuilt-source check: ${count} source(s) this build does not "
+                   "otherwise compile, parsed for diagnostics only (${name})")
+endfunction()

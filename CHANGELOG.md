@@ -10,6 +10,16 @@ workflow refuses one without a section here.
 ## [Unreleased]
 
 ### Added
+- A syntax-check for platform sources this configuration does not otherwise compile
+  (`core_cpp_add_unbuilt_source_check()` in `cmake/CoreCppHeaderSelfCheck.cmake`). `core::net`
+  picks one `DefaultBackend.cpp` from five, and its `else()` arm — `posix/` — is reached only on a
+  POSIX platform that is not Linux, not a BSD, not Apple, not Windows and not Emscripten, so no CI
+  leg and no local preset compiled that file **at all**: a rename or a dropped include would have
+  broken it silently until somebody ported core-cpp. It is now parsed for diagnostics everywhere
+  else, and it is the only such arm in the tree. What a green check means is deliberately narrow
+  and is written in the function's own comment: the file still **parses**, against the *host's*
+  headers rather than the target's, with no link step, so it catches bit-rot and not a wrong
+  implementation. The platform that takes the branch remains untested.
 
 - **Every public header is self-contained, and the build now proves it.** Each header in a
   module's `FILE_SET HEADERS` is compiled as the first and only include of a translation unit of
