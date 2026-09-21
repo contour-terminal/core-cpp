@@ -64,7 +64,13 @@ struct AsyncQueueOptions
 /// What one `push()` did.
 struct AsyncQueuePush
 {
-    /// How many items this push displaced to make room; 0 in the ordinary case.
+    /// How many items this push cost the queue; 0 in the ordinary case.
+    ///
+    /// Under @ref AsyncQueueOverflow::DropOldest those are the items evicted to make room, so the
+    /// count is what the queue gave up and @ref admission is @c Accepted. Under
+    /// @ref AsyncQueueOverflow::DropNewest nothing is evicted and the item lost is @b this one, so
+    /// the count is 1 against a @c Refused admission. Both are one item dropped, which is what a
+    /// caller adding this to a loss counter is asking about; the admission says which end went.
     ///
     /// Returned rather than only counted internally, because the caller is the one holding the
     /// counter an operator reads and the context to name what was lost. A silent drop is
@@ -148,8 +154,11 @@ class AsyncQueue final
     /// Never blocks beyond this queue's own mutex, never waits for the consumer, and never fails
     /// for want of space — it displaces instead, and says how much. A closed queue refuses.
     /// @param value The item; moved.
-    /// @return Whether it was accepted, and what it displaced.
-    AsyncQueuePush push(T value)
+    /// @return Whether it was accepted, and what it cost.
+    ///
+    /// `[[nodiscard]]`, because the result is the only report of a drop: this class exists to make
+    /// loss visible, and a discarded return is exactly the silent drop it was written against.
+    [[nodiscard]] AsyncQueuePush push(T value)
     {
         auto waiter = ParkedWork {};
         auto outcome = AsyncQueuePush {};
@@ -228,7 +237,7 @@ class AsyncQueue final
         return static_cast<bool>(_waiter.resume);
     }
 
-    /// @return Cumulative items displaced by overflow across this queue's life.
+    /// @return Cumulative items lost to overflow across this queue's life, evicted or refused.
     [[nodiscard]] std::uint64_t displaced() const noexcept
     {
         return _displaced.load(std::memory_order_relaxed);

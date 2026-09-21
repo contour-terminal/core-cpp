@@ -316,8 +316,10 @@ workflow refuses one without a section here.
     coroutine wherever that executor runs things.
   - `<core/async/AsyncQueue.hpp>`: `AsyncQueue<T>`, a queue one coroutine parks on and any thread
     pushes to, with `AsyncQueueOptions` (capacity and a `DropOldest`/`DropNewest` overflow policy),
-    `AsyncQueuePush`, and a `pop()` that resolves to `std::optional<T>`. `push()` and `close()`
-    never resume the consumer inline; they hand its handle to the executor. `pop()` is stop-aware:
+    `AsyncQueuePush`, and a `pop()` that resolves to `std::optional<T>`. `push()` is
+    `[[nodiscard]]`: its `AsyncQueuePush` is the only report of a drop, and a discarded one is the
+    silent loss the type exists to prevent. `push()` and `close()` never resume the consumer
+    inline; they hand its handle to the executor. `pop()` is stop-aware:
     a cancel from the awaiting flow's own token throws `core::async::OperationCancelled`, while an
     item already queued and a `close()` both answer first.
   - `<core/async/ThreadPoolExecutor.hpp>`: an `IExecutor` whose "somewhere else" is a fixed set of
