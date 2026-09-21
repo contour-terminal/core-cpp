@@ -17,6 +17,20 @@ on:
   pull_request:
   merge_group:
   workflow_dispatch:
+    inputs:
+      ref:
+        # GitHub creates one run per PUSH, on its tip, so every intermediate commit of a
+        # multi-commit push is built by nothing at all. `cc1b237` is the worked example: it was
+        # pushed with `0ae632e`, has zero runs, and carried two defects that surfaced one commit
+        # later on a SHA that did not contain their cause. The `unbuilt-commits` job below names
+        # such commits; this input is what lets anyone act on the name.
+        #
+        # A commit must be the full 40 characters: a git server resolves a complete object name
+        # and never a prefix, and actions/checkout reports the difference as a bare git exit code.
+        description: "Commit, branch or tag to build. A commit must be the full 40-character SHA. Empty builds the dispatch ref."
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -59,6 +73,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -229,6 +245,8 @@ jobs:
           - { name: clang-22-tracy, os: ubuntu-24.04, preset: clang-tracy, compiler: clang }
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Cache CPM sources
         uses: actions/cache@v4
@@ -318,6 +336,8 @@ jobs:
           - { name: llvm-22, preset: clang-release, homebrew_llvm: true }
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Cache CPM sources
         uses: actions/cache@v4
@@ -386,6 +406,8 @@ jobs:
       VCPKG_ARCHIVES: ${{ github.workspace }}/.cache/vcpkg-archives
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Cache CPM sources
         uses: actions/cache@v4
@@ -504,6 +526,8 @@ jobs:
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Cache CPM sources
         uses: actions/cache@v4
@@ -561,6 +585,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Cache CPM sources
         uses: actions/cache@v4
@@ -635,6 +661,8 @@ jobs:
         emsdk: ["3.1.56", "latest"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Cache CPM sources
         uses: actions/cache@v4
@@ -694,6 +722,8 @@ jobs:
       BUILD_DIR: out/build/gcc-release
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Cache CPM sources
         uses: actions/cache@v4
@@ -792,6 +822,8 @@ jobs:
         leg: [cpm, vendored, wasm]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       # The vendored leg fetches nothing at all, by design.
       - name: Cache CPM sources
@@ -898,6 +930,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Cache CPM sources
         uses: actions/cache@v4
@@ -948,6 +982,91 @@ jobs:
             out/build/clang-coverage/coverage.lcov
             out/build/clang-coverage/coverage-html
           if-no-files-found: error
+
+  # ---------------------------------------------------------------------------------------------
+  # GitHub creates one run per PUSH, on its tip. Every other commit of a multi-commit push is built
+  # by NOTHING -- not skipped, not deferred, absent -- and an absent run is indistinguishable from
+  # a green one on the board. `cc1b237` is the worked example: pushed together with `0ae632e`, it
+  # has zero runs of its own and carried both a `std::jthread` that FreeBSD's libc++ lacks and a
+  # Release-only unused-function error. Both surfaced on `0ae632e`, one commit after their cause,
+  # which is the expensive part -- the red SHA did not contain the defect.
+  #
+  # Ruling R105 cannot reach this. It stopped pushes cancelling one another's runs; it cannot
+  # create a run that was never created. Those are different failures and the per-SHA group covers
+  # only the first.
+  #
+  # So this job builds nothing. It NAMES what went unbuilt, which turns a silent gap into a stated
+  # one -- the same rule as "a gate that does not report reads as passed", applied to the absence
+  # of a gate rather than to a quiet one. The `ref` input at the top of this file is how someone
+  # acts on a name.
+  #
+  # It never fails, and is deliberately NOT in `ci-ok`'s `needs:`. The push has already happened;
+  # failing the tip's run would punish the one commit that did get built, and would make a
+  # multi-commit push impossible rather than visible. This is a report, not a gate.
+  unbuilt-commits:
+    name: unbuilt commits
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Name the commits this push did not build
+        env:
+          COMMITS: ${{ toJSON(github.event.commits) }}
+          TIP: ${{ github.sha }}
+          FORCED: ${{ github.event.forced }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+
+          tip = os.environ["TIP"]
+          forced = os.environ.get("FORCED", "false") == "true"
+          try:
+              commits = json.loads(os.environ.get("COMMITS") or "[]")
+          except json.JSONDecodeError:
+              commits = []
+
+          # The push payload carries at most 20 commits and says nothing about the rest, so a
+          # larger push is reported as "at least", never as a count this job cannot know.
+          truncated = len(commits) >= 20
+          unbuilt = [c for c in commits if c.get("id") != tip]
+
+          lines = []
+          if not commits:
+              lines.append(
+                  "This push carried no commit list (a branch creation, a deletion, or a payload "
+                  "without one), so which commits went unbuilt cannot be determined here."
+              )
+          elif not unbuilt:
+              lines.append(f"One commit in this push, and this run built it: `{tip[:9]}`.")
+          else:
+              count = f"at least {len(unbuilt)}" if truncated else str(len(unbuilt))
+              lines.append(
+                  f"**This push carried {len(commits)} commits. GitHub built one of them, the "
+                  f"tip `{tip[:9]}`. The other {count} were built by nothing:**"
+              )
+              lines.append("")
+              for c in unbuilt:
+                  subject = (c.get("message") or "").splitlines()[0] if c.get("message") else ""
+                  lines.append(f"- `{c.get('id', '?')[:9]}` {subject}")
+              lines.append("")
+              lines.append(
+                  "Each can be built on demand: **Actions -> Build -> Run workflow**, or "
+                  "`gh workflow run build.yml --ref master -f ref=<full 40-character SHA>`. "
+                  "A commit must be the full SHA; a git server cannot resolve an abbreviation."
+              )
+              if forced:
+                  lines.append("")
+                  lines.append(
+                      "This was a force-push, so the list above describes the new history and "
+                      "may not correspond to what was previously built."
+                  )
+
+          text = "\n".join(lines)
+          print(text)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(text + "\n")
+          PY
 
   # ---------------------------------------------------------------------------------------------
   ci-ok:

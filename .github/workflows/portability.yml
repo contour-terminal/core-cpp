@@ -12,7 +12,12 @@ on:
         # The dispatch API's own `ref` takes a branch or tag and never a commit, so without this
         # there is no way to ask this workflow for one: you dispatch a branch and reason about the
         # difference. Three times in one evening someone wanted a specific commit and settled.
-        description: "Commit, branch or tag to build. Empty builds the dispatch ref."
+        # The full SHA is not pedantry: a server resolves a complete object name under
+        # allow_reachable_sha1_in_want and cannot resolve a prefix, so an abbreviated commit fails
+        # inside actions/checkout with three lines of "The process '/usr/bin/git' failed with exit
+        # code 1" and no mention of the ref. The description is where a dispatcher looks, because
+        # `gh workflow run` prints it.
+        description: "Commit, branch or tag to build. A commit must be the full 40-character SHA. Empty builds the dispatch ref."
         required: false
         default: ""
         type: string
@@ -26,6 +31,28 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
+      # Refused here rather than left to actions/checkout, which reports an unresolvable ref as a
+      # bare git exit code naming neither the ref nor the input -- so the dispatcher concludes the
+      # runner or the token is broken and goes looking in the wrong place. Found on this input's
+      # first use by someone other than its author, who had passed a full SHA and so never saw it.
+      #
+      # Seven, not four: git's own default abbreviation is seven characters, so a shorter hex
+      # string is far likelier to be a branch called `beef` than an abbreviated commit, and
+      # refusing a real branch name is the worse error of the two.
+      - name: A ref that looks like an abbreviated commit is refused by name
+        if: inputs.ref != ''
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          set -e
+          if printf '%s' "$REF" | grep -qE '^[0-9a-fA-F]{7,}$' && [ "${#REF}" -ne 40 ]; then
+            echo "::error::portability: the ref input is '$REF', which looks like an abbreviated"\
+                 "commit. Git servers resolve only complete object names, so this cannot be"\
+                 "checked out. Pass the full 40-character SHA (git rev-parse $REF)."
+            exit 1
+          fi
+          echo "ref input: $REF"
+
       - uses: actions/checkout@v4
         with:
           # Empty is actions/checkout's own default for this input and means "whatever ref triggered
