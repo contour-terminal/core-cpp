@@ -19,33 +19,168 @@
 #include <core/async/Awaitable.hpp>
 #include <core/async/DetachedTask.hpp>
 
+#include <atomic>
 #include <coroutine>
+#include <memory>
+#include <mutex>
 #include <type_traits>
 #include <utility>
 
 namespace core::async
 {
 
-/// A coroutine parked on an executor: the handle to resume, and — only when this chain belongs
-/// to nobody — the frame that executor may free if it never resumes it.
+namespace detail
+{
+
+    /// What the parks of one chain agree on: which frame to free, and whether it is still theirs.
+    ///
+    /// **A fan-out hands the SAME root to every child**, so an executor can hold N parks naming one
+    /// frame; freeing it per park frees it N times. The count here is what makes that one free: the
+    /// last claim to go, and only that one, destroys the root.
+    ///
+    /// It does not free the frame from its own destructor, which is why the root's promise may hold it
+    /// strongly without a cycle. And it outlives the frame it frees, because the claim that frees it
+    /// is still holding a reference while it does.
+    class AbandonState final
+    {
+      public:
+        /// @param root The chain root this state answers for.
+        explicit AbandonState(std::coroutine_handle<> root) noexcept: _root(root) {}
+
+        AbandonState(AbandonState const&) = delete;
+        AbandonState(AbandonState&&) = delete;
+        AbandonState& operator=(AbandonState const&) = delete;
+        AbandonState& operator=(AbandonState&&) = delete;
+        ~AbandonState() = default;
+
+        /// Records one more park on this chain.
+        void claim() noexcept { _parks.fetch_add(1, std::memory_order_relaxed); }
+
+        /// Gives up one park's claim, freeing the chain if it was the last one and the chain is still
+        /// there to free.
+        ///
+        /// The thread whose `fetch_sub` returns 1 is the only one that touches anything afterwards,
+        /// which is what lets two threads release concurrently.
+        void release() noexcept
+        {
+            if (_parks.fetch_sub(1, std::memory_order_acq_rel) != 1)
+                return;
+            if (!_armed.load(std::memory_order_acquire))
+                return;
+            if (auto const root = std::exchange(_root, {}))
+                root.destroy();
+        }
+
+        /// Gives the chain back, for every holder at once: nothing frees it afterwards.
+        ///
+        /// Resuming ONE park of a chain hands the whole chain back to whoever owns it, so a sibling
+        /// still queued must not free what is running again.
+        void disarm() noexcept { _armed.store(false, std::memory_order_release); }
+
+        /// Takes the chain back, because it has parked again.
+        ///
+        /// Without this, `disarm()` would be permanent: a chain resumed off one executor and then
+        /// parked on a second would be one the second may never free, so destroying it would leak
+        /// the chain rather than free it. Every fresh claim re-arms (`claimOn`), which is exactly
+        /// the moment the question becomes live again.
+        void rearm() noexcept { _armed.store(true, std::memory_order_release); }
+
+        /// @return Whether the chain is still this state's to free.
+        [[nodiscard]] bool armed() const noexcept { return _armed.load(std::memory_order_acquire); }
+
+      private:
+        std::coroutine_handle<> _root;
+        std::atomic<std::size_t> _parks { 0 };
+        std::atomic<bool> _armed { true };
+    };
+
+    /// One park's claim on the root of a chain nobody owns: copyable, and the last one to go frees it.
+    class AbandonClaim final
+    {
+      public:
+        AbandonClaim() noexcept = default;
+
+        /// @param state The chain's shared state, or empty for a chain somebody owns.
+        explicit AbandonClaim(std::shared_ptr<AbandonState> state) noexcept: _state(std::move(state))
+        {
+            if (_state)
+                _state->claim();
+        }
+
+        AbandonClaim(AbandonClaim const& other) noexcept: _state(other._state)
+        {
+            if (_state)
+                _state->claim();
+        }
+
+        AbandonClaim(AbandonClaim&& other) noexcept: _state(std::exchange(other._state, {})) {}
+
+        /// By value, so one body serves copy and move assignment.
+        /// @param other What to take over.
+        /// @return This claim.
+        AbandonClaim& operator=(AbandonClaim other) noexcept
+        {
+            _state.swap(other._state);
+            return *this;
+        }
+
+        ~AbandonClaim()
+        {
+            if (_state)
+                _state->release();
+        }
+
+        /// Gives the chain back, for every claim on it. See @c AbandonState::disarm().
+        void disarm() const noexcept
+        {
+            if (_state)
+                _state->disarm();
+        }
+
+        /// @return Whether this claim names a chain at all.
+        explicit operator bool() const noexcept { return static_cast<bool>(_state); }
+
+        /// @return Whether the chain is still the claims' to free. For tests.
+        [[nodiscard]] bool armed() const noexcept { return _state && _state->armed(); }
+
+        /// @return Whether both claims are on the same chain. For tests.
+        [[nodiscard]] bool sameChainAs(AbandonClaim const& other) const noexcept
+        {
+            return _state == other._state;
+        }
+
+      private:
+        std::shared_ptr<AbandonState> _state;
+    };
+
+} // namespace detail
+
+/// A coroutine parked on an executor: the handle to resume, and -- only when this chain belongs
+/// to nobody -- a claim on the frame that executor may free if it never resumes it.
 ///
 /// **The two halves are different questions, and the second has a default that is safe.**
 /// `IExecutor::submit(std::coroutine_handle<>)` BORROWS: the contract is "resume this", and the
 /// caller guarantees the frame stays alive until it does. That is why an executor may not simply
-/// destroy what it holds at teardown — a caller parking a handle whose frame a live `Task` owns
+/// destroy what it holds at teardown -- a caller parking a handle whose frame a live `Task` owns
 /// would be double-freed rather than have a leak fixed.
 ///
 /// **It is the chain's ROOT, never the parked frame itself, and that distinction is the whole
 /// point.** Destroying the parked frame runs its own destructors and stops there: whoever awaits
 /// it through a `Task::Awaiter` is left holding a dangling handle, is itself unreachable, and the
-/// chain goes on leaking — which is how fastcached measured a four-allocation leak going to three
+/// chain goes on leaking -- which is how fastcached measured a four-allocation leak going to three
 /// with LeakSanitizer still red. Destroying the root frees all of it, because ownership in a
 /// `Task` chain runs downward: each frame's awaiter owns the frame it awaits.
+///
+/// **The claim is refcounted, because a chain can have more than one live park.** A `whenAll` or
+/// `whenAny` gives the same root to every child, so two children that park hand the executor two
+/// entries naming one frame. The invariant is not *one park per root* -- it is **one FREE per
+/// root**, and the claim is what counts the parks so the last one performs it (controller ruling
+/// R97).
 struct ParkedWork
 {
     std::coroutine_handle<> resume {}; ///< The coroutine to resume. Never owned by the executor.
-    std::coroutine_handle<>
-        abandon {}; ///< The chain root to free if it is never resumed; empty when owned elsewhere.
+    detail::AbandonClaim
+        abandon {}; ///< The chain to free if it is never resumed; empty when owned elsewhere.
 };
 
 namespace detail
@@ -78,17 +213,41 @@ namespace detail
             return {};
     }
 
+    /// The claim on @p root, made by the first park of a chain and shared by every later one.
+    ///
+    /// The state lives in the root's own promise, so the sharing needs no registry: @p root is a
+    /// @c DetachedTask -- that is the only thing @c unownedRootOf ever answers with -- so its
+    /// handle converts back to the typed one that names the slot. `std::call_once` rather than a
+    /// null check, because a fan-out's children can park on two threads at once and two null
+    /// checks make two states, which is the very thing this exists to prevent.
+    /// @param root The chain root, or an empty handle for a chain somebody owns.
+    /// @return A claim on it, or an empty claim.
+    [[nodiscard]] inline AbandonClaim claimOn(std::coroutine_handle<> root)
+    {
+        if (!root)
+            return {};
+
+        auto& promise =
+            std::coroutine_handle<DetachedTask::promise_type>::from_address(root.address()).promise();
+        std::call_once(promise.abandonOnce,
+                       [&promise, root] { promise.abandonState = std::make_shared<AbandonState>(root); });
+        // A chain that parks again is one an executor may once more have to free, so a fresh claim
+        // undoes whatever an earlier resumption disarmed.
+        promise.abandonState->rearm();
+        return AbandonClaim { promise.abandonState };
+    }
+
     /// How a coroutine parks itself on an @c IExecutor.
     ///
     /// The one place the ownership question is answered, so no awaitable has to decide it and
     /// none can get it wrong by omission.
     /// @tparam Promise The parking coroutine's promise type.
     /// @param handle The coroutine about to park.
-    /// @return The handle to resume, paired with the chain root to free if it is not.
+    /// @return The handle to resume, paired with a claim on the chain root to free if it is not.
     template <typename Promise>
-    [[nodiscard]] ParkedWork parkedWorkFor(std::coroutine_handle<Promise> handle) noexcept
+    [[nodiscard]] ParkedWork parkedWorkFor(std::coroutine_handle<Promise> handle)
     {
-        return ParkedWork { .resume = handle, .abandon = unownedRootOf(handle) };
+        return ParkedWork { .resume = handle, .abandon = claimOn(unownedRootOf(handle)) };
     }
 
     /// One entry in an executor's parked-work container, owning @c ParkedWork::abandon for as
@@ -104,7 +263,7 @@ namespace detail
         Parked() noexcept = default;
 
         /// @param work The handle to resume, and the chain root to free if it is not.
-        explicit Parked(ParkedWork work) noexcept: _work(work) {}
+        explicit Parked(ParkedWork work) noexcept: _work(std::move(work)) {}
 
         Parked(Parked const&) = delete;
         Parked& operator=(Parked const&) = delete;
@@ -146,11 +305,17 @@ namespace detail
             auto const work = std::exchange(_work, ParkedWork {});
             if (work.resume && !work.resume.done())
             {
+                // Disarmed for EVERY claim on this chain, not only this one: resuming one park
+                // gives the whole chain back to whoever owns it, and a sibling still queued must
+                // not free what is running again (controller ruling R97).
+                work.abandon.disarm();
                 work.resume.resume();
                 return;
             }
-            if (work.abandon)
-                work.abandon.destroy();
+            // Declined, so the claim goes out of scope here and the LAST one to do so frees the
+            // chain. Dropping it without freeing would discard an owned chain root -- a silent
+            // leak on the one path this type exists to close. The contract is *resumed or freed,
+            // never neither*, per chain rather than per park.
         }
 
         /// Hands the parked work to a caller taking it off this executor.
@@ -161,13 +326,8 @@ namespace detail
         [[nodiscard]] ParkedWork take() noexcept { return std::exchange(_work, ParkedWork {}); }
 
       private:
-        /// Frees the chain root, if this entry still holds one.
-        void abandon() noexcept
-        {
-            auto const work = std::exchange(_work, ParkedWork {});
-            if (work.abandon)
-                work.abandon.destroy();
-        }
+        /// Gives up this entry's claim on the chain, which frees it if no other park holds one.
+        void abandon() noexcept { _work = ParkedWork {}; }
 
         ParkedWork _work {};
     };

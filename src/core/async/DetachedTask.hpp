@@ -18,9 +18,16 @@
 
 #include <coroutine>
 #include <exception>
+#include <memory>
+#include <mutex>
 
 namespace core::async
 {
+
+namespace detail
+{
+    class AbandonState;
+}
 
 /// A coroutine started for its effects, owned by nobody, freeing its own frame when it ends.
 ///
@@ -35,6 +42,18 @@ struct DetachedTask
     /// The coroutine promise; the standard looks up `DetachedTask::promise_type`.
     struct promise_type
     {
+        /// What every park of this chain agrees on: which frame to free, and whether it is still
+        /// theirs to free. Created by the first park (`core::async::detail::claimOn`) and held
+        /// here so the second finds it rather than making a second one — a fan-out hands the same
+        /// root to N children, and N claims would free it N times. It is held STRONGLY and frees
+        /// nothing itself, so it is not a cycle: a park's claim is what frees the frame, and the
+        /// state outlives the frame because every park holds a reference to it.
+        std::shared_ptr<detail::AbandonState> abandonState;
+
+        /// Guards the one creation of @c abandonState. A chain whose children run on a pool can
+        /// park two of them at once, and `if (!state) state = make()` on two threads makes two.
+        std::once_flag abandonOnce;
+
         /// @return The (empty) handle-less object that represents this coroutine.
         [[nodiscard]] DetachedTask get_return_object() noexcept { return {}; }
 

@@ -96,13 +96,26 @@ class ThreadPoolExecutor final: public IExecutor
     /// must not run work on its own thread stops submitting, which it can see by having called
     /// `stop()`.
     /// @param handle Coroutine to resume; must remain alive until it is.
-    void submit(std::coroutine_handle<> handle) override
+    void submit(std::coroutine_handle<> handle) override { submit(ParkedWork { .resume = handle }); }
+
+    /// Posts a coroutine, holding its claim on the chain until it is resumed.
+    ///
+    /// **This pool never abandons work**, so in practice the claim is always given back rather
+    /// than acted on: `submit` queues even while stopping, the destructor drains, and a handle
+    /// arriving after that is resumed inline. But it HOLDS the claim while the entry is queued,
+    /// because dropping one frees the chain the moment it is the last — the claim is a share of
+    /// ownership now, not a note about who could free it
+    /// ([fastcached#1025](https://github.com/LASTRADA-Software/fastcached/issues/1025), controller
+    /// ruling R97).
+    /// @param work The coroutine to resume, and its claim on the chain root.
+    void submit(ParkedWork work) override
     {
+        auto entry = detail::Parked { std::move(work) };
         {
             auto const guard = std::scoped_lock { _mutex };
             if (!_stopping)
             {
-                _queue.push_back(handle);
+                _queue.push_back(std::move(entry));
                 // Notified with the lock RELEASED would be the usual advice; held is correct here
                 // because a worker waking to an empty queue and a set `_stopping` must not race
                 // the push it was notified for.
@@ -113,18 +126,8 @@ class ThreadPoolExecutor final: public IExecutor
 
         // Stopped, so nothing will pick it up. Resumed here rather than dropped: an unresumed
         // coroutine never frees its frame.
-        handle.resume();
+        entry.resume();
     }
-
-    /// Posts a coroutine, ignoring the chain root it names.
-    ///
-    /// **This pool never abandons work, which is why it can.** `submit` drains its queue even
-    /// while stopping and resumes anything handed to it after that inline, so there is no moment
-    /// at which a queued handle stops being resumable and nothing for @c ParkedWork::abandon to
-    /// answer. An event loop is the opposite shape, and that is where the whole question comes
-    /// from ([fastcached#1025](https://github.com/LASTRADA-Software/fastcached/issues/1025)).
-    /// @param work The coroutine to resume; only @c ParkedWork::resume is used.
-    void submit(ParkedWork work) override { submit(work.resume); }
 
     /// Asks the threads to finish and stop taking new work. Idempotent, and callable from any
     /// thread.
@@ -155,7 +158,7 @@ class ThreadPoolExecutor final: public IExecutor
     {
         while (true)
         {
-            auto handle = std::coroutine_handle<> {};
+            auto entry = detail::Parked {};
             {
                 auto guard = std::unique_lock { _mutex };
                 _wake.wait(guard, [this] { return _stopping || !_queue.empty(); });
@@ -163,16 +166,16 @@ class ThreadPoolExecutor final: public IExecutor
                 // completion rather than being abandoned mid-frame.
                 if (_queue.empty())
                     return;
-                handle = _queue.front();
+                entry = std::move(_queue.front());
                 _queue.pop_front();
             }
-            handle.resume();
+            entry.resume();
         }
     }
 
     std::mutex _mutex;
     std::condition_variable _wake;
-    std::deque<std::coroutine_handle<>> _queue;
+    std::deque<detail::Parked> _queue;
     bool _stopping { false };
 
     /// Declared LAST, so they are joined before the queue they read is gone.

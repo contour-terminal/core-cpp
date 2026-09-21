@@ -102,6 +102,15 @@ class QueuedExecutor final: public IExecutor
     /// @return How many parks are held right now.
     [[nodiscard]] std::size_t pending() const noexcept { return _parked.size(); }
 
+    /// Takes the first entry off, the way a loop's `cancelPending` hands a park back to its owner.
+    /// @return What was parked there.
+    [[nodiscard]] ParkedWork takeFront()
+    {
+        auto work = _parked.front().take();
+        _parked.erase(_parked.begin());
+        return work;
+    }
+
     /// Resumes everything queued, in order, giving each chain back to whoever owns it.
     /// @return How many entries were run.
     std::size_t drain()
@@ -135,7 +144,12 @@ class QueuedExecutor final: public IExecutor
 struct BothSubmitOverloads
 {
     void submit(std::coroutine_handle<> /*handle*/) {}
-    void submit(ParkedWork /*work*/) {}
+
+    /// By value and consumed, exactly as `IExecutor::submit(ParkedWork)` is declared. The sink is
+    /// not decoration: `ParkedWork::abandon` refcounts, so a parameter merely read would be a copy
+    /// per call, and clang-tidy's `performance-unnecessary-value-param` would have this control
+    /// rewritten to take a const reference -- which is no longer the signature it is a control for.
+    void submit(ParkedWork work) { [[maybe_unused]] auto const sunk = std::move(work); }
 };
 
 /// What the hiding leaves reachable.
@@ -208,6 +222,24 @@ DetachedTask parkUnderWhenAny(IExecutor* executor, FrameSentinel sentinel, Count
 {
     (void) sentinel;
     std::ignore = co_await whenAny(parkInner(executor, FrameSentinel { counters }, counters));
+    ++counters->completed;
+}
+
+/// A `whenAll` over TWO children that both park: the shape a fan-out actually has.
+DetachedTask parkTwoUnderWhenAll(IExecutor* executor, FrameSentinel sentinel, Counters* counters)
+{
+    (void) sentinel;
+    co_await whenAll(parkInner(executor, FrameSentinel { counters }, counters),
+                     parkInner(executor, FrameSentinel { counters }, counters));
+    ++counters->completed;
+}
+
+/// The same, through `whenAny`.
+DetachedTask parkTwoUnderWhenAny(IExecutor* executor, FrameSentinel sentinel, Counters* counters)
+{
+    (void) sentinel;
+    std::ignore = co_await whenAny(parkInner(executor, FrameSentinel { counters }, counters),
+                                   parkInner(executor, FrameSentinel { counters }, counters));
     ++counters->completed;
 }
 
@@ -348,16 +380,58 @@ TEST_CASE("unownedRoot reaches a coroutine parked underneath a whenAny runner", 
     CHECK(counters.completed == 0);
 }
 
+TEST_CASE("Two parks of one chain free it once between them", "[ParkedWork][WhenAll]")
+{
+    // A fan-out hands the SAME chain root to every child, so an executor ends up holding N entries
+    // that name one root. An entry that frees it unconditionally frees it N times: the second
+    // destroy runs over a frame the first one released, which is a heap-use-after-free rather than
+    // a leak, and at -O2 a crash.
+    //
+    // The invariant the single-child cases above cannot state is **at most one live park per
+    // unowned root**. It was true of a linear chain -- one frame parks, one park names the root --
+    // and stopped being true the moment `unownedRoot` reached a combinator's children.
+    auto counters = Counters {};
+    {
+        auto executor = QueuedExecutor {};
+        parkTwoUnderWhenAll(&executor, FrameSentinel { &counters }, &counters);
+
+        // Both children parked, so the executor holds two entries naming one root.
+        REQUIRE(counters.parked == 2);
+        REQUIRE(executor.pending() == 2);
+        REQUIRE(counters.destroyed == 0);
+    }
+
+    // The detached root and the two children that parked, each freed exactly once.
+    CHECK(counters.destroyed == 3);
+    CHECK(counters.completed == 0);
+}
+
+TEST_CASE("Two parks of one raced chain free it once between them", "[ParkedWork][WhenAny]")
+{
+    auto counters = Counters {};
+    {
+        auto executor = QueuedExecutor {};
+        parkTwoUnderWhenAny(&executor, FrameSentinel { &counters }, &counters);
+
+        REQUIRE(counters.parked == 2);
+        REQUIRE(executor.pending() == 2);
+        REQUIRE(counters.destroyed == 0);
+    }
+
+    CHECK(counters.destroyed == 3);
+    CHECK(counters.completed == 0);
+}
+
 TEST_CASE("A parked entry that cannot resume frees the chain it owns", "[ParkedWork]")
 {
     // `Parked::resume()` takes the work out before it decides whether it can resume, so a handle
-    // it declines to resume would have its owned chain root DROPPED rather than freed -- a silent
-    // leak on the one path this type exists to close.
+    // it declines to resume would have its claim DROPPED rather than released -- a silent leak on
+    // the one path this type exists to close. The contract is *resumed or freed, never neither*.
     //
     // **Driven at the primitive, because no executor reaches this branch today.** A chain whose
-    // `abandon` is set is owned by nobody, so nothing else can have resumed it to completion
-    // while the executor held it; the branch is written for the contract -- *resumed or freed,
-    // never neither* -- rather than for a caller that exists.
+    // claim is set is owned by nobody, so nothing else can have resumed it to completion while the
+    // executor held it; the branch is written for the contract rather than for a caller that
+    // exists.
     auto spent = Counters {};
     auto owned = Counters {};
 
@@ -366,12 +440,16 @@ TEST_CASE("A parked entry that cannot resume frees the chain it owns", "[ParkedW
     done.handle().resume();
     REQUIRE(done.done());
 
-    auto victim = immediate(FrameSentinel { &owned }, &owned);
+    auto executor = QueuedExecutor {};
+    parkDetached(&executor, FrameSentinel { &owned }, &owned);
+    REQUIRE(executor.pending() == 1);
+
+    // A real claim on a real detached chain: the only way to have one, and the only way this case
+    // exercises what an executor actually holds.
+    auto taken = executor.takeFront();
     {
-        // `release()` is what makes this entry the chain's only owner, which is the arrangement
-        // `ParkedWork::abandon` describes.
         auto parked = core::async::detail::Parked { ParkedWork { .resume = done.handle(),
-                                                                 .abandon = victim.release() } };
+                                                                 .abandon = std::move(taken.abandon) } };
         REQUIRE(owned.destroyed == 0);
 
         parked.resume();
@@ -384,21 +462,69 @@ TEST_CASE("A parked entry that cannot resume frees the chain it owns", "[ParkedW
     CHECK(owned.completed == 0);
 }
 
+TEST_CASE("Two claims on one chain free it once between them", "[ParkedWork]")
+{
+    // R97 at the primitive: the invariant is one FREE per root, not one park per root. Two entries
+    // naming one chain release in turn, and only the second one frees.
+    auto counters = Counters {};
+    {
+        auto executor = QueuedExecutor {};
+        parkTwoUnderWhenAll(&executor, FrameSentinel { &counters }, &counters);
+        REQUIRE(executor.pending() == 2);
+
+        auto first = executor.takeFront();
+        auto second = executor.takeFront();
+        CHECK(first.abandon.sameChainAs(second.abandon));
+        CHECK(first.abandon.armed());
+
+        first = ParkedWork {};
+        // One claim gone, one left: the chain is still there, which is the half a single-park case
+        // cannot state.
+        CHECK(counters.destroyed == 0);
+
+        second = ParkedWork {};
+        CHECK(counters.destroyed == 3);
+    }
+    CHECK(counters.destroyed == 3);
+}
+
+TEST_CASE("Resuming one park of a chain disarms every claim on it", "[ParkedWork]")
+{
+    // The other half of R97, and the one a refcount alone does not give: a chain that is running
+    // again belongs to whoever owns it, so the sibling park still queued must free nothing. Were
+    // it otherwise, the fix would trade a double free for a use-after-free on the resumed chain.
+    auto counters = Counters {};
+    {
+        auto executor = QueuedExecutor {};
+        parkTwoUnderWhenAll(&executor, FrameSentinel { &counters }, &counters);
+        REQUIRE(executor.pending() == 2);
+
+        CHECK(executor.drain() == 2);
+
+        // Both children ran on, the join completed, and the detached root freed its own frame --
+        // so the claims have nothing left to free and must know it.
+        CHECK(counters.completed == 3);
+        CHECK(counters.destroyed == 3);
+    }
+    CHECK(counters.destroyed == 3);
+}
+
 TEST_CASE("Parked::take() hands the work over, and the entry then frees nothing", "[ParkedWork]")
 {
     auto counters = Counters {};
-    auto victim = immediate(FrameSentinel { &counters }, &counters);
-
     auto taken = ParkedWork {};
     {
-        auto parked = core::async::detail::Parked { ParkedWork { .abandon = victim.release() } };
+        auto executor = QueuedExecutor {};
+        parkDetached(&executor, FrameSentinel { &counters }, &counters);
+
+        auto parked = core::async::detail::Parked { executor.takeFront() };
         taken = parked.take();
         CHECK_FALSE(static_cast<bool>(parked));
     }
 
-    // The entry died holding nothing, so the caller that took it is still the only owner.
+    // The entry died holding nothing, so the caller that took it is still the only claim.
     CHECK(counters.destroyed == 0);
-    taken.abandon.destroy();
+    taken = ParkedWork {};
     CHECK(counters.destroyed == 1);
 }
 
