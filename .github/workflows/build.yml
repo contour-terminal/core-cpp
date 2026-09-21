@@ -110,6 +110,17 @@ jobs:
           -DWORK_DIR="$RUNNER_TEMP/cmake-hygiene-selftest"
           -P tests/cmake/check-cmake-hygiene-selftest.cmake
 
+      # Every visible configure preset is run by some workflow, or is allowlisted with a reason.
+      # Without it a preset can be offered and run by nothing, which is not a failure anywhere --
+      # it is an absence, and an absent configuration looks exactly like a passing one.
+      # covers: core-cpp.preset-coverage
+      - name: Preset coverage
+        run: python scripts/check-preset-coverage.py
+
+      # covers: core-cpp.preset-coverage-selftest
+      - name: Preset-coverage self-test
+        run: python scripts/check-preset-coverage-selftest.py
+
       # covers: core-cpp.check-release-selftest
       - name: Release-check self-test
         run: >-
@@ -244,6 +255,13 @@ jobs:
         include:
           - { name: clang-22, os: ubuntu-24.04, preset: clang-debug, compiler: clang }
           - { name: gcc-14, os: ubuntu-24.04, preset: gcc-release, compiler: gcc, gcc: "14" }
+          # GCC with assertions ON. clang-debug covers Linux Debug for clang and gcc-release covers
+          # GCC's codegen, but neither covers their intersection -- and the intersection is where a
+          # coroutine library differs most, because GCC's coroutine lowering is a second
+          # implementation rather than a second front end. An assertion that only GCC's frame
+          # layout reaches was compiled out of every job that ran GCC and absent from every job
+          # that had assertions.
+          - { name: gcc-14-debug, os: ubuntu-24.04, preset: gcc-debug, compiler: gcc, gcc: "14" }
           # morph's compiler.
           - { name: gcc-15, os: ubuntu-24.04, preset: gcc-release, compiler: gcc, gcc: "15" }
           - { name: clang-22-arm64, os: ubuntu-24.04-arm, preset: clang-release, compiler: clang }
@@ -340,6 +358,17 @@ jobs:
       matrix:
         include:
           - { name: appleclang, preset: appleclang-release }
+          # **macOS ran no Debug configuration at all**, so NDEBUG was defined in every macOS job
+          # and all 30 runtime assertions in src/core were compiled out of the platform. 19 of the
+          # 30 are in the shared event-loop code, among them the twelve
+          # teardownIsSerialisedWithDispatch() thread-affinity checks in EventLoop.cpp and
+          # ReadyBatch's re-entrancy trap; both canaries abstain with 77 under NDEBUG. kqueue is
+          # macOS-exclusive, so those shared checks had never once been evaluated with kqueue
+          # underneath them -- the platform Ruling R101 exists because of.
+          #
+          # Only the runtime asserts: the 122 static_asserts fire at compile time and
+          # Require()/Guarantee() are not NDEBUG-gated, so neither family was ever dark.
+          - { name: appleclang-debug, preset: appleclang-debug }
           - { name: llvm-22, preset: clang-release, homebrew_llvm: true }
     steps:
       - uses: actions/checkout@v4
@@ -407,7 +436,13 @@ jobs:
       matrix:
         # cl-debug is here for the runtime: the Debug CRT's _ITERATOR_DEBUG_LEVEL=2 traps iterator
         # misuse where it happens, so it runs ctest, not only a build.
-        preset: [cl-release, clangcl-release, cl-debug, cl-release-tls]
+        #
+        # clangcl-debug is here because it was the only Windows Debug leg with clang-cl, and the
+        # two drivers disagree about more than syntax: on clang-cl `/Wall` means `-Weverything`,
+        # clang-cl defines `__clang__` without `__GNUC__`, and its depfile path is the one
+        # fastcached#1531 breaks. An assertion reachable only under clang-cl's codegen was
+        # compiled out of clangcl-release and never compiled by cl-debug.
+        preset: [cl-release, clangcl-release, cl-debug, clangcl-debug, cl-release-tls]
     env:
       VCPKG_COMMIT: e6f9e70a29a3e80a1fc510d8503304315447112f
       VCPKG_ARCHIVES: ${{ github.workspace }}/.cache/vcpkg-archives
@@ -436,7 +471,7 @@ jobs:
       # The runner's Visual Studio bundles an older clang-cl; core-cpp's floor is 22. `upgrade`,
       # not `install`: install does nothing when another LLVM version is already installed.
       - name: Install LLVM ${{ env.LLVM_VERSION }} (clang-cl)
-        if: matrix.preset == 'clangcl-release'
+        if: startsWith(matrix.preset, 'clangcl')
         run: |
           choco upgrade llvm --version=22.1.8 --allow-downgrade -y --no-progress
           clangcl="C:/Program Files/LLVM/bin/clang-cl.exe"

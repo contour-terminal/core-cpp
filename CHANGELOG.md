@@ -537,6 +537,33 @@ workflow refuses one without a section here.
   on its own: IOCP is *designed* to be drained by many threads, and a lost association is a socket
   awaiting completions that are delivered elsewhere — a hang with nothing in any log.
 
+- **Three CI legs that never existed, and the gate that makes their absence fatal.** Every visible
+  configure preset must now be named by a workflow or allowlisted with a written reason;
+  `core-cpp.preset-coverage` (label `tree-level`, with a 15-case self-test) refuses a preset no job
+  runs, an allowlist entry for a preset a job now runs, an entry for a preset that no longer
+  exists, and a workflow naming a preset `CMakePresets.json` does not define.
+
+  It was written because three presets were run by nothing, and **all three were Debug**:
+  `gcc-debug`, `clangcl-debug`, and `appleclang-debug` — which was the *only* Debug configuration
+  macOS had. So `NDEBUG` was defined in every macOS job and **all 30 runtime assertions in
+  `src/core` were compiled out of the whole platform** — 19 of them in the shared event-loop code,
+  among them the twelve `teardownIsSerialisedWithDispatch()` thread-affinity checks in
+  `EventLoop.cpp` and `ReadyBatch`'s re-entrancy trap — and both canaries abstain with 77 under
+  `NDEBUG`. kqueue is macOS-exclusive, so those shared checks had never once been evaluated with
+  kqueue underneath them — on the platform Ruling R101 exists because of. The count is of runtime
+  `assert()` only: the 122 `static_assert`s fire at compile time and `Require()`/`Guarantee()` are
+  not `NDEBUG`-gated, so neither family was ever dark.
+
+  All three legs are added: `gcc-debug` to `linux`, `appleclang-debug` to `macos`, `clangcl-debug`
+  to `windows`. The LLVM-version floor on the Windows job now covers every clang-cl leg rather than
+  the release one alone, or the new leg would have built with the runner's bundled clang-cl,
+  silently below the project's floor of 22.
+
+  A configuration absent from CI does not fail there — it is simply not present, and an absent gate
+  reads exactly like a passing one. `.agent/rules/build-and-toolchain.md` states it as a property
+  rather than a preset list, because a list there would decay the way four earlier enumerations in
+  this module did.
+
 ### Deprecated
 
 - `core::net::interruptibleSleepUntil(loop, token, deadline, wakeBound)`, the four-argument form,

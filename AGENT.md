@@ -124,6 +124,18 @@ a bug; Doxygen `///` on public API; zero warnings. The canonical text:
 `cmake --preset <p> && cmake --build --preset <p> && ctest --preset <p>`, or
 `cmake --workflow --preset ci-<p>`. Trees live in `out/build/<preset>`.
 
+**This table and what CI runs are two different lists, and only one of them is checked by a
+machine.** Every visible preset must be named by a workflow, or allowlisted with a written reason
+in `scripts/check-preset-coverage.py`; `core-cpp.preset-coverage` refuses both a preset no job
+runs and an allowlist entry that has gone stale. It exists because three presets here were run by
+nothing — `gcc-debug`, `clangcl-debug`, and `appleclang-debug`, which was the only Debug
+configuration macOS had, so all 30 runtime assertions in `src/core` were compiled out of every
+macOS job, 19 of them in the shared event loop. A
+configuration absent from CI does not fail there; it is simply not present, and an absent gate
+reads exactly like a passing one. **So a gate list is counted against the union of this file's
+workflow checklist and whatever a task's own brief adds, read at the moment of counting** — a
+dispatch may add gates, and nothing else tells a lane the two lists differ.
+
 ## Testing
 
 Tests sit next to their sources (`Foo_test.cpp`) and are registered with `core_cpp_add_test`.
@@ -136,7 +148,9 @@ and still runs every one of them: **`tree-level` marks the checks whose input is
 their answer cannot differ between platforms.** CI's per-job `ctest` excludes that label and the
 `style` job runs exactly those, once — before it, one violated provenance row reported as 22 failed
 jobs out of 24, which buries the leg that has a real platform bug. Adding a `tree-level` check means
-adding a `style` step for it, or it runs nowhere in CI.
+adding a `style` step for it, or it runs nowhere in CI — `core-cpp.tree-level-coverage` refuses
+that in both directions, so the obligation is enforced rather than remembered, and the same shape
+governs presets (see Building).
 
 ## Documentation
 

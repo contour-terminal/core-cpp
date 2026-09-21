@@ -262,6 +262,35 @@ set_tests_properties(core-cpp.tree-level-coverage core-cpp.tree-level-coverage-s
     LABELS "core-cpp;hygiene;tree-level"
     TIMEOUT 60)
 
+# Every visible configure preset is run by a workflow, or is allowlisted with a written reason.
+#
+# `CMakePresets.json` says how the project CAN be built; `.github/workflows/` says how it IS built,
+# and nothing referred one to the other. So a preset could be offered, documented and used by a
+# lane for hours while no job ran it -- and no gate was red, because a configuration absent from CI
+# does not fail there, it is simply not present. Three were, when this was written, and all three
+# were Debug: `gcc-debug`, `clangcl-debug`, and `appleclang-debug`, which was the ONLY Debug
+# configuration macOS had. All 152 assertions in src/core were compiled out of every macOS job.
+#
+# tree-level: it reads two files of this tree, so its answer cannot differ between platforms.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME core-cpp.preset-coverage
+             COMMAND "${Python3_EXECUTABLE}"
+                     "${CORE_CPP_SOURCE_DIR}/scripts/check-preset-coverage.py")
+    add_test(NAME core-cpp.preset-coverage-selftest
+             COMMAND "${Python3_EXECUTABLE}"
+                     "${CORE_CPP_SOURCE_DIR}/scripts/check-preset-coverage-selftest.py")
+else()
+    add_test(NAME core-cpp.preset-coverage COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.preset-coverage: SKIPPED -- no Python 3 interpreter was found at configure time")
+    add_test(NAME core-cpp.preset-coverage-selftest COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.preset-coverage-selftest: SKIPPED -- no Python 3 interpreter was found at configure time")
+    set_tests_properties(core-cpp.preset-coverage core-cpp.preset-coverage-selftest PROPERTIES
+        SKIP_REGULAR_EXPRESSION "SKIPPED")
+endif()
+set_tests_properties(core-cpp.preset-coverage core-cpp.preset-coverage-selftest PROPERTIES
+    LABELS "core-cpp;hygiene;tree-level"
+    TIMEOUT 60)
+
 # That scripts/clang-format.py and scripts/python-style.py refuse a path that is not theirs.
 #
 # Both filtered by extension only inside `sources()`, which serves `--all`, so a path a caller

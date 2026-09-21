@@ -285,6 +285,39 @@ presets, scripts and paths.
 
 ## A gate that does not report reads as a gate that passed
 
+- **A configuration CI does not run is the same shape, one level up: it does not fail, it is
+  absent.** The presets a developer can build and the presets a workflow runs are two lists, and
+  nothing made one refer to the other. So the rule is a property rather than a list, because a list
+  here would decay exactly like the four enumerations this module has already had to correct:
+  **every visible configure preset is named by a workflow, or is allowlisted with a written
+  reason.** `core-cpp.preset-coverage` refuses a preset no job runs, an allowlist entry for a
+  preset a job now runs (a stale exemption makes the list look maintained while the next preset to
+  go dark inherits its credibility), an entry for a preset that no longer exists, and a workflow
+  naming a preset `CMakePresets.json` does not define.
+- **A setup step gated on an exact preset name breaks the moment the matrix grows, and it breaks
+  green.** The Windows job installed the pinned LLVM under `if: matrix.preset == 'clangcl-release'`.
+  Adding `clangcl-debug` to that matrix would have produced a leg that configures, builds, tests and
+  reports success — on the runner's *bundled* clang-cl, silently below the project's floor of 22.
+  **A green leg on an unintended toolchain is worse than no leg, because it also carries a claim**:
+  an absent leg says nothing, while that one says "clang-cl 22 passes" and is believed. Gate a
+  toolchain-setup step on the property that made it necessary — `startsWith(matrix.preset,
+  'clangcl')` — never on one member of the set. The tell that this class is present: a step whose
+  condition names a single preset while the thing it installs is needed by a *family*. When adding a
+  preset to a matrix, read every `if:` in that job and ask which were written as "the only one"
+  rather than "this kind".
+- **What it cost before it existed: macOS ran no Debug configuration at all.** The `macos` job was
+  `appleclang-release` and `clang-release`, so `NDEBUG` was defined in both and all 30 runtime
+  assertions in `src/core` were compiled out of every macOS job — 19 of them in the shared
+  event-loop code, among them the twelve `teardownIsSerialisedWithDispatch()` thread-affinity
+  checks in `EventLoop.cpp` and `ReadyBatch`'s re-entrancy trap — and both canaries abstain with 77
+  under `NDEBUG`. kqueue is macOS-exclusive, so those shared checks had never once been evaluated
+  with kqueue underneath them, on the platform Ruling R101 exists because of. Count the runtime
+  `assert()`s only when you re-derive this: the 122 `static_assert`s fire at compile time and
+  `Require()`/`Guarantee()` abort in Release too, so a grep for `assert` overstates the dark set by
+  a factor of five.
+  `gcc-debug` and `clangcl-debug` were dark the same way. **All three of the presets nothing ran
+  were Debug**, which is not a coincidence: a Release leg is the one somebody adds to ship, and the
+  Debug leg is the one that has to be asked for.
 - **A failure nobody is shown is indistinguishable from a success.** In fastcached, five of six
   failing merge-queue runs failed a job that was not a required check, and all five pull
   requests merged with nobody told. Origin:
