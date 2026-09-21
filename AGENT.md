@@ -126,9 +126,10 @@ a bug; Doxygen `///` on public API; zero warnings. The canonical text:
 
 ## Testing
 
-Tests sit next to their sources (`Foo_test.cpp`) and are registered with `core_cpp_add_test`,
-one binary per module linked to `core::testing_main` (async has a second, over the StopToken
-fallback). Exit codes: 0 pass, 1 failure, 77 all
+Tests sit next to their sources (`Foo_test.cpp`) and are registered with `core_cpp_add_test`.
+**A module has as many test binaries as it has things to link**, not one — count them rather than
+assume; [`rules/testing.md`](.agent/rules/testing.md) is canonical on when a second one is owed.
+Exit codes: 0 pass, 1 failure, 77 all
 skipped, 2 nothing ran. Labels: `core-cpp`, the module, `hygiene`, `canary`, `loopback`,
 `no-tsan`, `tree-level`. `ctest -L hygiene` runs the checks over the tree and the build contract,
 and still runs every one of them: **`tree-level` marks the checks whose input is the source tree, so
@@ -161,8 +162,11 @@ refuses otherwise. Use the `/draft-release` skill, then `/publish-release`. Deta
 3. `clang-debug`, then `gcc-release`; on Windows `cl-debug` and `clangcl-release`
    (`--clean-first` on a cache-populated clang-cl tree if fastcache-cc predates fastcached
    ca8dfc32).
-4. `mkdocs build --strict`. That is every change in practice, not a conditional to evaluate: step 5
-   means every change edits `CHANGELOG.md`, which the site renders as a page. It takes under a
-   second, and the condition it replaces is one you cannot check without reading `mkdocs.yml`.
-5. A CHANGELOG entry under `[Unreleased]`.
+4. `mkdocs build --strict`, unconditionally. Not because every change touches the site, but because
+   it costs under a second while the condition it replaces -- *did I touch one of the three
+   snippet-included files outside `docs/`?* -- cannot be evaluated without reading `mkdocs.yml`.
+5. A CHANGELOG entry under `[Unreleased]` for anything a reader of the release notes would care
+   about: a public API change, a new option or gate, a behaviour change, a fixed defect. A
+   test-only commit, an internal comment or a rulebook edit earns none -- and a checklist step that
+   is visibly not followed stops being read as a step.
 6. "Consumer impact" in the pull request body.
