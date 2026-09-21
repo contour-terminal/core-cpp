@@ -99,6 +99,18 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   disowns and resumes in one expression, and a handle it *declines* to resume (already done, or
   empty) has its owned chain root destroyed there rather than dropped. Taking the work out and
   then walking away is a silent leak on the one path the type exists to close.
+- **A queue holding submitted work has `detail::Parked` as its element type, never
+  `std::coroutine_handle<>`**, and no `submit(ParkedWork)` forwards to `submit(work.resume)`.
+  Storing the handle alone drops the claim, and **`ParkedWork::abandon` is a share of ownership,
+  not a note about who could free it** — so dropping the last one *frees a chain that is about to
+  run*. `ThreadPoolExecutor` did exactly this, kept green by `abandon` being a raw handle nobody
+  released, and turned into a use-after-free the moment the claim began refcounting: every ASan tag
+  went SIGSEGV until `_queue` became `std::deque<detail::Parked>`. The tell is a `submit` overload
+  whose body names `work.resume` and nothing else — it has taken half of a two-part value. The same
+  applies to any queue, timer heap or completion list that holds work for later:
+  `EventLoop::submit`, `resumeSoon`, `schedule(timePoint, ParkedWork)`. Origin:
+  [fastcached#1025](https://github.com/LASTRADA-Software/fastcached/issues/1025), and core-cpp's
+  own Task B1 fix round (controller ruling R97, commit `ac0ff76`), which is where it was a bug.
 - **Both `IExecutor::submit` overloads are pure virtual, which is what actually closes the hiding
   hazard.** A derived class that re-declares one overload of a name hides every other overload of
   it — so an executor declaring only `submit(handle)` hides `submit(ParkedWork)`, fails to override
