@@ -19,7 +19,6 @@
 #include <optional>
 
 using core::net::Interest;
-using core::net::Readiness;
 using core::net::ReadinessHandler;
 using core::net::testing::HandlerId;
 using core::net::testing::ScriptedBackend;
