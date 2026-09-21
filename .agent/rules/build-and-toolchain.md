@@ -302,3 +302,8 @@ toward "nothing unusual here". Read the body. Target `std::views::iota`; for `ar
 - **[core-cpp#11](https://github.com/contour-terminal/core-cpp/issues/11)** — a must-die canary
   that proves `cl-debug` runs with `_ITERATOR_DEBUG_LEVEL=2`, accepted only on the runtime's own
   `subscript out of range` diagnostic.
+- **[core-cpp#33](https://github.com/contour-terminal/core-cpp/issues/33)** — `core-cpp.upstream-drift`
+  needs sibling checkouts that exist on no runner, so it skips on every CI machine and only its
+  self-test actually runs there. The skip is deliberate and says which upstream it could not read,
+  so this is not the "gate that does not report" defect — but its CI coverage is zero, and at tag
+  time a green board will be counted as including it.
