@@ -462,6 +462,59 @@ if(EXISTS "${ROOT}/NOTICE")
     endforeach()
 endif()
 
+# And CHANGELOG.md's `### Imported` table, which is the THIRD statement of the same fact and was
+# the last one still carrying a stale pin: the re-sync of the two verbatim cmake files corrected
+# cmake/portable/README.md, the provenance table and NOTICE, and left this table naming eb9c9c68 --
+# so one file gave two answers, and the one whose whole job is "which commit each file came from"
+# gave the old one.
+#
+# The same "(verbatim)" restriction as NOTICE above, for the same reason: a row describing a merge
+# or an adaptation names a pin that legitimately differs from the primary upstream's, and comparing
+# those would fire on a true negative (Ruling R81).
+#
+# But this table's grammar is one ROW, MANY SUBJECTS in prose, which is exactly how it rotted -- the
+# row was not wrong, it was wrong for two of its five subjects. So a verbatim row must name ONLY
+# verbatim files, and that is enforced rather than assumed: a semicolon is what separates subjects
+# in these rows, so a verbatim row containing one is refused and told to split. Without that, the
+# check would silently examine only the subjects before the first semicolon -- and a check that
+# quietly examines less than it claims is the defect this whole rule exists to catch.
+if(EXISTS "${ROOT}/CHANGELOG.md")
+    file(STRINGS "${ROOT}/CHANGELOG.md" changelogLines REGEX "^\\| *\\[")
+    foreach(changelogRow IN LISTS changelogLines)
+        if(NOT changelogRow MATCHES "verbatim")
+            continue()
+        endif()
+        if(changelogRow MATCHES ";")
+            core_cpp_hygiene_refuse(provenance "CHANGELOG.md" "-"
+                "an Imported row claiming 'verbatim' also names other subjects; give the verbatim files a row of their own, so one commit answers for every file the row names")
+            continue()
+        endif()
+        if(NOT changelogRow MATCHES "`([0-9a-f][0-9a-f]*)`")
+            core_cpp_hygiene_refuse(provenance "CHANGELOG.md" "-"
+                "an Imported row claims 'verbatim' and names no commit: ${changelogRow}")
+            continue()
+        endif()
+        set(changelogPin "${CMAKE_MATCH_1}")
+        string(REGEX MATCHALL "`[^`]+`" changelogCells "${changelogRow}")
+        foreach(changelogCell IN LISTS changelogCells)
+            string(REPLACE "`" "" changelogPath "${changelogCell}")
+            # A backticked token is a path only if it looks like one; the commit and prose names
+            # such as `SuppressWindowsDialogs` are backticked too.
+            if(NOT changelogPath MATCHES "/" AND NOT changelogPath MATCHES "^\\.")
+                continue()
+            endif()
+            string(MAKE_C_IDENTIFIER "${changelogPath}" changelogKey)
+            if(NOT DEFINED provenancePin_${changelogKey})
+                continue()
+            endif()
+            if(NOT changelogPin STREQUAL "${provenancePin_${changelogKey}}")
+                core_cpp_hygiene_refuse(provenance "CHANGELOG.md" "-"
+                    "the Imported table records '${changelogPath}' at ${changelogPin}, but ${CORE_CPP_HYGIENE_PROVENANCE_TABLE} pins it at ${provenancePin_${changelogKey}}")
+            endif()
+        endforeach()
+    endforeach()
+endif()
+
 # An allowlist row that allows nothing in a file that exists has outlived its reason. A row whose file
 # is gone is left alone: whatever the file was renamed to is not allowlisted, so it is refused anyway.
 foreach(index IN LISTS CORE_CPP_HYGIENE_ALLOWLIST)

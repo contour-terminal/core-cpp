@@ -32,6 +32,14 @@ set(clean
     "src/core/foo/Main.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace\n{\n}\nint main() { return 0<semicolon> }\n"
     "src/core/Top.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core\n{\nnamespace views\n{\n}\n} // namespace core\n"
     "src/core/Base64.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core::base64\n{\n}\n"
+    "CHANGELOG.md|# Changelog
+
+### Imported
+
+| From | Commit | What |
+|---|---|---|
+| [contour](https://github.com/contour-terminal/contour) | `1111111111111111111111111111111111111111` | `src/core/Base64.hpp`, verbatim |
+"
     "NOTICE|core-cpp
 
 contour-terminal/contour
@@ -92,6 +100,27 @@ contour-terminal/contour
 contour-terminal/contour
   Imported at 1111111111111111111111111111111111111111
   - src/core/Gone.hpp (verbatim)
+"
+    # CHANGELOG.md's Imported table is the THIRD statement of a pin, and it was the last one
+    # still stale after the two verbatim cmake files were re-synced: one file gave two answers.
+    "provenance|CHANGELOG.md|# Changelog
+
+### Imported
+
+| From | Commit | What |
+|---|---|---|
+| [contour](https://github.com/contour-terminal/contour) | `2222222222222222222222222222222222222222` | `src/core/Base64.hpp`, verbatim |
+"
+    # A row claiming verbatim must name ONLY verbatim files. The stale pin above survived
+    # because its row was right about three subjects and wrong about two, so a row that mixes
+    # them is refused rather than half-checked.
+    "provenance|CHANGELOG.md|# Changelog
+
+### Imported
+
+| From | Commit | What |
+|---|---|---|
+| [contour](https://github.com/contour-terminal/contour) | `1111111111111111111111111111111111111111` | `src/core/Base64.hpp`, verbatim<semicolon> and the bootstrap download in `cmake/CPM.cmake` |
 "
 )
 
