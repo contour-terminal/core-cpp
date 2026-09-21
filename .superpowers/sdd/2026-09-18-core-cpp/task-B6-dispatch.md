@@ -85,7 +85,15 @@ sockets that way and R101 costs you nothing.
 fastcached at **`0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21`**, read as blobs
 (`git -C D:\fastcached -c core.autocrlf=false -c core.eol=lf show 0708dd54:<path>`):
 `Net/EpollSocket.*`, `Net/KqueueSocket.*` and their tests, `Net/ISocket.hpp`,
-`Net/IoAwaitable.hpp`, `Net/SocketContract.hpp`, `WaitReadable_test.cpp`, `CancelRead_test.cpp`,
+`Net/ReadSlot.hpp`, `Net/WriteSlot.hpp`, `WaitReadable_test.cpp`, `CancelRead_test.cpp`,
+
+**Corrected in flight, verified against the commit: `Net/IoAwaitable.hpp` and
+`Net/SocketContract.hpp` DO NOT EXIST at `0708dd54`** — an earlier draft named them and
+`git cat-file -e` refuses both. `IoAwaitable` and `namespace Detail` are **sections of
+`Net/ISocket.hpp`**; the slot guards live in `Net/ReadSlot.hpp` and `Net/WriteSlot.hpp`. The
+plan's B6 file list describes the **destination** layout in core-cpp, which is correct — only
+the "read as blobs" line was wrong.
+
 `SocketDecorator_test.cpp`. Plus contour's `Socket_test.cpp`, `UnixSocket_test.cpp`,
 `posix/FdPassing_test.cpp` and the current `posix/PosixSocket.*`, already in the tree and already
 repaired by the Phase A gate — **read what that gate fixed before you replace it**, or you will
@@ -143,6 +151,39 @@ Write the case, run it, capture the RED verbatim, then implement, then the GREEN
   have socket callers.
 - `.agent/rules/async-and-net.md` gains the three rules above and the slot-guard discipline, each
   citing its origin as a full URL.
+
+## What B4 and B5 left you — this dispatch predates both, read it before you design
+
+**B5 landed timers at `fe48143`, and `setReceiveDeadline` is now a consumer of them, not an
+inventor.** `EventLoop::addTimer(SteadyTimePoint, TimerCallback, void*) -> TimerId`,
+`cancelTimer(TimerId) -> bool`, and `DeadlineTimer(EventLoop&, deadline, callback, state)` all
+exist. **B5's rule binds you: there is one deadline mechanism, not two.** A callback timer is a park
+in the same table as a coroutine deadline — one heap, one sequence counter, one never-reused id
+space — so `computeTimeout` and `armHostWake` get every deadline for free. **If your receive
+deadline computes a "next wake" of its own, you have built the second mechanism the design exists
+to prevent, and the symptom is a wait that is too long: a hang, not a failure.**
+
+`DeadlineTimer` is destroyable from inside its own callback, and `cancelTimer` returns true exactly
+when it prevented the callback — including in the window between the turn queueing a due timer and
+the turn running it. **Use that; do not re-derive it.**
+
+**B4's constraint, which lands on you from the socket side:**
+
+> **The loop cannot ask a borrowed `std::coroutine_handle<>` what it names.** A suspended flow that
+> would unwind and a never-started lazy `Task` that would run are the same type, and
+> `ResumeOn::await_resume()` is `noexcept`, so even a genuine continuation runs its body rather than
+> unwinding. **There is no safe discriminator.**
+
+That is why `~EventLoop` **drops** borrowed inbound work rather than resuming it. The distinction is
+not which container the work is in, but that **a turn accepted it** — the loop owes a resumption it
+took up; a submission still inbound is an offer no turn took. **A socket whose read is parked when
+its loop dies is in that second category.** Do not design a teardown that assumes the loop will
+resume your parked flow for you.
+
+**B4's fix round is in flight and not yet pushed** (`fb3fe97`, rebased onto `fe48143`). It changes
+`blockOn` to throw `std::logic_error` on a flow that can no longer advance, and reverts the
+teardown branch described above. **Fetch before you commit**, and expect `renames.json` to conflict
+— every lane adds rows to it and the resolution is always keep-both plus `ctest -R migrate-renames`.
 
 ## Concurrency
 

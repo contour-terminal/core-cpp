@@ -50,6 +50,37 @@ A dial written to depend on `onError` is wrong even on the platform where it wor
 
 ## Sources
 
+### Correction, made before you were dispatched: the file your central deliverable comes from was missing
+
+`ReadinessDial` — "non-template, over `IoBackend`" — is the heart of this task, and an earlier draft
+of this Sources list **did not name the file it comes from**. It would have sent you to
+`EpollConnector_test.cpp` to re-derive from scratch something upstream has already factored out.
+Verified at the pin with `git ls-tree`:
+
+- **`Net/ReactorDial.hpp` is the readiness dial**, `#if defined(__linux__) || defined(__APPLE__)`,
+  **templated on a platform `Traits` triple** (`Traits::Reactor`, `Traits::Handler`).
+  `Detail::ReadinessDialOp` holds the per-dial state **in the dialling coroutine's own frame** —
+  and the header says why, in a comment worth keeping: its address is stable for exactly as long as
+  the backend can reach it, it disappears with the attempt, and a connector holding a slot per dial
+  would let a timed-out dial tie one up. **Your job is to de-templatise this file over B3's
+  `IoBackend`, not to rewrite it.**
+- **`Net/EpollConnector.*` and `Net/KqueueConnector.*` are thin `IConnector` wrappers over it.**
+  `KqueueConnector` is `__APPLE__`-only. The earlier draft named `EpollConnector` and **not**
+  `KqueueConnector`, which is precisely how the macOS divergence R101 exists to prevent gets written
+  back in: deriving a portable dial from the Linux wrapper alone. **Read both wrappers.**
+- **`Net/IocpDial.hpp`** exists and is the Windows counterpart. The "What to build" list above names
+  `IocpDial`; this list previously did not.
+
+These four files have **no `_test.cpp` at the pin** — do not go looking: `KeepAlive.hpp`,
+`SocketDeadline.hpp`, `IAdmissionControl.hpp`, `IAsyncAddressResolver.hpp`. Their coverage is
+indirect, through `ConnectFlow_test.cpp` and `PlatformConnector_test.cpp`.
+
+**This is the fifth stale or incomplete source list found in this project.** Treat the list below as
+a starting point and run `git ls-tree -r --name-only 0708dd54 src/FastCache/Net/` yourself before
+you rely on any of it. Say in your report what you found that this list still gets wrong.
+
+### The list
+
 fastcached at **`0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21`**, read as blobs
 (`git -C D:\fastcached -c core.autocrlf=false -c core.eol=lf show 0708dd54:<path>`):
 `Net/{IConnector,ConnectFlow,PlatformConnector,EpollConnector,IocpConnector,KeepAlive,

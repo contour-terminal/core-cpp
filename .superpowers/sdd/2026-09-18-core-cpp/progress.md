@@ -849,3 +849,542 @@ Dispatch audit of `task-B3-dispatch.md` (A12): **the claim I sent it to check is
 - **A12 declined to save memories for the citation rule and the confidence-aiming rule, and the reasoning is correct:** both are being recorded in `global-constraints.md`, which is now tracked, and **duplicating repo content into memory is exactly what the memory rules exclude.** Worth recording that the decision was made deliberately rather than forgotten -- and that tracking the constraints file changed what belongs in memory, which was not a consequence I had anticipated when I ruled on `d44e2d6`.
 **Status check sent to B4, with no new work in it.** Everything in Phase B now waits on that lane and it has not reported since its dispatch. Told it the three obstacles that have cleared -- B3's R101 reorder landed (`7cd86fc`) so `IoBackend.hpp` is out of the shared tree; F5 landed (`7e2e3ae`) so mute cases are safe; `origin/master`'s POSIX break is fixed (`8d05bb7`) -- and asked the question I actually care about: **whether the five routings I sent in quick succession crowded out its own work.** Each was justified individually; five inside an hour may not have been. Offered to split them: **the `ParkedWork` claim rule is the only one load-bearing for B4's core task**, and the rest can be a follow-up commit or their own task without anything downstream suffering. Also offered that landing `assertTeardownIsSerialisedWithDispatch` ahead of the rest unblocks the most, since it is the one thing B6 and B7 cannot start without.
 - **This is the coordination risk I have been creating all evening and had not priced.** Every routing was a real finding from another lane's audit, and routing them promptly was right -- but **a lane on the critical path is the one place where the cost of an interrupt is not local.** The audits that produced them (A12's two, C0's three, B1's and B3's self-corrections) were cheap precisely because those lanes were idle; B4 was not.
+**`90cd500`: the SDD negation is now by KIND (`!*.md`, `!*.sh`), with `review-*.diff` still ignored.** A12 verified `8c7daa5` and found **`!task-*.md` is itself an enumeration -- of the one naming convention that existed the day I wrote it** -- leaving three files behind: `a2-context.md` (14 KB, declares itself binding in its third line, duplicates no tracked text), `plan-amendment-upstream.md`, and **`brief.sh`, the generator behind the 17 briefs I had just decided were worth keeping.** That last is my own argument caught being stronger than I used it: briefs are tracked *because the plan moves*, and the generator is what makes that gap auditable at all.
+- **Three commits in a row I closed this hazard at exactly the scope I could see** -- `d44e2d6` one file, `8c7daa5` one naming convention, `90cd500` by kind -- **and each time my own justification already covered the wider set.** A12 found all three.
+- **A12's `plan-amendment-upstream.md` finding is the durable one and is not about tracking at all.** It expected binding rule text in an untracked file and found the opposite: **the rule had propagated to five tracked files and a gate, while the RATIONALE had not.** `git grep -F "not moving at all on coro/net side"` across `8c7daa5` returns nothing -- the user's own words, alongside the measurements that scoped the decision, in no tracked file. Its sentence, now a constraint verbatim: **a decision's rule is recorded and its justification is not, which is the asymmetry that makes a decision impossible to revisit later -- you can see what was required but not what would change it.** The whole rationale is now in `90cd500`'s commit message as well, so it survives even the file.
+- **It checked the claim it was most confident about first and that cost it the finding it expected.** It predicted `plan-amendment-upstream.md` would be the hazard reappearing verbatim; it was not. *Aim the prediction at what you would bet on* means sometimes learning your confidence was the error, and reporting that is worth more than being right.
+Monitor: **`74308e7 failure`** (R105's own commit). **Verified rather than assumed, two ways:** the failing jobs are `clang-tidy` and `ci-ok` (the aggregator) -- clang-tidy alone, matching the scope A12 gave -- and `git merge-base --is-ancestor 48af4e6 74308e7` says **no**, so B3's unused-`using` fix genuinely is not in it. A12 had already read that run's log: 155/155 header self-check objects clean, the sole failure `ScriptedBackend_test.cpp:22`. **A12's process note working exactly as intended: with per-SHA runs a red leg is more often an older SHA than a new defect, and one command settles it.** No action, no notification.
+**`6270a32` is CLOSED, verified for the right reasons.** Run `35551629214` on `48af4e67`: clang-tidy **success**, and A12 read the log rather than the conclusion on four counts -- **155** header self-check objects compiled (the check ran, it did not pass by being absent), **0** `FAILED:` lines, **0** hits on `ScriptedBackend_test.cpp:22` (B3's `48af4e6` did fix it), and **2** planted `TidyCanary.cpp:2` findings **still firing**.
+- **That last row is the best verification move of the night.** Zero `FAILED:` lines proves the job did not fail; it does not prove clang-tidy ran. **A green gate and a silent gate produce identical output**, and the canary is the only thing that makes the green falsifiable. Three lanes nearly took a silent gate for a passing one tonight -- A12's `hdrcheck` grep returning zero mentions, B3's `--quiet` run reporting `head`'s exit status, B3 reading a job list where the log had more in it -- and **only the canary was designed to catch it; the other two were caught by someone being suspicious, which does not scale.**
+- **A12 declined to re-arm the monitor on `7cd86fc` and `c94a0b9`, and the reasoning is sharper than the decision:** they would re-confirm a settled result, and a red there would be B3's R101 reorder -- *"someone else's result under my question's name, which is exactly how the vacuous `cancelled (0 jobs)` answer happened."* **A monitor's exit condition is a question**, and a question you did not ask cannot be answered by a run you are watching for another reason. Now a constraint.
+Task (A12, new): **which of our gates can prove they are live?** This is A12's canary finding generalised, not invented work -- the demonstrated failure mode is **a gate that cannot fail is indistinguishable from a gate that passes**, and we are one task from tagging v0.1.0 with a green board nobody has asked that question of. For every gate in the tree -- the eighteen hygiene rules, the per-leg checks, `exit-codes`, `vendor-selftest`, `check-renames`, `layering`, the header self-check, `async-link-smoke`, the asserting CI jobs -- one question: **if this gate silently stopped checking, what would tell us?** Three honest columns: a self-test or canary exists (several do, and **a lot of this column is a good result, not a boring one**); structurally cannot silently pass, with the reason in a sentence; or **nothing would tell us**, which is the finding. Report, do not build; expectations stated before looking; a clean survey with the method shown is explicitly a worthwhile outcome.
+**An observed SEGFAULT in `core-cpp.async`, routed to two lanes with its limits stated.** B3 saw it once in `ctest` on a **clean checkout of `origin/master` at `d44e2d6`**, with none of its files in that binary, on the run immediately after a build with **four concurrent preset builds** running on WSL2 over `/mnt/d`. **It does not reproduce**: alone it passes, and three further full-suite runs were 16/16 each -- one SEGFAULT in four.
+- **I checked the ancestry rather than take the description, and it sharpens the case B3 could not have made: `d44e2d6` contains `04472c5`, `ac0ff76` and `0a77bfa`** -- B1's two-thread claim case, R97's refcount and the atomic join counters. **So the crash landed in a tree carrying the most concurrent exercise of that code that exists, under heavier contention than its 21 TSan and 21 ASan runs ever saw.**
+- **B3's reasoning is what made it routable:** *"a segfault that appears only under parallel load in a threaded test binary is the shape a real race has, and three green re-runs is exactly what a real race also looks like."* Given to **B1** and to **`rereview-B1-r1`** separately, each told **not to chase a reproduction** and to say independently whether it moves their confidence -- two independent judgments being worth more than either alone. **Reporting rather than deciding by omission is what made it routable at all**; now a constraint.
+**Task B3 fix round 2: gates closed.** clang-tidy preset build exit 0, zero diagnostics, 16/16 three times. Full matrix: Linux `clang-debug` 28/28 with 15 hygiene, `gcc-release` 16/16, ASan 16/16, TSan 16/16, clang-tidy clean; Windows `cl-debug` 30/30, `clangcl-release` 30/30; `mkdocs --strict` and clang-format clean. macOS and FreeBSD left to CI with the hypothesis in `7cd86fc`'s message -- kqueue already behaved as R101 requires, so both new parity cases should pass unchanged and no existing case should move.
+- **B3's fourth self-correction is the sharpest because it wrote the instrument.** Its background harness printed `FAILED at build/configure for clang-tidy` when configure and build had both succeeded and **`ctest` had returned 8** -- a hardcoded stage name in a `||` branch. Its words: *"I wrote a summary that resembled the failure instead of reporting it. I had spent the previous hour saying that about other people's job lists."* **The shorthand you built yourself is the one you will trust without checking.** Now a constraint.
+- **`rereview-B3-r1` dispatched** over the six fix-round commits (`870d12b`, `7e2e3ae`, `8d05bb7`, `48af4e6`, `7cd86fc`, `c94a0b9`) rather than a range, since they interleave with other lanes' work. Told to attack R101's fix by constructing a readiness combination where a handler with `onError` set gets its watched direction's wakeup stolen, to judge F8's argument rather than accept it, to scrutinise the companion case design rather than approve it, and to check F3's member ORDER since destruction order is reverse declaration order and easy to get backwards. B3 keeping its configured worktree at `D:/core-cpp-wt-b3r2`.
+**A12 verified `90cd500` and found nothing -- the first of four checks to come back empty.** 133 `.md` + 1 `.sh` + the `.gitignore` tracked; 30 `review-*.diff` ignored as intended; nothing falls through. **It went after a fourth residue and it did not survive:** the exclusion rests on a claim we both asserted and neither had checked -- that a `.diff` is regenerable because its source is two immutable commits. True of the 14 named `review-<sha>..<sha>.diff`; **not obviously true of the 16 named `review-A12.diff`**, whose range lives only in their content. It verified the label-to-range mapping survives in tracked files (`task-A11-review.md:3` and `progress.md:296`), so the exclusion holds for all 30.
+- **Its near-miss is the fourth instance of one personal failure mode, and it tabulated them rather than reporting a fourth anecdote.** Its scan said A11 had no recoverable range; false, because it searched `[0-9a-f]{7}\.\.[0-9a-f]{7}` and A11's range is written `b505db8..origin/master` -- **a symbolic ref.** *"I searched for the shape of an answer instead of the answer, and the shape excluded the answer."* All four: the drift checker's `in stripped`, the `# covers:` gate's unanchored regex, the `hdrcheck` grep, and this. **Identical tell each time -- a suspiciously clean or alarming count that is an artifact of the pattern rather than of the tree** -- and it noted it applies the rule to others' claims more reliably than to its own instruments. Caught only because it set out to refute the finding it was most confident in: **twice tonight that instrument has paid by taking a finding away rather than handing one over.**
+**RE-REVIEW OF B1 FIX ROUND 1: fix round 1 VERIFIED, and a NEW CRITICAL found that reproduces on completely unmodified `ceb471d`.**
+- **What held, under direct attack.** C1 ADDRESSED: the reviewer traced `AbandonState`/`AbandonClaim`/`abandonOnce`/the pool's `std::deque<detail::Parked>` by hand, ran the promoted arity-2 cases under ASan+UBSan (343 assertions / 83 cases, both binaries), **verified B1's undisclosed second half -- `submit(ParkedWork)` dropping the claim -- directly in the diff**, and grepped the rest of `src/core/async` for the same shape: none left. I2's counters/ordering, I3, I4 and all six Minors ADDRESSED, one correctly ARGUED as already-delivered.
+- **Both of B1's self-corrections VERIFIED by compiling, not reading.** The reviewer deleted `JoinAwaiter`'s move in a private worktree and reproduced B1's exact claim: `return whenAll(...)` compiles through copy elision while `auto a = whenAll(...); return a;` does not. **The payoff for settling a compile question by compiling.**
+**Ruling R106 -- the new Critical: a completed `whenAll`/`whenAny` join over a `ThreadPoolExecutor` can free a sibling child's coroutine frame while another worker thread is still resuming it.** Reproduced on **unmodified `ceb471d`**, no source changes, same binary run repeatedly: **1 in 60 ASan runs, 1 in 30 in an earlier sample, 1 in 40 under TSan** -- roughly **2-3%**, in `ThreadPoolExecutor_test.cpp`'s *"A join whose children finish on a pool"*, **the case I2 itself added.** ASan: heap-use-after-free writing to a freed `WhenAllPolicy::State` in the start-phase guard release. TSan: `Parked::resume()` (`ParkedWork.hpp:306`) reading a frame another thread was freeing via `~JoinAwaiter()`'s unconditional `~vector<JoinRunner>()`.
+- **Root cause: whichever thread's decrement brings `remaining` to zero unconditionally destroys every runner in `_runners`**, with no guard against a still-queued sibling being mid-resume on another worker. **This is the other half of R98, and the distinction is the reusable part: I2 closed the COUNTER race, and a counter reaching zero correctly is not the same fact as every runner being safe to destroy.** Now a constraint.
+- **Scoped to `Join.hpp`'s `~JoinAwaiter()`/`_runners` teardown, explicitly NOT to `ParkedWork`/`AbandonClaim`** -- the reviewer went looking for that shape and it is not there.
+- Two things the reviewer could not close, handed to B1: **the minimal deterministic interleaving was not pinned** (a 2-3% case is a lottery, not a guard -- find it or label it honestly), and **whether `whenAny`'s cancellation path has the identical exposure is unknown**, only `whenAll` was reproduced. *An unexamined half is exactly how C1's second half survived round one.*
+**B3's SEGFAULT is explained, and its judgment call is vindicated concretely.** Its crash was `core-cpp.async` on `d44e2d6`, which contains `ceb471d`, under four concurrent builds. It never said which case, **so this is consistency rather than identity** -- but an unreproducible field crash and a deliberate 2-3% reproduction in the same binary on the same commit corroborate each other better than either alone. **One in four full-suite runs under heavy load is what 2-3% looks like on a contended machine.**
+- **And CI confirms the rate from the other side: `04472c5`'s run has both sanitizer legs GREEN while containing the defect.** A single run has ~97% chance of missing it -- which is why B3's three green re-runs told it nothing, and why it was right to say so rather than treat them as a dismissal. **Now a constraint: a single green run is not evidence against a low-rate defect, and neither are three.**
+- **The counterweight recorded alongside the credit:** the reviewer found it by running the case sixty times, not by reading B3's report -- the observation corroborated a finding, it did not produce one. **The rule that survives is not "report everything" but that an unreproducible crash in a threaded binary is cheap to report and expensive to re-discover.**
+- **My range was wrong again:** the dispatch said `ac0ff76..ceb471d`, which **excludes `ac0ff76`** -- the actual C1 fix commit. The reviewer reviewed it anyway and flagged the off-by-one. Same class as every other range I have written tonight.
+- Monitor: `48af4e6 success` confirms A12's stated prediction. `04472c5 failure` and `3be3243 failure` both verified as `clang-tidy` alone on SHAs predating `48af4e6` -- the known, fixed cause, checked by ancestry rather than assumed.
+**macOS confirms R101's central claim on both commits** -- runs `35551974581` (`7cd86fc`) and `35551997366` (`c94a0b9`), both `macos (appleclang)` and `macos (llvm-22)` success. **B3's framing is the value, and most would have stopped at "green":** the ruling rested on poll and epoll being wrong and kqueue being right, so had kqueue not already routed a hangup-with-data to the watched direction, the new case would have **failed on macOS while passing on Linux -- the mirror image of the `1709a3c` failure.** It is the platform that could have refuted the ruling's central claim, on the kernel implementing one of the two backends I called correct, and it is the platform that caught B3's careless parity case last time.
+- **B3 refused to overclaim it, unprompted:** *"a green job proves the cases did not fail; it does not by itself prove they ran."* The cases sit in `#ifndef _WIN32` and `BackendMatrix` on macOS is poll plus kqueue -- but that is reading its own source, not evidence from the run. Until the assertion count moves from macOS's previous 804, the honest statement is **"macOS did not reject R101"**, not "macOS exercised both new cases". A12's canary lesson reached independently and applied against its own interest.
+- **Ruling: yes to dispatching `Portability` on `c94a0b9`.** B3's reason decides it -- **FreeBSD is kqueue's other implementation and the only thing that distinguishes a macOS-specific kqueue behaviour from a kqueue behaviour** -- and it has not run since `1709a3c`, the run whose macOS failure started this thread.
+- **Ruling: no to chasing the SEGFAULT under load** -- already reproduced three ways by the re-review. B3's instinct to offer itself as an instrument rather than as a lane adjudicating another's finding was right, and "no longer needed" is the best possible reason to decline. Its own assessment is now a constraint: *"I re-ran the same tree under lighter load rather than reproducing the conditions."*
+**Gate-liveness survey (A12): the tree is in better shape than predicted and the named worst case was wrong.** It predicted ~20% in column three with `check-upstream-drift.py` as the worst case; that gate has a **fourteen-throwaway-repository self-test** telling drift, a deletion, a malformed row and an unreachable upstream apart, and is among the best covered. **A prediction that fails in the reassuring direction still earned its keep**, and A12 led with that rather than burying it.
+- **Column 1:** eight dedicated self-test files, plus CI's `TidyCanary` planted findings, three `WILL_FAIL` dialog canaries, assertions that a compile really runs clang-tidy / that emscripten links no pthread / that `build.ninja` names fastcache-cc, and a codemod step that **refuses a skip by name**. **Plus two gates self-canarying BY CONSTRUCTION** -- `check-layering` and `check-platform-sources` pair each scenario row with `configures` or a regex the refusal must match, so the negative cases live inside the gate.
+- **Column 2:** `exit-codes` demands four mutually exclusive codes from one fixture, so doing nothing produces none of them; `async-link-smoke` links or does not; three consumer smokes build and run real consumers; every `Python3_Interpreter_FOUND` fallback registers an explicit SKIP with a reason -- the rulebook's own rule applied, so a missing interpreter reports skipped and never passed.
+- **Column 3 is ONE shape: gates that PRINT how many things they examined without asserting the number is plausible.** `check-cmake-hygiene.cmake:534` would emit *"0 file(s) are clean"* and exit 0. **Not hypothetical -- it is the exact bug A12's drift checker had**, total sliding 351 to 350 without a murmur.
+- **Ruling: build the two-count cross-check on `check-cmake-hygiene`'s `scanned` before the tag, NOT a nonzero guard**, on A12's argument: *a nonzero guard catches only zero; a two-count cross-check catches under-counting at any level, which is the failure that actually happened.* `check-tree-level-coverage.py:85-96` already has the shape, so this copies an instrument rather than inventing one. **Scoped to that one gate**; `check-platform-sources`'s table is a literal and cannot rot on its own, so hardening it would be speculative.
+- **Coverage note worth acting on before the tag: `core-cpp.upstream-drift` skips on EVERY CI runner.** Honest rather than silent -- the sibling checkouts are absent by design and it says which upstream it could not read -- **but its effective CI coverage is zero; only its self-test runs there.** Exactly what gets counted as a green gate at tag time by someone reading the board.
+- **A12's two honesty notes are the fifth and sixth instances, and both are INSTRUMENTS failing rather than attention failing.** Its count-guard grep was wrong in **both directions** -- a false positive on `if(violationCount GREATER 0)`, a "did we find violations" branch rather than a scan-size check, and a false negative on its own gate's real cross-check written `if blocks != written`. Caught only because eight zeros out of nine tripped the tell it has in memory. And the enumeration **nearly came from a stale build tree**, which would have under-reported while looking authoritative.
+**`7cd86fc` is FULLY GREEN: 24 of 24 jobs, zero non-success (run `35551974581`).** Job count checked rather than the conclusion read, since a run can complete having executed nothing and that has caught two lanes tonight. **R101 is now CI-verified across the entire matrix** -- Linux, macOS on both compilers, Windows, the sanitizers, clang-tidy, emscripten, the consumer smokes -- not only the two macOS legs B3 cited. **First fully green run since `870d12b`**; every red in between was `clang-tidy` on a SHA predating `48af4e6`, verified by ancestry on each rather than assumed. Break, fix, verified, in that order.
+- Two things remain outstanding on B3's round, both of which it named itself: **whether macOS EXERCISED the two new cases** (its watcher on the assertion count against the previous 804 -- still *"did not reject"* until then), and **FreeBSD**, which it is dispatching and which is the only thing separating a kqueue behaviour from a Darwin one.
+- Also confirms the second of A12's three predicted clang-tidy greens (`48af4e6`, `7cd86fc`, `c94a0b9`).
+**`Portability` dispatched on `master` (run `35552791163`), NOT on `c94a0b9` -- and B3 flagged the deviation before the result rather than after.** `portability.yml` is `workflow_dispatch` with no inputs and its checkout has no `ref:`, and GitHub's dispatch API accepts **a branch or tag only, never an arbitrary SHA.** B3 verified `c94a0b9` is an ancestor of `90cd500` with `git merge-base --is-ancestor` rather than assuming it, so R101 and both new parity cases are in the tree being built.
+- **It rejected the temporary-tag workaround, and I would have overruled it had it not.** This repository's release workflow keys off tags and `AGENT.md` requires the tag to equal `project(VERSION)` -- a stray tag here is an input to the workflow that cuts releases, not a local convenience. **"Precise but dangerous" loses to "imprecise and stated".**
+- **The asymmetry it stated in advance is what makes the run usable:** a **pass** is conclusive for R101's purpose, because FreeBSD's kqueue will have run both new parity cases; a **failure** is not conclusively B3's, since `90cd500` carries several lanes' work, and it would attribute before reporting. **Had that limit surfaced afterwards the run would have been worthless** -- not because the evidence changed but because nobody could still tell what it was evidence of. Now a constraint.
+**Ruling: add a `ref` input to `portability.yml`; queued to A12 behind the cross-check.** B3's argument is the count, not the incident: **three separate occasions tonight where someone wanted a workflow run against a specific commit and settled for "dispatch the branch and reason about the difference."** Three in one evening is a missing capability rather than bad luck. B3 identified the fix and **deliberately did not make it** -- a CI file another lane owns. Scope given to A12: an optional input defaulting to the dispatch ref, a `ref:` on the checkout, and the run must **say which commit it built** so a result cannot be misattributed later. Warned that the default path is the thing to get right, and that **`workflow_dispatch` changes cannot be tested on a branch** -- so say what could not be verified before landing.
+- **B3 sharpened my sharpening and its version is more accurate.** I called its three re-runs *"greens obtained by removing the variable you were testing for."* Its correction: **they were evidence about a different question** -- it saw the crash under four concurrent builds, then sampled the same binary on an idle machine. Not a weak test of the right question; a clean test of the wrong one.
+- **And its statistical point makes the whole thing quantitative rather than cautionary**, now a constraint: *a green sanitizer run is weak evidence against a rare race, and the weakness is quantifiable -- three greens after one red is a measurement only if you state the power of the test.* Against a 2-3% defect, three runs have ~92% chance of all passing while it is present.
+**B3 found that the macOS assertion count is UNOBTAINABLE, and finding that out is worth more than the count would have been.** `7cd86fc`'s logs are served; grepping the `macos (llvm-22)` job for `catch2 v3`, `assertions in` and `test cases` returns **zero matches**. **Catch2 prints its totals on FAILURE only**, and ctest logs one line per test -- so the 804 B3 was comparing against existed *only because that earlier run was red*, which is exactly backwards: the failing run is the one where you least need it.
+- **B3 narrowed it rather than declaring a crisis, and checked rather than assumed:** `normalisedExitCode` (`ExitCode.cpp:13`) returns **2** when `totals.testCases.total() == 0`, so a green binary does prove at least one case ran. Its sentence is the actionable form: **the exit-code contract catches a binary that ran nothing; it cannot catch a binary that ran everything except the two cases you care about.**
+- **And it refused to advance its claim when a strong source-level argument was available** -- both cases in `#ifndef _WIN32`, `_WIN32` undefined on Darwin, `BackendMatrix` there being poll plus kqueue -- because *"that is me reading my own file, which is exactly the kind of reasoning tonight has repeatedly caught out."* **macOS did not reject R101, and on this evidence it cannot become more.**
+**Ruling in three parts.** **(1) Print Catch2's totals on success** -- a reporter flag in `core_cpp_add_test`; queued to A12 third, *with its judgment explicitly invited to decline it*, since A12's own survey argued that nobody reads a passing gate's log and the recurrence of the CLASS is not automatically an argument for this particular fix. **(2) A per-binary expected minimum case count: DECLINED** -- a number maintained by discipline is a guard that weakens silently, the mirror image of the four true-negative gates refused tonight. **(3) The durable fix is the rule we already have** -- `.agent/rules/testing.md`'s *`SKIP`, never silence* -- and **B1 is already demonstrating it** with the parked Windows patch turning three `#ifndef`-vanished cases into three skips so 81 and 84 become comparable. That half is B1's, and B3's two new parity cases are in scope for it.
+- **Stated so nobody over-reads the ruling later: none of the three proves those two cases ran on macOS.** (1) makes totals visible, (3) makes a per-platform absence visible; **a case that runs everywhere and asserts nothing useful is still green.** Only an arm-removal RED proves a case exercises what you think -- which B3 did on Linux, and which is why its source argument is strong even though it is not a measurement.
+- Monitor: **`c94a0b9 success`** -- the third of A12's three predicted clang-tidy greens, and B3's fix round 2 head is now green in its own right.
+**Ruling: YES to B3's seventh commit, now rather than round 3 -- it buys the exact evidence B3 told me an hour ago it could not get.** Chasing the unobtainable assertion count, B3 found that **29 parity cases loop `BackendMatrix` with `if (!backend) continue;` and nothing asserts a backend was built.** It checked before reporting: `BackendParity_test.cpp:1654` does `REQUIRE(backend != nullptr)` on `makeBackend(preferredBackendKind())`, and every value that can return is in the matrix, so at least one entry is non-null everywhere. **Its finding is that "at least one" is not the question:** on macOS the question is whether the matrix had **two** -- poll AND kqueue -- because **if kqueue silently stopped building, all 29 cases would test poll only and stay green**, which is precisely the divergence R101 turns on.
+- **So this is not a general hardening; it is the missing evidence for THIS ruling.** R101 rests on kqueue being right where poll and epoll were wrong, and a macOS run exercising only poll would confirm nothing while looking identical to one that confirmed everything. **B3 found the one place where a green run and a vacuous run are indistinguishable on the specific question the ruling is about.**
+- All three of B3's hesitations answered: the seventh commit costs nothing because `rereview-B3-r1` has an explicit six-commit list and a worktree detached at `c94a0b9` (reviewer told anyway, as with B1); "not currently broken" is right and is not a reason to wait, since the trade changed when the evidence became obtainable for fifteen minutes; and **it is NOT the shape I declined an hour ago** -- that was a number maintained by discipline, this is **named rather than counted**, B3's own distinction and the one that makes it acceptable.
+- **One hazard flagged in its good form: the table says Windows → Wfmo only, and B7 makes IOCP the Windows default, so that row WILL fail then -- correctly, as part of that change.** Told B3 to write the failure as an instruction naming the table, and a line goes into B7's dispatch so its author meets it in a brief rather than as a surprise red.
+- FreeBSD run `35552791163` is already in flight on `90cd500` and will not carry this, so its answer stays *"did not reject"*. Re-dispatch after this lands: **FreeBSD is the run where proving kqueue was in the matrix matters most**, being the implementation that distinguishes a kqueue behaviour from a Darwin one.
+- **B3 corrected its own arithmetic unprompted:** 0.97 cubed is 0.91 and 0.98 cubed is 0.94, so **91-94%** rather than a single 92% -- and, more importantly, **the formula assumes independent samples of the same condition and its three were not.** Constraint amended. *A rule stated with an assumption nobody checks is how a correct formula produces a wrong answer.*
+**`8c7daa5` turned `style` RED, it was mine, and the defect was real: "No tracked file contains a CR byte".** `task-C0-report.md` carried one CR at offset 50556 -- **a literal carriage return inside a code span, in the paragraph explaining that `grep` is the wrong tool for detecting carriage returns.** git had classified the file `-text`, so `eol=lf` never normalised it. Fixed as `7d51077`: the byte is now the two characters backslash-r, which is what the prose meant. **The gate is correct and stays as it is.**
+- **Tracking the workspace is what exposed it.** The byte had sat in an untracked file all evening; `8c7daa5` brought it into a gate's scan. That is the tracking decision working as intended -- **but widening what a gate can see is a change to what the gate asserts**, and I did not think about it before pushing. Now a constraint.
+- **Three shell-mediated attempts to replace one byte all failed silently.** Two Python heredocs (`replace(b"$'
+'", ...)` and `replace(bytes([13]), ...)`) and one `perl -i -pe 's/
+/\r/g'` each reported success or no-match **while leaving the byte in place** -- verified by `od` after each. **PowerShell reading the file as bytes and comparing against `13` did it on the first attempt.** The escaping layer between the shell and the tool was eating the pattern. **Three tools "failing" identically is a sign the measurement or the plumbing is wrong, not the tools** -- and I varied the tool three times before questioning the plumbing.
+- **Then I repeated the exact trap the repaired paragraph documents.** My scan for other CR-carrying files piped `od -An -c` into `grep` and reported **five long-tracked `.agent/` files** that contain none, because the pattern matches od's own rendering. **`git ls-files --eol` -- the tool that paragraph prescribes -- says zero tracked blobs are `crlf` or `mixed`.** The trap has now caught two readers in a row, the second while repairing the warning about it.
+- Monitor re-armed after expiry.
+**Master's `style` red is FIXED and verified: `style: completed success` on `7d51077`** -- job state checked, not the run conclusion. A12 independently diagnosed the same byte and offered the fix; messages crossed. Its diagnosis was exact including what I worked out the hard way: **bare CR, not CRLF, which is why it survived** -- `eol=lf` normalises line endings and a lone CR is not one.
+- **A12's second miss is the finding of the exchange and it is mine more than its: "tracking is not only protection -- it is ENROLMENT."** I made that decision three times; A12 noticed the missing half. My earlier form was weaker (*widening what a gate can see is a change to what the gate asserts*); **"protection versus enrolment" names the two things being traded rather than describing the symptom.**
+- **Its redeeming read is right: the gate fired on the very first commit that enrolled those files** -- the strongest evidence tonight that the CR check is live rather than decorative. It reported into a job nobody was watching for three commits, **which is a separate problem and not the gate's.**
+- A12 caught its own scoping failure unprompted: it predicted `style: green` having verified **only the two steps it owned in a job of roughly fifteen** -- *"the same defect I criticised in a forecast of yours four hours ago."* **Both of us have now made it, against our own work. The rule is easy to apply outward.**
+**`9cbf930`: the two-count cross-check landed, RED predicted exactly, and it exposed a second defect nobody sought.** The self-test plants a **defect rather than a violation** -- a scanner copy whose dispatch skips every `.hpp` -- and is discriminating three ways: the clean tree must still pass unmutated, the case requires a specific count, and **it guards its own anchor**, reporting *"the anchor is gone, so this case planted nothing"* rather than passing silently. **A self-test that can quietly stop testing is the same bug one level up.**
+- **The second defect is the better half: the old message counted files no rule had run over** -- `447 file(s) are clean` was **the wrong number**, not merely unasserted. Now `checked 445 of 447`, difference chased to two genuinely unreachable files, with an **independent Python recount** agreeing. Three counts from two implementations is what makes it a measurement.
+**C0's vanishing-cases survey REFRAMES my ruling: 131 cases across 23 files in three classes -- and "a stated reason does not fix the silence."** I had asked it to record whether each guard has a stated reason, as though a documented guard were the acceptable case. **30 of 46 are documented and all 46 are equally invisible in a CI log.** B1's three are the proof: fully documented, and **B1 still had to derive the 84-81 gap by hand.**
+- **Class 2 is larger than Class 1 and I had not asked about it: 85 cases with no guard in the file to comment on**, selected away by CMake source lists -- `core-cpp.platform` loses **66 across seven files** under Emscripten. **Worse than a guarded case, because there is no line to attach a reason to.** C0 found the pattern that solves it where solvable: `core-cpp.net_backend` sets `SOURCES_EMSCRIPTEN` to the same list as `SOURCES`.
+- **Class 3 turned up a real defect to confirm: `core-cpp.net_tls` is registered unconditionally at `net/CMakeLists.txt:206` while `core::net_tls` is `WHEN CORE_CPP_WITH_TLS`, default OFF** -- and `ctest -N` lists no such row. **The dangerous reading is that `core_cpp_add_test` silently drops a test whose target is absent**, which would be a registration helper that quietly registers nothing. C0 to find out which and report.
+- **C0's control caught a bug in its own detector, and the near-miss would have been the more reportable answer:** it would have said **"46 vanishing cases and not one explains itself."** Its words: *"wrong, and far more interesting than the truth -- which is the direction that gets believed."* Both its predictions were low -- 46 against 20-40, 65% documented against 40-60% -- **under-predicting the problem and over-predicting the negligence**, which is the better error.
+**Task B3 fix round 2: CLOSED.** `rereview-B3-r1`: every finding ADDRESSED, F8 ARGUED and agreed with, no new Critical or Important. **It traced all four reachable branches of `selectReadinessCallback` by hand and could not construct a case where `onError` steals a watched direction's wakeup** -- *"I believe the fix structurally closes it, not just the reported cases."* Ran the previously-RED case and saw `1 >= 1` on poll and epoll; `EV_EOF` untouched; **agreed with the companion-case design after working out why** (POLLHUP-without-POLLIN against kqueue's readable `EV_EOF` is a genuine divergence). **F3 verified by mechanism rather than by comment.** clang-tidy run directly rather than through `--quiet`, 5/5 TUs confirmed processed.
+- **Two things nobody has run, recorded rather than papered over:** `posix/DefaultBackend.cpp`'s F7 edit is compiled by **no CI leg and no local preset**, and the Windows-side changes are CI's word only. Neither is a defect; both are unexercised.
+- **B3 converted five vanishing cases rather than its own two** (123 to 128, 5 skipped) because *a file with two conventions teaches the wrong one to the next reader* -- **then made the correction it nearly did not**: Linux 141 against Windows 128, the remaining 13 being whole files via `SOURCES_POSIX`. **Its narrow statement is the rule: within a file compiled on both platforms, a case no longer disappears silently. It does not make totals comparable.** C0 reached the same boundary independently from the other end.
+- **Confirmed to B3 that my decline of a per-binary minimum count never covered its `makeBackend(Kqueue) != nullptr` assertion** -- already approved, and its distinction is right: **a positive assertion about a named thing fails loudly; there is no threshold to drift past.**
+**RULING R106 RE-RULED: the scope restriction is LIFTED. B1's evidence beats the evidence I ruled on.** B1 refused to move in either direction until I re-ruled -- *"I'm not going to quietly fix `Join.hpp` to mask a `ParkedWork` defect, and I'm not going to reach into `ParkedWork` against an explicit ruling"* -- which is exactly right and is why this was catchable at all.
+- **Its reproduction is the best characterisation anyone has:** `origin/master`, plain `clang-debug` (sanitizers distort the timing and hide it), 32-way concurrency -- **36 SIGSEGVs in 1920 full-suite runs, 1.9%**; 15 from the I2 join case alone, 1 from the two-thread claim case alone. B3's one-in-four was the same thing at lower load.
+- **Three probes, and the third names the destroyer rather than inferring it from a stack.** (1) A magic word on `JoinAwaiter` checked after every `resume()` in the start loop: **`PROBE-AWAITER-DEAD at i=2 of 8`** -- at `i=2` at most three of nine decrements can have happened, so `remaining >= 6` and **the join cannot have completed.** (2) An underflow detector on `remaining` **never fired**; the counter is sound. (3) A flag raised for the start loop's duration, checked **inside `AbandonState::release()` immediately before `root.destroy()`**: **8 hits in 1920 runs, zero SIGSEGVs**, the abort pre-empting every crash.
+- **So R106's stated root cause was the EFFECT.** *"Whichever thread's decrement brings `remaining` to zero unconditionally destroys every runner"* describes what the reviewer's stacks showed; B1's flag shows the destroy coming through the **abandon** path while the start loop still runs. Its unification is what makes both accounts one: `root.destroy()` frees the `DetachedTask` frame, destroying the `JoinAwaiter` and `~vector<JoinRunner>` under a worker mid-`Parked::resume()` -- **a completed join and an abandoned chain tear down the same objects through the same destructor.** And the reviewer's own ASan trace was *inside the start-phase guard release* -- the start phase, which is where B1 finds it. **I should have weighed that detail harder when I wrote the ruling.**
+- **Fix held pending two things, on B1's own honesty about its limits.** Its 1 ms sleep gave 0 crashes in 640 runs where the baseline predicts ~5, which it calls **confounded** rather than refuting (the sleep removes the start-loop/release overlap that is the precondition); and disabling `rearm()` proves the destroy comes **through** `release()`, not **why** `release()` concluded abandonment. **"Location proven; mechanism not."**
+- **And the decisive experiment was already running, built by the reviewer before either knew:** an isolated probe exercising only `AbandonState`/`AbandonClaim`/`ThreadPoolExecutor`/`ResumeOn`, **deliberately without `Join.hpp` or `whenAll`**, 200 iterations each under TSan and ASan+UBSan. If it crashes with no `Join.hpp` in the picture, B1 is right and my scoping was backwards; a clean 400 is a meaningful negative because the probe excludes the alternative. Reviewer asked for its counts and for its view on `PROBE-AWAITER-DEAD`, which is the load-bearing probe.
+- **Question 2 answered and accepted: `whenAny` has the identical exposure**, `AbandonState` being shared by both policies with nothing `whenAll`-specific in the path -- **and no `whenAny`-on-pool case exists to demonstrate it**, which B1 names as *"the same unexamined-half shape that let C1's second half survive round 1."* That case gets written whatever the mechanism proves to be. **Question 1 held on B1's reasoning, now a constraint:** pinning a deterministic interleaving against the wrong mechanism bakes in the wrong answer.
+**A12's Catch2 judgment: THE PREMISE WAS WRONG, and it checked rather than answered.** It ran a built binary -- `All tests passed (299 assertions in 74 test cases)` -- so **Catch2 already prints its totals on success** and the reporter flag I queued would have changed nothing. **I would have shipped a no-op and recorded it as a fix.** The real cause is one layer down: `build.yml:48` sets `CTEST_OUTPUT_ON_FAILURE: "1"`, so a passing test's stdout is captured and discarded and no job retains a ctest log. **B3's 804 existed because that run was red** -- green output is thrown away, not quieter. Its sentence: *the reporter is innocent, ctest is doing it.*
+- **It also dissolved the cost question I set it**: I asked it to trade the fix against log noise, and **there is no noise to trade**, because no CI job displays a passing test's output. My question presupposed the same wrong layer its survey argument was about.
+- **Ruling: no code change, one `## Open work` entry**, on A12's reasoning for declining even the obvious replacement -- retaining `LastTest.log` would give the lookup at zero cost, **but a count is only worth having if it is comparable**, and a retained 81 meaning *"81 ran"* in one job and *"81 ran, 3 vanished"* in another invites the misattribution retention was meant to prevent. **B1's `SKIP` work is the half that makes counts comparable and it is the harder half.** Told A12 to record the LAYER in the entry, so the next person does not re-derive "Catch2 only prints on failure" and go looking at the reporter as B3 and I both did -- and to note C0's 131 cases, since "after the `SKIP` rule makes them comparable" is a longer road than one lane's patch.
+**C0 cleared `net_tls` and found the real hazard one step over.** `core_cpp_add_test` looks up the name's row in the module table and declines to register a test for a target the table says is not built -- **the condition is derived from the DAG rather than repeated beside it**, which is this project's own *a reason recorded twice can disagree with itself* applied to a build condition. **So the `if(NOT EMSCRIPTEN)` wrapper around `core-cpp.net` is the inconsistency, not the registration.** Not a gate that quietly registers nothing.
+- **But `core_cpp_row_builds` evaluates `if(when AND NOT ${when})`, so a MISSPELLED `WHEN` silently removes the target and every test registered against it** -- an undefined variable is false, `NOT` is true, the row does not build. **Configures clean, builds clean, module absent, no diagnostic anywhere.** Two instances exist and both are spelled correctly: **true by discipline, in the helper that decides what gets built and tested at all.** Dispatched to C0 with the schema-change conditions -- RED predicted, refusal **by name**, a discriminating case (one refusing every `WHEN` would also "catch" it), and a self-test in `check-cmake-hygiene-selftest`'s shape. **One question left to C0 to decide and report rather than assume:** whether "declared option" means `option()` only or also a cache variable or plain `set()` -- because a check that only knows `option()` becomes the thing worked around the first time the table wants something else, and **a rule people route around stops being read.**
+- **Third inert guard C0 has found tonight**, all one shape: **a check whose misspelling, mis-scoping or mis-shaping passes silently** -- the `removed` row, the reason-above-the-`#if` detector, and now a build condition. Told it that is its particular strength, because it is the failure this project is least able to find any other way.
+**B3: `779f6f9` pushed, and FreeBSD is GREEN** (run `35552791163` on `90cd500`, which contains `c94a0b9`) -- **with the limitation B3 stated in advance intact**: it proves *"FreeBSD did not reject R101"*, not that its kqueue was in the matrix, since the run predates the new table. The RED for the table was predicted and matched exactly (adding `Kqueue` to the Linux row, one failure), **and the B7 warning is in the failure message itself** so its author meets it where the red appears rather than only in a brief.
+- **B3 flagged that the five-case `SKIP` conversion was the one part of that commit I had not explicitly authorised**, and said it should have separated it or asked rather than letting it pass as covered. Correct instinct; the conversion itself was ruled and the file is B3's, so no deviation -- but naming it unprompted is the behaviour that makes the rest of its reports trustworthy.
+**`rereview-B3-r1` addendum: `779f6f9` is the right shape and does not collide with its review.** Its independent judgment on my specific question -- whether the per-platform table is *"a list standing in for a rule"* -- is **no**: there is no single property under "which backends does this platform build" other than the module table itself, so **it is not approximating a rule, it IS the fact.** What makes it the good kind: each row states why, it is tied to the one thing it must stay true for, and the failure carries the instruction. **One thing it checked and cleared rather than flagged:** `BackendMatrix.hpp` is a single unconditional array on every platform, so the new case's second check cannot fail today -- future-proofing rather than live coverage, and the `makeBackend() != nullptr` half is doing the real work.
+- **And it restated the main event exhaustively when asked a second time:** all four reachable branches traced -- readable+failed on a reader, writable+failed on a writer, failed-alone with `onError`, failed plus the *other unwatched* direction -- **no fifth path.** All three platforms this task cannot run locally are now confirmed green for fix round 2.
+**False alarm of my own making, and it is the second self-inflicted bad measurement in an hour.** I read `7d51077` as having 3 non-success jobs and accused myself of the scoping failure I have recorded twice tonight -- reporting `style` fixed without checking the rest of the run. **Both halves were wrong: the run is `in_progress`, the three jobs are still running, and my jq filtered on `conclusion != "success"` without checking `status`, so an empty conclusion read as a failure.** Style did pass; my original report to A12 was correct. Now a constraint, alongside the `od | grep` false positives from an hour earlier.
+- `90cd500 failure` verified as `style` alone on a head predating the CR fix -- the third of that set (`8c7daa5`, `90cd500`, `9cbf930`), all already fixed by `7d51077`. Checked by ancestry, no action.
+**B3 closed half of the re-review's unexercised item with an instrument I had no answer for.** `posix/DefaultBackend.cpp` is selected only on a POSIX platform that is neither Linux, BSD, Apple, Windows nor Emscripten -- Solaris, AIX, illumos -- so nothing we run compiles it. **It extracted the real compile command for `linux/DefaultBackend.cpp` from the compile database, stripped the output and dependency flags, and ran `-fsyntax-only` against the orphan: exit 0** under the full pedantic set with `-Werror`. *"Nothing builds this file"* had been a shrug; it is now a question with a cheap partial answer.
+- **Its statement of what that does NOT establish is the better half**, and why the first half is trustworthy: Linux's libc headers rather than Solaris's, and `-fsyntax-only` does not link, so a missing symbol would not show. *"'Small' is my judgement and 'unexercised' remains the accurate word."*
+- **And the subtler note, now a constraint:** *"I ran them locally on `cl-debug` and `clangcl-release`, which is the same evidence CI has, not independent of it."* **Running the same configuration yourself is a second sample, not a second method** -- it catches flakiness and nothing else. Most would have counted it as corroboration.
+- **B3 re-dispatched FreeBSD on `0ae632e`** (verified to contain `779f6f9` by ancestry, not assumption) so the backend table runs there and the claim becomes the strong one -- **kqueue was built and in the matrix on FreeBSD**, which is what separates a kqueue behaviour from a Darwin one. I should have asked for that rather than leaving it to B3.
+- **On its misreading of my decline: the ambiguity was mine.** I declined a per-binary minimum count while B3 had a named table in the same conversation, and did not say which clearly enough for the distinction to survive. It caught it by re-reading rather than by my telling it.
+- **Its closing reframe is the right way to hold the `SKIP` work:** C0's 85 Class-2 cases make B3's five a rounding error by count -- **but what B3 produced was the narrow statement, not the five**, arrived at by checking arithmetic it was about to report triumphantly. **A correct boundary is worth more than a large fix.**
+
+## Controller-verified tree state at `f2a175f` (independent of any lane's report)
+
+Measured against a clean `origin/master` worktree, each checker's own exit code, script presence
+proven first:
+
+| Gate | How run | Result |
+|---|---|---|
+| `check-cmake-hygiene` (carries the provenance rule, R86) | `cmake -DROOT=<wt> -P` | **exit 0** -- 445 of 447 files, all clean |
+| `check-platform-sources` | `cmake -DTARGETS=<wt>/cmake/CoreCppTargets.cmake -P` | **exit 0** -- 8 scenarios, 8 rows |
+| `check-renames.py` | `python ... --root <wt>` | **exit 0** -- 495 rows, 468 delivered, 1 pending, 8 removed, 0 failures |
+
+**B4's `cc1b237` landed the code together with +15 provenance lines and +163 renames lines**, which
+is what its dispatch demanded and what I then went on describing as an open blocker for five more
+commits. The "5 provenance + 3 renames rows hold `ctest -L hygiene` red" line is retired.
+
+CI at 02:23Z: 3 Build runs in progress, 7 queued, newest 3 minutes old -- draining, not stalled.
+The earlier "six queued, none running" reading was a `--limit 6` window artifact.
+
+Task B1: fix round 2 verified and R106 CLOSED — `50aed76` (one atomic word: `claimAndArm()` and
+`release()` each a single CAS) plus `e80d1a1` (the CAS retry as a do/while, after it landed with a
+`for (;;)` that `cmake-hygiene` refuses). Implementer: 0/12000 on three harnesses against a 0.052%
+wrong-fix rate, arithmetic fixed before the runs. Independent confirmation by `rereview-B1-r1`'s
+`Join.hpp`-free probe: 18,000 TSan iterations, 0 failures, against a baseline of 4/9/10 per 2000.
+Nothing in `Join.hpp` changed. **Outstanding from B1: the two parked `whenAny` pool cases**
+(`whenany-pool-cases.patch`), which could not land until the fix did.
+
+**Correction to the line above, same hour:** the two `whenAny` pool cases were NOT parked — they
+landed inside `50aed76` itself, in its 113-line test diff, at `ThreadPoolExecutor_test.cpp:412` and
+`:445`, with the `WHAT IT CANNOT CATCH, measured rather than assumed` label at `:418`. I wrote
+"outstanding" from B1's earlier message and did not check the tree. **Task B1 is CLOSED:
+`ac0ff76..e80d1a1`, hygiene 15/15, six toolchains clean, R106 fixed and independently confirmed.**
+
+## Prediction committed BEFORE B4's fixes land (run 35556086166 on `50aed76` is the baseline)
+
+Failing there: `style`, `macos (appleclang)`, `sanitizers (clang-asan-ubsan)`, `windows (cl-debug)`,
+`consumer-smoke (cpm)`, `consumer-smoke (vendored)`, `ci-ok`.
+
+| Job | Cause | Should go green when |
+|---|---|---|
+| `style` | `for (;;)` at `ParkedWork.hpp:92` | **already fixed** — `e80d1a1`; scanner verified 445/447 clean |
+| `macos (appleclang)` | `std::jthread`, `TestLoop_test.cpp:376` | B4's jthread fix |
+| `Portability` (FreeBSD) | same line | B4's jthread fix |
+| `sanitizers (clang-asan-ubsan)` | stack-use-after-scope, `EventLoop_test.cpp:784` | B4's lifetime fix |
+| `windows (cl-debug)` | canary hangs 60 s; no `core::testing_dialogs` | B4's link line |
+| `consumer-smoke` ×2 | canary registers tests in consumers; no `CORE_CPP_TESTING` guard | B4's guard |
+| `ci-ok` | aggregate | all of the above |
+
+**`macos (llvm-22)` was failing on `f2a175f` and is GREEN on `50aed76`** — evidence the `parkForever`
+`#ifndef NDEBUG` fix worked, and evidence that **the jthread breaks AppleClang and FreeBSD but NOT
+LLVM-22's libc++**, which does define `__cpp_lib_jthread`. That distinction was not visible while
+both legs were red for two different reasons.
+
+**Anything still red after those four fixes is a FIFTH defect, not a surprise** — and this table is
+written down so that cannot be rationalised after the fact.
+
+**R106 final:** closed under three independently-validated park-creation topologies. Original defect
+4/9/10 per 2000; `50aed76` 0/0/0 + 0/12000; `e80d1a1` 0/0/0; `probe_multispawn` control 9/9/10 on
+pre-fix `04472c5` then 0/0/0 on `e80d1a1`. Probes kept at `D:/core-cpp-wt-b1-probe/`.
+
+## Prediction result: EXACT (run 35556460529 on `e80d1a1`, master tip)
+
+Failing: `ci-ok`, `consumer-smoke (cpm)`, `consumer-smoke (vendored)`, `macos (appleclang)`,
+`sanitizers (clang-asan-ubsan)`, `windows (cl-debug)`.
+
+- **Unpredicted failures: none.** `comm -13 predicted actual` is empty -> **no fifth defect.**
+- **Predicted-red that went green: none.** `comm -23` is empty -> the forecast did not over-predict.
+- **`style` went GREEN**, as forecast, on B1's `e80d1a1` do/while fix -- and it agrees with the local
+  scanner run (445 of 447 files, all clean). **Two instruments in different currencies, same
+  answer.**
+
+**So master's red is now a CLOSED, ENUMERATED set of four defects, all B4's, all diagnosed to a
+line.** When those four land, `ci-ok` should go green with nothing left over. That is the value of
+writing the forecast down before the run: "master is red" became a bounded list instead of an
+open-ended worry, and the check for a fifth defect is a set-difference rather than a judgement.
+
+**`1205045`** — `test(net): what a spawned flow writes to must outlive the loop, and nine of mine did
+not`. Set-difference against `e80d1a1`: **`sanitizers (clang-asan-ubsan)` went GREEN; nothing new
+introduced.** Three defects remain — `macos (appleclang)` (jthread), `windows (cl-debug)` (canary
+dialogs link), `consumer-smoke` ×2 (canary `CORE_CPP_TESTING` guard).
+
+**I diagnosed one site; B4 found NINE.** I reported `parkForAnHour(EventLoop*, int*)` at
+`EventLoop_test.cpp:784` from the single ASan trace CI happened to surface. B4 swept the file for
+the shape instead of fixing the line. **A sanitizer reports the instance it reached, never the
+class** — and a report naming one site invites exactly the one-line fix that leaves the other eight.
+
+**`216d1d1`** `fix(net): on Windows the host-driven canary hung instead of failing` — the
+`core::testing_dialogs` link. **`a040878`** `fix(net): two legs no local preset can run, and the
+second was landing in consumers' suites` — the `CORE_CPP_TESTING` guard. Pushed as two separate
+commits, one per push. Verified at `origin/master`: `testing_dialogs` 2 hits (was 0),
+`CORE_CPP_TESTING` 2 hits (was 0). **Three of four defects fixed; only `std::jthread` at
+`TestLoop_test.cpp:376` remains.** Both runs in flight.
+
+`a040878`'s title names the property that hid both: **no local preset runs `consumer-smoke` or the
+macOS legs**, so a lane doing everything its checklist asks still cannot see them.
+
+## Task B4: COMPLETE — master fully green at `a040878`
+
+`cc1b237` (the EventLoop contract) plus six repairs: `8f1d0d0` (Release `-Werror` + ClockRefresh),
+`45fc58a` (clang-tidy `_outermost`), `1205045` (nine spawned-flow lifetime sites), `216d1d1` (canary
+links `core::testing_dialogs`), `a040878` (canary guarded by `CORE_CPP_TESTING`; `std::jthread` ->
+`std::thread` with explicit join). **Run 35559759646: all 25 jobs success, `ci-ok` success.**
+
+Phase B so far: B1 ✓, B2 ✓, B3 ✓, B4 ✓. Next: B5 (timers), dispatch written and audited.
+
+**`a9ea52b` red, as recorded in advance.** Run 35562734180 failed on every compiling job with
+exactly the predicted errors — `'TimerId' does not name a type`, `'cancelTimer' is not a static
+data member`, `Park has no member named 'onExpired'`, `ReadyEntry has no non-static data member
+named 'callbackPark'`. **Those are B5's symbols, declared in headers that were correctly still
+uncommitted.** The commit was repaired forward in `4049954` four minutes later; the red is truthful
+and needs no investigation.
+
+**`4049954` GREEN** (run 35562779359) — master's tip restored. The `--only` sweep incident is closed
+end to end: `a9ea52b` red for exactly the predicted compile errors, `4049954` green four minutes
+later, B5's work verified intact in the working tree throughout, nothing redone.
+
+**Open:** B4 fix round 1 (Critical in `blockOn` — the `break` where its own `@throws` clause
+specifies a `std::logic_error`; 3 Important; 5 Minor). B5 implementing timers.
+
+## Task B5: landed as `fe48143`, master green 25/25
+
+`net: callback timers; DeadlineTimer and interruptible sleep no longer poll`. The pre-committed CI
+prediction table came out exact. **Fix round 1 is open** — 1 Critical, 2 Important, 8 Minor.
+
+The Critical: **`addTimer` never wakes or arms a host-driven backend.** A timer armed outside a
+turn silently never fires there, because a host-driven backend has no wait to interrupt — `wake()`
+*is* how the host is asked for the turn. The function immediately above it in `EventLoop.cpp` ends
+with exactly that `if (!isOnWorkerThread()) _backend.wake();` and says why in a comment. Adjacent
+code that already states the rule is the cheapest review instrument there is, and it did not fire
+for the author of the adjacent code.
+
+Also in the round, window still open under `[Unreleased]`: rename `RunOnceResult::resumed` and
+correct the `[[deprecated]]` wording.
+
+## Ruling: merge order for the three lanes inside `EventLoop.{hpp,cpp}` + `detail/ParkTable.hpp`
+
+**B4 pushes `fb3fe97` -> B5 rebases its fix round -> B6 rebases last.** Not negotiable in that
+direction because `fb3fe97` is already gated: it is the object its gate record names, so it goes up
+unamended and the rulebook follow-up rides on top as its own commit.
+
+**Cost if wrong:** B6 rebases twice instead of once. **Cost of the alternative** — letting a gated
+commit be rewritten so a one-line rulebook edit can ride inside it — is a gate record that names an
+object nobody built, which is the failure this project has now paid for twice.
+
+Expect a `ParkEntry` conflict: B5 added `onExpired` + `callbackState`, B6 adds `onReady` + its
+state. Disjoint fields, same struct, resolution is keep-both — including the
+`.onExpired = nullptr, .callbackState = nullptr` designated initializers B5 added at every
+construction site. `renames.json` conflicts on every lane and resolves keep-both plus
+`ctest -R migrate-renames`.
+
+## Ruling: B6's frameless readiness park is approved, and its rejected alternative is the argument
+
+B6 reasoned from coroutine semantics rather than from precedent: **`ISocket::write` writes the whole
+buffer, so it is inherently multi-step; `co_await` suspends exactly once, so `await_resume` cannot
+re-park; therefore a frame-free operation's retry loop must run where readiness is delivered, not in
+the awaiting coroutine.** That is a consequence, not a preference. `ParkEntry::onReady(...)`
+dispatched through the ready queue in turn step 2, modelled on B5's frameless timer, inherits
+`notifyHandleClosing`, the generation-checked `requestCancel`, `hasPendingWork()` and teardown.
+
+It **rejected** exposing `EventLoop::backend()` for direct registration, and the sharp form of that
+rejection is a cross-lane observation: those registrations would be invisible to the park table, so
+`blockOn` would see `hasPendingWork() == false` with a socket read outstanding — **which, after
+B4's `fb3fe97`, is a `std::logic_error` rather than a hang.** B4's Critical fix converts B6's
+rejected design from a silent deadlock into a thrown exception: a good argument for the fix and a
+better one against the design.
+
+## The unbacked-up-commit measurement, re-run: 67 of 88 -> 1 of 1
+
+Every detached worktree HEAD measured against `origin/master`:
+
+```
+D:/core-cpp-wt-b4fix    fb3fe97   not-on-origin/master = 1
+wt-b5 wt-b6 wt-b3r2 wt-b1-probe wt-stress wt-b3 wt-rereviewB13a hygiene-probe   = 0
+```
+
+`fb3fe97` is on **no branch and no remote** — one `git worktree remove` from gone. Anchored with
+`git update-ref refs/backup/b4-fb3fe97`, deliberately outside `refs/heads/` so
+`git branch -a --contains fb3fe97` still reports empty and B4's own check stays honest. A safety ref
+that changes what the lane measures is not a safety ref.
+
+**The earlier 67-of-88 figure was true when measured and is now false** — the lanes pushed. Worth
+recording only because the first version of that check used `origin/master..HEAD`, which asks
+whether commits are on master, not whether they are anywhere backed up. The re-run is the number.
+
+## A trap I nearly walked into: the lead must not commit either, while a gated fast-forward is pending
+
+I edited `.agent/rules/build-and-toolchain.md` (making the `--clean-first` condition evaluable) and
+was about to commit it. **That commit would have destroyed the ruling it was supposed to serve.**
+
+`fb3fe97` sits directly on `fe48143 == origin/master`, so B4's push is a one-commit fast-forward.
+**Any commit of mine landing first makes it no longer a fast-forward**, so B4 would have to rebase,
+so `fb3fe97` would get a new SHA — and the entire point of "push exactly as gated, the rulebook line
+rides as a follow-up" is that **the gate record names the object that was pushed.** My rulebook edit
+would have forced the very rewrite I forbade B4 from doing, for the sake of a rulebook edit.
+
+**The merge-order ruling binds the lead too.** The edit is held uncommitted until `fb3fe97` is up.
+Recorded because the ruling was written as an instruction to lanes and I did not initially read
+myself as one of them.
+
+## B4 and B5, both blocked on the same gate, in two different ways
+
+**B4 asked for a ruling and I gave it: finish TSan and clang-tidy, do not push early.** B4 had
+reconciled its own gate record honestly and found `clang-tidy` **never started** — it had reported
+"four of six" and then "five of six" counting against a list built from memory rather than from
+`AGENT.md`'s checklist. The mechanism is worth more than the instance: **the gates you ran are the
+ones you remember, so memory reconstructs a list that is complete by construction and wrong by
+omission** — which is why B4 made the identical error again ten minutes later when it re-derived
+"the three gates that read the tree" from memory and dropped `clang-tidy` a second time.
+
+**B4's argument for waiting was right on the evidence it had** — "skipping the gates buys nothing
+against the loss risk, because `fb3fe97` is one `git worktree remove` from gone either way" — and it
+is now doubly right, because `refs/backup/b4-fb3fe97` already removes that risk. B4 could not see
+the ref: it is outside `refs/heads/` precisely so B4's own `git branch --contains` stays honest.
+
+**B5 caught itself reading "0 findings" off a clang-tidy log at 179 of 526 files.** Same gate, same
+hour, two lanes, two different ways of having no answer while believing otherwise — B4 by never
+starting it, B5 by reading it early.
+
+## B5's finding, which is the best methodological result of Phase B so far
+
+> *"I had checked the smoke could fail — but by moving the deadline past the bound, which tests the
+> bound, not the arming."*
+
+**B5 mutated the observation, not the mechanism.** Moving a deadline past its bound asks whether the
+harness notices a late timer; only a mutation to `addTimer`'s wake could ask whether arming outside
+a turn reaches a backend with no wait to interrupt.
+
+And the masking was load-bearing in **both** WebAssembly programs: they were green because
+`loop.spawn(...)` preceded the timer and **spawn's** wake bought the turn. **A case made green by a
+neighbouring call is a test of the neighbour** — worse than a missing mutation, because it reads as
+covering what it does not, and the next person to add a convenience `spawn` deletes the coverage
+without touching an assertion.
+
+## Two audits, both clean, recorded so they are not re-run
+
+- **Fourteen issue citations verified against their titles**, not merely their existence:
+  `fastcached#465 #884 #1025 #1041 #1054 #1057 #475 #677 #1128 #1152 #1369 #1531`, core-cpp `#6 #17`.
+  All fourteen match the claim the citing text makes.
+- **`--clean-first` IS still required on `clangcl-*` trees.** The installed fastcache-cc is built
+  from `d4451c3b` (2026-09-16); the #1531 fix is `ca8dfc32` (2026-09-18). The launcher predates the
+  fix. `AGENT.md` states this conditionally and **the condition was unevaluable in practice**, so
+  `.agent/rules/build-and-toolchain.md` now carries the two commands that answer it. B7a told
+  directly: it edits `IoBackend.hpp`, which most of `core::net` includes, on the affected toolchain.
+
+## The Phase B critical path is B6, and five tasks are behind it
+
+- **B7a** (IOCP backend, readiness bridge, `slot`) — needs only B3's `IoBackend`. Running.
+- **B6** (`ISocket`, frameless readiness park) — running. **Five tasks need it:**
+  - **B7b** — `IocpSocket`/`IocpListener` + flipping the Windows default. Needs B6 **and** B7a.
+  - **B8** — dial and DNS. Needs B6; `IocpDial` also needs B7a.
+  - **B9** — UDP and blocking transports. Needs B6.
+  - **B10** — buffered reader, write queue, HTTP server. Needs B6.
+  - **B11** — TLS. Needs B6.
+- **B12** (TUI runtime on the loop) needs B6 and B4. **B13** (gates, docs, v0.1.0) needs all.
+
+**So B8, B9, B10 and B11 can run in parallel the moment B6 lands**, which is the point at which lane
+count stops being the constraint and build throughput starts. Holding at four concurrent lanes until
+then: B5's tidy tree and B4's are both rebuilding from scratch right now, which is most of the
+machine.
+
+## `fb3fe97` CI-GREEN — master fully green with the `blockOn` Critical fixed
+
+```
+run 35569159400   conclusion=success   jobs=25   non_success=0   ci-ok: success
+```
+
+B4's eleventh gate, and the only one it could not run locally. Ten of ten local gates were green
+before the push — including `clang-tidy` 22.1.8 with `warnings=0, errors=0` over a **535-line** log
+and `--tidy=` verified on `EventLoop.cpp`'s own build statement — and CI agrees.
+
+**This also retires the repair-forward branch** I had B5 and B6 rebase against: I told both to rebase
+on `fb3fe97` without waiting for CI, on the reasoning that a red would be repaired forward
+(`a9ea52b` -> `4049954`) and their base would stay valid either way. It did not go red, so the
+contingency never had to be exercised.
+
+**Phase B: B1 ✓ B2 ✓ B3 ✓ B4 ✓ B5 ✓ (fix round in flight).** Queue: B5's `a02031c` -> B4's
+six-item follow-up -> B6. B7a running in parallel on the IOCP backend, which needs nothing from any
+of them.
+
+## Task B5: COMPLETE — `a02031c` on origin/master
+
+`fix(net): addTimer never asked a host-driven loop for the turn that runs it`. Every gate measured
+**on a throwaway worktree of the pushed commit**, not on the working copy the fixes were written in:
+clang-debug / gcc-release / ASan / TSan **31/31** each, cl-debug / clangcl-release **33/33**,
+emscripten **13/13**, hygiene **16/16**, consumer-wasm **1/1 and red with the fix reverted**, mkdocs
+green, clang-format clean, and **clang-tidy 509 statements / 0 findings from a deleted tree**.
+
+**509 after the 25 it caught and threw away** is the two-hour instrument thread in one line.
+
+That worktree detail is the part worth copying: **every number is about the object now on master,
+not a tree that resembles it.** This project has been bitten twice by the difference — a gate record
+naming a SHA nobody pushed, and a `log_lines` count that predated part of the change it certified —
+and B5 closed it by construction rather than by care.
+
+## A near-miss of mine: the shared checkout's HEAD was an orphan, and B4 was about to commit onto it
+
+`D:\core-cpp`'s `master` still pointed at **`ae34fea`** — B5's *pre-rebase* commit, orphaned the
+moment B5 rebased it into `a02031c`. **B4's `git commit --only` runs in that checkout and commits
+onto its HEAD**, so its six-item follow-up would have landed on an orphan, on the wrong base,
+missing `fb3fe97`'s content.
+
+```
+git reset --mixed origin/master            # branch + index to a02031c, working tree untouched
+git checkout -- <11 stale tracked files>   # their diffs REVERTED landed work
+```
+
+The reset exposed that the working tree held **pre-`fb3fe97`** content for eleven tracked files, and
+their diffs were removals of B4's and B5's landed work — dropping `#include <stdexcept>` from
+`EventLoop.hpp`, reverting the CHANGELOG `blockOn` entry to the wording B4 had corrected, deleting
+the teardown rule from `async-and-net.md`. All discarded; the lead's own held
+`build-and-toolchain.md` hunk with them, since B4 already carries it.
+
+Verified after: `HEAD = a02031c (master)`, eleven `.superpowers/` files dirty and nothing else,
+`grep -c stdexcept EventLoop.hpp = 1`, `grep -c addTimer EventLoop.cpp = 4`.
+
+**The rule I wrote and did not follow:** I told the lanes the shared checkout is a *commit staging
+area, not a workspace* — and then left its branch pointing at a commit that had been rebased out
+from under it. **A staging area whose HEAD nobody maintains is worse than a workspace: it looks
+ready and commits to the wrong place silently.** Maintaining it is the lead's job.
+
+## `Z:\core-cpp-b5-rescue\` was never deletable because Z: does not exist
+
+`Get-PSDrive` reports **C, D, X**. The user dropped Z: earlier in this session. B5's tooling was
+refusing to write or delete under `Z:\` because the volume was gone, not because of a rule — and B5
+carried it as an open cleanup item, which was the right default. **A tool that refuses to touch a
+path is not evidence the path exists.**
+
+## `a02031c` CI-GREEN — Task B5 closed end to end
+
+```
+run 35570339997   conclusion: success
+25   completed / success        <- every job, grouped rather than selected
+ci-ok: success
+```
+
+Both of B5's commits are now CI-verified: `fe48143` (the task) and `a02031c` (fix round 1).
+**Phase B: B1 ✓ B2 ✓ B3 ✓ B4 ✓ B5 ✓.**
+
+B5 held this claim open past the point where closing it would have been convenient — the third time
+in its round, after the unfinished tidy log and the `steps=25` inheritance. Each one mattered.
+
+**Queue:** B4's `27b8b43` (gating) -> B5's M8 follow-up -> B6. B7a running in parallel.
+
+**What B5's round produced beyond the code:** one Critical found and closed in its own work; the
+sharpest methodological result of Phase B (*a mutation tests the observation as well as the
+mechanism*); four corrections of the lead, three of them on conclusions already published; and two
+of its own instruments caught lying inside the hour it wrote the rule forbidding it. The `steps=25`
+catch cost it a push window it was ready to take.
+
+## The lead cannot push at an arbitrary time, and that is a protocol, not an inconvenience
+
+`.superpowers/` is **tracked** — 135 files in git, 10 recent ones untracked and owed the same
+treatment. So the ledger, the dispatches and the briefs belong in commits, and eleven of them are
+currently dirty in the shared checkout plus ten untracked.
+
+**But the lead cannot simply push them.** While any lane holds a **gated-but-unpushed** commit, a
+lead push stops that lane's push being a fast-forward, forces a rebase, and changes the SHA its gate
+record names — which is precisely the rewrite ruled out for `fb3fe97`. Right now B4 is gating
+`27b8b43`, and the moment it lands B5 rebases M8 onto it and gates that. **There is no arbitrary
+moment; there are windows.**
+
+**The window is after B5's M8 lands and before B6 is ready**, which is hours away. The ledger goes
+in then, tracked files and the ten untracked ones together, so the record is not half in git and
+half on disk.
+
+**The general rule, which is the lead's version of what the lanes already follow:** a push into a
+queue of gated commits is the same hazard as an amend, and the holder of the queue is the one who
+must wait. I wrote *the shared checkout is a commit staging area, not a workspace* for the lanes;
+this is its second half, for me.
+
+## Task B4: COMPLETE — `27b8b43` on origin/master
+
+`docs(rules): a rule without a procedure is agreed with, not executed` — six items: the
+`build-and-toolchain.md` instrument-proof procedure (with the lead's `--clean-first` hunk and B4's
+two-launchers sentence), the `async-and-net.md` adjacency line with B5's family form, M8's guard in
+`DelayAwaiter`, `ScopeGuard.hpp` documenting its own constraint diagnostic, and three
+counter-declaration comments.
+
+**Gate record, five levels, from a deleted tree:**
+
+```
+clang-debug   build_rc=0  ctest_rc=0  31/31
+clang-tidy    L0 exit build_rc=0
+              L1 binary  -- [core-cpp] clang-tidy 22.1.8 (~/.local/bin/clang-tidy)
+              L2 applied --tidy="...clang-tidy;..." on EventLoop.cpp.o
+              L3 work    534 statements
+              findings   none
+clang-format clean   mkdocs --strict rc=0, artifact checked
+```
+
+534 against B5's 513 and 509, all three from deleted trees.
+
+**Both of B4's commits pushed exactly as gated, neither amended after its gate record was written** —
+`fb3fe97` (ten gates) and `27b8b43` (six items). **Phase B: B1 ✓ B2 ✓ B3 ✓ B4 ✓ B5 ✓.**
+
+## `27b8b43` CI-GREEN — both of B4's commits verified end to end
+
+```
+run 35572252833   conclusion: success
+25   completed / success
+ci-ok: success
+```
+
+**Four consecutive green pushes on master tonight**, each one a single fast-forward: `fe48143` (B5),
+`fb3fe97` (B4), `a02031c` (B5), `27b8b43` (B4). All 25/25. No repair-forward needed since
+`a9ea52b`.
+
+**Phase B: B1 ✓ B2 ✓ B3 ✓ B4 ✓ B5 ✓.** Remaining: B5's M8 follow-up (gated, pushing now), then
+**B6 — the critical path**, with B7b, B8, B9, B10 and B11 all behind it and able to fan out in
+parallel the moment it lands. B7a is running beside it and needs nothing from it.
+
+Dispatch readiness for that fan-out, so the moment is not spent writing:
+- **B8** — full dispatch, Sources corrected (`ReactorDial.hpp`, `KqueueConnector`, `IocpDial`).
+- **B9** — brief + corrections (`ParkingReadableSocket` is a class in `src/tests/SocketDecorator.hpp`;
+  `IDatagramSocket` is the plan's `Datagram`; `BlockingConnector`/`IAdmissionControl` ruled to B8;
+  `SocketClosedStates_test.cpp` is a fake-vs-real parity test and not optional).
+- **B10** — brief + the `LingeringClose` finding and [core-cpp#35](https://github.com/contour-terminal/core-cpp/issues/35).
+- **B11** — brief + the crypto-seam gate that fastcached has and core-cpp does not, the
+  generate-don't-commit certificate rule, and the undecided `CryptoError` question.
+- **B12** — brief + the two mis-pathed deletions and the three-file `TerminalEventSource`.
+
+## `8d7b8b2` — B5's M8 follow-up landed; B6 is unblocked and the queue ahead of it is empty
+
+`fix(net): a throw between parking and arming the stop callbacks leaked the park`. One file,
++26 lines, re-gated from scratch at the moved base rather than carried over — correctly, because
+`27b8b43` had modified `detail/ScopeGuard.hpp`, the header the change includes.
+
+**Five consecutive green fast-forwards on master tonight:** `fe48143`, `fb3fe97`, `a02031c`,
+`27b8b43`, `8d7b8b2`.
+
+**B6 is now the only thing between Phase B and a four-way fan-out** (B8, B9, B10, B11), with B7b
+behind B6 and B7a. B7a runs beside it.

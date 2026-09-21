@@ -1016,3 +1016,376 @@ longer looking at 81 against 84 with nothing to explain it.
 
 Patch parked at the session scratchpad as `windows-skip.patch`, 43 lines, based on `48af4e6`.
 Both verification worktrees removed.
+
+---
+
+# DEFECT: the SEGFAULT is real, it reproduces, and it is mine
+
+The controller passed on another lane's single unreproducible `core-cpp.async` SEGFAULT with its
+limits spelled out and asked whether it moved my confidence. **It reproduces, and the cause is the
+`rearm()` I added in the C1 fix.** Reported before fixing: R97 reserved this object's design to the
+controller, and B3/B4/B5 build on it.
+
+## Reproduction
+
+`origin/master` at `90cd500`, plain `clang-debug` (**not** sanitized — sanitizers distort the
+timing), 32-way concurrency on a 32-core box:
+
+| What | Runs | SIGSEGV |
+|---|---|---|
+| full `core-cpp.async` binary | 1920 | **36** (1.9%) |
+| *"A join whose children finish on a pool"* alone | 1920 | **15** |
+| *"Claims on one chain..."* alone | 1920 | **1** |
+
+So it is not case-specific: it is the shared `whenAll` + `ResumeOn` + `ThreadPoolExecutor` +
+`DetachedTask` machinery, and the lane's one-in-four observation was the same thing at lower load.
+
+## Diagnosis
+
+ASan, 10 failures in 1280 runs: **`heap-use-after-free`, 48-byte region, WRITE by the main thread,
+freed by a pool thread.** Symbolized, the write is
+
+```
+std::shared_ptr<WhenAllPolicy::State>::operator=(...)   Join.hpp:293
+JoinAwaiter<WhenAllPolicy>::await_suspend<DetachedTask::promise_type>(...)
+joinOnPool(...) [clone .__await_suspend_wrapper__await]  ThreadPoolExecutor_test.cpp:169
+```
+
+`Join.hpp:293` is `promise.state = _state;` **inside the start loop** — so the awaiter's own
+`_state` is dangling, which can only mean the awaiter was destroyed while `await_suspend` was
+still running.
+
+Tested rather than argued. A magic word on `JoinAwaiter`, set to `0xDEAD` in its destructor and
+checked after every `resume()` in the start loop:
+
+```
+PROBE-AWAITER-DEAD at i=6 of 8
+PROBE-AWAITER-DEAD at i=4 of 8
+PROBE-AWAITER-DEAD at i=2 of 8
+PROBE-AWAITER-DEAD at i=7 of 8
+```
+
+and an underflow detector on `remaining` that **never fired** — the join counter is sound; the
+coroutine frame is being freed underneath it.
+
+## The bug, exactly
+
+```cpp
+void release() noexcept
+{
+    if (_parks.fetch_sub(1, acq_rel) != 1) return;  // (A) this release took the count to zero
+    if (!_armed.load(acquire)) return;              // (B) ... and is it still ours to free?
+    if (auto const root = std::exchange(_root, {})) root.destroy();
+}
+```
+against `claimOn()`'s
+```cpp
+promise.abandonState->rearm();                      // (C) armed = true
+return AbandonClaim { promise.abandonState };       // (D) count 0 -> 1
+```
+
+Thread P finishes resuming a park and runs (A): count 1 to 0, armed currently **false** because
+`Parked::resume()` disarmed before resuming. Thread M parks the next child and runs (C): armed
+becomes **true**. Thread P then runs (B), reads **true**, and destroys the chain root — which is
+the live `DetachedTask` frame the main thread is still executing `await_suspend` inside.
+
+**Two independent atomics, one decision that is not atomic.** Causal proof: with `rearm()` made a
+no-op, **0 crashes in 1920 runs** against 15 with it.
+
+## Why nothing caught it, which is the part worth keeping
+
+**Every access involved is atomic, so this is not a data race and ThreadSanitizer cannot see it.**
+It is a *logic* race: a correctly synchronised refcount reaching a wrong conclusion. Only ASan can
+catch it, and only when the interleaving actually occurs — which needs real contention, not a clean
+machine. My 21 TSan and 21 ASan runs were clean and *proved* they reached `claim()` and `release()`;
+they were simply the wrong instrument. This is exactly the gap I named when the controller asked
+whether the observation moved my confidence, before I knew it had fired: *TSan covers the ordering
+question as well as load ever could; what it cannot cover is a correctly-synchronised but logically
+wrong refcount.* That is what this is.
+
+## Recommended fix, not applied
+
+**Make the count and the armed flag one atomic word**, so `(rearm + claim)` and
+`(decrement + test)` are each a single operation. It is not a redesign: the contract, the
+vocabulary and `ParkedWork`'s shape are unchanged, and the refcount itself was never wrong. It
+works because the disarm always precedes the resume, so at P's decrement the armed bit is false
+unless M's re-arm has already landed — and if it has, M's increment landed with it, so the count is
+not zero. The window closes by construction.
+
+I have not applied it: R97 reserved this object's design to the controller, and B3, B4 and B5 are
+writing against `ParkedWork` now.
+
+## R106: I reproduced the same defect independently, and the root cause differs
+
+The re-review and I found this in parallel. **The crash is the same; the attribution is not**, and
+R106's scope would send the repair to the wrong object. Reporting rather than fixing, per R97.
+
+**R106 says:** *"whichever thread's decrement brings `remaining` to zero unconditionally destroys
+every runner in `_runners`"*, scoped to `~JoinAwaiter()` and **"explicitly not to C1's
+`ParkedWork`/`AbandonClaim` machinery... Do not repair this by reaching into the refcount."**
+
+**Three measurements say the destroyer is the refcount path, before the join completes:**
+
+1. **A magic word on `JoinAwaiter`**, set to `0xDEAD` in its destructor and checked after every
+   `resume()` in the start loop: `PROBE-AWAITER-DEAD at i=2 of 8`, `i=4`, `i=6`, `i=7`. At `i=2`
+   only three children have been started, so at most three of nine decrements have happened and
+   `remaining >= 6`. **The join cannot have completed.**
+2. **An underflow detector on `remaining` never fired** in any run. The counter is sound.
+3. **The destroyer, named directly.** A flag raised for the duration of the start loop, checked in
+   `AbandonState::release()` immediately before `root.destroy()`:
+   **`PROBE-ABANDON-DESTROY-DURING-START-LOOP`, 8 hits in 1920 runs, and zero SIGSEGVs** — the
+   abort pre-empts every crash. So `AbandonState::release()` destroys the `DetachedTask` root while
+   the awaiting coroutine is still inside `await_suspend`.
+
+**The reviewer's traces are real; they are the effect.** `root.destroy()` frees the `DetachedTask`
+frame, which destroys the `JoinAwaiter`, which runs `~vector<JoinRunner>` and frees a runner frame
+under a worker mid-`Parked::resume()`. That is precisely the teardown the TSan trace shows —
+**reached from the abandon path, not from the join completing.** A completed join and an abandoned
+chain destroy the same objects through the same destructor, which is why one looks like the other
+from a stack alone.
+
+### What I have NOT established, and two experiments that failed
+
+My first hypothesis was the window between `release()`'s `fetch_sub` and its `_armed` read, with
+`claimOn()`'s `rearm()` landing in between. **It is not proven, and one experiment ran against it:**
+widening that window with a 1 ms sleep gave **0 crashes in 640 runs at matched 32-way concurrency**
+where the 0.78% baseline predicts about five. That is confounded rather than refuting — a sleep per
+release removes the overlap between the start loop and the releases, which is the precondition —
+but it does not support the hypothesis either.
+
+And my earlier causal claim was weaker than I put it: disabling `rearm()` gave 0 crashes in 1920,
+but that removes the **only** path by which `AbandonState` can destroy a root after any resume, so
+it proves the destroy comes *through* `release()` without proving *why* `release()` concluded the
+chain was abandoned. **Location proven, mechanism not.**
+
+### R106's two open questions
+
+2. **Does `whenAny` have the same exposure?** On this diagnosis, yes — `AbandonState` is shared by
+   both policies and nothing in the path is `whenAll`-specific. There is no `whenAny`-on-pool case
+   in the suite to demonstrate it, which is the same unexamined-half shape that let C1's second
+   half survive round 1. It should be written.
+1. **A deterministic interleaving** is not pinned, and I would not pin it against the wrong
+   mechanism; it should follow the corrected root cause.
+
+**Reproduction, for whoever takes it:** `origin/master`, plain `clang-debug`, 32-way concurrency —
+36 SIGSEGVs in 1920 full-suite runs (1.9%); 15 in 1920 for the join case alone; 1 in 1920 for the
+two-thread claim case. Sanitizers distort the timing and reproduce it far less often.
+
+## The Windows `SKIP`, landed
+
+`a7fbf94 test(async): three cases that cannot run on MSVC now say so`. Hold lifted, and re-verified
+against the current tree rather than the tree it was written on, as promised — both files were
+unchanged since `48af4e6`, and I re-ran the four toolchains anyway, because "it applied cleanly" is
+not the same claim as "it still does what I measured".
+
+`cl-debug`: `test cases: 84 | 81 passed | 3 skipped`, exit 0. `clangcl-release`: 334 assertions,
+exit 0. `clang-debug` and `gcc-release`: 346 assertions in 84 cases, 0 warnings. The assertion
+counts still differ by design; the **case** counts now agree.
+
+## Mechanism pinned: `claimOn` publishes "armed" before it publishes "claimed"
+
+Scope lifted, fix held. Holding the fix is not holding the investigation, and the mechanism was the
+blocker. It is now proven, by treatment against control.
+
+**My earlier experiment widened the wrong window.** The race is not between `release()`'s
+`fetch_sub` and its `_armed` read on the worker; it is between `rearm()` and `claim()` on the
+**parking** thread. The identical 200 µs sleep, moved a few lines within the same function on the
+same thread:
+
+| Where the sleep goes | Crashes / 640 |
+|---|---|
+| between `rearm()` and `claim()` | **15** |
+| *before* `rearm()` — control, same cost | **0** |
+| no sleep — baseline | ~5 (0.78%) |
+
+Fifteen against zero for a two-line move is not timing perturbation.
+
+### The interleaving
+
+1. Worker W: `Parked::resume()` disarms, resumes child *k*, which completes.
+2. Main M: child *k+1* parks. `claimOn` calls **`rearm()`** — armed becomes true.
+3. Worker W: `~ParkedWork` → `release()` → `fetch_sub` takes the count 1 → 0 and returns 1, because
+   **M has not claimed yet**.
+4. Worker W: reads `_armed`, sees **true**, and destroys the chain root — the live `DetachedTask`
+   frame the main thread is still inside `await_suspend` of.
+5. Main M: constructs the `AbandonClaim` on a state whose root is already gone.
+
+One line: **`claimOn` publishes *armed* before it publishes *claimed*, so there is a window in
+which the state reads "abandoned and unreferenced" while a park is being created.**
+
+### The obvious fix is necessary and NOT sufficient — measured, not assumed
+
+Claiming before arming, so the count is never zero-and-armed:
+
+```cpp
+auto claim = AbandonClaim { promise.abandonState }; // claim BEFORE arming
+promise.abandonState->rearm();
+return claim;
+```
+
+**Full binary, 1920 runs, 32-way: 1 crash, against a baseline of 36.** A 36-fold reduction — and
+**not zero**, which is exactly the shape that gets shipped as a fix. The residual is the window I
+originally guessed at: if M's `claim()` lands *after* W's `fetch_sub` and M's `rearm()` still lands
+before W's `_armed` read, the reorder does not help. It is far narrower, so it is rarer. That also
+retroactively rescues my confounded 1 ms experiment: that window is real, it is just not the
+dominant one.
+
+### What I believe the fix has to be, not applied
+
+**One atomic word holding both the park count and the armed bit**, with `(claim + rearm)` and
+`(decrement + test-and-claim-the-destroy)` each a single compare-exchange. Then "armed" can never
+be observed without the claim that accompanies it, and the destroy is claimed by exactly one
+thread. It changes no contract, no vocabulary and nothing in `Join.hpp`; `ParkedWork`'s shape is
+untouched. The refcount was never the wrong idea — it was two atomics deciding one thing.
+
+Held pending `rereview-B1-r1`'s isolated probe, as instructed.
+
+## R106 question 2, answered by measurement — and the case that nearly answered it wrongly
+
+I had answered *"on this diagnosis, yes"* by inference. Measured, the answer is yes — but the first
+case I wrote to show it said **no**, and that near-miss is the more useful result.
+
+| Case | Shape | Crashes / 1920 |
+|---|---|---|
+| `whenAll` join on a pool | 8 children, one `ResumeOn` hop each | **15** |
+| `whenAny`, first attempt | 4 losers parked on stop-aware `AsyncQueue::pop`, 1 winner | **0** |
+| `whenAny`, structural mirror | 8 children, one `ResumeOn` hop each | **14** |
+
+**14 against 15 is the same exposure.** `AbandonState` is shared by both policies and nothing in
+the path is `whenAll`-specific, which is what I claimed; now it is measured rather than reasoned.
+
+**The first `whenAny` case is a case that cannot fail for the bug.** It is a *better* test of
+`whenAny`'s cancellation path in every other respect — the losers are parked on a stop-aware `pop`
+at the moment the winner requests the stop, which is the path the combinator exists for — and it
+reproduces the defect **never**, because its parks are created on pool threads one at a time rather
+than rapidly from the start loop. The precondition is the start-loop/release overlap, not the
+combinator and not the cancellation.
+
+Had I written only that case and reported it, I would have concluded `whenAny` was clean, on a
+green run, with a case that looked more thorough than the one that works. **A richer test is not a
+more sensitive one**, and the thing that made the difference was mirroring the reproducing case's
+*structure* rather than its subject. Both cases are kept: the mirror because it reproduces, and the
+queue-parked one because it covers cancellation over a pool, which nothing else does — but it is
+labelled with what it cannot catch.
+
+Neither is landed: both would redden master until the fix lands. Patch parked at
+`whenany-pool-cases.patch` in the session scratchpad, on the stress worktree.
+
+---
+
+# Fix round 2: R106, fixed at `ParkedWork.hpp::claimOn()`
+
+`50aed76 fix(async): a chain that parks again is armed and counted in one step`. Nothing in
+`Join.hpp` changed; the join counter was never wrong.
+
+**The defect.** `claimOn()` armed the abandon state and then took its claim as two separate atomic
+stores. A concurrent `release()` landing between them observed a state that never existed as a
+whole — armed by the new park, count zero because that park had not been counted yet — concluded
+the chain was abandoned, and destroyed a live coroutine frame. Two atomics deciding one thing.
+
+**The fix.** One word: bit 63 armed, the rest the park count. `claimAndArm()` is a single
+compare-exchange, so *armed* is never observable without the claim that accompanies it.
+`release()` is another that clears the armed bit **as** it takes the root, so the right to destroy
+is claimed rather than merely observed and exactly one thread can hold it.
+
+## Acceptance, with the arithmetic stated before the runs
+
+The bar came from my own 36→1 measurement: claim-before-arm alone gives 1 crash in 1920, which is
+0.052%. At n=1920 a wrong fix shows zero **37%** of the time — a coin flip. At n=12000 the
+expectation is 6.3 hits and P(zero | still broken) is **0.2%**.
+
+| Harness | Before | After |
+|---|---|---|
+| `whenAll` join on a pool | 15 / 1920 | **0 / 12000** |
+| `whenAny` structural mirror | 14 / 1920 | **0 / 12000** |
+| full `core-cpp.async` binary | 36 / 1920 | **0 / 12000** |
+| full binary under ASan+UBSan | — | 0 / 400 |
+| full binary under TSan | — | 0 / 400 |
+
+Across the three 12000-run harnesses, P(all zero | still broken at the wrong-fix rate) ≈ 0.0004%.
+
+**The reviewer's `Join`-free probe is not mine to re-run and I did not have it.** I could not build
+an equivalent honestly: the precondition is several concurrent parks *of one chain*, which needs a
+fan-out, and hand-rolling one without `Join.hpp` would be reimplementing `whenAll` badly. Its
+re-run on `50aed76` is still owed, and per the controller's own framing, if it still fires while
+all three of mine are clean, that is the second path and a finding rather than a regression.
+
+## Gates
+
+Six toolchains, **all in a private worktree at `origin/master`** rather than the shared checkout:
+`clang-debug`, `gcc-release`, `clang-asan-ubsan`, `clang-tsan`, `cl-debug`, `clangcl-release` —
+**0 warnings and 3/3 tests each.** clang-format and clang-tidy 22.1.8 clean on both changed files;
+`mkdocs build --strict` clean. CHANGELOG entry under Fixed, since this is a real use-after-free in
+shipped-shaped code.
+
+**One thing found on the way, not mine and not touched:** `cmake/CoreCppHeaderSelfCheck.cmake` has
+an uncommitted edit in the shared working tree with an unterminated `${` at line 126, which fails
+configure on any tree that re-runs CMake. It is why my first gate pass reported "1 error" on three
+presets while their tests still passed — the binaries were stale. Committed `HEAD` is fine, so
+master is unaffected; it is the shared-checkout hazard exactly as described, and the reason the
+final gate pass was done in a worktree.
+
+## A rule I have been quoting all night, broken in my own fix
+
+`e80d1a1 fix(async): the CAS retry is a do/while, which is what this tree spells`.
+
+`50aed76` wrote the compare-exchange retry in `release()` as `for (;;)`. `AGENT.md` lists no
+C-style `for` as a tripwire, `cpp-guidelines.md` is canonical on it, and
+`core-cpp.cmake-hygiene` refuses it by name:
+
+```
+src/core/async/ParkedWork.hpp:92: [c-style-for] no C-style for(;;) loops: use a range-for over a
+range, e.g. std::views::iota
+```
+
+**It was committed and pushed, so it was red on every lane's `clang-debug` in the shared tree, not
+only mine** — B4 hit it while triaging its own presets.
+
+**And my first explanation of how it got past me was self-serving, so here is the accurate one.**
+I wrote that `cmake-hygiene` had been red all night on the net lane's provenance rows, so a red
+from it had stopped carrying information for me. That is true, and it is not the proximate cause.
+**The proximate cause is that I did not run the gate at all for that commit.** My fix-round-2 gate
+list above — six toolchains, clang-format, clang-tidy, mkdocs, CHANGELOG — **does not contain
+`ctest -L hygiene`**, and the fix-round-2 dispatch named it explicitly. The desensitisation is why
+I was comfortable leaving it out; the omission is why nothing caught it. Reporting the second as
+the first turns a skipped step into an unlucky read, which is the more flattering of the two and
+the wrong one.
+
+The general form still holds and is worth keeping: **a gate already failing for someone else's
+reason is a gate that cannot tell you about yours** — the same shape as CI's 22-of-24 provenance
+cascade that `tree-level` was invented to stop, one level down: buried across lanes in a shared
+tree rather than across jobs in a run. But it is an explanation of the habit, not of the miss.
+
+A `do`/`while` on the exchange result is better than `while (true)` for a reason beyond the lint:
+the loop condition is the thing that failed, so a reader looking for why it spins finds it where
+they look, and the success path leaves the loop rather than returning from inside it.
+
+**Re-measured rather than assumed**, because it is the body of a use-after-free fix and "obviously
+equivalent" is the assumption this task has been punished for repeatedly: **0 crashes in 12000 runs
+on each of the three reproducing harnesses**, plus all six toolchains at 0 warnings and 3/3, and
+`cmake-hygiene` green. No CHANGELOG entry — the behaviour `50aed76` describes has not changed.
+
+## Closed — and one last correction that is mine
+
+Task B1 and both fix rounds closed at `ac0ff76..e80d1a1`: hygiene 15/15, six toolchains clean,
+R106 fixed and confirmed at 18,000 iterations by a harness that shares none of my assumptions.
+
+**I said a `Join.hpp`-free harness could not be built honestly. That was wrong, and the way it was
+wrong is worth keeping.** My words were: *"the precondition is several concurrent parks of one
+chain, which needs a fan-out, and hand-rolling one without `Join.hpp` would be reimplementing
+`whenAll` badly."* The reviewer's probe is sixteen self-freeing coroutines **sharing one root**,
+each parking twice on a four-thread pool — concurrent parks of one chain, with no fan-out and no
+combinator anywhere.
+
+I had even reasoned my way to the edge of it and turned back: I worked out that a single chain
+re-parking sequentially cannot race, because the re-park happens inside `Parked::resume()` on the
+same thread that will release — and concluded the shape was unreachable, rather than asking what
+*else* could make one root's parks concurrent. **Sixteen coroutines over one root is the answer,
+and it was one question away.**
+
+So the honest record is that I declared an impossibility where I had a failure of imagination, and
+the probe I said could not exist is the only evidence in this whole exercise that does not descend
+from my own hypothesis. Which is also why it was worth having: **all three of my harnesses create
+parks the same way — a burst from a start loop — because that is the shape I found first, and a
+harness generalises from its author's first sighting in a way its author cannot see.** The
+reviewer's creates them by re-parking. Two preconditions, not one, and I could see only mine.

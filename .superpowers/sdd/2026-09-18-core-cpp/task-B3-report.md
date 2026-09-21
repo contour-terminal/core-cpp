@@ -3,9 +3,9 @@
 **Status: DONE_WITH_CONCERNS.** Commits `e7963de..1709a3c` (`e7963de`, `0fd01f5`, `9f7eb5d`, `c4d3567`, `149659a`, `1709a3c`).
 Two defects of mine reached master: one fixed by another lane before I found it
 (`tests/consumer-shared/ConsumerSmoke.hpp`) and one CI found on macOS and I fixed in `1709a3c`
-(§7), and CI is green on the result: `Build` 24/24 and `Portability` on FreeBSD. Five deliberate
-deviations from the dispatch are recorded in §6 — **(a) and (d) are the two worth a reviewer's
-time.**
+(§7). Fix rounds 1 and 2 are in §§9-10; **R101 is `7cd86fc`** and is the one a re-reviewer should
+weigh first, because B6, B7 and B8 all build on it. Five deliberate deviations from the dispatch
+are recorded in §6 — **(a) and (d) are the two worth a reviewer's time.**
 
 ---
 
@@ -20,6 +20,11 @@ time.**
 | `149659a` | `test(net): the three loop paths a backend's refusal reaches` |
 | `1709a3c` | `fix(net): a muted registration's un-muting is asked where the answer is portable` |
 | `870d12b` | `test(net): the >64-handle sweep is asked of the backend, not only of its arithmetic` (fix round 1) |
+| `7e2e3ae` | `fix(net): the scripted backend stops saying things no kernel would say` (round 2, F5) |
+| `8d05bb7` | `fix(net): NativeHandle is an int on POSIX, so the scripted probe cannot be nullptr` (round 2, mine) |
+| `48af4e6` | `fix(net): a using-declaration the scripted backend's cases do not use` (round 2, mine) |
+| `7cd86fc` | `fix(net): a watched direction beats onError, and a hangup keeps its bytes` (round 2, **R101**) |
+| `c94a0b9` | `fix(net): a throwing wakeup channel no longer leaks the kernel descriptor` (round 2, F3/F6/F7 + §9) |
 
 The last four are follow-ups: the sweep outside `src/` that §7 earned, an unused include, the
 three cases that give `ScriptedBackend`'s refusal helpers a user (§2), and the macOS failure CI
@@ -345,7 +350,7 @@ show the loss, because both versions were larger than HEAD.
 
 ---
 
-## 9. Owed in fix round 2
+## 9. The precondition rewording (delivered in `c94a0b9`)
 
 **Reword the level-triggered precondition in `windows/WfmoBackend.hpp`.** The finding is verified
 and stands; the framing does not. What I wrote enumerates two handle classes — "a WSAEVENT from
@@ -388,7 +393,7 @@ a consuming handle registered anywhere is drained by the rescan of an unrelated 
 > `SystemPipe`'s wakeup event and `core::platform::Wakeup`, all manual-reset; Task B12 adds
 > `core::platform::standardInput()`, which is the second kind.
 
-The defect class is the one this session keeps finding — an enumeration standing in for a rule, with
+**Delivered in `c94a0b9`.** The defect class is the one this session keeps finding — an enumeration standing in for a rule, with
 no owner and no check, in a set about to grow — and I wrote a fresh instance of it in the very
 comment that recorded a general finding. Held for fix round 2 rather than spent as a commit of its
 own, on the controller's instruction.
@@ -463,8 +468,35 @@ any source file another lane has open, not only to generated tables.**
 
 ### Gates
 
-`clang-format` (pinned 22.1.8) clean on all ten files; `mkdocs build --strict` clean.
-Linux `clang-debug` **28/28 including 15 hygiene**, `gcc-release` 16/16.
-Windows `cl-debug` **30/30**, `clangcl-release` **30/30**.
-macOS and FreeBSD are CI's to refute: the hypothesis in the commit message is that kqueue and Wfmo
-already behaved this way, so the two new parity cases should pass there unchanged.
+| Configuration | Result |
+|---|---|
+| Linux `clang-debug` | 28/28, including 15 hygiene |
+| Linux `gcc-release` | 16/16 |
+| Linux `clang-asan-ubsan` | 16/16 |
+| Linux `clang-tsan` | 16/16 |
+| Linux `clang-tidy` | build exit 0, no diagnostics; 16/16 (x3) |
+| Windows `cl-debug` | 30/30 |
+| Windows `clangcl-release` | 30/30 |
+| `mkdocs build --strict` | clean |
+| clang-format 22.1.8 | clean, every file |
+
+macOS and FreeBSD are CI's to refute: the hypothesis in `7cd86fc`'s message is that kqueue already
+behaved as R101 requires, so both new parity cases pass there unchanged and no existing case moves.
+If a macOS leg reddens on `a hangup over buffered data`, that is a third kqueue fact and not this one.
+
+**Two gates lied to me while I ran them, and both were my own doing.** The targeted clang-tidy run
+used `--quiet` piped into `grep` and reported `EXIT=0` -- which was `head`'s status, while
+`--quiet` suppressed the only output that would have said whether it had processed anything at all.
+A file absent from the compile database produces exactly that: silence and a zero. Re-run asking for
+the thing itself -- exit captured directly, output to a file -- it gave `clang-tidy exit=0` with
+`"warnings generated"` present **three times, one per translation unit**, which is the part that
+proves all three were reached. Separately, my background preset script printed
+`FAILED at build/configure for clang-tidy`; configure and build both succeeded, and the failing step
+was `ctest`, which my `||` branch described with a hardcoded guess at the stage. **A gate that does
+not report reads as passed, and a gate that reports the wrong stage is worse.**
+
+**Not mine, observed once:** `core-cpp.async` SEGFAULTed in one of four full-suite runs of the
+`clang-tidy` tree, on a clean `origin/master` checkout with none of my files in that binary. It does
+not reproduce -- alone it passes, and three further full runs were 16/16. Reported to the async lane
+rather than filed as flake, because a segfault that appears only under parallel load in a threaded
+binary is the shape a real race has, and three green re-runs is what a real race also looks like.

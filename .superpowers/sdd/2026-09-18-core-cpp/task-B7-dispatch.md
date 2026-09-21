@@ -1,5 +1,44 @@
 # Task B7: IOCP is the Windows backend, and it can park on a waitable handle
 
+## SCOPING RULING — read this before anything else: B7 is split, and you are B7a
+
+**B6 has not landed.** It is in flight, and it owns `ISocket`/`IListener` — which job 3 below
+needs and jobs 1, 2 and the `slot` contract do not. Rather than park the hardest Windows work
+behind it, **B7 runs in two halves and you are the first:**
+
+**In scope (B7a):**
+
+1. **`IocpBackend` implementing B3's `IoBackend`**, including the `completionPort()` member you add.
+2. **The readiness bridge** — the threadpool wait for waitable HANDLEs, the zero-byte `WSARecv` for
+   socket readability, `WSAEventSelect` + threadpool wait for writability.
+3. **The `ReadinessHandler::slot` contract** — refcounted, generation-checked, backend-owned, with
+   the ownership rule written in the header beside the field.
+4. **G1 and G4 asserted**, with the G1 canary.
+5. **`makeBackend(BackendKind::Iocp)` stops answering null** and returns your backend, so
+   `BackendParity` and every test can reach it by name.
+
+**Out of scope, deferred to B7b after B6 lands:**
+
+- **`IocpSocket` and `IocpListener`** (job 3) — they implement B6's contract, which does not exist
+  yet. Do not invent a provisional one; a socket written against a guessed interface is work thrown
+  away plus a merge conflict.
+- **`makeDefaultBackend()` returning IOCP on Windows** (job 4). This is deliberate and it is the
+  part most likely to tempt you: flipping the default *before* `IocpSocket` exists would put every
+  Windows socket test onto a backend whose sockets are still contour's Wfmo-specific ones. **The
+  Windows default stays Wfmo at the end of your half.** Say so in the CHANGELOG — "available by
+  name, not yet the default" — so the release note is true at every commit rather than only at the
+  end of B7b.
+
+**What this buys and what it costs.** It buys the IOCP backend being built, reviewed and gated in
+parallel with B6 instead of after it. It costs a second review cycle for B7b and one rebase. If
+you find a job-3 dependency inside jobs 1-2 that I have not anticipated — something in the
+readiness bridge that genuinely cannot be settled without knowing `ISocket`'s shape — **report it
+rather than guessing**, and I will re-rule.
+
+Everything below is the original dispatch. Where it names job 3 or job 4, it is describing B7b.
+
+---
+
 Windows is the platform where contour's design and fastcached's disagree most. contour waits on
 events with `WaitForMultipleObjects`, which caps at 64 handles and cannot express a completion.
 fastcached uses a completion port, which scales and expresses one — but cannot, on its own, wait on

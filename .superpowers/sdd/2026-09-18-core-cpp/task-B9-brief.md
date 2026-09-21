@@ -21,3 +21,31 @@ Implementation must preserve the lifetime rules in `.agent/rules/wire-and-protoc
 - [ ] Import `Datagram`, `UdpSocket`, `SharedPortDatagram`, `BlockingSocket`, `BlockingConnector`, `TcpClient`, `HealthProbe`, `IAdmissionControl`, and `testing/{InMemoryTransport,InMemoryDatagram,ParkingReadableSocket}`. Dedupe InMemoryTransport with contour's socket pair (`makeLoopbackPair`).
 - [ ] Commit `net: UDP, blocking transports and in-memory test doubles`.
 
+
+---
+
+# Corrections made before dispatch — see `phaseB-unclaimed-upstream-survey.md`
+
+Measured at the pin with `git ls-tree -r --name-only 0708dd54 src/FastCache/Net/` over the whole
+directory. **Do not trust the file list above; run that command yourself and say what it still gets
+wrong.**
+
+1. **`ParkingReadableSocket` is a class, not a file.** `grep -i parking` over the pin's entire tree
+   matches no path. `git grep -l ParkingReadableSocket 0708dd54` puts it in
+   **`src/tests/SocketDecorator.hpp`** — under `src/tests/`, not `Net/testing/`. The plan's
+   `testing/{InMemoryTransport,InMemoryDatagram,ParkingReadableSocket}` describes the **destination**
+   layout in core-cpp, not the source layout in fastcached. Sixth instance of this shape in this
+   project; B6 hit the same one with `IoAwaitable`.
+2. **`Datagram` is `Net/IDatagramSocket.hpp`.** There is no `Datagram.hpp` at the pin.
+3. **`Net/BlockingConnector.*` and `Net/IAdmissionControl.hpp` are B8's, not yours.** Both appear in
+   your import list and in B8's Sources. Ruled to B8: a connector is a dial concern, and your
+   subject is datagrams and blocking *transports*. **Consume them; do not import them.** If B8 has
+   not landed when you need them, say so rather than importing a second copy.
+4. **`Net/SocketClosedStates_test.cpp` is yours, and it is not optional.** Single case:
+   *"`InMemorySocket` answers every closed state the way a loopback TCP socket does."* It is a
+   **parity test between a shipped test double and a real socket**, and core-cpp ships
+   `testing/InMemoryTransport` as a DI fake for consumers to build their own suites on. **A fake
+   whose closed-state behaviour diverges from a real socket does not fail — it manufactures passing
+   tests in every consumer that uses it.** That is worse than a missing test, because it is
+   invisible and it compounds downstream. Port it with the parity property intact: the case must
+   run the same assertions against both the fake and a loopback pair, or it is not the test.
