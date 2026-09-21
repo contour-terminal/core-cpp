@@ -22,14 +22,16 @@ task lands `core::net::IoBackend`, this gate fails and says to mark the row deli
 A **removed** row is that inversion made permanent: its `from` names a symbol core-cpp no longer
 has, and the gate asserts it stays gone, so a re-introduction is refused (Ruling R75).
 
-Every arm reads a qualified symbol through `declares_qualified()`, which walks the namespace prefixes
+Every arm reads a qualified symbol through `qualified_failure()`, which walks the namespace prefixes
 instead of testing the whole path as a namespace. That is what lets it see a symbol scoped to an
 **enum or a class** -- `core::net::NetErrorCode::SystemError` -- which a whole-path test would call
 absent forever, and a pending row that can never resolve is worse than no row at all (Ruling R74).
 
 What it cannot check: the source side (fastcached's and contour's symbols are not in this tree),
 a signature, an overload set, or a declaration behind an `#if`. It is a text scan over the headers,
-not a compile.
+not a compile. Everything it cannot read it *says* it could not read -- a header list held in a
+variable this scan cannot resolve is reported, never answered as an empty list, because "this
+module publishes nothing" and "I did not look" are the same silence (Ruling R95).
 """
 
 from __future__ import annotations
@@ -113,22 +115,44 @@ def declares(text: str, name: str) -> bool:
     return any(re.search(pattern, body, re.MULTILINE) for pattern in patterns)
 
 
-def declares_qualified(text: str, components: list[str]) -> bool:
-    """Whether the header declares the qualified symbol @p components, e.g. `core::net::EventLoop`.
+def qualified_failure(text: str, components: list[str]) -> str | None:
+    """Why @p text does not declare the qualified symbol @p components, or None if it does.
 
     The prefix walk is what makes a symbol scoped to an **enum or a class** findable:
     `core::net::NetErrorCode::SystemError` has no namespace called `core::net::NetErrorCode`, so a
-    test for the whole path as a namespace answers "absent" forever. Every arm of the gate --
-    delivered, pending and removed -- reads a symbol through this one function, so none of them can
-    drift into that hole on its own (controller ruling R74).
+    test for the whole path as a namespace answers "absent" forever (controller ruling R74).
+
+    This is the one place the walk exists. It returns a *reason* rather than a bool so that the
+    delivered arm, which has to say what is wrong, can use it too: that arm previously carried its
+    own copy of the walk under a docstring claiming every arm shared this one, which is how a fix
+    made here would have reached two arms of three and read as reaching all of them (R93).
     """
     if len(components) == 1:
-        return defines_macro(text, components[0])
+        return None if defines_macro(text, components[0]) else f"declares no macro {components[0]}"
+    symbol = "::".join(components)
     namespaces = open_namespaces(text)
-    return any(
-        "::".join(components[:cut]) in namespaces and all(declares(text, name) for name in components[cut:])
-        for cut in range(len(components) - 1, 0, -1)
-    )
+    shortest: list[str] | None = None
+    for cut in range(len(components) - 1, 0, -1):
+        if "::".join(components[:cut]) not in namespaces:
+            continue
+        absent = [name for name in components[cut:] if not declares(text, name)]
+        if not absent:
+            return None
+        if shortest is None or len(absent) < len(shortest):
+            shortest = absent
+    if shortest is None:
+        opened = ", ".join(sorted(namespaces)) or "none"
+        return f"opens no namespace of '{symbol}' (it opens {opened})"
+    return f"declares no {', '.join(repr(name) for name in shortest)}, for {symbol}"
+
+
+def declares_qualified(text: str, components: list[str]) -> bool:
+    """Whether the header declares the qualified symbol @p components, e.g. `core::net::EventLoop`.
+
+    The pending and removed arms want the yes/no; the delivered arm wants the reason. Both read
+    `qualified_failure()`, which is the walk itself.
+    """
+    return qualified_failure(text, components) is None
 
 
 def find_symbol(root: Path, symbol: str) -> Path | None:
@@ -146,33 +170,69 @@ def defines_macro(text: str, name: str) -> bool:
     return re.search(pattern, _stripped(text), re.MULTILINE) is not None
 
 
-def public_headers(root: Path) -> set[str]:
-    """Every include path a module's `FILE_SET HEADERS` publishes, as `core/<module>/<Header>.hpp`."""
+def public_headers(root: Path) -> tuple[set[str], list[str]]:
+    """Every include path a module's `FILE_SET HEADERS` publishes, and every list it could not read.
+
+    Returns (`core/<module>/<Header>.hpp` for each published header, problems). The second half is
+    the point. This resolver answers "can a consumer include this?", and every way it fails answers
+    *no* while looking exactly like a module that publishes nothing: an unknown `${X}` resolved to
+    the empty list, and -- the quiet one -- a `${X}` a `list(APPEND)` extended resolved to whatever
+    the `set()` beside it held, which is a confidently short answer that an "unresolvable reference"
+    check passes, because the reference does resolve; it is just missing entries. An empty list is
+    at least suspicious on inspection, while a list one entry short looks entirely normal, so both
+    arms are reported rather than resolved (controller ruling R95).
+    """
     source_root = root / "src"
     found: set[str] = set()
+    problems: list[str] = []
     for listing in sorted((source_root / "core").rglob("CMakeLists.txt")):
         text = listing.read_text(encoding="utf-8")
         directory = listing.parent.relative_to(source_root).as_posix()
-        variables = _set_variables(text)
+        variables, unfollowed = _cmake_variables(text)
+        where = listing.relative_to(root).as_posix()
         for call in MODULE_CALL.finditer(text):
             body = _balanced(text, call.end() - 1)
-            for header in _header_tokens(body, variables):
+            headers, unreadable = _header_tokens(body, variables, unfollowed)
+            for header in headers:
                 found.add(header if header.startswith("core/") else f"{directory}/{header}")
-    return found
+            problems += [f"{where}: {problem}" for problem in unreadable]
+    return found, problems
 
 
-def _set_variables(text: str) -> dict[str, list[str]]:
-    """Every `set(<var> ...)` of a CMakeLists, so a HEADERS list held in a variable is still read.
+#: The `list()` sub-commands this text scan models: each one only adds entries, so reading every
+#: occurrence of a variable gives the full set whatever the surrounding `if()` decides. Any other
+#: sub-command -- TRANSFORM, REMOVE_ITEM, FILTER, POP_BACK, SORT -- changes a list in a way a scan
+#: cannot follow, and a HEADERS list that reaches one is reported instead of answered short.
+LIST_ADDITIONS = ("APPEND", "PREPEND", "INSERT")
+
+SET_CALL = re.compile(r"\bset\s*\(\s*([A-Za-z_]\w*)([^)]*)\)")
+LIST_CALL = re.compile(r"\blist\s*\(\s*([A-Z][A-Z0-9_]*)\s+([A-Za-z_]\w*)([^)]*)\)")
+
+
+def _cmake_variables(text: str) -> tuple[dict[str, list[str]], dict[str, str]]:
+    """Every variable of a CMakeLists this scan can resolve, and every one it knows it cannot.
 
     A header a module publishes only under an option (`CORE_CPP_WITH_IMAGES`) is public, so every
-    assignment of a variable contributes, not the last one.
+    assignment contributes, not the last one -- the scan has no idea which branch a build takes, and
+    the union is the right answer for "could a consumer include it".
     """
     variables: dict[str, list[str]] = {}
-    for match in re.finditer(r"\bset\s*\(\s*([A-Za-z_]\w*)([^)]*)\)", text):
-        variables.setdefault(match.group(1), []).extend(
-            token.strip('"') for token in re.findall(r'"[^"]*"|\S+', match.group(2))
-        )
-    return variables
+    unfollowed: dict[str, str] = {}
+
+    def words(tail: str) -> list[str]:
+        return [token.strip('"') for token in re.findall(r'"[^"]*"|\S+', tail)]
+
+    for match in SET_CALL.finditer(text):
+        variables.setdefault(match.group(1), []).extend(words(match.group(2)))
+    for match in LIST_CALL.finditer(text):
+        command, name, tail = match.group(1), match.group(2), match.group(3)
+        if command not in LIST_ADDITIONS:
+            unfollowed[name] = f"list({command})"
+            continue
+        # `list(INSERT <var> <index> <element>...)`: the index is not an element.
+        entries = words(tail)[1:] if command == "INSERT" else words(tail)
+        variables.setdefault(name, []).extend(entries)
+    return variables, unfollowed
 
 
 def _balanced(text: str, open_index: int) -> str:
@@ -188,9 +248,13 @@ def _balanced(text: str, open_index: int) -> str:
     return text[open_index + 1 :]
 
 
-def _header_tokens(body: str, variables: dict[str, list[str]]) -> list[str]:
-    """The tokens of the call's HEADERS section, up to the next all-caps keyword."""
+def _header_tokens(
+    body: str, variables: dict[str, list[str]], unfollowed: dict[str, str]
+) -> tuple[list[str], list[str]]:
+    """The tokens of the call's HEADERS section, up to the next all-caps keyword, and what it could
+    not read. A `${X}` this scan cannot resolve in full is a problem, never an empty answer (R95)."""
     headers: list[str] = []
+    problems: list[str] = []
     collecting = False
     for token in re.findall(r'"[^"]*"|\S+', body):
         bare = token.strip('"')
@@ -201,13 +265,26 @@ def _header_tokens(body: str, variables: dict[str, list[str]]) -> list[str]:
             continue
         reference = re.fullmatch(r"\$\{([A-Za-z_]\w*)\}", bare)
         if reference:  # a HEADERS list held in a variable of the same CMakeLists
-            headers += [name for name in variables.get(reference.group(1), []) if name]
+            name = reference.group(1)
+            if name in unfollowed:
+                problems.append(
+                    f"HEADERS names ${{{name}}}, which {unfollowed[name]} changes in a way this "
+                    f"scan cannot follow; the list it would read is short, and every header missing "
+                    f"from it reads as private"
+                )
+            elif name not in variables:
+                problems.append(
+                    f"HEADERS names ${{{name}}}, which this CMakeLists never sets; the module would "
+                    f"read as publishing nothing, which is indistinguishable from a private module"
+                )
+            else:
+                headers += [entry for entry in variables[name] if entry]
             continue
         if "}" in bare:  # a generated header, named through a ${...} path prefix
             bare = bare.rsplit("}", 1)[1].lstrip("/")
         if bare:
             headers.append(bare)
-    return headers
+    return headers, problems
 
 
 def _header_text(root: Path, header: str) -> str | None:
@@ -237,25 +314,10 @@ def _check_delivered(root: Path, row: renames.Row, public: set[str], where: str)
     if not target.symbol:
         return failures
 
-    components = target.symbol.split("::")
-    if len(components) == 1:
-        if not defines_macro(text, target.symbol):
-            failures.append(f"{where}: src/{target.header} declares no macro {target.symbol}")
-        return failures
-
-    namespaces = open_namespaces(text)
-    for cut in range(len(components) - 1, 0, -1):
-        if "::".join(components[:cut]) in namespaces:
-            break
-    else:
-        failures.append(
-            f"{where}: src/{target.header} opens no namespace of '{target.symbol}' "
-            f"(it opens {', '.join(sorted(namespaces)) or 'none'})"
-        )
-        return failures
-    for name in components[cut:]:
-        if not declares(text, name):
-            failures.append(f"{where}: src/{target.header} declares no '{name}', for {target.symbol}")
+    # The same walk the pending and removed arms use, not a copy of it (controller ruling R93).
+    reason = qualified_failure(text, target.symbol.split("::"))
+    if reason is not None:
+        failures.append(f"{where}: src/{target.header} {reason}")
     return failures
 
 
@@ -285,12 +347,14 @@ def _check_removed(root: Path, row: renames.Row, where: str) -> list[str]:
 
 def validate(root: Path, table: Path) -> list[str]:
     """Returns every way @p table disagrees with the tree at @p root, or an empty list."""
+    # The tree is read first, and what it could not read is reported whatever the table says. A
+    # header list this scan cannot resolve is a fact about the tree, and a table that fails to load
+    # must not swallow it -- that is the same silence R95 is about, one level up.
+    public, failures = public_headers(root)
     try:
         loaded = renames.load(table)
     except renames.TableError as error:
-        return [str(error)]
-    public = public_headers(root)
-    failures: list[str] = []
+        return failures + [str(error)]
     for index, row in enumerate(loaded.rows):
         where = f"rows[{index}]"
         if row.kind == "removed":
@@ -309,7 +373,7 @@ def summarise(root: Path, table: Path) -> Summary:
         validated=len([row for row in loaded.rows if row.status == "delivered" and row.delivers]),
         pending=len([row for row in loaded.rows if row.status == "pending"]),
         removed=len([row for row in loaded.rows if row.kind == "removed"]),
-        headers=len(public_headers(root)),
+        headers=len(public_headers(root)[0]),
     )
 
 

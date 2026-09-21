@@ -11,6 +11,7 @@ import importlib.util
 import json
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -304,6 +305,107 @@ class ARemovedRowIsAnInverseGate(unittest.TestCase):
                 self.assertTrue(row.note, f"{row.source} is removed with no note saying what replaces it")
 
 
+class TheGateSaysWhenItCouldNotLook(unittest.TestCase):
+    """A header list the resolver cannot read must fail, never read as 'this module is private'.
+
+    Both arms of controller ruling R95. An unknown `${X}` resolved to `[]` -- silently *absent*;
+    and a known `${X}` that a `list(APPEND)` later extends resolved fine and was silently
+    *incomplete*, which an 'unresolvable reference' check passes because the reference resolves --
+    it is just short. An empty list is at least suspicious on inspection; a list one entry short
+    looks entirely normal, so the quiet arm is the dangerous one.
+    """
+
+    def module(self, directory: str, cmake: str) -> Path:
+        root = Path(directory)
+        module = root / "src" / "core" / "async"
+        module.mkdir(parents=True)
+        for name in ("Task.hpp", "AsyncQueue.hpp"):
+            (module / name).write_text(
+                f"#pragma once\nnamespace core::async\n{{\nclass {name[:-4]}\n{{\n}};\n}}\n",
+                encoding="utf-8",
+            )
+        (module / "CMakeLists.txt").write_text(cmake, encoding="utf-8")
+        return root
+
+    LITERAL = (
+        "core_cpp_add_module(async KIND INTERFACE\n    HEADERS\n        Task.hpp\n        AsyncQueue.hpp)\n"
+    )
+    APPENDED = (
+        "set(_coreCppAsyncHeaders Task.hpp)\n"
+        "list(APPEND _coreCppAsyncHeaders AsyncQueue.hpp)\n"
+        "core_cpp_add_module(async KIND INTERFACE\n    HEADERS ${_coreCppAsyncHeaders})\n"
+    )
+    UNKNOWN = "core_cpp_add_module(async KIND INTERFACE\n    HEADERS ${_headersFromSomewhereElse})\n"
+    MUTATED = (
+        "set(_coreCppAsyncHeaders Task.hpp)\n"
+        "list(TRANSFORM _coreCppAsyncHeaders PREPEND x)\n"
+        "core_cpp_add_module(async KIND INTERFACE\n    HEADERS ${_coreCppAsyncHeaders})\n"
+    )
+
+    def headers_for(self, cmake: str) -> tuple[set, list]:
+        with TemporaryDirectory() as directory:
+            return check.public_headers(self.module(directory, cmake))
+
+    def test_a_literal_header_list_resolves(self) -> None:
+        headers, problems = self.headers_for(self.LITERAL)
+        self.assertEqual(headers, {"core/async/Task.hpp", "core/async/AsyncQueue.hpp"})
+        self.assertEqual(problems, [])
+
+    def test_a_list_append_is_resolved_too(self) -> None:
+        # Arm (b): this used to resolve to Task.hpp alone, so AsyncQueue.hpp read as private.
+        headers, problems = self.headers_for(self.APPENDED)
+        self.assertEqual(headers, {"core/async/Task.hpp", "core/async/AsyncQueue.hpp"})
+        self.assertEqual(problems, [])
+
+    def test_an_unknown_variable_is_refused_not_read_as_empty(self) -> None:
+        # Arm (a): silence here is indistinguishable between "no public headers" and "did not look".
+        headers, problems = self.headers_for(self.UNKNOWN)
+        self.assertEqual(headers, set())
+        self.assertTrue(problems, "an unresolvable HEADERS variable must be reported")
+        self.assertIn("_headersFromSomewhereElse", problems[0])
+
+    def test_a_variable_mutated_by_an_unmodelled_list_command_is_refused(self) -> None:
+        # Arm (b), generalised: resolving it would give an answer that is confidently short.
+        headers, problems = self.headers_for(self.MUTATED)
+        self.assertTrue(problems, "a HEADERS variable this resolver cannot follow must be reported")
+        self.assertIn("TRANSFORM", problems[0])
+
+    def test_the_gate_reports_an_unreadable_header_list_as_a_failure(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = self.module(directory, self.UNKNOWN)
+            table = root / "renames.json"
+            table.write_text(
+                json.dumps({"version": 1, "profiles": {"contour": "c"}, "rows": []}), encoding="utf-8"
+            )
+            failures = "\n".join(check.validate(root, table))
+            self.assertIn("_headersFromSomewhereElse", failures)
+
+
+class TheDeliveredArmUsesTheSharedWalk(unittest.TestCase):
+    """R93: the docstrings claimed every arm reads a symbol through one function; one did not."""
+
+    def test_the_delivered_arm_routes_through_qualified_failure(self) -> None:
+        good = {
+            "kind": "namespace",
+            "from": "net",
+            "to": "core::net",
+            "profiles": ["contour"],
+            "target": {"header": "core/net/EventLoop.hpp", "symbol": "core::net::EventLoop"},
+        }
+        with TemporaryDirectory() as directory:
+            sandbox = ASandbox(directory)
+            self.assertEqual(check.validate(sandbox.root, sandbox.write([good])), [])
+            with unittest.mock.patch.object(check, "qualified_failure", lambda text, parts: "PATCHED"):
+                failures = "\n".join(check.validate(sandbox.root, sandbox.write([good])))
+            self.assertIn("PATCHED", failures, "the delivered arm has its own copy of the walk")
+
+    def test_declares_qualified_is_that_same_function(self) -> None:
+        with unittest.mock.patch.object(check, "qualified_failure", lambda text, parts: "PATCHED"):
+            self.assertFalse(
+                check.declares_qualified("namespace core::net { class X{}; }", ["core", "net", "X"])
+            )
+
+
 class TheSchemaIsChecked(unittest.TestCase):
     def load_one(self, row: dict) -> None:
         with TemporaryDirectory() as directory:
@@ -371,6 +473,82 @@ class TheSchemaIsChecked(unittest.TestCase):
     def test_a_removed_row_without_a_note_is_refused(self) -> None:
         with self.assertRaisesRegex(renames.TableError, "note"):
             self.load_one({"kind": "removed", "from": "core::tui::LanguageId::Endo", "profiles": ["contour"]})
+
+    def test_a_pending_row_without_a_target_is_refused(self) -> None:
+        # R92: a pending row with no target is asserted by nothing in either direction -- a comment
+        # wearing a row's clothes -- and being checked later is the pending list's entire job.
+        with self.assertRaisesRegex(renames.TableError, "target"):
+            self.load_one(
+                {
+                    "kind": "symbol",
+                    "from": "FastCache::SyncRun",
+                    "to": "core::async::syncRun",
+                    "profiles": ["contour"],
+                    "status": "pending",
+                    "task": "B1",
+                }
+            )
+
+    def test_a_pending_row_whose_target_names_no_symbol_is_refused(self) -> None:
+        with self.assertRaisesRegex(renames.TableError, "symbol"):
+            self.load_one(
+                {
+                    "kind": "symbol",
+                    "from": "FastCache::SyncRun",
+                    "to": "core::async::syncRun",
+                    "profiles": ["contour"],
+                    "status": "pending",
+                    "task": "B1",
+                    "target": {"header": "core/async/SyncRun.hpp"},
+                }
+            )
+
+    def test_two_members_of_different_classes_may_share_a_name(self) -> None:
+        # R94: the key omitted `scope`, so `AsyncQueue::Close` could not have a row because
+        # `ISocket::Close` already held that name in the same profile. Read, Write, Stop and Close
+        # are exactly the members Phase B renames, one per profile.
+        rows = [
+            {
+                "kind": "member",
+                "from": "Close",
+                "to": "close",
+                "profiles": ["contour"],
+                "apply": "semantic",
+                "scope": "FastCache::ISocket",
+            },
+            {
+                "kind": "member",
+                "from": "Close",
+                "to": "close",
+                "profiles": ["contour"],
+                "apply": "semantic",
+                "scope": "FastCache::AsyncQueue",
+            },
+        ]
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "renames.json"
+            path.write_text(
+                json.dumps({"version": 1, "profiles": {"contour": "c"}, "rows": rows}), encoding="utf-8"
+            )
+            self.assertEqual(len(renames.load(path).rows), 2)
+
+    def test_two_members_of_the_same_class_are_still_refused(self) -> None:
+        row = {
+            "kind": "member",
+            "from": "Close",
+            "to": "close",
+            "profiles": ["contour"],
+            "apply": "semantic",
+            "scope": "FastCache::ISocket",
+        }
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "renames.json"
+            path.write_text(
+                json.dumps({"version": 1, "profiles": {"contour": "c"}, "rows": [row, dict(row)]}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(renames.TableError, "twice"):
+                renames.load(path)
 
     def test_the_real_table_loads(self) -> None:
         table = renames.load(TABLE)

@@ -194,6 +194,25 @@ class ARemovedRowCanNeverBeARewriteSource(unittest.TestCase):
                 result, _ = rewrite.rewrite_text(source, rows_for(profile))
                 self.assertEqual(result, source)
 
+    def test_the_loader_is_a_door_of_its_own(self) -> None:
+        # R93: text_rows()/semantic_rows() filtered on `apply`, not on `kind`, so they excluded a
+        # removed row only *because* the schema forced its apply -- the schema door seen from
+        # downstream, not a second door. A Row built directly, bypassing the schema, proves it.
+        table = renames.Table(
+            profiles={"contour": "c"},
+            rows=[
+                renames.Row(
+                    kind="removed",
+                    source="core::tui::LanguageId::Endo",
+                    target="X",
+                    profiles=("contour",),
+                    apply="text",
+                )
+            ],
+        )
+        self.assertEqual(table.text_rows("contour"), [])
+        self.assertEqual(table.semantic_rows("contour"), [])
+
     def test_building_a_pattern_for_a_removed_row_raises(self) -> None:
         row = renames.Row(kind="removed", source="core::tui::LanguageId::Endo", target="", profiles=("endo",))
         with self.assertRaises(renames.TableError):

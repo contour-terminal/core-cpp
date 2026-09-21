@@ -16,6 +16,10 @@ profiles it applies to, and how it is applied:
 | `scope` | for a semantic row, the qualified name of the class whose member is renamed |
 | `target` | the core-cpp header and symbol the drift gate (check-renames.py) checks |
 
+A `pending` row must carry a `target` with a `symbol`, because that symbol is the whole of what the
+gate watches for: the day the task lands it, the gate fails and says to mark the row delivered. A
+pending row without one is asserted by nothing in either direction, and reads as covered.
+
 `removed` is the one kind that runs the gate backwards. Its `from` names a symbol core-cpp **no
 longer has**, and check-renames.py asserts the symbol is *absent* from the delivered headers, so a
 re-introduction is refused. It has no `to` and no `target`, because there is nothing to rename to;
@@ -88,14 +92,26 @@ class Table:
         """The rows rewrite.py applies for @p profile, most specific source first."""
         if profile not in self.profiles:
             raise TableError(f"unknown profile '{profile}'; the table has {', '.join(sorted(self.profiles))}")
-        rows = [row for row in self.rows if row.apply == "text" and row.applies_to(profile)]
+        rows = [row for row in self.rows if row.apply == "text" and self._rewritable(row, profile)]
         return sorted(rows, key=lambda row: (KINDS.index(row.kind), -len(row.source), row.source))
 
     def semantic_rows(self, profile: str) -> list[Row]:
         """The rows semantic_rename.py owns for @p profile."""
         if profile not in self.profiles:
             raise TableError(f"unknown profile '{profile}'; the table has {', '.join(sorted(self.profiles))}")
-        return [row for row in self.rows if row.apply == "semantic" and row.applies_to(profile)]
+        return [row for row in self.rows if row.apply == "semantic" and self._rewritable(row, profile)]
+
+    @staticmethod
+    def _rewritable(row: Row, profile: str) -> bool:
+        """Whether @p row may be handed to a rewrite tool at all, before its `apply` is consulted.
+
+        The `kind` test is not redundant with the `apply` test above it. `_row()` forces a removed
+        row's `apply` to `none`, so filtering on `apply` alone excluded one -- but only as a
+        consequence of the schema, which is the schema's door seen from downstream, not a second
+        door. A `Row` built in code, bypassing the loader, walked straight through. Two doors were
+        claimed and one existed (controller ruling R93).
+        """
+        return row.kind != "removed" and row.applies_to(profile)
 
 
 def _target(raw: object, where: str) -> Target | None:
@@ -188,6 +204,18 @@ def _row(raw: object, index: int, profiles: dict[str, str]) -> Row:
             f"{where}: a removed row names no 'target'; the gate asserts the symbol is ABSENT, "
             f"which is the opposite of what a target means"
         )
+    # Being checked the day its task lands is the whole job of a pending row. Without a target the
+    # gate has nothing to watch for, so the row is asserted by nothing in either direction -- a
+    # comment wearing a row's clothes, and one that reads as covered (controller ruling R92).
+    if status == "pending" and delivers is None:
+        raise TableError(
+            f"{where}: a pending row carries the 'target' the gate watches for; without one, "
+            f"nothing ever tells task {task} that its symbol landed"
+        )
+    if status == "pending" and not delivers.symbol:
+        raise TableError(
+            f"{where}: a pending row's 'target' needs the 'symbol' the gate watches for, not the header alone"
+        )
 
     return Row(
         kind=kind,
@@ -225,13 +253,18 @@ def load(path: Path) -> Table:
 
     rows = [_row(entry, index, profiles) for index, entry in enumerate(raw_rows)]
 
-    seen: dict[tuple[str, str, str], int] = {}
+    # `scope` is part of the key because a member name is only unique inside its class. Without it,
+    # `AsyncQueue::Close` could not have a row at all once `ISocket::Close` held the name in the same
+    # profile -- and Read, Write, Stop and Close are exactly the members Phase B renames, several
+    # classes each (controller ruling R94). For every other kind `scope` is None and changes nothing.
+    seen: dict[tuple[str, str, str | None, str], int] = {}
     for index, row in enumerate(rows):
         for profile in row.profiles:
-            key = (profile, row.kind, row.source)
+            key = (profile, row.kind, row.scope, row.source)
             if key in seen:
+                named = f"'{row.scope}::{row.source}'" if row.scope else f"'{row.source}'"
                 raise TableError(
-                    f"rows[{index}]: profile '{profile}' renames the {row.kind} '{row.source}' twice "
+                    f"rows[{index}]: profile '{profile}' renames the {row.kind} {named} twice "
                     f"(also rows[{seen[key]}])"
                 )
             seen[key] = index

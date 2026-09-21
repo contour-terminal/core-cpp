@@ -21,10 +21,10 @@ endif()
 # file set that build installs. Everything else is in the WebAssembly subset.
 #
 # It reaches HEADERS through a variable of its own rather than a list(APPEND) over the whole list,
-# so the rest stays literal where the file set is declared: tools/migrate/check-renames.py reads
-# this call to answer whether a header a rename row names is one a consumer can include, and it
-# resolves a ${...} in HEADERS through the set() beside it -- a list(APPEND) is invisible to it, and
-# the row would then read as private.
+# so the rest stays literal where the file set is declared and a reader sees everything this module
+# publishes in one place. tools/migrate/check-renames.py reads this call to answer whether a header
+# a rename row names is one a consumer can include; it follows a set() and a list(APPEND) alike, and
+# a ${...} it cannot resolve in full it reports, rather than reading the module as publishing less.
 set(_coreCppAsyncThreadedHeaders "")
 if(CORE_CPP_USE_THREADS)
     set(_coreCppAsyncThreadedHeaders ThreadPoolExecutor.hpp)
