@@ -273,18 +273,35 @@ if(CORE_CPP_TESTING AND NOT EMSCRIPTEN)
     foreach(mode IN ITEMS run blockOn spawnOffThread)
         add_test(NAME core-cpp.hostdriven-canary.${mode}
                  COMMAND core-cpp-hostdriven-canary ${mode})
-        # SKIP_RETURN_CODE takes precedence over WILL_FAIL, so a build with assertions compiled out
-        # reports a skip rather than the defect the canary exists to catch.
-        # WILL_FAIL inverts ANY non-zero exit, so it reports "Passed" for a canary that never
-        # reached its assertion -- an unknown mode exits 2 and looks identical to the refusal
-        # firing. Measured: `bogusMode` exits 2 and ctest calls it a pass. FAIL_REGULAR_EXPRESSION
-        # is what distinguishes them, by naming the three ways this binary can exit non-zero or
-        # zero WITHOUT the assertion having fired.
+        # **A canary is judged by a POSITIVE match, not by WILL_FAIL.** WILL_FAIL inverts ANY
+        # non-zero exit, so a run that never reached its assertion scored as a pass: measured,
+        # a deliberately bogus mode exits 2 and ctest called it Passed. A negative alternation
+        # only narrows that -- it can exclude the paths you enumerated, and the paths that print
+        # NOTHING are invisible to it. `PASS_REGULAR_EXPRESSION` inverts the burden: the marker
+        # printed immediately before the forbidden operation must appear, so reaching the
+        # mechanism is what passes and every silent exit fails.
+        #
+        # Measured, because CMake documents none of it: SKIP_RETURN_CODE still wins over both
+        # regexes (so a Release leg, where assertions are compiled out, abstains rather than
+        # fails); FAIL_ beats PASS_ when both match, which is what makes the "continued" guard
+        # work even though the marker was printed; and a run with no output at all fails with
+        # "Required regular expression not found".
+        #
+        # PASS_REGULAR_EXPRESSION makes ctest IGNORE the exit code, so it REPLACES WILL_FAIL
+        # rather than accompanying it -- together they would invert the regex verdict and the
+        # test would pass when the marker was absent.
+        #
+        # **The `onAbort` handler in the canary is load-bearing for all of this**, not tidiness:
+        # it turns SIGABRT into `_Exit(1)`, and both properties are documented as unable to
+        # override a signal. Delete it as redundant and every scheme here breaks silently.
+        #
+        # The FAIL_ entry is the one that must be here: those two lines are printed AFTER the
+        # marker, on the path where the refusal did not fire, so PASS_ alone would accept them.
         set_tests_properties(core-cpp.hostdriven-canary.${mode} PROPERTIES
-            WILL_FAIL TRUE
+            PASS_REGULAR_EXPRESSION "${mode}: about to"
             TIMEOUT 60
             SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
-            FAIL_REGULAR_EXPRESSION "unknown mode;was accepted;returned on a host-driven loop"
+            FAIL_REGULAR_EXPRESSION "was accepted;returned on a host-driven loop"
             LABELS "core-cpp;net;canary")
     endforeach()
 endif()
@@ -306,10 +323,39 @@ if(CORE_CPP_TESTING AND WIN32)
     foreach(guarantee IN ITEMS g1 g4)
         add_test(NAME core-cpp.iocp-canary.${guarantee}
                  COMMAND core-cpp-iocp-canary ${guarantee})
-        # SKIP_RETURN_CODE takes precedence over WILL_FAIL, so a build with assertions
-        # compiled out reports a skip rather than the defect the canary exists to catch.
+        # **A canary is judged by a POSITIVE match, not by WILL_FAIL.** WILL_FAIL inverts ANY
+        # non-zero exit, so a run that never reached its assertion scored as a pass: measured,
+        # a deliberately bogus mode exits 2 and ctest called it Passed. A negative alternation
+        # only narrows that -- it can exclude the paths you enumerated, and the paths that print
+        # NOTHING are invisible to it. `PASS_REGULAR_EXPRESSION` inverts the burden: the marker
+        # printed immediately before the forbidden operation must appear, so reaching the
+        # mechanism is what passes and every silent exit fails.
+        #
+        # Measured, because CMake documents none of it: SKIP_RETURN_CODE still wins over both
+        # regexes (so a Release leg, where assertions are compiled out, abstains rather than
+        # fails); FAIL_ beats PASS_ when both match, which is what makes the "continued" guard
+        # work even though the marker was printed; and a run with no output at all fails with
+        # "Required regular expression not found".
+        #
+        # PASS_REGULAR_EXPRESSION makes ctest IGNORE the exit code, so it REPLACES WILL_FAIL
+        # rather than accompanying it -- together they would invert the regex verdict and the
+        # test would pass when the marker was absent.
+        #
+        # **The `onAbort` handler in the canary is load-bearing for all of this**, not tidiness:
+        # it turns SIGABRT into `_Exit(1)`, and both properties are documented as unable to
+        # override a signal. Delete it as redundant and every scheme here breaks silently.
+        #
+        # The marker is keyed to ${guarantee} because one shared string would make g4 fail: it
+        # never prints a g1 marker. `nothing refused it` is printed by both not-fired paths, so
+        # one entry covers both -- and it is the only negative entry needed here, because this
+        # binary's other exits (an unknown mode, a backend offering no port, a socket it could
+        # not associate) print no marker and are already failed by PASS_. That includes the path
+        # that defeats any alternation: IocpBackend's constructor throwing exits 1 with EMPTY
+        # stderr, because the testing_dialogs suppression that makes this canary usable also
+        # removes the CRT's abort text.
         set_tests_properties(core-cpp.iocp-canary.${guarantee} PROPERTIES
-            WILL_FAIL TRUE
+            PASS_REGULAR_EXPRESSION "${guarantee}: about to"
+            FAIL_REGULAR_EXPRESSION "nothing refused it"
             TIMEOUT 60
             SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
             LABELS "core-cpp;net;canary")

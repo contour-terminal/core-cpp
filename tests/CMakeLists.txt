@@ -321,17 +321,66 @@ set_tests_properties(core-cpp.format-scripts-selftest PROPERTIES
     LABELS "core-cpp;hygiene;tree-level"
     TIMEOUT 120)
 
-# A CRT assert, abort(), invalid parameter or crash must end the process instead of opening a dialog
-# that waits for a click. Each run must fail (WILL_FAIL) within the timeout; a run that hangs has hit a
-# dialog. The canary's main() asks for no suppression: linking core::testing_dialogs installs it.
+# A CRT assert, abort(), invalid parameter or crash must not open a dialog that waits for a click.
+# What each run must do differs: `assert` and `abort` die, `invalid-parameter` is handled and
+# CONTINUES -- a no-op handler is what the suppression installs, so surviving is the proof. What
+# they share is that none of them may WAIT: a run that hangs has hit a dialog, and TIMEOUT is what
+# catches that. The canary's main() asks for no suppression: linking core::testing_dialogs
+# installs it.
 if(WIN32)
     add_executable(core-cpp-windows-dialog-canary WindowsDialogCanary.cpp)
     target_link_libraries(core-cpp-windows-dialog-canary PRIVATE core::testing_dialogs)
     core_cpp_apply_toolchain(core-cpp-windows-dialog-canary)
     foreach(mode IN ITEMS assert abort invalid-parameter)
         add_test(NAME core-cpp.windows-dialog-canary.${mode} COMMAND core-cpp-windows-dialog-canary ${mode})
+        # **A canary is judged by a POSITIVE match, not by WILL_FAIL.** WILL_FAIL inverts ANY
+        # non-zero exit, so a run that never reached its assertion scored as a pass: measured,
+        # a deliberately bogus mode exits 2 and ctest called it Passed. A negative alternation
+        # only narrows that -- it can exclude the paths you enumerated, and the paths that print
+        # NOTHING are invisible to it. `PASS_REGULAR_EXPRESSION` inverts the burden: the marker
+        # printed immediately before the forbidden operation must appear, so reaching the
+        # mechanism is what passes and every silent exit fails.
+        #
+        # Measured, because CMake documents none of it: SKIP_RETURN_CODE still wins over both
+        # regexes (so a Release leg, where assertions are compiled out, abstains rather than
+        # fails); FAIL_ beats PASS_ when both match, which is what makes the "continued" guard
+        # work even though the marker was printed; and a run with no output at all fails with
+        # "Required regular expression not found".
+        #
+        # PASS_REGULAR_EXPRESSION makes ctest IGNORE the exit code, so it REPLACES WILL_FAIL
+        # rather than accompanying it -- together they would invert the regex verdict and the
+        # test would pass when the marker was absent.
+        #
+        # **The `onAbort` handler in the canary is load-bearing for all of this**, not tidiness:
+        # it turns SIGABRT into `_Exit(1)`, and both properties are documented as unable to
+        # override a signal. Delete it as redundant and every scheme here breaks silently.
+        #
+        # This one was the worst case of it: `ContinuedAfterFailure` is 3, so the single outcome
+        # this canary exists to detect -- the process SURVIVING a failure that should have killed
+        # it -- was reported as a pass. The author gave that outcome its own exit code and a
+        # comment saying so, and the registration discarded the distinction.
+        #
+        # Its marker already existed: main() prints "failing by <mode>" to stderr, flushed,
+        # before the mode dispatch.
+        #
+        # **The three modes do not share a success condition**, which the previous registration
+        # hid by accepting any non-zero exit for all of them. `assert` and `abort` must KILL the
+        # process: surviving is the defect, and `CONTINUED AFTER FAILURE` names it.
+        # `invalid-parameter` must SURVIVE: the suppression installs a no-op invalid-parameter
+        # handler (`SuppressWindowsDialogs.cpp`), so `strcpy_s` returns EINVAL and execution
+        # continues -- that is the proof the handler is installed, and dying there would mean it
+        # was not. So the same string is the failure marker for two modes and the pass marker for
+        # the third. Measured: registering `CONTINUED AFTER FAILURE` as a failure for all three
+        # made `invalid-parameter` fail, which is how this difference was found.
+        set(_coreCppDialogPass "failing by ${mode}")
+        set(_coreCppDialogFail "CONTINUED AFTER FAILURE")
+        if(mode STREQUAL "invalid-parameter")
+            set(_coreCppDialogPass "CONTINUED AFTER FAILURE")
+            set(_coreCppDialogFail "")
+        endif()
         set_tests_properties(core-cpp.windows-dialog-canary.${mode} PROPERTIES
-            WILL_FAIL TRUE
+            PASS_REGULAR_EXPRESSION "${_coreCppDialogPass}"
+            FAIL_REGULAR_EXPRESSION "${_coreCppDialogFail}"
             TIMEOUT 60
             SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
             LABELS "core-cpp;canary")

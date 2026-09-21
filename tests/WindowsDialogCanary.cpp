@@ -50,6 +50,7 @@ int main(int argc, char* argv[])
 #else
         [[maybe_unused]] auto const canaryHolds = false;
         assert(canaryHolds && "windows-dialog-canary asserts on purpose");
+        std::println(stderr, "windows-dialog-canary: CONTINUED AFTER FAILURE");
         return ContinuedAfterFailure;
 #endif
     }
@@ -62,7 +63,10 @@ int main(int argc, char* argv[])
         // Release one, unless a handler was installed.
         char* volatile destination = nullptr;
         if (strcpy_s(destination, 1, "x") != 0)
+        {
+            std::println(stderr, "windows-dialog-canary: CONTINUED AFTER FAILURE");
             return ContinuedAfterFailure;
+        }
         return 0;
 #else
         return NotExercised;

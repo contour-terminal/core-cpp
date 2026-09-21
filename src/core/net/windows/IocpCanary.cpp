@@ -62,6 +62,14 @@ namespace
 /// arrives as the exception it is.
 constexpr int RefusedExitCode = 1;
 
+/// **Load-bearing for the ctest registration, not tidiness.** `WILL_FAIL`,
+/// `PASS_REGULAR_EXPRESSION` and `FAIL_REGULAR_EXPRESSION` are each documented as unable to
+/// override a system-level failure, and a raw `SIGABRT` is one -- so without this handler the
+/// assertion arrives as a signal and every regex scheme here is defeated. A future cleanup
+/// deleting "unused" abort handling would convert every canary in this binary into a false pass
+/// silently. It also writes nothing: `_Exit` flushes no stream, and an abort handler may call
+/// only async-signal-safe functions, which is why the markers are printed by the program BEFORE
+/// the forbidden operation and on stderr, which is unbuffered.
 /// Turns the refusal's abort into an exit code. `_exit`-shaped on purpose: an abort
 /// handler runs with the process already committed to dying, so it must not unwind,
 /// flush or allocate.
@@ -91,6 +99,14 @@ int provokeG1()
     while (!backend.dequeuerRunning())
         std::this_thread::yield();
 
+    // The POSITIVE marker, and it is what the registration matches on. Printed immediately
+    // before the forbidden call, so its presence proves the canary reached the mechanism --
+    // which a negative alternation cannot, because a path that prints nothing at all (this
+    // backend's constructor throwing) exits 1 exactly like the refusal firing.
+    //
+    // stderr, not stdout: `onAbort` calls `std::_Exit`, which flushes nothing, and stderr is
+    // unbuffered -- the same marker on stdout would be lost on the very path it exists for.
+    std::fputs("iocp-canary: g1: about to dequeue from a second thread\n", stderr);
     std::ignore = backend.wait(std::chrono::milliseconds { 0 }); // must abort
 
     std::fputs("iocp-canary: a second thread dequeued the port and nothing refused it\n", stderr);
@@ -134,6 +150,8 @@ int provokeG4()
         return 2;
     }
 
+    // The positive marker for this guarantee; see provokeG1 for why it is here and on stderr.
+    std::fputs("iocp-canary: g4: about to associate a handle with a second port\n", stderr);
     std::ignore = port->associate(handle); // must abort
 
     std::fputs("iocp-canary: a handle was associated with one port twice and nothing refused it\n", stderr);

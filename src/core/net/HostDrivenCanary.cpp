@@ -49,6 +49,14 @@ namespace
 /// distinguishable: SIGSEGV is not handled, so it still arrives as the exception it is.
 constexpr int RefusedExitCode = 1;
 
+/// **Load-bearing for the ctest registration, not tidiness.** `WILL_FAIL`,
+/// `PASS_REGULAR_EXPRESSION` and `FAIL_REGULAR_EXPRESSION` are each documented as unable to
+/// override a system-level failure, and a raw `SIGABRT` is one -- so without this handler the
+/// assertion arrives as a signal and every regex scheme here is defeated. A future cleanup
+/// deleting "unused" abort handling would convert every canary in this binary into a false pass
+/// silently. It also writes nothing: `_Exit` flushes no stream, and an abort handler may call
+/// only async-signal-safe functions, which is why the markers are printed by the program BEFORE
+/// the forbidden operation and on stderr, which is unbuffered.
 /// Turns the refusal's abort into an exit code. `_exit`-shaped on purpose: an abort handler runs
 /// with the process already committed to dying, so it must not unwind, flush or allocate.
 /// @param signalNumber Ignored; only SIGABRT is handled.
@@ -107,12 +115,14 @@ int main(int argc, char** argv)
 
     if (std::strcmp(argv[1], "run") == 0)
     {
+        std::fputs("hostdriven-canary: run: about to enter run() on a host-driven loop\n", stderr);
         loop.run();
         std::fputs("hostdriven-canary: run() returned on a host-driven loop\n", stderr);
         return 0;
     }
     if (std::strcmp(argv[1], "blockOn") == 0)
     {
+        std::fputs("hostdriven-canary: blockOn: about to block on a host-driven loop\n", stderr);
         loop.blockOn(parkForever(&loop));
         std::fputs("hostdriven-canary: blockOn() returned on a host-driven loop\n", stderr);
         return 0;
@@ -139,6 +149,7 @@ int main(int argc, char** argv)
         while (!entered.load(std::memory_order_acquire))
             std::this_thread::yield();
 
+        std::fputs("hostdriven-canary: spawnOffThread: about to spawn from a second thread\n", stderr);
         nativeLoop.spawn(doNothing());
 
         // Unreachable where assertions are on. Reaching it means the predicate answered true from
