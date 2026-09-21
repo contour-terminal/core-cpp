@@ -213,6 +213,24 @@ Task B5. Every rule here is a wake-up somebody paid for.
 
 ## Thread affinity, asserted rather than documented
 
+**A rule written beside the code is not a rule the code applies, and adjacency makes that harder
+to notice rather than easier** -- a reader who has just read the rule carries it into the lines
+below and supplies it from memory. Two instances in this module, both Critical, both found by
+review and not by reading:
+
+- `EventLoop::blockOn` carried an `@throws std::logic_error` clause specifying the refusal, and
+  its justification, **eight lines above a `break` that did the opposite**. A `@throws` clause is
+  a checkable claim about the code beneath it and nothing in this tree checks one.
+- `EventLoop::addTimer` neither woke nor armed a host-driven backend, in the function immediately
+  after the one whose comment explains why a host-driven backend needs `wake()`.
+
+The second has the more mechanical form, and it is the one to look for: **`post`, `submit`,
+`schedule`, `spawn`, `requestCancel` and `stop` all wake the backend. `addTimer` was the sixth
+member of that family and the only one that did not.** An invariant visible in five sibling
+implementations and absent in the sixth needs no comment to state and can be checked by reading
+the family. **When a function joins a family that all do X, "why does this one not do X" is
+answered out loud or it is not answered.**
+
 - **G1: exactly one thread dequeues a loop.** `run()`, `runOnce()` and `blockOn()` each claim the
   worker identity, and `runOnce` asserts that no OTHER thread already holds it. `run()` is not
   virtual, and that is the obligation half: a loop that could enter its turn without claiming

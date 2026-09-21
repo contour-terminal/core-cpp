@@ -48,6 +48,7 @@
 #include <core/async/Task.hpp>
 #include <core/net/IoBackend.hpp>
 #include <core/net/detail/ParkTable.hpp>
+#include <core/net/detail/ScopeGuard.hpp>
 #include <core/net/detail/WorkerIdentity.hpp>
 #include <core/platform/Clock.hpp>
 #include <core/platform/Types.hpp>
@@ -791,8 +792,25 @@ class DelayAwaiter
             _token = awaiting.promise().stopToken();
         if (_token.stop_requested())
             return false;
+        // The park is filed BEFORE the stop callback exists, and nothing unregisters it if the
+        // emplace below throws: `await_suspend` exiting by exception unwinds the awaiting frame
+        // through its `co_await` without ever running `await_resume`, which is the only other
+        // caller of `unregisterPark`. The loop would then hold a park naming storage that is
+        // being destroyed. `ScopeGuard` has no dismiss, so the flag is what makes this fire on
+        // the exceptional exit alone; `unregisterPark` on an invalid id is a no-op, which covers
+        // a throw from `registerPark` itself.
+        auto registered = false;
+        // `noexcept` on the lambda is required, not decorative: `ScopeGuard`'s constraint is
+        // `is_nothrow_invocable_v<Callable&>`, and an unmarked lambda fails it -- as a deduction
+        // failure with no viable constructor, not as a readable message. `unregisterPark` is
+        // itself `noexcept`, so the marking is honest.
+        auto const undo = detail::ScopeGuard { [&]() noexcept {
+            if (!registered)
+                _loop->unregisterPark(_park);
+        } };
         _park = _loop->registerPark(ParkEntry::onDeadline(async::detail::parkedWorkFor(awaiting), _deadline));
         _cancelReg.emplace(_token, [loop = _loop, park = _park] { loop->requestCancel(park); });
+        registered = true;
         return true;
     }
 

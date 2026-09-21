@@ -73,6 +73,10 @@ TEST_CASE("A host-driven loop runs a posted callback only once the host pumps", 
     auto backend = HostDrivenBackend { host, clock };
     auto loop = EventLoop { backend, clock };
 
+    // Declared after the loop, and safe only because the work that writes here has
+    // FINISHED by the time the loop is destroyed. A case that left this work parked would
+    // make ~EventLoop resume it into storage already gone; every case here that does so
+    // declares its counter BEFORE the loop for that reason.
     auto ran = 0;
     loop.post([&ran] { ++ran; });
 

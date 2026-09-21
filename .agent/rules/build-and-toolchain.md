@@ -46,7 +46,25 @@ presets, scripts and paths.
   daemon answers. Origin: fastcached build-and-toolchain, "Running the launcher is not testing
   it".
 - **With a fastcache-cc older than fastcached ca8dfc32, rebuild a `clangcl-*` tree with
-  `--clean-first` after a header edit; from ca8dfc32 on, do not bother.** CMake's Ninja
+  `--clean-first` after a header edit; from ca8dfc32 on, do not bother.** **Decide which you have
+  rather than guessing** — the version string ends in `-g<sha>`, which is the commit it was built
+  from, so two commands answer it:
+
+  ```sh
+  fastcache-cc --version              # 0.2.0-739-gd4451c3b  ->  the sha is d4451c3b
+  git -C <fastcached> merge-base --is-ancestor ca8dfc32 <sha> && echo new || echo old
+  ```
+
+  A condition nobody can evaluate reads as optional and gets skipped, which is why the commands
+  are here and not left implied. The launcher is per-platform and this machine carries two -- a
+  Windows build for the `cl-*`/`clangcl-*` trees and a WSL build for the rest -- so **run the
+  check in the environment that builds the tree you are asking about**: `fastcache-cc --version`
+  answers from whichever one is on that shell's PATH, they are upgraded independently, and on
+  2026-09-21 they were nine commits apart (`0.2.0-739-gd4451c3b` on Windows,
+  `0.2.0-748-g73fb0457` in WSL). They agreed on the verdict that day; agreeing is not guaranteed.
+  **On this machine on 2026-09-21 the answer was `old`**:
+  `d4451c3b` is dated 2026-09-16 and `ca8dfc32` 2026-09-18, so `--clean-first` was required.
+  Re-check after a launcher upgrade; do not carry that answer forward. CMake's Ninja
   generator does not give clang-cl `/showIncludes`: it writes `deps = gcc` and asks for a GNU
   depfile through the pass-through, `-clang:-MD -clang:-MT<obj> -clang:-MF<obj>.d`. The older
   launcher did not recognise `-clang:-MF`, so a cache hit wrote the object but no depfile, and
@@ -269,6 +287,94 @@ presets, scripts and paths.
 - **A diagnostic that never ran and one that ran and found nothing are the same green.** A
   probe step with `continue-on-error` must still say it was reached. Origin: fastcached
   build-and-toolchain, "A diagnostic that never RAN".
+- **That rule is ten lines above, and it did not stop three instances of itself in one hour.**
+  On 2026-09-21 `clang-tidy` went quiet three ways inside sixty minutes: a log read at 179 of 526
+  files; a gate never started, because its runner counted against a remembered list instead of
+  against this checklist -- **a remembered list can only drop the item you never did**, so memory
+  rebuilds something complete by construction and wrong by omission; and a run whose analyser was
+  absent from the shell's PATH, which reported `warnings=0` from a tool that was never invoked.
+  **What was missing was never the rule. It was the procedure.** A rulebook entry that states a
+  principle without an executable step is a sentence people agree with and do not carry out: the
+  reader nods, moves to the next paragraph and supplies compliance from memory. So a gate reports
+  **four facts, and they are a CONJUNCTION rather than a hierarchy** -- no one of them implies
+  another, and the ways they fail are different ways:
+
+  0. **The build's EXIT CODE is the verdict.** Findings are fatal here, so an object cannot exist
+     unless its statement passed the analyser: a zero exit over a build that executed statements
+     is the answer, and it is the only check that **passes through no pattern anyone wrote**. It
+     is therefore cheaper and stronger than reading the log, and it is what demotes the log to a
+     diagnostic -- how you find out *why* -- rather than evidence. Two runners on 2026-09-21
+     differed only in that one grepped `warning:` and the other `warning:|error:`; the second was
+     right **by luck of pattern, not by design**, and a rule that says "print the findings"
+     leaves the next person writing a pattern and being lucky or not. Note the pairing: **exit 0
+     over zero statements is also exit 0**, so the exit code and the work count are the pair, and
+     neither is the verdict alone.
+  1. **Which binary answered.** The build already prints it -- `-- [core-cpp] clang-tidy <version>
+     (<path>)` from `cmake/CoreCppToolchain.cmake`, in every configure this project has ever run.
+     Match the **`[core-cpp] ` prefix**, never the bare string `clang-tidy`: a dependency prints
+     `[clang-tidy] Disabled.` and `Enable clang-tidy: OFF ()` into the same output from its own
+     options, so grepping for the tool's name returns the proof and a flat contradiction of it,
+     adjacent. The general fact: **a dependency reports in the same voice you do.** `message(STATUS)`
+     has no namespace, so anything grepped from a configure log is grepped from every project in
+     the tree, and a vendored dependency's feature flags collide with yours by name because you
+     both named them after the same tool. Our `[core-cpp] ` prefix exists for this. Prefer that line to `command -v`, which answers what *your shell* would find rather
+     than what the build resolved: `CORE_CPP_CLANG_TIDY_EXE` is a CACHE variable, so on a tree
+     that was not deleted the two can differ. **Deleting the tree is what licenses the shorthand,
+     not hygiene.**
+  2. **That it was applied to the files you changed.** The configure line proves the tool exists,
+     not that it ran on your source. `ninja -t commands <your object>` shows `--tidy="<path>;..."`
+     per file. That is what makes a zero mean anything about a particular file -- and with a
+     compile launcher in the mix, it is also what rules out a replayed object having skipped the
+     analysis.
+  3. **That it did work.** Record a count that cannot be zero when the analyser ran; the build
+     log's line count serves. `warnings=0` and `warnings=0` are indistinguishable; `535` and `0`
+     are not. **Count the WORK; and where you do read the log, PRINT the findings rather than
+     counting them** -- a finding count passes through a regex, and a regex is where this
+     silently fails. A probe written to catch a silent gate reported `0 findings` twice from a
+     run that had just produced two, because it matched `warning:` while `-warnings-as-errors`
+     emits `error:`. The work count cannot be zeroed by a bad pattern.
+
+     **A work count does NOT prove the analyser ran on YOUR files, and reading it that way is a
+     mistake this rule's own authors made within an hour of writing it.** The count includes
+     every statement in the tree -- Catch2, libunicode, link steps -- while `CORE_CPP_CLANG_TIDY`
+     applies to core-cpp's targets alone, so *"526 statements ran and none of them carried
+     `--tidy`"* is indistinguishable by step count from a clean analysis. A post-rebase run
+     reported `steps=25` on an already-built tree: real work, the rebase delta only, and a
+     verdict inherited from a previous run rather than earned. **Level 3 says the build did
+     something; only levels 2 and 4 say it analysed your change.**
+  4. **That the analyser's findings are FATAL, by feeding it one.** A deliberate violation in a
+     file you changed proves the right tool ran on your code and that a finding fails the build,
+     which is more than 1 and 2 together can say -- a tool can be present, correctly wired, and
+     idle.
+
+     **The mutation and the work count answer different questions, and neither implies the
+     other.** The mutation proves the **instrument**: the right analyser, on your code, with
+     fatal findings. The work count proves the **surface**: that the statements ran at all rather
+     than inheriting a previous run's verdict. **A fed violation reports from the file you
+     mutated and says nothing about the other five hundred** -- an incremental run can analyse
+     exactly that one file, inherit every other verdict, and the mutation reports cleanly either
+     way. That is what `steps=25` was. Feed a violation AND count the work; 1 and 2 are then what
+     you read to find out why a mutation did not report. Proved twice on 2026-09-21, independently:
+     `readability-identifier-naming` on `DeadlineTimer.cpp` and `misc-redundant-expression` on
+     `EventLoop.cpp`, both `error:`, both fatal.
+
+  **And DELETE THE TREE, which is load-bearing rather than fastidious.** Ninja skips a build
+  statement whose object is up to date -- and `CODE_CHECK`, which runs the analyser, is INSIDE
+  the statement. So an incremental run over an unchanged tree reports zero for the same reason an
+  absent analyser does, and `warnings=0` then means *nothing needed recompiling*. This composes
+  with the `--clean-first` rule above into one rule: a clang-cl cache hit replays no
+  `/showIncludes`, so Ninja records no header dependencies, so after a header edit the dependent
+  objects look up to date, so their statements are skipped -- **and their analysis with them.**
+  The depfile bug does not only leave stale objects, it silently narrows the analysed surface.
+  (`.clang-tidy` is not an input of any object either, so editing it rebuilds nothing:
+  [core-cpp#36](https://github.com/contour-terminal/core-cpp/issues/36).)
+
+  Refuse to report at all when the build tree does not exist: a configure that failed leaves no
+  `build.ninja`, and a runner that greps its absent log finds zero warnings. And note that **a
+  version mismatch is a `WARNING`, not a `FATAL_ERROR`** -- absence is fatal, a wrong version is
+  not. That is deliberate and it does report, so it satisfies the rule, but read the warning's own
+  words before dismissing it: the pin *"is what CI analyses with"*, so a local green from an
+  unpinned analyser is not evidence about the gate.
 
 ## A C-style loop is classified by its body
 

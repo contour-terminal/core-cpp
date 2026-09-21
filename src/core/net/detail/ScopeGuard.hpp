@@ -21,6 +21,12 @@ namespace core::net::detail
 /// scope that declared it. Construct it with a lambda and let it go out of scope.
 /// @tparam Callable The callable to invoke; must be nothrow-invocable, since it
 ///         runs from a destructor and an escaping exception would terminate.
+///
+/// **Mark the lambda `noexcept` or this will not compile, and the diagnostic will not say why.**
+/// A lambda is only nothrow-invocable if it says so, whatever its body does, so an unmarked one
+/// fails the constraint -- and the failure surfaces as *"no viable constructor or deduction guide
+/// for deduction of template arguments"*, which reports that the call did not match without
+/// naming the requirement it missed. `auto const g = ScopeGuard { [&]() noexcept { ... } };`
 template <typename Callable>
     requires std::is_nothrow_invocable_v<Callable&>
 class ScopeGuard

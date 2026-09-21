@@ -622,6 +622,10 @@ TEST_CASE("post() wakes a blocked wait and runs its callback on the loop thread"
     auto const backend = core::net::makeDefaultBackend();
     auto loop = EventLoop { *backend };
 
+    // Declared after the loop, and safe only because the work that writes here has
+    // FINISHED by the time the loop is destroyed. A case that left this work parked would
+    // make ~EventLoop resume it into storage already gone; every case here that does so
+    // declares its counter BEFORE the loop for that reason.
     auto const loopThread = std::this_thread::get_id();
     auto callbackThread = std::thread::id {};
 
@@ -671,6 +675,10 @@ TEST_CASE("Finished spawned flows are released by the turn that ran them", "[Eve
     auto source = ScriptedBackend {};
     auto loop = EventLoop { source };
 
+    // Declared after the loop, and safe only because the work that writes here has
+    // FINISHED by the time the loop is destroyed. A case that left this work parked would
+    // make ~EventLoop resume it into storage already gone; every case here that does so
+    // declares its counter BEFORE the loop for that reason.
     auto counter = 0;
     loop.spawn(incrementAndFinish(&counter));
     loop.spawn(incrementAndFinish(&counter));
