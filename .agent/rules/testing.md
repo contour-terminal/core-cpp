@@ -238,3 +238,20 @@ to be recompiled, and nothing tells you when one was not.
   directory under `out/build/<preset>/` is enough; `--clean-first` is the blunt version.
 - The tell is a failure that only one toolchain sees, in code the diff did not touch, and that
   moves or vanishes when tests are run individually. Suspect the build before the code.
+
+## Open work
+
+- **[core-cpp#34](https://github.com/contour-terminal/core-cpp/issues/34)** — a green run's case
+  and assertion totals are printed and then discarded, so nothing afterwards distinguishes "the
+  cases passed" from "the cases did not run". **The reporter is innocent; ctest is doing it**:
+  Catch2's default console reporter already prints `All tests passed (N assertions in M test
+  cases)` on success, and core-cpp's `CatchMain.cpp` does not replace it — it is
+  `CTEST_OUTPUT_ON_FAILURE` that throws a passing test's output away, and no job keeps a ctest log.
+  Recorded at that layer on purpose, because the natural conclusion is "Catch2 only prints on
+  failure" and it sends you to the reporter, which is not where the problem is. Retaining
+  `LastTest.log` is the obvious fix and should not be taken first: a count is only worth having if
+  it is comparable, and 131 cases across 23 files vanish between configurations today. The rule
+  above — `SKIP`, never silence — covers the `#ifndef` class; it does not reach the largest one,
+  where `core-cpp.platform` loses 66 cases across seven files under Emscripten because CMake
+  selected the sources away, leaving the same binary name with different contents and no guard in
+  any file to convert.
