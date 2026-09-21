@@ -454,3 +454,143 @@ The artefact the data produces tests the data.
 - `a9ea52b` has its own in-flight CI run and **it will go red truthfully** — that commit genuinely
   did not compile, because it took B5's `EventLoop.cpp` without the declarations in
   `EventLoop.hpp` that it names. It was repaired forward in `4049954`. Nobody should chase it.
+
+---
+
+# Fix round 2
+
+Re-review: `task-B4-rereview1.md` — 6 ADDRESSED, 3 ADDRESSED-WITH-CONCERN, 0 NOT ADDRESSED, no new
+Critical, and two new Importants. Commit `5d7a5ae`, on B7a's `320a9ab`, which travelled
+byte-identical.
+
+## The Critical I found in my own fix round
+
+Fix round 1's `blockOn` throw fires on a flow that is **running**, and then segfaults.
+
+```cpp
+co_await ResumeOn { pool };   // legitimate: the shape ResumeOn exists for
+// ... work on the pool ...
+co_await ResumeOn { loop };   // and back
+```
+
+Between the two, the loop has nothing queued, nothing parked and nothing inbound — not because
+the flow cannot advance, but because it is advancing somewhere else. The throw's own message,
+*"the task can no longer be advanced"*, is false for that case; the unwind then frees the frame
+under the thread running it.
+
+| | cross-thread flow (legitimate) | deadlocked flow (#17) |
+|---|---|---|
+| pre-B4 (spin) | **works** — burns a core, completes | hangs at 100% CPU |
+| B4 (`break`) | UB, garbage, then UAF | UB, garbage |
+| fix round 1 (`throw`) | **throws, then UAF** | clean throw |
+| fix round 2 (wait) | works | hangs at **0%** CPU |
+
+**The shape pre-B4 handled correctly is the one B4 broke and fix round 1 did not repair.** The
+review's reproducer and both of my C1 cases used an `AsyncQueue` wired to an inert executor —
+genuinely unadvanceable — so neither the review, nor my tests, nor ten gates could see it. The
+re-review derived the same defect independently from the diff, and the consumer grep found 54
+`blockOn` call sites across contour, endo and tuidu, one of which — contour's `ReactorThread` —
+catches everything and routes it to `onFailure`, so the throw would have converted a working flow
+into a reported fault with no stack.
+
+## The measurement that matters more than the fix
+
+My first case for this asserts the outcome: the flow completes. **With the fix mutated away, it
+still passes.**
+
+```
+REQUIRE(result == 7)          passed     <- the outcome case does NOT discriminate
+REQUIRE_FALSE(asked.empty())  FAILED     <- the argument does
+```
+
+`blockOn` spins, the pool submits, the inbound queue drains, and the flow completes — a green
+suite with core-cpp#17 back in it. Only an assertion on **what `wait()` was asked for** separates
+a loop that slept from a loop that burned a core.
+
+> **An outcome test cannot distinguish two mechanisms that produce the same outcome.** If the
+> defect is *how* a result was reached, only an assertion on the request can see it.
+
+**The case I wrote for C1 did not cover C1's own justification** — C1's `@throws` clause justified
+the refusal *by* the spin, the fix replaced the refusal, and the only case guarding the
+replacement could not see the spin return. The one reason it was caught is that I ran a mutation
+on a case I had already deleted once as unwritable.
+
+Three attempts at that case failed first, each for a measured reason: `runOnce()` never blocks so
+it records no timeout at all (`.back()` on an empty vector aborted the binary, which is the only
+reason I noticed); `ScriptedBackend::waitCount()` is a plain `std::vector`, so observing it
+cross-thread is a data race TSan would rightly flag; and single-threaded the state is unreachable
+without a second thread. The resolution was a `RecordingBackend` decorator over the real backend —
+real blocking, argument captured, read after the drive returns, when the only appender is the test
+thread.
+
+## Everything else in the round
+
+- **`WaitHandleAwaiter`'s guard**, the third site of M8's park-then-arm shape and the one where it
+  is a use-after-free rather than a leaked slot: its park holds a live backend registration whose
+  handler names the awaiting frame. M8's comment claiming the sites "cannot drift" **named two of
+  three**, which read as an audit that had been performed.
+- **Disposal on the remaining unfinished exit** is `cancelPending(task.handle())` rather than
+  `release()`: `release()` stopped the frame being freed and left a live `Park` still naming it.
+  `core::async::syncRunWith` leaks on the same shape because it has nothing that can retrieve the
+  park; this has one. **Disarm beats leak where disarming is available.**
+- **`IdlePolicy::Return`** is documented beside the blocking half rather than eight lines away,
+  because the separation was the defect: unadvanceable-with-nothing-parked and
+  unadvanceable-with-something-parked had opposite answers in one header.
+- **`~EventLoop`'s cost** corrected from the benign ordering to the likely one — a use-after-free
+  of the **loop**, via `submit()` on destroyed storage — and that **G5 does not cover it**, because
+  a thread holding a handle it intends to submit is not driving anything.
+- **I2's justification** corrected to match the code: the discriminator is the **container**, and
+  the borrowed-handle hazard argues only that the boundary must be positional rather than judged
+  per item.
+- **Two more asserts** (`notifyHandleClosing`, `cancelPending`), taken from the criterion rather
+  than the review's list, with each precondition checked for a legitimate off-thread caller.
+  `resumeSoon`'s Doxygen no longer advertises thread-pool callers its assert aborts.
+- Minors 3, 4 and 7: `parkedWaiterCount()`'s meaning, `ParkTable::add`'s exception window, and
+  `registerPark`'s out-parameter deviation recorded where a reader meets it.
+
+## The canary that reported its own regression as a pass
+
+`core-cpp.hostdriven-canary.spawnOffThread` now drives one of the thread-affinity asserts into its
+assertion, so the family is proved to **fire** rather than merely to exist. Then I checked what
+"Passed" meant:
+
+```
+mode=run             exit=1   the assert
+mode=blockOn         exit=1   the assert
+mode=spawnOffThread  exit=1   the assert
+mode=bogusMode       exit=2   "unknown mode"   <- and ctest calls this Passed too
+```
+
+`WILL_FAIL` inverts **any** non-zero exit. Sweeping the tree found seven such registrations across
+three binaries and no `FAIL_REGULAR_EXPRESSION` anywhere — and the worst is
+`windows-dialog-canary`, whose `ContinuedAfterFailure = 3` means *the process survived a failure
+that should have killed it*: **the defect it exists to detect, reported as a pass.** The author
+encoded that outcome as its own exit code, wrote a comment saying so, and registered the test in a
+way that discards the distinction.
+
+Two of the seven are fixed here; the remaining five are a `test(net):` follow-up, with B7a
+supplying `IocpCanary`'s real exit paths rather than my inference — my first attempt at that sweep
+asserted on `${mode}` where the registration uses `${guarantee}`, and **only the assertion in my
+own patch script stopped me reporting a sweep that had changed nothing.**
+
+## Reading the step counts, which mean three different things
+
+The same small number is a pass on one leg and a void verdict on another, so each is labelled:
+
+- **`clang-tidy`: the count IS the verdict.** What is measured — the analyser — runs *inside* the
+  build statement ninja skips, so an incremental run reports zero findings because it analysed
+  nothing. That leg deletes its tree.
+- **`clang-debug` / `gcc-release` / sanitisers: the count is NOT the verdict.** Ninja's currency
+  check is sound there, so a small number means every object was already newer than its inputs,
+  and ctest then ran those binaries. `work_lines=61` is a real answer.
+- **`clangcl-*`: the count is the verdict again, for the opposite reason.** Our fastcache-cc
+  (`0.2.0-739-gd4451c3b`, 2026-09-16) predates `ca8dfc32`, so a cache hit reproduces no depfile,
+  ninja's graph never learns a header changed, and the skip decision itself is wrong. Hence
+  `--clean-first`, and hence recording the count: 524 steps is a full build, and B7a measured the
+  same 524 on the same target set, which is the cross-check.
+
+One further reading, from this round's Windows legs: **the canaries report `Skipped` under
+`clangcl-release` and run under `cl-debug`**, because a Release build compiles the assertions out
+and `SKIP_RETURN_CODE` takes precedence. So the thread-affinity canary is exercised by exactly two
+legs — `clang-debug` and `cl-debug` — and a report that counted "36/36 on clangcl-release"
+as covering it would be counting a skip as a pass.

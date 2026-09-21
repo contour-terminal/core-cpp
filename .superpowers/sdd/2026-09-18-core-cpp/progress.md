@@ -1388,3 +1388,629 @@ Dispatch readiness for that fan-out, so the moment is not spent writing:
 
 **B6 is now the only thing between Phase B and a four-way fan-out** (B8, B9, B10, B11), with B7b
 behind B6 and B7a. B7a runs beside it.
+
+## The re-review that was owed to B4 and B5, and was not performed
+
+**Every other task in this project got a scoped re-review after its fix round** — A4, A5, A6, A7,
+A8 (three rounds), A9, A10 (two), A11, A12 (two), B1, B3, B13a. **B4 and B5 did not.** I ruled on
+both fix rounds from the lane's own report and its gate record, and never had the diff independently
+checked — on the two rounds carrying the most load-bearing changes in Phase B, both now on master
+with five tasks about to build on them.
+
+**"CI green" is not "the findings were addressed correctly."** That distinction is what this whole
+session has been about, and I let it slide exactly where it mattered most. B4's C1 is a **behaviour
+change to a public header** — `blockOn` throws where it used to return — and until now nobody but
+its author had asked whether the throw can fire where the old code was correct.
+
+`rereview-B4-r1` and `rereview-B5-r1` dispatched with the full diffs, the original findings, and
+the specific things worth doubting:
+
+- **B4**: can the new throw fire on a correct path; is the reverted inbound-drop coherent; is the
+  assert predicate right for all six mutators (`spawn` is loop-thread-only, the others may not be);
+  is M8's *unreachable* claim true, and is the guard still correct if it is.
+- **B5**: does the wake fix reach **every** path that files a timer, and does `cancelTimer` need it;
+  do the WebAssembly cases isolate the mechanism after two insufficient attempts; are the three
+  "no case" rows honest, or is one testable after all — B5 moved a fourth out of that column by
+  realising the checker was the compiler rather than the runtime.
+
+Both asked to **name the mutation that would leave a case green if the fix were reverted**, rather
+than to judge the case by reading it.
+
+## Lane status, measured rather than asked
+
+```
+D:/core-cpp-wt-b6    HEAD fe48143   6 behind   25 dirty   writing SocketDecorator_test.cpp
+D:/core-cpp-wt-b7a   HEAD fe48143   6 behind   18 dirty   building the mkdocs site -- i.e. gating
+```
+
+B7a appears to be in its gate phase. **B6 has not answered three direct status requests across six
+commits**, and from outside, "deep in a hard change" and "stuck on something I could unblock" are
+indistinguishable — which is the same class as everything else tonight: **an absent signal read as
+the expected one.** Fourth request sent, reduced to one line.
+
+## REGRESSION FOUND IN SHIPPED CODE: `blockOn` throws on a legitimate cross-thread flow, then segfaults
+
+B4's probe, on `8d7b8b2`:
+
+```cpp
+Task<int> hopToPoolAndBack(EventLoop* loop, IExecutor* pool)
+{
+    co_await ResumeOn { *pool };        // legitimate
+    std::this_thread::sleep_for(40ms);  // work on the pool
+    co_await ResumeOn { *loop };        // and back
+    co_return 7;
+}
+loop.blockOn(hopToPoolAndBack(&loop, &pool));
+```
+
+```
+threw logic_error -- "the task can no longer be advanced..."   then: SIGSEGV
+```
+
+**The message is false for this flow.** The task *can* be advanced — a pool thread is running it and
+will `submit()` back; `hasPendingWork()` reads false only because the flow is momentarily in flight
+**elsewhere**, which is the entire purpose of `ResumeOn`. The throw unwinds, `task` destructs, the
+frame is freed, and the pool thread resumes freed storage.
+
+| | cross-thread flow (legitimate) | deadlocked flow (core-cpp#17) |
+|---|---|---|
+| **pre-B4** (spin) | **works** — burns a core, then completes | hangs at 100% CPU |
+| **B4** (`break`) | UB, garbage, then UAF | UB, garbage |
+| **fix round 1** (`throw`) | **throws, then UAF** | clean throw |
+
+**C1's fix repaired the deadlock case and left broken a shape that worked before Task B4 existed.**
+
+### Ruling: option 1 — `blockOn` blocks on the backend; the throw is REMOVED
+
+The deciding argument is what `blockOn` **means**: *run this task to completion on this loop and
+block until it finishes.* Keeping the throw silently adds *"...provided the task never leaves the
+loop"* — **unenforceable, unstated at the call site, and false for the most ordinary coroutine shape
+there is.** A restriction a caller cannot check and the compiler cannot enforce is a trap with
+documentation attached.
+
+It also gets the failure mode the right way round: **core-cpp#17 was filed about the SPIN, not the
+hang.** A deadlocked flow parked in `backend.wait()` at **0% CPU** is better than the same deadlock
+at 100%, and is diagnosable from one stack. Option 1 is strictly better than pre-B4 on the broken
+case and restores pre-B4 on the working one.
+
+Three conditions:
+1. **Remove the throw; do not leave it unreachable.** An unreachable throw whose `@throws` clause
+   says it fires is the mirror image of the original defect — and that defect was an `@throws` clause
+   eight lines above the `break` that made it false.
+2. **Enumerate every path by which `blockOn` can return with the task unfinished** —
+   `IdlePolicy::Return`, `stop()`, `requestStop()`, an exception escaping a turn. Any early exit
+   frees a frame another thread may be about to resume, and the UAF survives the fix.
+3. **The probe becomes a case**, run under ASan and TSan, RED captured against the current tip.
+
+### The methodological finding, which is deeper than the defect
+
+> *"The review's reproducer and my two cases both used `AsyncQueue` wired to an inert executor --
+> genuinely unadvanceable -- so neither the review, nor my tests, nor ten gates could see this."*
+
+**Every instrument agreed because every instrument was built from the same example.** The review
+supplied the reproducer, B4 wrote both cases from it, and the gates ran what was written. **That is
+not three checks; it is one check counted three times** — and unlike every other instance tonight,
+the shaping happened at the **specification** rather than inside any tool, which is why no amount of
+care with the tools could have caught it.
+
+And **I2's own example in the review is this exact `ResumeOn { pool }` shape.** It was in front of
+the reviewer, the author and me, and none of us connected it to C1.
+
+### The re-review paid before it reported
+
+I dispatched `rereview-B4-r1` saying *"nobody but you has looked at whether the throw can fire where
+the old code was correct."* **B4 went looking and found it within the hour.** The value came from
+naming the unexamined question, not from the review's answer — which has not arrived yet.
+
+### Consumer impact, measured — and it settles the ruling
+
+```
+contour     29 files call blockOn      endo  20      tuidu  5      Lightweight 0   morph 0
+```
+
+**Fifty-four call sites across three of the user's own projects.** That alone disposes of option 2:
+an unenforceable, unstated precondition added to an API with fifty-four existing callers is not a
+documentation change, it is a trap laid under working code.
+
+**And one is the exact shape, in production.** `D:\contour\src\contour\remote\ReactorThread.hpp:76`:
+
+```cpp
+_thread = std::thread { [...]() mutable {
+    // EVERYTHING is caught here, because an exception leaving a std::thread's function is
+    // unconditional std::terminate ... bad_alloc and length_error are therefore reachable from
+    // the wire ... one malformed peer must not take the GUI down either.
+    try { _loop.blockOn(rootTask(&_loop)); }
+    catch (coro::OperationCancelled const&) { /* intended shutdown */ }
+```
+
+A `std::logic_error` from `blockOn` is **caught by machinery built for malformed peer input**,
+routed to `onFailure`, and contour's remote reactor shuts down reporting a fault — **a working flow
+converted into a reported failure, with no stack to explain it** — while the use-after-free fires
+regardless of the catch, because the frame is freed before anything is caught.
+
+The comment also shows the author reasoned explicitly about which exceptions are reachable there and
+concluded "everything from the wire". **A `logic_error` from the event loop itself is not in that
+model at all.**
+
+**Under option 1 the Consumer impact line reads "none -- the shape that broke is restored."** No
+sentence option 2 could produce comes close.
+
+**Open, and nobody has looked:** fastcached uses `SyncRun`, not `blockOn`. If `syncRun` carries the
+same premise -- that the calling thread is the only thing that can advance the task -- it has the
+same defect.
+
+## Both re-reviews reported, and the omission was expensive
+
+| | ADDRESSED | WITH CONCERN | NOT ADDRESSED | New |
+|---|---|---|---|---|
+| **B4** (9 findings) | 6 | 3 (C1, I2, M3) | 0 | 2 Important, 5 Minor |
+| **B5** (11 findings) | 9 | 2 (C1, M8) | 0 | 1 Important, 3 Minor |
+
+**Neither lane silenced, narrowed or moved anything** — that part of both rounds holds. What the
+re-reviews found is what nobody had looked for.
+
+### The two re-reviewers independently found the same defect, on different diffs
+
+**`WaitHandleAwaiter::await_suspend` (`EventLoop.hpp:877`/`:884`) is the THIRD site of M8's
+park-then-arm shape, and it is the one where it hurts:**
+
+```
+DelayAwaiter          27b8b43   guarded    -> leaks a slot
+InterruptibleSleep    8d7b8b2   guarded    -> leaks a slot
+WaitHandleAwaiter     --        UNGUARDED  -> use-after-free
+```
+
+The leaked park **carries a live backend registration whose handler names a destroyed frame**, so
+the next readiness on that descriptor queues a dead handle. **And M8's own comment says "the two
+cannot drift" — naming two of three.**
+
+### B5's Critical family is open, and a comment claims it is not
+
+`registerPark` (`:738`), `resumeSoon` (`:719`) and `requestStop` (`:623`) each file work only a turn
+can reach and ask a host-driven backend for nothing. **`registerPark` is `addTimer`'s own
+implementation path, so B5's fix sits one level above the primitive.** Reachable today with no new
+API: `DetachedTask` is eagerly started, so `co_await loop->delay()` from a browser callback parks
+off-turn and never resumes.
+
+**And B5's new comment at `EventLoop.cpp:678-680` enumerates "every other member that … wakes" and
+excludes all three.** Two comments in one file, written in the same hour by two lanes, each
+enumerating and each missing a member — **a comment that enumerates reads as an audit that was
+performed.**
+
+### Two of B5's three "no case" rows were not "no case"
+
+- **lazy pruning — honest.**
+- **the loop-thread assertions — MISLABELLED.** The truthful word is **"declined"**: the tree's
+  `HostDrivenCanary.cpp` + `WILL_FAIL` mechanism exists and B4 uses it. Declining is legitimate;
+  *"no case exists"* claims something false about the tree.
+- **`DeadlineTimer` allocating nothing — TESTABLE by B5's own move.** It rejected a `sizeof`
+  **equality** as fragile, correctly; a `sizeof` **upper bound** is not fragile that way, and that is
+  exactly the move it made to close the id-type row. The row also **miscounts its own members.**
+
+### What B4's re-review said about the gap that let C1 through
+
+> *"No test in the tree combines `blockOn` with a `ThreadPoolExecutor`, so 25/25 says nothing about
+> it."*
+
+**That is the measurement behind "one check counted three times."** And separately: I2's written
+reason — *"the loop cannot ask a borrowed handle what it names"* — **applies verbatim to the ready
+queue, which teardown DOES resume.** The discriminator actually applied is *which container*, not
+*whether a turn accepted it*. The prose and the code say different things.
+
+### Sequencing
+
+**B4 fix round 2 -> B5 fix round 2.** Both are in `EventLoop.{hpp,cpp}`; B4 has `blockOn` and
+`WaitHandleAwaiter`, B5 has the wake family, and each has been told explicitly to leave the other's
+lines alone.
+
+## `7bdd132` CI-green — six consecutive green fast-forwards on master
+
+```
+run 35573859196   head=7bdd132   conclusion=success   25 completed / success
+```
+
+`fe48143` -> `fb3fe97` -> `a02031c` -> `27b8b43` -> `8d7b8b2` -> `7bdd132`, each a single
+fast-forward, each 25/25. No repair-forward since `a9ea52b`.
+
+## On B6's silence: it is following its brief and I am the anomaly
+
+Four status requests, no reply. Measured instead: 30 dirty files, currently across
+`AsTask_test.cpp`, `AsyncBufferedReader_test.cpp`, `CancelRead_test.cpp`, `detail/ParkTable.hpp` and
+`EventLoop.cpp` — a large, coherent change in progress.
+
+**Its dispatch says "Return only status, the commit range, a one-line test summary, and concerns"**,
+i.e. report at the end. A focused implementer deferring mid-task interrupts is following that, and
+**my four requests are the deviation, not its silence.** Stopping.
+
+What remains true is the cost: it is six commits behind in the three files that changed in four of
+those six, and four tasks start when it lands. That is a scheduling fact to absorb, not a reason to
+interrupt a working lane a fifth time.
+
+## Task B7a has committed: `320a9ab`, the IOCP backend, 3028 insertions
+
+Found by measuring the worktree rather than waiting for a report — `0 dirty, behind 0`, rebased onto
+current master.
+
+```
+ICompletionPort.hpp                 +101      detail/ReadinessSlot.hpp          +200
+windows/IocpBackend.{hpp,cpp}       +1165     windows/IocpBackend_test.cpp      +676
+windows/WaitCompletionPacket.*      +248      windows/IocpCanary.cpp            +178
+IoBackend.hpp                        +59      BackendParity_test.cpp            +218
+CHANGELOG, provenance, async-and-net, three docs pages
+18 files, +3028 -32
+```
+
+**It has the push window, ahead of B4**, and I told it so: B4 is mid-fix-round-2 with five Minors,
+a CHANGELOG and its sanitiser and Windows legs outstanding, so **nothing of B4's is gated yet** — if
+B7a pushes first, B4 gates against a base that includes it and nothing is wasted.
+
+**Its conflict surface with B4 and B5 is two files and no source at all**: `CHANGELOG.md` and
+`.agent/rules/async-and-net.md`, both keep-both. Nothing in `EventLoop.{hpp,cpp}` or
+`detail/ParkTable.hpp`, which is exactly what the B7a/B7b split was for — **the scoping ruling paid
+off: the backend half was buildable, reviewable and rebasable with zero contact with the three lanes
+that have been fighting over `EventLoop.cpp` all night.**
+
+Three things asked of its report: whether jobs 1 and 2 were *genuinely* separable from B6's
+`ISocket` (what B7b inherits turns on it); confirmation that `makeDefaultBackend()` still returns
+Wfmo while `makeBackend(BackendKind::Iocp)` answers non-null; and **step counts on the Windows
+legs**, since it changed `IoBackend.hpp` and B5 measured a 7-step incremental reporting the same
+`33/33` as a 517-step `--clean-first`.
+
+## B6 is still the critical path, and its shape is now visible
+
+30 dirty, still at `fe48143`, six behind. New files: `async/AsTask.hpp`, `async/AsTask_test.cpp`,
+`net/ISocket.cpp`, `net/IoAwaitable.hpp`, `net/IoAwaitable_test.cpp`, `net/CancelRead_test.cpp` —
+plus edits across `EventLoop.{hpp,cpp}`, `detail/ParkTable.hpp`, `AsyncBufferedReader_test.cpp`.
+That is the whole socket contract plus `asTask`, in one change. Not stuck; large.
+
+## B7a reported "Landed" and had not pushed — `origin/master` was still `7bdd132`
+
+```
+origin/master        = 7bdd132
+D:/core-cpp master   = 320a9ab   <- local ref moved, never pushed
+```
+
+**The same shape as `fb3fe97`**: a commit that exists in one checkout and nowhere else. And a third
+way for the claim to go wrong — **there was no push output to misread**, so *"confirm by re-fetching,
+never by the push output"* had nothing to correct.
+
+**Its offline three-way merge worked, verified rather than trusted:** `async-and-net.md` carries 19
+IOCP markers from its commit while still showing ` M` for the other lane's delta; `CHANGELOG.md` has
+both entries; `D:/core-cpp-wt-b4fix` is untouched at `8d7b8b2` with its 7 dirty files.
+
+**And its reason for refusing `git commit --only` is correct and belongs in the rules**: with master
+six commits ahead and another lane's edits in the same two files, **`--only` commits THEIR content
+under YOUR message.** The discipline assumes the rest of the tree is clean and silently does the
+wrong thing when it is not.
+
+## B7a's Windows-coverage finding is filed as core-cpp#38
+
+**No CI leg lints or sanitises any Windows-only source.** The `clang-tidy` preset is Unix-only;
+`clangcl-debug` + `CORE_CPP_SANITIZERS=address` does not configure at all. B7a ran the pinned tidy by
+hand and found **eleven real findings in its own files — one forcing a design change** — plus **two
+pre-existing findings in `src/core/platform/Types.hpp`**, the Windows arm of a header that ships to
+every consumer and has been in the tree since Task A4.
+
+**The gate reports; it simply reports about a subset, and the subset boundary is invisible from the
+result.** That is a new face of *a gate that does not report reads as passed* — this one reports
+truthfully about less than you think it covers. The issue asks for the leg **and** for it to assert
+the file count it analysed, since a leg that silently analyses zero Windows files is the same defect
+repeated.
+
+## B5 is working in the shared checkout, and B7a moved the base under it
+
+`D:/core-cpp`'s working tree carries B5's fix-round-2 edits — `EventLoop.{hpp,cpp}`,
+`Timers_test.cpp`, `DeadlineTimer_test.cpp`, `HostDrivenLoop_test.cpp` — including the
+`armHostWake` comment approved an hour ago, verbatim. B7a rebased the branch from `7bdd132` to
+`320a9ab` underneath them. Nothing was lost, but **the rule I wrote for the lanes — prepare in your
+own worktree, move it in at the moment you commit — is not being followed, and the lead has no way
+to enforce it except by saying so again.**
+
+## A sequencing error of mine, corrected before it cost anything
+
+I told B7a it had the push window ahead of B4, then told B4 to rebase onto B7a's `320a9ab` — and
+**B4 had already committed `4288571` on `7bdd132` and started a full gate set on it.** Two
+instructions, an hour apart, that contradicted each other the moment B4 committed.
+
+**Resolution: B4 pushes first as gated; B7a rebases onto it.** `4288571`'s parent is `7bdd132` and
+that is a clean fast-forward, so rebasing now would void four Linux legs, a deleted-tree clang-tidy
+and two Windows legs with `--clean-first`, and buy nothing — **the two commits have no source
+overlap at all.** The only files in both are `CHANGELOG.md` and `async-and-net.md`, plus different
+blocks of `src/core/net/CMakeLists.txt`.
+
+**The general rule: a lane holding a gated-but-unpushed commit outranks a lane holding an ungated
+one, whatever order they were promised.** The cheaper correction goes to whoever has not started
+gating.
+
+## The canary sweep landed one of three sites, and that is my error too
+
+`4288571` protects `hostdriven-canary.{run,blockOn}`. **`windows-dialog-canary` (three
+registrations) is not in the commit at all, and `iocp-canary` (two) does not exist on that base** —
+five of seven still unprotected, because I sent the sweep after B4 had committed.
+
+**Ruled to a single follow-up after both land**, owned by B4 (it has the finding and the pattern),
+with **B7a supplying the exact non-assertion exit paths of `IocpCanary`** rather than B4 inferring
+them from source it did not write. The follow-up is `test(net):` — nothing in it but registration
+properties, which is the honest type for a commit that changes no behaviour.
+
+## B4 applied its own rule to its own commit
+
+`fix(net): blockOn waits for a flow that left the loop instead of giving up on it` — **not**
+`docs(rules):`, despite carrying two rulebook files. **The riskiest content decided the type**,
+which is the rule it wrote three hours after the commit that violated it.
+
+## B6 is writing an eighth canary right now, and was told before it registered it
+
+Measured from its worktree rather than asked: `SocketContractCanary.cpp` is among its untracked
+files, and it is currently in `windows/WindowsSocket.{cpp,hpp}` — the last item on its dispatch's
+file list. **Its new files are the whole socket contract:**
+
+```
+async/AsTask.hpp + _test          net/ISocket.cpp            net/IoAwaitable.hpp + _test
+net/SocketContract.{hpp,cpp}      net/SocketContractCanary.cpp
+net/{CancelRead,ReactorSocket,SocketDecorator,WaitReadable}_test.cpp
+```
+
+**This is the one interruption worth making to a lane that is following its brief**: it would have
+copied the `WILL_FAIL` registration pattern that five existing canaries are being fixed out of
+tonight, and the retrofit costs more than the warning. Sent it the positive-marker design with the
+three facts that decide it — `PASS_REGULAR_EXPRESSION` ignores the exit code so `WILL_FAIL` must go;
+both properties are defeated by a raw SIGABRT so an `onAbort` handler doing nothing but `_Exit` is
+load-bearing; and `assert` text does not survive the dialog suppression, so the program prints its
+own markers.
+
+Plus the two facts that change how its canary reads: **it will be exercised only on Debug legs**
+(`clang-debug`, ASan, TSan, `cl-debug`), and **`core_cpp_add_test`, never a bare `add_test()`** —
+the latter landed in every consumer's ctest suite once already (`a040878`).
+
+**The principle: a lane deep in its brief is interrupted only for something that would make it redo
+work.** Four status requests were the wrong kind of interruption; this is the right kind.
+
+## Lane status, measured at 08:45 — B4 idle with three gates owed, and it is the second instance
+
+`ListAgents` plus `git worktree list`, not a question to anyone:
+
+| Lane | State | What it owes |
+|---|---|---|
+| impl-B4 | **idle** | ASan, TSan, deleted-tree `clang-tidy` on `5d7a5ae`; the push; telling B7a |
+| impl-B7a | idle, **legitimately blocked** | nothing until B4 pushes; frozen at `320a9ab` |
+| impl-B5 | running | Linux gates on fix round 2; holding for the push |
+| impl-B6 | running | the socket contract -- still the critical path for B7b/B8/B9/B10/B11 |
+
+```
+origin/master        = 7bdd132
+D:/core-cpp master   = 320a9ab   (B7a's, unpushed)
+D:/core-cpp-wt-b4fix = 5d7a5ae   (B4's one commit, on top of 320a9ab)
+```
+
+**This is the second time a lane's work has sat in one checkout and nowhere else** -- B7a at line
+1666, B4 now. The two failures are not the same mistake: B7a *said* it had landed and had not,
+which a re-fetch catches; B4 said truthfully what it still had to do and then **stopped**, which no
+re-fetch catches because there was nothing to re-fetch. What they share is the observable:
+**a local ref ahead of `origin/master` with no agent running.** That is the thing to watch, and it
+costs one `git rev-list --left-right --count` to see.
+
+**What changed as a result:** the controller's periodic question is now *"which agents are idle, and
+does any of them owe work?"* -- `ListAgents` for the first half, this ledger for the second. Asking
+a lane how it is going costs it a turn and returns the message it already sent.
+
+## CORRECTION: B12 is not behind B6, and I am the one who said it was
+
+Line 1212 of this ledger reads *"**B12** (TUI runtime on the loop) needs B6 and B4."* It is wrong,
+and it cost B12 a place in the queue behind the project's bottleneck. Measured:
+
+```
+grep -rn "ISocket|PosixSocket|makeLoopbackPair" src/core/tui/     -> no matches
+grep -n "^#include" src/core/net/WithTimeout.hpp                  -> Task, WhenAny, EventLoop
+grep -n "^#include" src/core/tui/runtime/TuiRuntime.hpp           -> async, platform, tui
+```
+
+Nothing in `core::tui` touches a socket. `core::net::withTimeout` -- the replacement for
+`tui/runtime/WithTimeout.hpp`, and the only plausible reason to think B12 needed the socket work --
+landed in **A6** and includes `Task`, `WhenAny` and `EventLoop` and nothing else. Everything B12
+consumes came from **B3, B4 and B7a**.
+
+**How the error was made:** B10 adapts `withTimeout` to the new socket contract and B10 needs B6, so
+"withTimeout is downstream of B6" was true of *B10's* work on it and got attached to the file. B12
+does not need the adapted version; it needs the function to exist, and it does.
+
+**Ruling: B12 is dispatched from `origin/master` as soon as B4's push lands** -- not because it
+needs anything in that push, but because B4's `blockOn` fix and B5's wake/arm fix are the last
+unsettled `EventLoop` semantics, and starting a lane on a base about to move under it is the
+mistake that already cost B5 a rebase. **That converts B12 from behind the bottleneck to parallel
+with it**, which is the whole value. Cost if wrong: one lane rebases.
+
+**The general form, which is the part worth keeping:** a dependency edge asserted in prose is as
+unchecked as an enumeration written in prose, and decays the same way -- this one was true about a
+neighbouring task and got copied onto the wrong node. `cmake/CoreCppModules.cmake` makes *module*
+edges mechanical and configure refuses one that is not listed. **Nothing does that for task edges**,
+and the four I have not re-derived are B7b, B8, B9 and B11.
+
+## The B12 brief carried the wrong wake-family list, third generation
+
+`.agent/rules/async-and-net.md` had it, the code comment had it, and the brief had copied it:
+*"The six loop entry points that wake the backend -- `post`, `submit`, `schedule`, `spawn`,
+`requestCancel`, `stop`."* **A wrong enumeration outlived two corrections** because each copy reads
+exactly like an audit. Replaced in the brief with the rule (*ready work wakes; a park arms*), the
+mechanism (`wake()` is `scheduleAt(now())`), and the instruction the list cannot give: **derive the
+family from `EventLoop.cpp` and report what you find; if it disagrees with the brief, the brief is
+what is wrong.**
+
+## The critical path was wider than B6, and the machine was never the reason to hold
+
+Two claims of mine, both stale, both load-bearing, both measured tonight instead of repeated.
+
+### 1. Three of the five tasks "behind B6" do not include `ISocket`
+
+Include lists read from the pin (`git -C D:/fastcached show 0708dd54:<path>`), not from the plan:
+
+| File | Includes | Behind B6? |
+|---|---|---|
+| `Net/SocketAddress.hpp` | `BlockingSocket.hpp` *for a `NativeSocket` alias only* | **no** |
+| `Net/IAsyncAddressResolver.hpp` | Task, NetError, SocketAddress | **no** |
+| `Net/ThreadedAddressResolver.hpp` | IAsyncAddressResolver | **no** |
+| `Net/IDatagramSocket.hpp` | NetError | **no** |
+| `Net/UdpSocket.hpp` | IDatagramSocket | **no** |
+| `Net/SharedPortDatagram.hpp` | IDatagramSocket | **no** |
+| `Net/TlsWrap.hpp` | **`ISocket.hpp`** | **yes** |
+
+**UDP is its own interface, not a socket**, and the resolver seam is pure `Task` + `NetError`. So
+**B8's resolver half and B9's datagram half are splittable exactly as B7 was** -- and B11's context
+half (`ITlsContext`, self-signed certs, `certificateFingerprint`) is too, while `wrapTls` is not.
+`SocketAddress`'s one edge is spurious in the port: it includes `BlockingSocket.hpp` for
+`Detail::NativeSocket`, which is `core::platform::NativeHandle` here.
+
+**B7b genuinely needs B6** (it implements `ISocket`), and so does B10.
+
+### 2. The machine has not been the constraint
+
+```
+Windows:  CPU 7%      RAM 44.1/93.6 GB free   ninja 0   compilers 0
+WSL:      loadavg 7.44 / 32 cores             one ctest, no compilers
+```
+
+**And the Windows measurement nearly produced the wrong conclusion on its own** -- `Get-Process`
+cannot see WSL, where B5 and B6 build, so "zero compilers" would have read as "the lanes are dead".
+The instrument could not observe the thing, and its silence looked like an answer. That is the
+shape again, in an eighth medium.
+
+### Ruling
+
+**B12 is dispatched the moment B4's push lands.** It needs the settled `EventLoop`, not B6, and it
+deletes `tui/runtime/{EventSource,PollEventSource,WithTimeout}` plus the four deferred runtime
+defects (core-cpp#16-19) that v0.1.0 cannot ship with either way.
+
+**B8a (SocketAddress + the resolver seam) and B9a (the datagram half) are recorded as available
+splits, not dispatched yet.** The reason is coordination bandwidth, not the machine: every lane owes
+a review and a re-review, and I have just found my own dependency map wrong in one place. One new
+lane, verified, before three. If B6 is still running when B12 is dispatched and reviewed, B9a goes
+next -- its measurement is the cleanest of the two.
+
+**Cost if wrong:** the project stays serialised behind B6 for longer than it had to be. That is the
+error I have already made once here, so the bias is toward dispatching, not holding.
+
+## The base moved under a lane, and that is mine
+
+B7a committed `320a9ab` onto `master` **in the shared checkout** while B5 held uncommitted edits to
+seven files there. `320a9ab` touches `.agent/rules/async-and-net.md` (+72) and `CHANGELOG.md`
+(+51) -- **two of B5's seven.**
+
+B5's diff turned out clean (`+27/-5` and `+13/-6` against the *new* HEAD, removing only its own
+rewrites), and it verified that rather than assuming it. **But it found the move by accident**: a
+worktree sync copied 29 files into a worktree still at `7bdd132`, and four files B5 has never
+touched came back modified. Four unexplained `git status` lines were the entire signal. Had B5's
+seven not happened to sit beside those four, **the first symptom would have been a commit silently
+reverting 123 lines of B7a's work.**
+
+**Two rules, and the first is the lane's while the second is mine.**
+
+- **Record HEAD when you start editing shared files, and diff against HEAD at commit time -- never
+  against the base you read an hour ago.** `git diff` already does the right thing; the error is
+  reasoning about a remembered base. **A `git status` line you cannot explain is a stop, not
+  noise.**
+- **The controller owes every lane a base that does not move, and a lane cannot be asked to notice
+  when it does.** A lane has no clock and no turn; it discovers a moved base only if it happens to
+  look. So: while any lane holds uncommitted edits in the shared checkout, **nothing commits there
+  but that lane** -- and if something must, every lane editing there is told the new HEAD *before*
+  it lands, not after. Today B5 is the only lane in the shared tree; B6 and B7a are in
+  `D:/core-cpp-wt-b6` and `D:/core-cpp-wt-b7a`. That fact is the thing I have to keep, and I did
+  not have it written down when B7a committed.
+
+**And the consequence B5 drew unprompted is the right one:** its green ran at `7bdd132`, a base
+without `IocpBackend`, `ReadinessSlot`, `IoBackend.hpp` (+59) or 218 lines of new `BackendParity`
+cases -- and `IoBackend.hpp` is a header `EventLoop.cpp` includes. **It refused to quote its own
+passing gates as evidence** and will re-run everything after the rebase, `--clean-first` on both
+Windows presets. A gate at the wrong base is a smoke signal, not a result.
+
+**Sequencing confirmed to B5: rebase onto `origin/master` after the push, never onto the shared
+tree's local HEAD.** A local ref that exists in one checkout and nowhere else has now bitten this
+project three times -- `fb3fe97`, `320a9ab`, `5d7a5ae`. `origin/master` is the only base with a
+witness off this machine.
+
+## `5d7a5ae` pushed — B4 closed, B5 released, B12 dispatched
+
+```
+7bdd132..5d7a5ae  master        (B4's blockOn fix; B7a's 320a9ab riding underneath)
+git diff 320a9ab origin/master -- <B7a's paths>   -> empty, checked AFTER the push
+```
+
+**Task B4 gate record for `5d7a5ae`, skips beside every total:**
+
+| Leg | Result |
+|---|---|
+| clang-debug | 32 total, 0 skipped, 32 passed (work=61) |
+| gcc-release | 32 total, **3 skipped**, 29 passed (work=63) |
+| clang-asan-ubsan | 32 total, 0 skipped, 32 passed |
+| clang-tsan | 32 total, 0 skipped, 32 passed |
+| cl-debug | 36 total, 0 skipped, 36 passed (steps=524) |
+| clangcl-release | 36 total, **6 skipped**, 30 passed (steps=524) |
+| clang-tidy | deleted tree, binary 22.1.8 = pin, `--tidy=` present on `EventLoop.cpp.o`, work=537, **no findings** |
+
+**ASan and TSan skip nothing and are both Debug**, so the new `spawnOffThread` canary and both
+cross-thread cases genuinely ran under the two sanitisers that matter for a frame-lifetime fix.
+Both `clangcl` numbers are 524 steps, not 7 — a real build, not an inherited pass.
+
+**Task B12 dispatched** (opus, worktree `D:/core-cpp-wt-b12` at `5d7a5ae`), with the standing
+instruction not to touch the shared checkout: B5 is editing seven files there and is mid-rebase.
+This is the lane established earlier tonight to be **not behind B6** — `core::tui` contains no
+socket reference and `core::net::withTimeout` landed in A6. B8a and B9a remain available splits on
+the same measurement.
+
+**B5 released onto `5d7a5ae`.** It used the wait for read-only analysis and found that B4's commit
+deletes `hasPendingWork()`, which its `armHostWake` comment cited — *"a clean rebase would have
+carried the dangling citation in and nothing would have failed."* The same catch invalidated two
+sentences of mine in `.agent/rules/async-and-net.md`, written within an hour of my writing the rule
+that a document citing code must be re-derived from the code. Both rewritten to argue from the
+order of the steps in a turn, with no function name and no line number left in them.
+
+**Lane state:** B4 on the canary follow-up · B5 rebasing and re-gating from scratch
+(`--clean-first` both Windows presets; `IoBackend.hpp` moved +59) · B6 on the socket contract,
+still the critical path for B7b/B8/B9/B10/B11 · B7a released, rebasing · B12 starting.
+
+## Task B5: COMPLETE — `29e9b24` on origin/master
+
+`5d7a5ae..29e9b24`, six files, +367/-38. Gates all at the correct base: 32/32 on clang-debug,
+gcc-release, ASan/UBSan and TSan; 26/26 emscripten; 16/16 hygiene; **36/36** on `cl-debug` and
+`clangcl-release`; clang-tidy **514 steps from a deleted tree, zero findings**;
+`net_backend-test` 2271/64 and `net-test` 1142/171. **Neither new assertion fired anywhere** --
+the run that could have contradicted the severity call did not.
+
+**M8's family is CLOSED — measured on `29e9b24`, not asserted:**
+
+```
+EventLoop.hpp:306          blockOn              guarded
+EventLoop.hpp:869          DelayAwaiter         guarded
+EventLoop.hpp:950          WaitHandleAwaiter    guarded   (B4, in 5d7a5ae)
+InterruptibleSleep.cpp:85  TokenDelayAwaiter    guarded   (B5, this round)
+```
+
+Every other `registerPark` caller in the tree is a test. B5 raised `WaitHandleAwaiter` as a
+standing unguarded concern; it had been fixed. **Fifth instance of a party reporting the other's
+state from stale knowledge** -- and the right call anyway, since flagging beats assuming someone
+has it.
+
+**Two behaviours that are the standard from here:**
+
+- **Re-gate after a comment-only edit.** B5 dropped a past-tense mention of the deleted symbol --
+  *a coordinate decays even when phrased as history* -- then re-ran rather than reasoning that a
+  comment cannot break anything. clang-tidy's `EventLoop.cpp.o` proved newer than its source, so
+  the analysis was current rather than inherited.
+- **Justify a short incremental instead of trusting or reflexively rebuilding.** Both Windows legs
+  reported `steps=6` with `rebuilt_EventLoop.cpp=1`. **A `.cpp` edit is a direct ninja input; a
+  header edit is the one the launcher's depfile handling loses.** That distinction is what the
+  `LNK1163` episode turns on, and the full `--clean-first` runs (532 steps, 36/36) stand behind it.
+
+**B6 is unblocked.** Remaining Phase B: B6 (critical path) -> B7b/B8/B9/B10/B11; B12 and B7c
+running in parallel.
+
+## Session hygiene, at the user's direction
+
+34 completed Phase A/B implementer and reviewer agents stopped; 42 tasks reduced to five live
+lanes plus the CI monitor. **Token spend flagged by the user as too high, and the bulk of it is
+mine** -- lane messages running 500-800 words where 150 would do, and a ledger append per insight
+rather than per task. Cut: rulings and deltas only, no restating a lane's findings back to it, one
+batched append per task. Lanes told the same.
+
+**Open question put to the user:** per-task re-reviews have caught real defects, including a
+use-after-free the first review missed, but roughly double review spend. Proposal is to keep them
+for `net`/`async` lifetime work and drop them for the remaining docs and CI tasks.

@@ -257,8 +257,20 @@ it.** *The two id types cannot be handed to each other's cancellation* had no ca
 though it could not have one. It can: **a runtime case cannot express it — the program that would
 prove it by failing is the one that does not compile — and the compiler can.** Three
 `static_assert`s now hold it. That is the general answer to "this claim is untestable", which is
-usually "untestable *at runtime*"; the remaining three rows below are the ones where it genuinely
-does not apply, and each says why.
+usually "untestable *at runtime*".
+
+**Fix round 2 moved a second row out by the same move, and relabelled a third — so of the three
+that remained, only one was what it said it was.** *`DeadlineTimer` allocates nothing and holds no
+coroutine frame* is now a compile-time bound, proven load-bearing by mutation; I had rejected
+`sizeof` as fragile, which is true of an equality and false of an upper bound, so I applied the
+lesson of the row above to one row and not to the row beneath it. *The loop-thread-only assertions*
+were never "no case" — the tree owns a `WILL_FAIL` canary and B4 uses it — so the honest word is
+**declined**, and it now says so. Only the lazy-pruning row was honest as written.
+
+**The pattern is worth stating because it survived being asked the question once.** The lead asked
+whether the id-type move was available for the remaining three. I answered no for all three, having
+found it for the fourth minutes earlier. Writing a row down is not the same as re-deriving it, and
+a claims table protects against prose only if each row is re-argued rather than restated.
 
 | Claim | Case | Mutation |
 |---|---|---|
@@ -280,8 +292,8 @@ does not apply, and each says why.
 | Arming outside a turn asks a host-driven backend for one | *A timer armed on a quiescent host-driven loop asks the host…*; both WebAssembly programs | **M8** (new this round) |
 | A WebAssembly program's exit status does not survive the host | both directions run by hand, and the reasoning recorded beside the ctest property | — |
 | **Lazy pruning is bounded by what was armed behind the live root** | *Lazy timer pruning is bounded by the deadlines armed behind the live root* — three exact equalities with a stated counterfactual each | **no mutation run.** The counterfactuals (1 for eager, 1000/1001 for none) are arithmetic I reasoned rather than executed. Mutating `pruneTimers` is a change to B4's file, which is why I did not; it is the one measurement here resting on argument for its alternatives. |
-| **`addTimer` and `cancelTimer` are loop-thread only, asserted** | **no case.** An `assert` cannot be observed from inside a Catch case — it aborts the binary. The tree's shape for this is a `WILL_FAIL` canary process (`HostDrivenCanary.cpp`), which is how B4 covers `run()`/`blockOn()`. Adding a third canary mode for two more assertions was more than this round warranted; naming it here is the alternative to implying it is covered. |
-| **`DeadlineTimer` allocates nothing and holds no coroutine frame** | **no case.** Structural, and visible in the header: four members, none owning. I know of no assertion that would fail if it stopped being true without also being fragile (`sizeof`), so it is stated rather than checked. |
+| **`addTimer` and `cancelTimer` are loop-thread only, asserted** | **DECLINED, not "no case"** — relabelled in fix round 2, and the re-review is right that the distinction is the whole value of the column. The mechanism exists in this module: a `WILL_FAIL` canary process (`src/core/net/HostDrivenCanary.cpp`), already wired into CMake with the `canary` label, which is how B4 covers `run()` and `blockOn()`. So this is testable and I chose not to pay for it, which is a different claim from "nothing could check this" — and it is the claim a later reader would act on. The cost of declining rose this round rather than falling: I2 added a *second* such assertion, both share the one predicate `teardownIsSerialisedWithDispatch()`, and **nothing reds if it inverts**. The passing direction is exercised incidentally by the sibling-kill case; the failing direction is exercised nowhere. |
+| **`DeadlineTimer` allocates nothing and holds no coroutine frame** | **NOW CHECKED** — closed in fix round 2, and the row was wrong twice over. It said "four members"; the header declares **five** (`_loop`, `_onExpired`, `_state`, `_timer`, `_settled`), which is exactly the failure this table exists to catch, committed inside the table itself. And my stated obstacle was false in the way the re-review names: `sizeof` is fragile as an **equality**, not as an **upper bound**. `DeadlineTimer_test.cpp` now bounds it against a struct declaring the same five members, so padding, member reordering and a 32- versus 64-bit target cannot break it while a sixth member cannot slip past — with `!std::is_polymorphic_v` beside it. **Mutation run, not assumed:** removing one member from the reference struct reds the build (`static assertion failed due to requirement 'sizeof(core::net::DeadlineTimer) <= sizeof(DeadlineTimerShape)'`), and restoring it greens it again. This is the same move that took the id-type row out of this column: the checker was the compiler, not the runtime. |
 
 ## The methodological point, which is the review's and I accept it
 

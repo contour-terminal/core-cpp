@@ -2202,3 +2202,1272 @@ ones I expect and look at what is left' is not a diagnosis, it is a coin flip th
   clang-tidy's coverage by **comparing object mtimes to source mtimes** — `InterruptibleSleep.cpp.o`
   newer than its source, `EventLoop.cpp.o` newer than `EventLoop.hpp` — a fifth form of evidence,
   and the only one that shows the *moved header's dependents* were re-analysed.
+- **`pathlib.Path.write_text` ON WINDOWS TRANSLATES `\n` TO `\r\n`.** The lead used it for several
+  in-place ledger edits and committed `progress.md` with **895 CR bytes** into a repository whose
+  `.gitattributes` says `* text=auto eol=lf` and whose vendoring tool **refuses CR bytes outright**.
+  Measured rather than assumed: the blob had **0** CRs at `fe48143`, `a02031c`, `27b8b43` and
+  `8d7b8b2`, and 895 at the new commit — so it was introduced, not inherited. **Use `write_bytes`,
+  or pass `newline=""`.** Same class as everything else tonight: the instrument silently changed the
+  thing it touched, and nothing in the commit output said so. Caught by scanning every committed
+  blob for `\r` before pushing, which is now the step.
+- **THE ORPHANED-HEAD HAZARD RECURRED WITHIN THE HOUR, BECAUSE A ONE-TIME REPAIR OF A CONTINUOUSLY
+  DRIFTING POINTER IS NOT A FIX.** The lead re-pointed the shared checkout at `a02031c`, wrote the
+  rule, and then two more lanes pushed — leaving it two commits behind again with stale working-tree
+  content for every file `27b8b43` and `8d7b8b2` touched. **Anyone committing from the shared
+  checkout in that window would have landed on `a02031c`.** The rule was right and prevented nothing,
+  for the third time tonight, and for the same reason: **no procedure was attached.** The procedure:
+  `git fetch && git reset --mixed origin/master` and discard stale non-ledger files **every time the
+  shared checkout is touched**, not once.
+- **`git commit --only -- <paths> -m "msg"` SILENTLY TREATS THE MESSAGE AS A PATHSPEC.** Everything
+  after `--` is a pathspec, so `-m` and its argument became file names and the commit failed with
+  *"did not match any file(s) known to git"* — naming the message text as the missing path. **Nothing
+  was committed, which is the good outcome**, but the failure mode reads as a pathspec typo rather
+  than an argument-order error. `git commit --only -F <file> -- <paths>`: options first, `--` last.
+- **A COMMIT'S RISKIEST CONTENT DECIDES ITS TYPE, NOT ITS LARGEST** (B4, after B5 caught it).
+  `27b8b43`'s subject is `docs(rules): ...` and it changes **four C++ files** — `EventLoop.hpp`
+  (+18, M8's scope guard, a behaviour change to a public header), `ScopeGuard.hpp` (+6),
+  `EventLoop_test.cpp` (+8), `HostDrivenLoop_test.cpp` (+4). The body describes all of it
+  accurately; **the subject is what a `git bisect` log shows**, and someone bisecting a `core::net`
+  defect reads `docs(rules)` and skips it. The right subject was `fix(net):` with the rulebook work
+  in the body. Pushed and built upon, so recorded rather than rewritten.
+
+  **B4's own connection is the generalisation:** *"twice today I let a commit's framing follow what
+  I was thinking about rather than what it contained — the first being `a9ea52b`, which swept up
+  B5's in-flight work because I thought of `EventLoop.cpp` as mine."* **Both are the same error at
+  different scales: the artefact described by the author's attention rather than by its contents.**
+  One cost four minutes of red master; the other costs a future bisect.
+- **A GATE RECORD THAT CANNOT ANSWER THE DECISIVE QUESTION IS ONE YOU WILL DEFEND ON THE WRONG
+  EVIDENCE** (B4, checking its own record after B5's finding). Its `clangcl-release` on `fb3fe97`
+  had in fact run **524 of 524 steps** — a fresh tree, fully built, so the leg was earned — **but
+  `gates-win.txt` recorded exit codes, an error count and a binary-exists check, and no step
+  count**, so B4 had to go back to the raw log to learn it. On the one platform where an inherited
+  pass is indistinguishable from an earned one, the record omitted the only field that tells them
+  apart.
+- **SEPARATE "THE RECORD WAS INCOMPLETE" FROM "THE RISK WAS REAL".** B4 disclosed that `27b8b43`
+  was locally gated on clang-debug and clang-tidy only while modifying two headers, and began
+  re-running the Windows legs. **CI had already run the full 25-job matrix on that exact commit and
+  every job succeeded** (run `35572252833`, `ci-ok: success`), on fresh runners with no cache to
+  inherit. So the lesson about gate records stands and the re-run does not. **Measure the exposure
+  before paying for it** — an honest disclosure is not automatically an open risk.
+- **ONE CHECK COUNTED THREE TIMES: when the review, the tests and the gates all derive from the same
+  example, they are not independent.** B4's C1 fix passed a review reproducer, two cases written
+  from it, and ten gates — **all of which used `AsyncQueue` wired to an inert executor**, a genuinely
+  unadvanceable flow. The legitimate cross-thread shape (`ResumeOn { pool }` and back) was never
+  exercised by any of them, and it segfaults. **The shaping happened at the SPECIFICATION, not inside
+  any tool**, which is why no amount of instrument hygiene could have caught it. **Ask of every case:
+  is it derived from the review's example, or from the claim?**
+- **THE NUMBER OF TIMES A DOCUMENT HAS BEEN CORRECTED IS NOT EVIDENCE ABOUT WHICH BEHAVIOUR IS
+  RIGHT.** B4 flagged that choosing the better fix would force a **third** rewrite of `blockOn`'s
+  `@throws` clause and its CHANGELOG Breaking entry, and said so rather than letting it weigh
+  silently. Correct to name it; wrong to let it count. Also: **a Breaking entry describes the net
+  change from the last RELEASED state, not the path taken** — nothing has shipped, so 0.1.0's notes
+  need one sentence about `blockOn`, not four.
+- **NAMING THE UNEXAMINED QUESTION IS WORTH MORE THAN THE ANSWER SOMETIMES.** The re-review of B4's
+  fix round paid for itself **before it reported**: the dispatch said *"nobody but you has looked at
+  whether the throw can fire where the old code was correct"*, and the author went looking and found
+  a regression in shipped code within the hour. The review's own verdict had not yet arrived.
+- **`core::async` ALREADY CONTAINED THE ANSWER TO B4'S DEFECT, one module over, in prose.**
+  `src/core/async/SyncRun.hpp`, explaining why `syncRunWith` exists:
+
+  > *"**The plain overload's refusal is only half of what such a task needs.** It throws, and the
+  > throw is legible; but **`~Task` then frees a frame the parked read still points into**, the
+  > resource's next completion writes into freed memory, and the case ends in a crash that names no
+  > assertion at all -- **a red turned into a SIGSEGV**."*
+
+  **That is `blockOn`'s defect exactly**, written down before anyone needed it. And the remedy is
+  there too: `std::ignore = task.release();` then throw, with the reason stated —
+  ***"a leak report names the coroutine that parked, and a use-after-free names nothing."***
+  **So the disposal for any early exit holding an unfinished task is `release()`, never destruction.**
+  A leak is a diagnosable defect with a name; a use-after-free is a crash that names nothing.
+
+  **Note what this is an instance of:** the knowledge was in the repository, correct and well
+  argued, in the module the defective code depends on — and it did not travel. Same shape as the
+  rule ten lines above the violation, and as `AGENT.md` documenting the clang-cl trap that then
+  caught the most careful lane of the night.
+- **FIRST WRONG CITATION IN FIFTEEN: `fastcached#178` does not say what three core-cpp sites claim.**
+  Cited in `src/core/async/SyncRun.hpp:71` (**a public header**), `.agent/rules/async-and-net.md:291`
+  and `task-B1-report.md` as the origin of the leak-don't-free rule. It is actually *"A machine that
+  joins the fleet only while a VPN is up cannot be configured..."* — unrelated, and not a PR either.
+  Filed as [core-cpp#37](https://github.com/contour-terminal/core-cpp/issues/37); the correct number
+  could not be found in four searches.
+
+  **A citation pointing at the wrong issue is worse than none**: the reader follows it, finds a VPN
+  bug, and concludes the rule is unfounded or that they misread the code — and one of those gets the
+  rule deleted by someone tidying up. **Fourteen of fifteen checked numbers were right, which is
+  exactly the rate at which people stop checking.**
+- **MEASURE THE ARGUMENT, NOT THE BEHAVIOUR, AND READ IT AFTER THE DRIVE RETURNS.** B4 deleted a
+  case asserting that `blockOn` asks for an indefinite wait rather than polling — the property
+  core-cpp#17 was actually filed about — after three measured failures: `runOnce()` records no
+  timeout because it never asks for one; reading `waitCount()` **from a producer thread** while the
+  loop appends is a data race; and the state is unreachable single-threaded. **The second failure is
+  fixable and changes what is measured:** `blockOn` runs on its caller, so the only appender is the
+  test thread, and the pool thread only ever calls `submit()`/`wake()`. **Read the recorded timeouts
+  after `blockOn` returns and there is no race to miss** — and assert on the *argument* passed to
+  `wait()` (`std::nullopt` versus a zero poll), which is a fact that needs no blocking backend at
+  all. Offered to B4 as a claim to check, not an instruction: it has measured three failures the
+  lead has not.
+- **"I WILL NOT ADD A CASE THAT ONLY PASSES BECAUSE THE SANITISER IS NOT LOOKING"** (B4, refusing its
+  own attempt 2). **An honestly stated gap is a better artifact than a case that passes for the
+  wrong reason** — and B4's report distinguishes what is *tested* (the outcome: a cross-thread flow
+  completes) from what is only *reasoned* (the mechanism: `blockOn` routes through the same
+  `idleWait` flag `run()` uses, which another case exercises). **Naming which half is reasoning is
+  the whole value of the report.**
+- **A FAILED BUILD FOLLOWED BY READING THE TEST OUTPUT IS THE STALE-ARTIFACT TRAP, AND IT IS WORSE
+  THAN AN INHERITED GREEN.** B4's build failed on an unused function; it read the test output
+  anyway; **the old binary was still segfaulting and it briefly believed its fix had not worked.**
+  Unlike `ninja: no work to do`, the artifact here **actively contradicted the truth** rather than
+  withholding it. Fix, and it is the same fix as every other one tonight: **the step reports its own
+  failure instead of letting the next step answer for it** — the gate script now refuses to run
+  tests when the build fails, and says so.
+- **A SYMBOL ADDED AND REMOVED INSIDE THE UNRELEASED WINDOW EARNS NO CHANGELOG ENTRY — not under
+  Breaking, not under Removed.** `EventLoop::hasPendingWork()` is the worked example, all four facts
+  measured rather than recalled:
+
+  ```
+  contour 0  endo 0  tuidu 0  Lightweight 0  morph 0     <- zero consumer uses
+  grep hasPendingWork <design spec>          -> nothing   <- never a spec member
+  git log -S hasPendingWork --reverse        -> cc1b237   <- introduced this session
+  grep hasPendingWork CHANGELOG.md           -> nothing   <- never recorded
+  ```
+
+  **From the last released state it never existed**, so recording its removal invents a history: a
+  0.1.0 reader who sees *"Removed: `EventLoop::hasPendingWork()`"* goes looking for when they could
+  have used it, and the answer is never. **The test is those four checks, not memory of what felt
+  public** — the instinct is to record a removal because API surface leaving feels notable.
+- **SEPARATE THE RULE FROM ITS JUSTIFICATION, OR THE JUSTIFICATION WILL BE MISTAKEN FOR THE RULE.**
+  B4's first statement of teardown's inbound-queue drop was *"the discriminator is whether a turn
+  ACCEPTED it"* — which the re-review refuted, because the borrowed-handle hazard it cites is equally
+  true of the **ready queue, which teardown DOES resume**. The corrected form:
+
+  > *"the discriminator is **the container** -- the ready queue holds work the loop put there, the
+  > inbound queue holds an offer no turn took up; the borrowed-handle hazard argues only that the
+  > boundary must be **FIXED** rather than judged per item, since the loop cannot inspect a handle to
+  > decide."*
+
+  **"A turn accepted it" was doing duty as both the discriminator and the reason, and could not be
+  the first.** Now the container is the rule and the impossibility is the argument for why the rule
+  must be positional. **A reader can disagree with the boundary without disputing the hazard** —
+  which is the test of whether the two have actually been separated.
+- **THE DEFECT CLASS APPEARED INSIDE PROSE WRITTEN ABOUT THE DEFECT CLASS.** B4, on its own M8
+  comment: *"the version that named two read as an audit that had been performed, which is this
+  session's defect class appearing inside my own prose about that defect class."* **Two enumerating
+  comments in one file, written the same hour by two lanes, each missing a member** — B4's "the two
+  cannot drift" about three sites, and B5's `EventLoop.cpp:678-680` naming "every other member that
+  wakes" while excluding three. **That the class recurs inside prose about the class is the strongest
+  evidence it is structural rather than carelessness.**
+- **A FIX THAT PASSES REVIEW AND CHANGES NOTHING IS WORSE THAN NO FIX, BECAUSE IT CLOSES THE
+  FINDING.** B5, on the obvious one-line repair for `notifyHandleClosing`:
+
+  > *"Adding `if (!isOnWorkerThread()) armHostWake();` **does nothing at all**"* -- the park carries
+  > no deadline, so `_parks.nextDeadline()` is `nullopt`, and **`armWakeAt(nullopt)` cancels rather
+  > than schedules.** *"The obvious fix would have passed review, shipped, and changed nothing."*
+
+  Found by **reading `armHostWake` rather than assuming the call did what its name suggests.** The
+  root cause is the night's shape once more: **two places enumerate "what counts as work" and
+  disagree** -- `hasPendingWork()` counts `_closedParks`, `armHostWake()` does not.
+- **RULING: `_backend.wake()`, not `armHostWake()`, at every off-turn wake site.** B5 argued for
+  `armHostWake()` -- one idiom, already encodes "queued work means now", no-op for native backends
+  by construction. **Overridden on thread safety: `wake()` is the only member the spec declares
+  thread-safe**, `armWakeAt` makes no such claim, and `armHostWake()` reads `_ready`, `hasInbound()`
+  and `_parks.nextDeadline()` on the way there. **These sites exist precisely to be called off the
+  loop thread.** B5's safety argument (`!isOnWorkerThread()` + the teardown assert implies
+  `!running()`) rules out a race with the *loop* thread and **says nothing about two non-loop
+  callers** -- two sockets closing on two threads both reach `notifyHandleClosing`. And `wake()`
+  reaches B5's own goal anyway: six members, one idiom, since `spawn` already uses it.
+- **DISARM BEATS LEAK WHERE DISARMING IS AVAILABLE.** `syncRunWith` leaks because it has nothing
+  that can retrieve the park. `blockOn` does: **`cancelPending(task.handle())` already searches all
+  three containers and disarms**, so a `ScopeGuard` calling it closes three of `blockOn`'s exits at
+  once, where `task.release()` prevents the free but **leaves a live `Park` naming a leaked frame**.
+  Cite `syncRunWith` for the principle, use `cancelPending` for the mechanism.
+- **TWO HALVES OF ONE QUESTION, ANSWERED OPPOSITELY, EIGHT LINES APART IN THE SAME HEADER.** C1's
+  `@throws` justified refusing an unadvanceable flow by *"a loop that kept turning would spin at full
+  CPU instead"*; M4's paragraph **immediately above** says that on an `IdlePolicy::Return` loop it
+  **does** spin, and resolves it by telling the reader not to. **Unadvanceable-with-nothing-parked
+  threw; unadvanceable-with-something-parked spins forever -- and the difference is the loop's
+  bookkeeping, not the flow.** core-cpp#17 is therefore unrepaired in `testing::TestLoop`, the loop
+  type every test author reaches for first.
+- **A SWEEP THAT TAKES THE REVIEW'S LIST INSTEAD OF ITS CRITERION MISSES WHAT THE LIST MISSED.**
+  B4's I3 swept the six members the review named and missed **`notifyHandleClosing`** -- documented
+  loop-thread-only, mutating `_closedParks`, `_abandoned` and the backend, **called from every socket
+  and listener `close()` and destructor across seven files** -- and `cancelPending`. That is verbatim
+  B5's own argument for asserting `cancelTimer` (*"reached from `~DeadlineTimer`, wherever the object
+  owning the timer happens to be destroyed"*), **and a socket is destroyed in more places than a
+  timer.**
+- **THE STRICTER OF TWO TWINS ADVERTISING THE LAXER ONE'S CALLERS IS HOW THE NEXT DEFECT GETS
+  WRITTEN.** `resumeSoon`'s Doxygen names "thread-pool callback" callers that its new assert aborts,
+  while `submit(ParkedWork)` -- `resumeSoon` plus the hand-off -- is the safe twin. Two public
+  members, same operation, different affinity, and the documentation pointing the wrong way. B6's and
+  B7's completion backends are who will read it.
+- **A NEW VARIANT: the mechanism verified, the PRECONDITION assumed.** B5, retracting its own
+  `notifyHandleClosing` finding ten minutes after making it: *"I checked the mechanism I was
+  thinking about and **not the precondition I was relying on**."* It had correctly verified that the
+  function files into `_closedParks` and asks the backend for nothing — **and never checked whether
+  the precondition could exist.** Verified link by link before accepting the retraction:
+
+  ```
+  HostDrivenBackend.cpp:15   attach(ReadinessHandler&) -> unexpected{Unsupported}, unconditionally
+  EventLoop.cpp:777-788      registerPark: attach refuses -> detach, disarm, return ParkId::invalid()
+  EventLoop.cpp:898-901      notifyHandleClosing: early-return on InvalidHandle, then parksOn(handle)
+  ```
+
+  **No park with a handle can exist on a host-driven loop**, so the path is inert there. Every
+  earlier instance tonight was an instrument shaped by an expectation; **this was a claim whose
+  mechanism was verified thoroughly and whose precondition was assumed**, which is why it survived
+  its author's own scrutiny — the check was real and one level too late.
+- **DO NOT SHIP INERT CODE WITH AN UNTESTABLE JUSTIFICATION; SHIP THE COMMENT INSTEAD.** B5's
+  disposal, and the reasoning is better than the finding: *"Both would be code no test could ever
+  red -- M7's finding, an assertion that cannot come out the other way, applied to a FIX instead of
+  an assertion."* The remedy is a comment at `armHostWake` recording that the closed-park path is
+  deliberately absent, citing the refusal, and saying what would have to change first — **the only
+  instrument that can reach whoever later gives a host-driven backend readiness, because no test
+  can.** And the boundary must be in it: *"every member that files work a turn must reach wakes" is
+  still not true of `notifyHandleClosing` — it is merely not REACHABLE*, so a comment saying "all of
+  them" would be wrong again one level down.
+- **SAME FUNCTION, TWO CONCERNS, OPPOSITE VERDICTS — and a retraction of one must not be read as
+  retracting the other.** `notifyHandleClosing`: B5's *"does it need to wake a host-driven
+  backend?"* is **retracted** (no park can be on a handle there); B4's *"should it assert
+  loop-thread affinity?"* **stands** (native backends, reached from every socket and listener
+  `close()` and destructor across seven files). Relayed explicitly to both, because the natural
+  reading of "B5 retracted the `notifyHandleClosing` finding" would have killed a live one.
+- **AN ASSERT THAT FIRES ON A CALLER THE DOCUMENTATION INVITES IS WORSE THAN NO ASSERT.**
+  `resumeSoon`'s Doxygen advertises "thread-pool callback" callers that B4's new assert aborts.
+  **Either the doc is wrong or the assert is**, and the pair must be resolved together — checking
+  the criterion is not enough without checking the precondition, which is B5's variant applied to
+  B4's sweep.
+
+## AN OUTCOME TEST CANNOT DISTINGUISH TWO MECHANISMS THAT PRODUCE THE SAME OUTCOME
+
+B4's mutation, restoring `idleWait` to `_inRun` alone — i.e. reverting the C1 fix:
+
+```
+REQUIRE(result == 7)          passed     <- the outcome case does NOT discriminate
+REQUIRE_FALSE(asked.empty())  FAILED     <- the argument does
+```
+
+**With the fix mutated away the flow still completes.** `blockOn` spins, the pool submits, the
+inbound queue drains, `result == 7`. **B4's own `hopToPoolAndBack` case — written FOR C1 — would
+have shipped the spin**, a green case on the tip with core-cpp#17 quietly restored.
+
+**The case written for a finding did not cover that finding's own justification.** C1's `@throws`
+justified the refusal *by* the spin; the fix replaced the refusal; the only case guarding the
+replacement could not see the spin return. **The finding would have been closed by a test that
+agreed for the wrong reason**, and the only thing that prevented it was running the mutation on a
+case B4 had already deleted once as unwritable.
+
+> **A loop that slept and a loop that burned a core both complete the flow. If the defect is HOW the
+> result was reached, only an assertion on the REQUEST can see it.**
+
+B4: *"the third time tonight the instrument had to measure the request rather than the result, and I
+had not generalised it from the first two."* **Generalising was hard because the first two were
+instruments lying, and this is a CORRECT instrument answering a question adjacent to the one asked.**
+Same family, different face.
+
+- **THE LEAD'S SHAPE WAS INCOMPLETE AND THE LANE FOUND IT BY TRYING IT.** Reading recorded timeouts
+  after `blockOn` returns does remove the race — but **`ScriptedBackend` defeats the test regardless
+  of read timing**: its `wait()` never really waits, so `blockOn` burns one script step per turn and
+  the run ends in *"script exhausted"* before the pool hands back. **Attempt 1's reason wearing
+  different clothes.** Resolution: a `RecordingBackend` **decorator over `makeDefaultBackend()`** —
+  real blocking, real wake channel, argument captured, and the thread-safety argument intact with
+  the vector owned by the decorator. Sixth correction of the lead tonight, third from B4.
+
+## `WILL_FAIL` INVERTS *ANY* NON-ZERO EXIT — seven canary registrations, none protected
+
+B4, adding a `spawnOffThread` mode and then checking what "Passed" meant:
+
+```
+mode=run             exit=1   Assertion `!_backend.isHostDriven() ...`
+mode=blockOn         exit=1   Assertion in blockOn
+mode=spawnOffThread  exit=1   Assertion `EventLoop::spawn from a second thread ...`
+mode=bogusMode       exit=2   "unknown mode"        <- and ctest calls this Passed too
+```
+
+**A canary that never reached its assertion is indistinguishable from one that did** — in the one
+test type whose entire job is to prove a check fires. Swept the tree: **seven registrations across
+three binaries and zero `FAIL_REGULAR_EXPRESSION`** (every hit for that property is in the vendored
+Catch2 cache):
+
+```
+src/core/net/CMakeLists.txt:279   hostdriven-canary.{run,blockOn}                    2
+src/core/net/CMakeLists.txt:306   iocp-canary.{g1,g4}                                2
+tests/CMakeLists.txt:305          windows-dialog-canary.{assert,abort,invalid-param} 3
+```
+
+**And the sharpest form is in the registrations themselves.** Two of the three carry:
+
+> *"`SKIP_RETURN_CODE` takes precedence over `WILL_FAIL`, so a build with assertions compiled out
+> reports a skip rather than the defect the canary exists to catch."*
+
+**The author reasoned explicitly about one false-pass path in that very property block and did not
+see the adjacent one.** Evidence of careful thought about the exact class, sitting beside the
+instance it missed — the same mechanism as a rule ten lines above its violation, one level up.
+
+**Ruling: one lane fixes all three sites.** A one-line property split across three lanes and two
+rounds guarantees two get forgotten. The `windows-dialog-canary` is the one that once **hung**
+instead of failing (`216d1d1`), so a second false reading there is not hypothetical.
+
+- **`$?` IS EXPANDED BY THE OUTER SHELL THROUGH `wsl -- bash -lc '...'` — third instance tonight.**
+  It told B4 its canary exited 0 when it exits 1. **Every probe goes through a script file**, which
+  is the same fix as the pipeline exit status and the stale binary: ***stop asking a shell to carry
+  a result across a boundary it reinterprets.***
+
+## THE WORST FALSE PASS OF THE NIGHT: the canary reported its own regression as a pass
+
+`tests/WindowsDialogCanary.cpp`, verified rather than taken:
+
+```cpp
+/// Exit status meaning "the failure was handled and execution continued", distinct from any success.
+constexpr int ContinuedAfterFailure = 3;                                    // :29-30
+...
+assert(canaryHolds && "windows-dialog-canary asserts on purpose");
+return ContinuedAfterFailure;          // :53  reached ONLY if the assert did not kill the process
+...
+if (strcpy_s(destination, 1, "x") != 0)
+    return ContinuedAfterFailure;      // :65  same shape on the invalid-parameter arm
+```
+
+`WILL_FAIL TRUE` inverts exit 3 to **Passed**. **So the canary that proves a CRT failure kills the
+process would have reported green on the day it stopped killing the process.** Every other false
+pass tonight was a green about something *unrelated*; **this one is the defect reporting itself as a
+pass** — and in the canary that has already produced one false reading (`216d1d1`, when it hung
+instead of failing).
+
+**The author encoded "this is the bad outcome" as its own exit code, wrote a comment saying exactly
+that, and then registered the test in a way that cannot see the distinction.** Not an unconsidered
+error path — a *deliberately distinguished* one, discarded by the registration. **Third file tonight
+containing written evidence that someone reasoned about exactly the class that then bit it**, after
+the `SKIP_RETURN_CODE` comment two lines from the gap and the rule ten lines above its violation.
+
+Closed by having the binary name the path on stderr — `windows-dialog-canary: CONTINUED AFTER
+FAILURE` — and matching it, because **an exit code cannot say WHICH non-zero it was.**
+
+- **THE SWEEP TOOL WAS PROTECTED FROM THE CLASS IT WAS FIXING, BY AN ASSERTION PUT THERE FOR THAT
+  REASON.** B4: *"my first attempt asserted on `${mode}` in the `iocp-canary` registration, which
+  actually uses `${guarantee}`. The assertion failed, nothing was written, and I read the real text.
+  **Had I written it with `replace` and no assert, I would have silently changed nothing and
+  reported the sweep done.**"* **The procedure working, rather than the rule being remembered** —
+  which is the distinction the whole session turned on.
+- **A REGEX ENTRY THAT CAN NEVER MATCH IS THE INVERSE OF THE DEFECT IT FIXES: it looks like coverage
+  and provides none.** Asked of the three new `FAIL_REGULAR_EXPRESSION` alternations: `usage:`
+  appears in all three, so **confirm each binary actually prints that string**, or the alternation
+  is silently one entry short for that canary.
+- **COUNT AGAINST THE UNION OF `AGENT.md`'s CHECKLIST AND YOUR DISPATCH'S "THEN" SECTION.** B7a
+  counted against `AGENT.md` — the correct procedure, taken deliberately after the remembered-list
+  failure — **and still came up one gate short**, because its dispatch adds `clangcl-debug` (with
+  `-DCORE_CPP_SANITIZERS=address` top-level) and `AGENT.md`'s checklist names only `cl-debug` and
+  `clangcl-release`. **The instruments disagreed and nothing told the lane they might.** A defect in
+  the arrangement, not in the lane. Run afterwards: **506 steps `--clean-first`, clean, 35/35.**
+  Future dispatches say this explicitly.
+- **A BRIDGE WITH NO PRODUCTION CALLER HAS AN INTERFACE NOTHING HAS EVER CONTRADICTED.** B7a, on why
+  the B7a/B7b split worked and what it cost: on Windows **every existing registration is a waitable
+  HANDLE** (`DefaultHandleKind` is `Waitable`; `WindowsSocket` parks on a `WSAEVENT`, not the
+  SOCKET), so IOCP serves today's sockets through the waitable bridge with **no socket-layer
+  knowledge at all**. **`HandleKind::Socket` — the zero-byte `WSARecv` and the `WSAEventSelect`
+  write path — is exercised only by its own tests.** Correct against the only caller that exists,
+  which is the one its author wrote to test it. **The failure mode for B7b is specific: it passes
+  `HandleKind::Socket` from production for the first time and finds the bridge wants something the
+  tests never asked for.** A design question, not a bug, and much cheaper known in advance.
+- **libunicode's `-- [clang-tidy] Disabled.` was hit independently by a SECOND lane.** B4 found it
+  grepping a configure log for its instrument proof; B7a found it two hours later doing the same.
+  **Two lanes, two trees, one conclusion** — `message(STATUS)` has no namespace, so match the
+  `[core-cpp] ` prefix and never the tool's name. Independent rediscovery is the corroboration
+  neither would have had alone, and the argument for putting it in the rulebook rather than a report.
+- **`head` EXITS 0 ON EMPTY INPUT, SO `cmd | head -1 || echo "NO MATCH"` NEVER FIRES.** Reproduced:
+  `echo -n "" | grep -o 'nothing' | head -1 || echo "NO MATCH fired"` prints nothing, exit **0**.
+  B4: ***"A missing file and a present-but-unmatched string produced identical output: silence."***
+  **Third pipeline-exit-status instance for one lane in one day** — after `tail` and `Select-String`
+  — and this one **inside the two-line probe written to check for that very class.** The recursion
+  is four deep: the class, the instrument built to catch it, the sweep that fixed the instrument,
+  and the probe that verified the sweep.
+- **AN AUTHOR CHECKS THAT A PATTERN MATCHES WHAT IT SHOULD, AND RARELY THAT EVERY BRANCH OF IT
+  *CAN*.** The `usage:` reachability check came out clean — all three canary binaries print it, so
+  no alternation entry is dead — but B4's own words are the finding: *"I would not have tested my own
+  regex for reachability."* **An entry that can never match is coverage that is not there: the
+  inverse of the defect the regex was added to fix.**
+- **A SEQUENCING INSTRUCTION IS A CONDITIONAL ON MEASURED STATE, NOT A COMMAND.** The lead issued
+  three sequencing instructions to B4 as absolutes, each correct about the state it had measured and
+  wrong about the state B4 was in by the time it arrived: *"rebase onto `320a9ab`"* reached a lane
+  that had already committed; *"do not rebase"* reached one that had; *"the rebase is accepted"*
+  reached one that had backed it out. **The latency between measuring and arriving is exactly where
+  a lane commits.** Say *"if you have not started gating, do X; if you have, do Y"* instead.
+
+  **B4 settled it on the rule rather than on the instruction: B7a holds a gate record naming
+  `320a9ab`, so rebasing B7a would void it; B4's own gate cycle was the cheaper thing to spend.**
+  The same rule the project has enforced all night, applied by a lane in the direction that cost it
+  rather than saved it.
+
+## THE UNIFYING STATEMENT, and it came from a lane rather than the lead
+
+B4, on the lead's three crossed sequencing instructions:
+
+> *"an instruction issued as an absolute against measured state is wrong the moment the latency
+> exceeds the lane's next commit... **the instruction, like an instrument, was shaped by the state
+> its author had measured, and could only be right about that state.**"*
+
+**That folds the coordination failure into the same class as every technical one tonight.** Four
+media, one shape:
+
+| medium | shaped by |
+|---|---|
+| a `git status` filter | the tree the author expected |
+| a finding regex | the diagnostic form the author expected |
+| a poll predicate | the SHA the author expected |
+| **a sequencing instruction** | **the lane state the author had measured** |
+
+The lead had it as a coordination mistake of a different kind. **It is an instance.**
+
+- **"NOT ON MY LIST" AND "I FORGOT IT" LOOK IDENTICAL IN A REPORT** (B4, flagging that
+  `clangcl-debug` appears in neither of its two checklists). **A checklist reports what it covers and
+  says nothing about its own boundary**, so a reader cannot tell an examined exclusion from an
+  unexamined one. **Naming the exclusion is what makes the boundary visible** — the same argument as
+  [core-cpp#38](https://github.com/contour-terminal/core-cpp/issues/38), where `clang-tidy` reports
+  truthfully about a source set that silently excludes every Windows file.
+
+  Ruled not owed, on the merits: `clangcl-debug` is in B7a's dispatch because B7a wrote 1165 lines of
+  Windows-only source; B4's Windows exposure is its new asserts, which **`cl-debug` already exercises
+  with the Debug CRT and `_ITERATOR_DEBUG_LEVEL=2`**, and nothing in `blockOn`, the scope guards or
+  the asserts is compiler-specific.
+
+## THE UNIFICATION, FINAL FORM: a silent intermediary decided the answer
+
+B4 added two instances that **strain** the "shaped by the author's expectation" statement — `head`
+has no opinion about what anyone expected, and `REQUIRE(result == 7)` is a correct assertion about a
+true fact. So the class is one level down:
+
+> **In every case something stood between the question and the answer, and that intermediary's own
+> behaviour decided the result — silently.**
+
+| medium | what actually decided the answer |
+|---|---|
+| a `git status` filter | the author's expectation of the tree |
+| a finding regex | the expected diagnostic form (`warning:` vs `error:`) |
+| a poll predicate | the expected SHA |
+| a sequencing instruction | state measured before the latency |
+| a probe's `\|\|` branch | `head`'s exit semantics, not the match |
+| an outcome assertion | the flow completing, not how it completed |
+
+**None announced its contribution.** `head` did not say *"I converted a failure into a success."*
+The filter did not say *"I removed eleven rows."* The regex did not say *"I matched a form findings
+do not take."* The instruction did not say *"I was true an hour ago."*
+
+**And that is why every fix tonight rhymes — each makes the intermediary report its own
+contribution:**
+
+```
+lines_in_log / steps=524        the build says how much it did
+GH-BLIND / FETCH-FAILING        the poll says its input died
+FAIL_REGULAR_EXPRESSION         the canary says which exit it took
+rc captured before the pipe     the pipeline says which stage failed
+assert the anchor before write  the sweep says it found nothing
+REQUIRE_FALSE(asked.empty())    the case says what was REQUESTED, not just what resulted
+```
+
+**Six instruments, one remedy, arrived at independently six times by three people who had not
+generalised it in advance.** That convergence is the evidence the class is real.
+- **A NEGATIVE ALTERNATION CAN ONLY EXCLUDE THE PATHS THAT SAY SOMETHING.** B7a measured a fifth
+  `IocpCanary` exit path with a temporary `probe` mode rather than reasoning about it:
+
+  ```
+  core-cpp-iocp-canary.exe probe   ->  exit 1, stderr COMPLETELY EMPTY
+  ```
+
+  `IocpBackend`'s constructor throws when `CreateIoCompletionPort` fails, nothing catches it:
+  `throw` -> `std::terminate` -> `abort()` -> **the canary's own `SIGABRT` handler** -> `_Exit(1)`.
+  **Exit 1 is byte-identical to the assertion firing, and stderr is empty because
+  `core::testing_dialogs` suppresses the abort message** — *the same linkage that stops a Debug
+  assert opening a modal dialog also removes the CRT's text.*
+
+  **The mechanism that makes the canary work at all is what makes this case invisible**, and it
+  converts every abort into exit 1. **A fourth instance of the pattern with a twist: the file
+  contains no written evidence anyone reasoned about it, because the mechanism that causes it was
+  added to solve the adjacent problem.**
+
+  **The remedy is positive, not negative**: a marker printed immediately BEFORE the forbidden
+  operation (proving the mechanism was reached) and one AFTER (proving it was survived) — which is
+  exactly the shape `WindowsDialogCanary`'s `ContinuedAfterFailure` already has.
+  **A negative alternation excludes the paths you enumerated; a positive match requires the one path
+  you want.**
+
+  Two cautions flagged rather than asserted, for the lane to verify: **`PASS_REGULAR_EXPRESSION`
+  appears to make ctest ignore the exit code**, so combining it with `WILL_FAIL` would invert the
+  regex verdict and `WILL_FAIL` must go; and **`assert`'s own text may not survive the
+  dialog-suppression**, which is why the existing alternations match the canary's OWN printed
+  strings rather than assert text.
+- **"N/N" MEANS "N RAN, 0 FAILED" — IT DOES NOT MEAN "N PASSED."** B4's seventh instance, and the
+  broadest: **`clangcl-release` reports `36/36` with all five canaries `Skipped`.** Release compiles
+  the assertions out, `SKIP_RETURN_CODE` fires, and **a skip is absorbed into a green total.**
+  *"The total does not announce that five of its members abstained."*
+
+  **Every figure in every gate record this project has produced is affected** — `fe48143` 31/31,
+  `fb3fe97` 33/33, `a02031c` 33/33, B7a's 35/35 on both Windows legs — and every lane, the lead
+  included, read them as pass counts. `ctest` reports the skips in its own output and then hands you
+  a summary that has absorbed them: **the "named exclusion" point one level up, where a total does
+  not announce its boundary any more than a checklist does.**
+
+  **Rule: a gate record states the skip count beside the total, or the total is not a result.**
+
+  Concretely for B4's round: **the thread-affinity canary is exercised by exactly two legs,
+  `clang-debug` and `cl-debug`** — it abstains on every Release leg, inside a green total, so a
+  reader comparing Windows figures would conclude it passed on four.
+
+  **A correction of the lead's own relaying follows from it:** *"your 524 matches B7a's 524, which is
+  the cross-check"* compared two totals that may have held different skip counts. **The BUILD
+  cross-check holds — those are statements, not tests. The TEST cross-check does not, until both
+  state their skips.**
+- **THE THREE READINGS OF A STEP COUNT, in one table (B4, and better than the prose version landed
+  in `build-and-toolchain.md`):**
+
+  | leg | is the count the verdict? | why |
+  |---|---|---|
+  | `clang-tidy` | **yes** | what is measured runs INSIDE the statement ninja skips |
+  | `clang-debug`/`gcc-release`/sanitisers | **no** | ninja's currency check is sound; `work_lines=61` is a real answer |
+  | `clangcl-*` | **yes, oppositely** | the skip DECISION is wrong on a pre-`ca8dfc32` launcher |
+
+  **Same figure, three meanings, decided by where the measurement sits relative to the skip.**
+- **MUTATE YOUR OWN FILE, NOT AN OFFERED ONE.** B7a declined the two mutation sites already proved
+  tonight and fed `readability-identifier-naming` into `src/core/net/detail/ReadinessSlot.hpp`, **a
+  file its own commit adds** — *"because those prove the analyser reaches B4's and B5's code and I
+  needed it to reach mine."* **A mutation proves the analyser reached the file you mutated and
+  nothing else**, which is the same boundary as the work count: instrument versus surface, one file
+  at a time.
+
+## THE RULEBOOK REPRODUCED THE DEFECT, IN THE FILE WHOSE JOB IS TO PREVENT IT
+
+`.agent/rules/async-and-net.md`, landed in `27b8b43`, asserted:
+
+> *"`post`, `submit`, `schedule`, `spawn`, `requestCancel` and `stop` all wake the backend.
+> `addTimer` was the sixth member of that family and **the only one that did not.**"*
+
+**It was not the only one.** `registerPark`, `resumeSoon` and `requestStop` do not either. **So the
+rule written to record the defect reproduced it** — and **re-reading the rulebook could never have
+found it**, which is the property that makes this worse than any other instance tonight.
+
+**The chain: B5 proposed the formulation, the LEAD amplified it — calling it "better than B4's" and
+propagating it to three lanes — and B4 landed it. Three people handled it and none checked the
+enumeration against the code.** The lead is the one who called it *mechanically checkable*, which
+is precisely the claim that made nobody check it.
+
+**B5's remedy attacks the re-reading:** derive the family from the code every time, **including from
+this page**; fix the primitive, not the caller; and a member that legitimately does not join says so
+where the reader is. **A rulebook page that tells you not to trust it is an odd artifact and the
+right one here.**
+
+And the structural half: **`addTimer` now drops its own copy and inherits the arming from
+`registerPark`** — *"six call sites reach that primitive; the fix placed above it covered one."*
+The family error one level down: **a fix at the caller looks complete and covers a sixth of the
+surface.**
+
+- **A WRONG PREDICTION IS THE BETTER OUTCOME WHEN IT IS WRITTEN DOWN FIRST.** B5 predicted three
+  REDs and got two: `requestStop` is **not** broken on the path the review described, because
+  `spawn` hands the flow `_rootStop`'s token and `DelayAwaiter::await_suspend` registers a cancel on
+  it — **the wake arrives from the cancellation, before `unparkEverything()` runs.** The case passed
+  for a reason that was not the fix. Isolating `requestStop`'s own obligation with `host.clear()` is
+  what turned it into a measurement. **Outcome-versus-mechanism in its third costume**, caught only
+  because the prediction was in writing.
+- **THE INSTRUMENT REPORTED AND THE CONSUMER IGNORED IT — the eighth instance and a new sub-variant.**
+  B5's mutation script printed **`mutation applied: 0 line(s)`** and then concluded *"the assertion
+  is decorative"* anyway. **Every other instance tonight was an intermediary staying silent; here it
+  spoke and was not heard.** Fix: a zero count is fatal — **the number must be able to stop the
+  verdict, not merely accompany it.**
+- **CORRECTION OWED TO `build-and-toolchain.md:73`: `cl` is NOT untouched by the launcher.**
+  Verified: `out/build/cl-debug/build.ninja` has **314 LAUNCHER lines, all `fastcache-cc`** —
+  identical to `clangcl-release`'s 314. B5 hit `LNK1163: invalid selection for COMDAT section` there
+  and `--clean-first` cleared it at 517 steps / 33/33. **Measured: the launcher is used, the link
+  failed, `--clean-first` fixed it. INFERRED: that the failure came from a stale cached object** —
+  `--clean-first` fixes every stale-tree problem, so it does not discriminate between causes.
+  B5's framing is the keeper either way: ***clang-cl fails silently as an inherited pass, MSVC fails
+  loudly as a link error — same launcher, opposite symptom, and the loud one is the lucky one.***
+- **FIVE OF SEVEN CANARIES ARE PROTECTED BY A SINGLE CI JOB** — traced from B4's skip measurement
+  through the matrix:
+
+  ```
+  windows job matrix (build.yml:410):  [cl-release, clangcl-release, cl-debug, cl-release-tls]
+  CMAKE_BUILD_TYPE:                     Release     Release          Debug     Release
+  ```
+
+  **`cl-debug` is the only Debug leg on Windows**, and every canary abstains where assertions are
+  compiled out. So `windows-dialog-canary.{assert,abort,invalid-parameter}` and
+  `iocp-canary.{g1,g4}` are exercised by **`windows (cl-debug)` alone**; only
+  `hostdriven-canary.*` has redundancy (`linux (clang-debug)`, `sanitizers` asan+tsan). And
+  `cl-debug` is the leg the rulebook itself says *"was the one Windows configuration nobody ran in
+  CI"* until it was added. Attached to
+  [core-cpp#38](https://github.com/contour-terminal/core-cpp/issues/38), whose remedy — a Windows
+  Debug leg that is not `cl-debug` — closes both halves with one job.
+
+- **THREE INDEPENDENT WAYS ONE CANARY CANNOT REPORT A TRUE NEGATIVE, all found in one night:**
+  `windows-dialog-canary.assert` **hung** instead of failing when unlinked from
+  `core::testing_dialogs` (`216d1d1`); returns `ContinuedAfterFailure = 3` — *the defect it exists
+  to detect* — which `WILL_FAIL` inverts to Passed; and **abstains** on every Release leg inside a
+  green total. Two are being closed by the canary follow-up and #38; the first already was.
+
+- **THE FOUR READINGS OF A COUNT ARE ONE RULE, not four** — about where the measurement sits
+  relative to what was skipped:
+
+  | the count is… | because the measurement sits… |
+  |---|---|
+  | the verdict (`clang-tidy`) | *inside* the statement ninja skipped |
+  | not the verdict (`clang-debug`, sanitisers) | *after* a sound currency check |
+  | the verdict again (`clangcl-*`) | after an **unsound** currency check |
+  | not the verdict (a test total) | *across* results that include abstentions |
+
+  B4's remedy: runners emit `total / skipped / notrun / ran_and_passed` per leg. **That format is
+  what a gate record should contain, not merely what a script prints** — the summariser reporting
+  its own contribution, which is the same fix as all the others.
+- **AN ISSUE'S COST ESTIMATE IS PART OF ITS CONTENT.** [#38](https://github.com/contour-terminal/core-cpp/issues/38)
+  was written as though a Windows Debug leg needed a preset authored and validated. B4 checked:
+  **`clangcl-debug` already exists in all four preset sections**, workflow included —
+
+  ```
+  configurePresets / buildPresets / testPresets   ['clangcl-debug', 'clangcl-release']
+  workflowPresets                                 ['ci-clangcl-debug', 'ci-clangcl-release']
+  ```
+
+  — so the remedy is **one list entry at `build.yml:410`**. *"Add a job" rather than "add a
+  toolchain"* **is the difference between a ticket someone picks up and one that sits**, and the
+  estimate was the lead's, not the reporter's.
+- ***"A CANARY WITH THREE INDEPENDENT SILENCES IS NOT A CANARY"*** — the sentence to lead the canary
+  follow-up with, better than any general statement about `WILL_FAIL`. All three of
+  `windows-dialog-canary.assert`'s silences were found in a single night: the hang (`216d1d1`,
+  closed), the inverted `ContinuedAfterFailure = 3` (the follow-up), the Release abstention (#38).
+
+## RULING OVERTURNED BY MEASUREMENT: "ready work wakes; a park arms"
+
+The lead ruled `_backend.wake()` at all off-turn wake sites, on thread safety. **B5 measured it
+instead of arguing it, and it is wrong at `registerPark`:**
+
+```cpp
+void HostDrivenBackend::wake() noexcept     { scheduleAt(_clock.now()); }   // :61-64
+void HostDrivenBackend::armWakeAt(deadline) { if (!deadline) return;        // :66-74
+                                              scheduleAt(*deadline); }
+```
+
+**`wake()` is `scheduleAt(now())`**, so a park fifty milliseconds out is pumped **immediately**,
+finds nothing due and re-arms from the same heap:
+
+```
+HostDrivenLoop_test.cpp:196: CHECK( soonestDelayMs(host) == 50 )   0 == 50   <- addTimer
+HostDrivenLoop_test.cpp:236: CHECK( soonestDelayMs(host) == 50 )   0 == 50   <- delay()
+```
+
+**B5's replacement rule is better than "one idiom":**
+
+> **Ready work wakes; a park arms.**
+
+`resumeSoon` and `requestStop` file work ready *now* carrying no time -> `wake()`. `registerPark`
+files a park *with a time* -> `armHostWake()`. **Not five-one-way-and-`spawn`-the-other: one
+distinction that says which primitive applies, and the two primitives exist because the distinction
+does.** The lead was treating **uniformity** as the goal; **non-arbitrariness** was the goal, and
+B5's rule delivers it without flattening a real difference.
+
+**And the thread-safety argument does not reach `registerPark`:** it already does `_parks.add(...)`
+unsynchronised, so two threads calling it concurrently race **with or without** the arming — which
+is what its `teardownIsSerialisedWithDispatch()` assertion forbids. *"The arming cannot make a
+function that is single-threaded by contract less safe."* The argument holds where two non-loop
+threads genuinely collide (`notifyHandleClosing`) and nowhere else.
+
+- **A SILENT `||` MAKES A FUTURE REORDERING WORK; AN `assert` MAKES IT FAIL LOUDLY.** The lead's two
+  messages on `armHostWake`'s missing `_closedParks` contradicted each other (fix defensively /
+  comment only). **B5's reconciliation is better than either**: comment only, *because a defensive
+  disjunct would make a future reordering succeed rather than announce itself* — the opposite of the
+  stated goal — **plus `assert(_closedParks.empty())` in the host-driven branch as the loud
+  instrument.** An assert is not inert code: it has no behaviour, it is an **executable statement of
+  the invariant the comment describes**, and it fires exactly when someone gives a host-driven
+  backend readiness without revisiting.
+- **"A TEST THAT WAS MEASURING ITS OWN FIXTURE."** B5's `host.clear()` isolation dropped the host's
+  queue while the **backend** still believed a pump was outstanding, so its coalescing swallowed the
+  next request: `pendingCount == 1` expanded to **0**. Isolating by **pumping** — what a real host
+  does — clears both sides. **The isolation mechanism was the neighbour of the thing under test**,
+  the same shape as `spawn` rescuing the timer, one level in.
+- **A PREDICTION CARRIED ACROSS A REWRITE IS A REMEMBERED LIST.** B5 predicted M-A would red 2 cases
+  and it reds 3, because the rewritten `requestStop` case now needs `registerPark` to have armed
+  something. The coupling is real and M-C still isolates, so the suite discriminates — but, in B5's
+  words, *"I should have derived it from the rewrite instead of reusing the old number."*
+
+### An idle lane is a stopped lane, and nothing announces it
+
+B4 ended a turn with *"ASan, TSan and the deleted-tree `clang-tidy` outstanding. When they land
+I'll report all four ... and tell B7a the window is open."* It then went **idle**. Idle is not
+"working"; idle is "this agent's turn ended and it will not act again until someone messages it."
+Two lanes -- B7a frozen at `320a9ab`, B5 holding fix round 2 -- were blocked behind a push that was
+never going to happen, and **nothing in the system said so**. I found it by measuring:
+`git worktree list` put `D:/core-cpp-wt-b4fix` at `5d7a5ae` and `origin/master` at `7bdd132`.
+
+**Rule: a report is not a handoff.** A lane finishes its run and reports the result, or it names in
+one line the answer it is blocked on. Reporting a plan and then stopping produces the one state
+that reads identically to progress.
+
+**Rule for me: a blocked lane is my liveness problem, not its own.** A lane cannot notice it has
+been forgotten -- it has no clock and no turn. The controller's periodic question is not
+*"how is it going"* (which costs a turn and tells me what the last message already said) but
+**"which agents are idle, and does any of them owe work?"** `ListAgents` answers the first half in
+one call; the ledger answers the second. This is the sixth instance of *a silent intermediary
+decided the answer* -- here the intermediary is the scheduler, and its silent contribution is that
+"idle" and "busy" render the same in the absence of a message.
+
+### "Two commits" was one
+
+The same report said two commits were ready to push. The worktree holds **one** (`5d7a5ae` on
+`320a9ab`). I did not learn which of *folded in*, *unwritten* or *dropped* it is -- I asked -- but
+the count itself was a claim, made in advance of the work, restated afterwards as though it had
+been re-derived. **The same failure as B5's mutation prediction, in a different medium**: a number
+that was true about the plan, repeated after the plan changed.
+
+### A rule classifies the filed object, not the signature -- `schedule` is the near-miss
+
+Having accepted **"ready work wakes; a park arms"**, I enumerated every wake/arm site in
+`EventLoop.cpp` rather than trusting the rule's wording, and `schedule` reads as a counter-example:
+
+```
+schedule(deadline, work):
+    if (isOnWorkerThread())  registerPark(ParkEntry::onDeadline(...))   -> arms
+    else                     _inbound.scheduled.push_back(...); _backend.wake()
+```
+
+A deadline in the signature, and the off-thread branch **wakes**. Applied to the signature the new
+rule condemns it. Applied to **what the member filed** it endorses it: the off-thread branch filed
+an entry on the *inbound queue*, the park does not exist yet, and the turn that drains the inbound
+queue is ready now. `registerPark` arms for the deadline when the drain reaches it, and the
+end-of-turn `armHostWake()` arms again. **Changing that `wake()` to an arm would arm for a deadline
+whose park has not been created, and the work would sit in the inbound queue until something else
+asked for a turn.** A correct site, turned into a hang, by a correct rule applied one level off.
+
+**So: every behavioural rule names the object it classifies.** "Ready work wakes; a park arms"
+classifies *the thing the member just filed*, and the two members that file the same kind of thing
+through different queues get the same answer. A rule stated over signatures is a rule that will be
+applied over signatures by the next reader, who has only the sentence.
+
+**And the enumeration is why this was caught.** I had the rule from the lane that measured it, I
+agreed with it, and I still read the eleven sites. The sentence *"`post`, `submit`, `schedule`,
+`spawn`, `requestCancel` and `stop` all wake the backend"* -- which I had written into the rulebook
+myself -- would have been the third generation of the same wrong list.
+
+### Seventh instance: `$( )` is a silent intermediary, and the positive marker caught it
+
+The CI monitor's first event was:
+
+```
+MON-UP rc= tracked=12 tip=7bdd132
+```
+
+**`rc=` is empty.** `snap()` sets `ghrc=$?` and is called as `prev=$(snap)` -- a command
+substitution runs its body in a **subshell**, so every variable it assigns dies with that subshell.
+The loop's `[ "$ghrc" -ne 0 ]` then compares an empty string to an integer, which is a bash error
+and evaluates false, so:
+
+- the **GH-BLIND branch could never fire**, and a dead `gh` would have produced silence that reads
+  exactly like "nothing landed";
+- the previous monitor of the same shape (`bv0v1o46i`) had been "running" for hours and had
+  **not even created its output file** -- there was nothing to read and nothing said so.
+
+This is the seventh medium for one shape, after a `git status` filter, a finding regex, a poll
+predicate, a sequencing instruction, a probe's `||` branch and an outcome assertion. And the fix
+rhymes with all six: **make the intermediary report its own contribution through the channel that
+actually crosses the boundary.** Here the only such channel is stdout, so `snap()` prints
+`RC=<n>` as line 1 and the caller splits it off.
+
+**What actually caught it was the positive marker.** I put `rc=$ghrc` in the startup line for
+diagnostics, not as a check, and it is the reason the defect was visible in the first three seconds
+rather than at the first `gh` outage -- which might never have come. A field that prints a value on
+the success path exposes an empty value; a branch that only speaks on the failure path cannot
+report that it is unreachable. **This is B4's canary positive-marker design, validated in a
+different medium before B4 has written it**, and it generalises past canaries: an instrument states
+what it measured, not only what it objected to.
+
+**Rule: a monitor's startup line says whether its input answered.** `MON-UP` now carries `rc=`, and
+a non-zero rc prints `MON-UP-BLIND` saying in words that "no events" means nothing. A periodic
+`MON-ALIVE` distinguishes a quiet watch from a dead one -- the distinction the previous monitor,
+with no output file at all, could not make.
+
+### The enumeration rule, applied to the code, found an eleventh member the same evening
+
+I had just written into `.agent/rules/async-and-net.md`: *derive the family from the code every
+time, including from this page*. Applying it to the serialisation family rather than to the wake
+family, within the hour:
+
+**SUPERSEDED -- see "A finding derived from a stale tree" below: `5d7a5ae` already contained this assert when I reported it missing.** The finding as written was:
+
+**`EventLoop::notifyHandleClosing` mutates `_parks`, `_closedParks` and `_abandoned` directly, and
+is the only public member of that family that does not assert
+`teardownIsSerialisedWithDispatch()`.** **Eleven** siblings do -- B5 re-derived the family and found `run` at `:194`, which my list omitted. I had enumerated instead of deriving, in the same hour I made deriving the rule. The members that genuinely are callable
+from any thread route through `_inbound` under `_inboundMutex` and then wake; this one does neither.
+Its requirement exists only in prose, at `EventLoop.hpp:469`: *"Call this BEFORE the `close()`
+syscall, **on the loop thread**"*.
+
+**It sits under a rulebook section titled "Thread affinity, asserted rather than documented", whose
+opening sentence is that a rule written beside the code is not a rule the code applies.** The
+section names two instances. This is the third, and it was found by the method the section
+prescribes rather than by reading the section.
+
+**What makes this worth recording is not the defect -- it is Important, not Critical, and no current
+caller is on the wrong thread.** It is that *the same method, applied twice in one evening to two
+different families in one file, found a missing member both times*. `addTimer` neither woke nor
+armed; `notifyHandleClosing` documents instead of asserting. **Enumerating definitions is not a
+better way of checking a list. It is a different activity, and it is the only one that can find the
+member nobody wrote down.**
+
+**And I checked the wrong hypothesis first, which is the part I would have skipped if I were
+reasoning from the rule alone.** I suspected a single-threaded hazard -- a handle closed after
+`std::exchange(_closedParks, {})` leaving waiters until some later turn. It is not there:
+the exchange at `:257` is taken deliberately *before* the wait, a non-empty `closed` forces the
+timeout to zero, and `hasPendingWork()` counts `_closedParks`. **The comment explaining why was
+already in the code.** Reporting the hypothesis I disproved alongside the one I confirmed is what
+keeps the finding from reading as broader than it is.
+
+### My flagged correction was itself the error, and a zero in the wrong file nearly confirmed it
+
+I had routed to B4 a correction of `build-and-toolchain.md:73` -- *"`cl` (`deps = msvc`,
+`/showIncludes`) and GCC and Clang hits were unaffected"* -- because I had measured **314
+`fastcache-cc` lines in `cl-debug`'s `build.ninja`** and concluded that `cl` obviously *is* affected,
+since it plainly uses the launcher. Measured properly before editing:
+
+```
+cl-debug        CMakeFiles/rules.ninja:  deps = msvc ×87   /showIncludes ×88   -clang:-MF ×0
+clangcl-release CMakeFiles/rules.ninja:  deps = gcc  ×29                       -clang:-MF ×29
+both            build.ninja:             fastcache-cc ×314
+```
+
+**The rule was right.** "Unaffected" is a claim about the *dependency mechanism*, not about
+caching: `cl` goes through the same launcher and never asks for a GNU depfile, so the
+`-clang:-MF` defect cannot reach it. My 314-line measurement was true and irrelevant -- it answered
+*does `cl` use the cache*, and the sentence was answering *can this defect reach `cl`*.
+
+**The near-miss inside it is the part to keep.** My first attempt greped `build.ninja` for
+`deps =` and got **zero matches in both trees**. Ninja keeps rule definitions in
+`CMakeFiles/rules.ninja`; `build.ninja` holds the build statements. A zero from the wrong file is
+byte-identical to a zero from the right one, and this particular zero would have *supported* the
+correction I already believed in -- "neither tree declares a dependency mode, so the mechanism
+described here is fiction."
+
+**Rule: when a grep returns zero and the zero is the answer you were hoping for, prove the file you
+searched is the file a match would be in.** One control search for something you know is present
+costs one command and converts an absence of evidence into evidence. This is the
+positive-marker principle in a third medium, after the canary exit status and the monitor's `rc=`:
+**an instrument states what it measured, not only what it objected to.**
+
+**And the meta-rule, which cost nothing this time and has cost hours before:** *a correction is a
+claim.* I have been requiring every lane to verify the numbers in its dispatch; the corrections I
+issue are subject to the same requirement, and this one would have had a lane edit a correct rule
+into a wrong one on my authority.
+
+### A grep for a wrong sentence always matches the document that corrects it
+
+B5 checked whether our two edits to `async-and-net.md` had collided by grepping for the sentence
+this round exists to remove -- *"the only one that did not"* -- and got **1**. It was one message
+from reporting that the rulebook had resurrected the exact falsehood being corrected. It had not:
+**the match was inside its own quotation of it**, in the paragraph explaining that the sentence was
+wrong.
+
+This is not a quirk of that file. **Every document that corrects a quotation contains the wrong
+version verbatim.** A correction that does not quote what it corrects is unusable, so the property
+is structural, and a grep for the old text therefore matches *every* correctly-corrected document
+and reads identically to a regression.
+
+- **Check for the replacement, not the absence of the original.** `grep -c "<new sentence>"` has
+  no false positive of this kind.
+- **Or count outside quotation context** -- `grep -v '^\s*>' | grep -c`, or require the match not
+  be inside a fenced block or an italicised quote.
+- **Or quote the wrong sentence with an ellipsis**, which is the cheapest of the three and the one
+  found by accident: my own correction reads *an earlier draft said "every member ... asks"*, so
+  `grep -c "every member that files"` returns **0** and the absence-check still works. **An elided
+  quotation is still a usable correction and is no longer a grep target.** Verified after writing
+  it, not before -- I had the property by luck and kept it on purpose.
+- **A count standing in for the thing** again, in the medium where the thing and its negation are
+  byte-identical.
+
+**And the reason it was caught is worth as much as the finding.** B5 read four lines of context
+*only because reporting it would have accused someone else of a regression*. A check whose failure
+mode is an accusation earns the context read; a check whose failure mode is silence does not get
+it. **That is backwards, and it is the correct generalisation**: the accusatory checks in this
+project have been careful and the silent ones have not.
+
+### Prove the assert executes, not that it holds
+
+B5 was told to add `assert(_closedParks.empty())` to a branch with no case. It proved the
+assertion **runs** by inverting it:
+
+```
+assert(!_closedParks.empty())  ->  SIGABRT, runner_rc=134, EventLoop.cpp:499
+restored                       ->  81 assertions in 17 test cases, rc=0
+```
+
+**An assertion that never executes is indistinguishable from one that holds**, and both report
+green. "Unreachable today" has to mean unreachable-but-live, which is a different claim requiring
+its own evidence. The inversion is that evidence and it costs one build.
+
+It also carries **two independent reasons** in its comment -- no host-driven park can be on a
+handle, *and* the turn `std::exchange`s `_closedParks` before the wait with nothing able to refill
+it. Two reasons means the assertion survives either premise changing alone, which is precisely the
+case a defensive `||` would have absorbed without a word.
+
+### My rulebook text stated a universal, and a reader falsifies it in one grep
+
+I replaced a wrong enumeration with *"every member that files work asks the backend for the turn
+that will run it"* -- a non-enumerating form, which was the point. B5 caught that it is **false**:
+`notifyHandleClosing` appends to `_closedParks` and neither wakes nor arms. It is sound (the turn
+exchanges `_closedParks` before the wait and a non-empty batch forces the timeout to zero;
+`hasPendingWork()` counts it), but the sentence does not say so.
+
+**Trading a wrong list for a wrong universal is not progress.** A universal invites a reader to
+falsify it in one grep and then distrust the section that contains it -- which is worse than a
+list, because a list at least looks finite. **State the property, or state the exception. Never the
+quantifier alone.**
+
+### CORRECTION to the "two commits was one" entry
+
+B4 answered: *"two-commit push"* meant `origin/master` advances past **both** `320a9ab` (B7a's,
+riding underneath) and `5d7a5ae` (B4's own). One commit of its own. The `WaitHandleAwaiter` guard
+is folded into `5d7a5ae`, measured from the diff (`ScopeGuard` +4 lines; three guards now in
+`EventLoop.hpp`: `DelayAwaiter`, `WaitHandleAwaiter`, `blockOn`'s exceptional-exit
+`cancelPending`). **So the count was right and my reading of it was wrong** -- "two commits to
+push" reads as two of yours, and it was one of yours plus one of someone else's. Asking beat
+assuming in both directions here: I was right to ask and wrong about the answer.
+
+### B4's measurement corrects my count matrix: the Release abstention is build-type-driven
+
+`gcc-release` skipped **3** -- the same three `hostdriven-canary` modes that `clangcl-release`
+skips as part of its 6. **Linux Release abstains from exactly what Windows Release abstains from**,
+so the abstention is a property of the build type, not of the platform. **The canary's reporters
+are therefore the four Debug legs** -- `clang-debug`, `clang-asan-ubsan`, `clang-tsan`, `cl-debug`
+-- which matches the count I derived from the CI matrix, now measured from the other end. Two
+derivations, independent inputs, same answer: that is what makes it a result rather than a claim.
+
+### Which binary reaches the line is a separate question from whether a second binary is owed
+
+B5 proved the `notifyHandleClosing` assertion executes by inverting it, and the result was not the
+one either of us expected:
+
+```
+core-cpp-net_backend-test   rc=0    All tests passed (2271 assertions in 64 cases)   <- never reaches it
+core-cpp-net-test           rc=134  EventLoop.cpp:981: Assertion failed, SIGABRT     <- reaches it
+```
+
+**The backend test never calls `notifyHandleClosing`; the socket test does, through real closes.**
+So the guard is live, every current caller is demonstrably on the loop thread, and the severity
+call was confirmed by measurement rather than by argument.
+
+**And in B5's words: "had I probed one binary I would have reported the guard as dead."** The
+abort-or-not mechanism *looks* conclusive -- it is a process either dying or not -- so a
+single-binary probe produces a confident wrong answer with no tell. This is `testing.md`'s
+*"a module has as many test binaries as it has things to link"* arriving from the opposite
+direction: not **is a second binary owed**, but **which binary reaches the line I am asking
+about**. Any liveness probe -- an inverted assert, a deliberately broken branch, a poisoned
+constant -- has to name the binary it ran in and say why that binary is the one that would reach
+it.
+
+### A copied diagnostic that is wrong for its site is a defect, not consistency
+
+The ten sibling asserts end `post() a call to it instead`. B5 deliberately did **not** copy that
+into `notifyHandleClosing`, because the advice **cannot be followed**: the call is inseparable from
+the `close()` that must follow it -- the handle has to still be open when the backend drops its
+registration, or the removal lands on a descriptor number the kernel may have reassigned. Its
+message says the whole close moves to the loop thread. **Approved as written.** A message telling
+the reader to do something impossible is worse than no message, and matching the siblings verbatim
+would have bought consistency with a lie in it.
+
+### `grep -c 'Skipped'` double-counts, and B4 caught it inside the report that introduced skips
+
+ctest names a skipped test **twice** -- inline as `***Skipped`, then again in the trailing "did not
+run" list as `(Skipped)`. So `grep -c` gave `gcc-release skipped=6, ran_and_passed=26`; the truth is
+**3 and 29**.
+
+**B4 would have published a wrong skip count inside the very report that introduced counting
+skips.** Its fix prints both forms so the doubling is visible rather than assumed:
+`total=32 skipped=3 (trailing-list repeats=3) notrun=0 ran_and_passed=29`.
+
+Same shape as everything else tonight, with one variation worth naming: **this summariser distorted
+by REPEATING rather than by omitting.** Every prior instance was something silently dropped; a
+double-count is something silently added, and it reads as the more alarming number, which is the
+direction that gets believed. B4 also noted its earlier `clangcl-release` figure was right **by
+luck of pattern** (`\*\*\*Skipped` happens to be inline-only) rather than by design -- the same
+admission B5 made about its own grep, and the reason both are trustworthy.
+
+### The rulebook citation I wrote decayed within the hour
+
+Within one hour of writing *derive the family from the code every time, including from this page*, I
+wrote into the same page: *"because `hasPendingWork()` counts it"* and *"`armHostWake` does not
+count `_closedParks` although `hasPendingWork()` does"*. **B4's commit, landing beneath mine,
+deleted `hasPendingWork()`.** `git grep hasPendingWork origin/master -- EventLoop.{cpp,hpp}` returns
+nothing, and the exchange I cited as `:257` is now `:269`.
+
+B5 caught it on its own comment and the same catch reached mine. **Nothing would have failed:** a
+clean rebase carries a dangling citation into the tree, and no gate reads prose.
+
+**The fix is not a better citation, it is no citation.** That paragraph now argues from the *order
+of the steps in a turn* -- a property a reader re-derives from the code in front of them -- and
+contains no function name and no line number. **A coordinate goes stale while nothing fails; a
+property cannot.** That is the general answer to a class of decay this project has now hit in
+provenance rows, dispatch source lists, family enumerations and, here, a rule citing the code it
+governs.
+
+### ctest canary registration semantics, MEASURED rather than inferred from the docs
+
+B7a built a throwaway ctest project with four registrations carrying B4's exact properties. CMake
+documents only that `PASS_REGULAR_EXPRESSION` makes the exit code ignored, which leaves the
+question nobody had asked: **does it also swallow `SKIP_RETURN_CODE`?** If it did, the canary would
+*fail* on every Release leg instead of abstaining.
+
+| Case | Output / exit | Verdict |
+|---|---|---|
+| abstains (`NDEBUG`) | skip message, **77** | **Skipped** -- `SKIP_RETURN_CODE` survives |
+| refusal fires | marker, exit 1 | **Passed** |
+| refusal does not fire | marker **and** continue text, exit 0 | **Failed** -- `FAIL_` beats `PASS_` |
+| constructor threw | **no output**, exit 1 | **Failed** -- required regex not found |
+
+**The fifth path is closed by the positive match, not by any alternation** -- which is precisely why
+no negative alternation could ever have reached it.
+
+**Two details invisible from the implementing lane's side, both load-bearing:**
+
+- **The marker must be per-guarantee.** A single G1-shaped regex fails a `g4` registration, because
+  the loop is `foreach(guarantee IN ITEMS g1 g4)`.
+- **The marker must go to `stderr`.** `onAbort` calls `_Exit`, which flushes nothing, so the same
+  marker on `stdout` is lost **on exactly the path it exists to prove**. The positive-marker
+  principle defeated by a buffering detail, in a form that ships looking correct.
+
+### The configurations that exist locally and the ones CI runs are different sets, and nothing said so
+
+B7a found `clangcl-debug` is defined in `CMakePresets.json` and referenced by **no workflow**. I
+verified it, then enumerated the whole set instead of checking the one preset:
+
+```
+non-hidden configure presets exercised by NO workflow:
+  clangcl-debug     appleclang-debug     gcc-debug
+```
+
+**All three are Debug**, and the consequence is larger than three missing legs:
+
+```
+macos job:    appleclang-release, clang-release    <- both Release
+windows job:  cl-debug, cl-release, cl-release-tls, clangcl-release
+```
+
+**macOS runs no Debug configuration in CI at all.** Every `assert`,
+every `teardownIsSerialisedWithDispatch()` and every canary is compiled out there --
+
+> **CORRECTED, by the lane, against me.** My original said *"every G1-G5 guarantee"* too. Wrong:
+> G1/G4 live in `windows/IocpBackend.*` and `ICompletionPort.hpp`, which **macOS never builds**.
+> That is platform exclusion, not build-type exclusion, and merging the two overstates what a
+> Debug leg would buy. I also wrote *"all 152 assertions in `src/core`"*, wrong by 5x -- the grep
+> swept up ~130 `static_assert`s (compile-time) and 11 `Require()`/`Guarantee()` (which abort in
+> Release too, so they are not `NDEBUG`-gated at all). The real figure is ~30 runtime `assert(`,
+> **19 of them in the shared event-loop code**, including the twelve
+> `teardownIsSerialisedWithDispatch()` checks and `ReadyBatch`'s re-entrancy trap.
+> **The argument survives and is stronger stated honestly** -- and the wrong number had already
+> reached `.agent/rules/build-and-toolchain.md`, where it would have become the citable source.
+> **A grep for `assert(` counts three different things with three different lifetimes.**
+
+
+**and `kqueue` is macOS-exclusive, so that backend's entire assertion surface is unexercised
+anywhere.** macOS is the platform R101 exists because of: the `EV_EOF` divergence where a dial
+believes a refused connect succeeded. It is the platform where no assert has ever fired.
+
+**Checking the preset you care about finds one; enumerating the set finds three and the pattern.**
+Third time tonight that the same substitution has paid, after the closed-handle family and the
+serialisation family.
+
+**Routed to B7a as Task B7c**, with the remedy stated as a *gate* rather than as three added legs:
+a `tree-level` check making the set difference fatal, every preset either referenced by a workflow
+or allowlisted with a written reason, plus the `style` step without which a tree-level check runs
+nowhere. **And the rule written as a property, not a preset list** -- a list there would decay
+exactly like the four enumerations that broke in this module tonight.
+
+**The lane booked the omission against itself** -- *"your dispatch's Then section was in my context
+the whole time; I filed it as background"*. Overruled: **a procedure that depends on every lane
+remembering a preset list is the defect.** It found the hole; that is the arrangement working.
+
+### Independently reproduced: the wrong-file grep, on a second lane's tree
+
+B4 ran the control on its own tree:
+
+```
+deps =  in build.ninja               0
+deps =  in CMakeFiles/rules.ninja  104
+```
+
+**Two lanes, same repository, same trap, found within the hour.** That moves it from an anecdote
+about my carelessness to a property of this build system: `build.ninja` holds build statements and
+`CMakeFiles/rules.ninja` holds rule definitions, so any grep for a rule-level token (`deps =`,
+`command =`, `description =`) returns a confident zero from the file most people reach for first.
+
+B4's framing of the remedy is the right one: **it is the positive marker in a third medium.** An
+instrument states what it measured, not only what it objected to. It had applied that to gate
+totals and not to greps; I had applied it to canaries and not to greps. **The principle does not
+transfer between media on its own -- it has to be re-applied to each instrument by name.**
+
+### Twice in one evening, a CORRECTION was the error rather than the rule
+
+- **Mine:** *"`cl` … unaffected"* in `build-and-toolchain.md`. I had measured 314 `fastcache-cc`
+  lines in `cl-debug`'s `build.ninja` and concluded the sentence was false.
+- **B4's:** its own I2 justification, where the prose was wrong and the code was right.
+
+B4's diagnosis of the pair is the one to keep: **both were caught by measuring the thing the
+sentence was actually about, rather than a neighbour of it.** My 314 lines answered *does `cl` use
+the cache*; the sentence was answering *can this defect reach `cl`*. Neighbouring questions,
+opposite answers, and the measurement of the neighbour felt like evidence about the subject.
+
+**So: before correcting a sentence, state in one line what question the sentence answers, and
+check that your measurement answers that question and not an adjacent one.** A correction is a
+claim, and it is subject to every rule a claim is subject to -- including this project's own
+requirement that lanes verify the numbers handed to them in a dispatch. The corrections I issue
+are handed to lanes the same way.
+
+### The `onAbort` handler is load-bearing and nothing says so where a reader would look
+
+Both `PASS_REGULAR_EXPRESSION` and `FAIL_REGULAR_EXPRESSION` are defeated by a raw `SIGABRT`.
+Every canary property in this tree therefore depends on the `onAbort` handler converting the abort
+into `_Exit(1)`. **That handler currently reads as tidiness.** A future cleanup removing "unused"
+abort handling would silently convert every canary into a false pass -- the failure mode being
+that the gate stops reporting, which reads as passed. Routed to B4: the statement goes in the
+header beside the handler, not only in a report.
+
+### A finding derived from a stale tree, which is the base problem in its third costume
+
+I read `EventLoop.cpp` **in the shared checkout at `320a9ab`** and reported that
+`notifyHandleClosing` asserts nothing. **`5d7a5ae` already contained B4's assert**, in a worktree
+one `git show` away. I then ruled B5 to add a guard that existed, and B5 spent a rebase conflict
+resolving the duplicate.
+
+**The first two costumes were a lane writing against a stale tree. This one is the controller
+FINDING A DEFECT in one**, which is worse in a specific way: a lane's stale edit shows up as a
+conflict, and a stale finding shows up as a confirmed bug report that two lanes then act on.
+
+**A finding is a claim and is subject to every rule this project applies to claims.** I had written,
+within the hour, *derive the family from the code every time, including from this page* -- and then
+derived a family from a checkout a commit behind the branch. **Read the ref you are making a claim
+about, not the working tree you happen to be standing in.** `git show origin/master:<path>` costs
+one command and is what I now use for every source read in a finding.
+
+**What it produced anyway, which is why it was not worse:** B5's inverted-assert probe found that
+only one of the two net binaries reaches the line, which neither of us would have measured
+otherwise. **The accounting is that the duplication cost a conflict and bought a rule.** That is
+not a defence; it is why this is recorded as a process failure rather than an incident.
+
+### A label separated from its check by a `;` survives the check's failure
+
+B5's conflict-marker check printed `(empty = none)` for a grep that **never ran**: the `git apply`
+before it exited non-zero, the `&&` chain stopped there, and the `;` printed the label regardless
+-- over two files that **did** contain markers.
+
+**The most compact statement of the whole family yet.** The reassuring text and the thing it
+reports on were never connected, and nothing in the output distinguishes "checked, clean" from
+"never checked". The fix is the same one every time: **the label must be printed BY the check, not
+beside it.** `foo && echo "clean"` and `foo; echo "clean"` differ by one character and by whether
+the output means anything.
+
+### The turn's numbered steps are not the order its work executes
+
+My rulebook paragraph claimed a close performed by a timer callback lands *after* the turn's
+`std::exchange` of `_closedParks` and is rescued by the next turn. Measured on master:
+
+```
+:255  drainReadyQueue          <- runDueCallback reached from here (:392)
+:269  std::exchange(_closedParks)
+:320  fireExpiredTimers        -> _ready.push_back(ReadyEntry{...})    QUEUES ONLY
+```
+
+**`fireExpiredTimers` never runs a callback.** It queues one, and the drain that runs it precedes
+the exchange in the following turn -- so the close is caught by the turn that ran it. The second
+reason for the assertion is independent after all.
+
+**The error's mechanism is worth more than the correction: I read the sequence of the turn's
+numbered steps as the sequence in which its work executes.** Step 5 comes after step 3, so
+"something step 5 does" felt like it happened after the exchange. It does not; step 5 only files
+work, and filed work runs in step 2 of the next turn. **A numbered list of phases invites exactly
+this substitution**, and the paragraph has now been wrong three times tonight, each time caught by
+someone deriving from the code rather than reading the prose.
+
+### Crossed messages: every one was a party reporting the OTHER party's state as a fact
+
+B5 and I crossed three times in twenty minutes; B4 and B7a once. The shape is identical every time
+and it is symmetric:
+
+| Who | Said | Truth at the time |
+|---|---|---|
+| me -> B5 | *"`origin/master` still `7bdd132`"* | `5d7a5ae`, pushed while the message was in flight |
+| B5 -> me | *"your two rulebook sentences still cite `hasPendingWork`"* | both already fixed |
+| B5 -> me | *"still holding for your window"* | window already open |
+| B4 -> me | *"still outstanding: B7a's review"* | already sent |
+| me -> B5 | *"`notifyHandleClosing` asserts nothing"* | it did, in `5d7a5ae` |
+
+**Each party's information about its OWN state was current; its information about the OTHER's was
+stale, and it was stated as a fact rather than as a question.** The last row is the expensive one,
+because a stale claim about someone else's state, phrased as a finding, gets acted on by two lanes.
+
+**Rule: report your own state; ask about the other's.** *"I am holding; is the window open?"* costs
+the same as *"still holding for your window"* and cannot be wrong. The asymmetry is not a
+communication problem -- it is the base problem again, where the shared thing that went stale is
+the other party rather than a git ref.
+
+**And the check is cheap on my side specifically:** before reporting a defect in code, read the
+ref, not the tree (`git show origin/master:<path>`); before telling a lane it is blocked, read
+`git rev-parse origin/master`. Both are one command, and both would have prevented the two rows
+above that cost real work.
+
+### CORRECTION: "exit 3 is the defect" is true for `assert`, FALSE for `invalid-parameter`
+
+B4 retracted its own finding, which I had amplified. Verified in the source before accepting:
+`SuppressWindowsDialogs.cpp:29` installs a **no-op** `_set_invalid_parameter_handler`, and the
+canary's `invalid-parameter` mode does `strcpy_s(nullptr, 1, "x")` and returns
+`ContinuedAfterFailure` when it fails. **Continuing IS the proof the handler is installed** --
+dying there would mean it was not. The canary's contract is "no dialog", not "the process dies";
+`TIMEOUT` enforces the shared half.
+
+So the same string is the **failure** marker for two modes and the **pass** marker for the third,
+and the registration now says so per mode.
+
+**The three modes never shared a success condition, and `WILL_FAIL` hid that by accepting any
+non-zero exit for all three.** B4's diagnosis: *a shared exit code is exactly the intermediary that
+does not announce which mode's meaning it is carrying.* Same class as everything else tonight, with
+the collapse performed by a person rather than an instrument.
+
+**The new scheme earned its keep before it landed**: the positive-marker registration **failed a
+correct behaviour on its first run**, which is the only reason the distinction surfaced. A negative
+alternation would have gone green and left the mode's meaning undocumented forever.
+
+Amends the stacked finding: that canary's three silences are still three, but silence 2 is
+*"`assert` surviving reports as a pass"*, not *"exit 3 reports as a pass"*.
+
+**B4 follow-up, batched:** all five canary markers verified on `stderr`; per-guarantee keying was
+already correct (`iocp-canary: g1: …`, matched by `"${guarantee}: about to"`); the `onAbort`
+load-bearing note is now in both canary sources beside the handler, not only in the registration.
+**And its own first check raised a false alarm:** `grep -n "about to"` reported a marker as not on
+`stderr` because the statement spans two lines with `stderr` on the second -- *a line-oriented
+instrument giving a one-line answer about a two-line fact, inside the check for exactly that class
+of instrument.* Next: mutate a marker away and confirm *required regular expression not found* on
+the real binaries rather than carrying B7a's throwaway-project result across.
+
+### Two readers of the same stale artifact agreeing is not corroboration, and it reads exactly like it
+
+B5 refused my account of the `notifyHandleClosing` duplication as too generous to it:
+
+> *"You derived the finding from the shared tree at `320a9ab` -- but I read the same stale tree,
+> reached the same conclusion, and confirmed your finding as though independently."*
+
+**That is the correct and harsher reading.** I had recorded it as *my* stale-tree error. It was
+two people deriving from one stale base and calling the agreement evidence. **It cost only a merge
+conflict because B4's version differed in wording rather than in behaviour** -- had it differed in
+behaviour, B5 would have "verified" a finding already fixed and could have reverted the fix under
+the authority of an independent confirmation.
+
+**Rule: a confirmation is worth what its SOURCE independence is worth, not what its reader
+independence is worth.** Before treating a lane's agreement as corroboration, ask which artifact it
+read. Same file, same checkout, same ref -> **one observation, not two**, however many agents
+looked at it. Genuine corroboration needs a different source: the ref instead of the tree, the
+other binary, the inverted assert, the second platform.
+
+This reframes several results tonight. The ones that held were cross-source -- B4's `gcc-release`
+skip count against my CI-matrix derivation, B5's inverted assert against two different binaries,
+B7a's throwaway ctest project against the documentation. **The ones that failed were same-source
+agreement**, and they felt identical from the inside.
+
+### Summarising an artifact instead of quoting it
+
+I told B5 to drop line numbers from a comment. **The committed comment never had any** -- verified:
+`git show 29e9b24 -- EventLoop.{cpp,hpp} | grep '^+' | grep -cE ':[0-9]{2,4}'` returns **0**, and
+the shipped text names functions and states the ordering exactly as I prescribed. B5 had the
+coordinates in its head from re-deriving the ordering and wrote them into its *message* as though
+they were in the code.
+
+**So I corrected the artifact it described rather than the one it committed** -- the night's
+failure one level up, in the medium of a status report. Its own fix is the right one and applies to
+every lane including me: **quote the artifact, do not describe it.** Three pasted lines would have
+cost less than the exchange did.

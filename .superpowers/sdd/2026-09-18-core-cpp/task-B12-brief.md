@@ -72,7 +72,71 @@ so say which configuration covered which file.
 - **B4's loop asserts `teardownIsSerialisedWithDispatch()`** on `spawn`, `resumeSoon`,
   `requestStop`, `registerPark`, `unregisterPark` and `wakeReasonOf`. An input pump resuming from a
   reader thread trips these rather than misbehaving quietly.
-- **The six loop entry points that wake the backend** — `post`, `submit`, `schedule`, `spawn`,
-  `requestCancel`, `stop` — share *"the loop is asked for a turn"*. The agent wakeup path going
-  through `loop.post()` is a member of that family; the interrupt path
-  (`SignalHandler` -> `Wakeup` -> `waitReadable`) is not, and should say why in a comment.
+- **Every entry point that files work asks the loop for the turn that will run it — but with one of
+  two primitives, and which one is decided by what was filed.** *Ready work wakes; a park arms.*
+  `post`, `submit`, `spawn`, `stop`, `requestStop`, `requestCancel` and `resumeSoon` file work that
+  is ready now and carries no time, so they call `_backend.wake()`. `registerPark` files a park
+  **with a time**, so it calls `armHostWake()`, and `addTimer`, `delay` and `sleepUntil` inherit
+  that through it. `HostDrivenBackend::wake()` is `scheduleAt(now())`, so waking for a park destroys
+  its deadline — which is why the two are not interchangeable.
+
+  **An earlier version of this bullet said "the six loop entry points that wake the backend" and
+  named a list.** The list was wrong in `.agent/rules/async-and-net.md` first, wrong in a code
+  comment second, and had been copied into this brief third — a wrong enumeration outliving two
+  corrections because each copy reads exactly like an audit. **Derive the family from
+  `src/core/net/EventLoop.cpp` yourself** and say in your report what you found; if it disagrees
+  with this paragraph, this paragraph is the thing that is wrong.
+
+  Your agent wakeup path through `loop.post()` is ready-now work and wakes. The interrupt path
+  (`SignalHandler` -> `Wakeup` -> `waitReadable`) files nothing on the loop at all — it signals a
+  handle the loop is already watching — and should say so in a comment rather than being read as a
+  member that forgot to wake.
+
+## You are NOT behind B6, and the ledger said you were
+
+I wrote *"B12 (TUI runtime on the loop) needs B6 and B4"* into the progress ledger, and it is
+wrong. Measured, not reasoned:
+
+```
+grep -rn "ISocket|PosixSocket|makeLoopbackPair" src/core/tui/     -> no matches
+grep -n "^#include" src/core/net/WithTimeout.hpp                  -> Task, WhenAny, EventLoop only
+grep -n "^#include" src/core/tui/runtime/TuiRuntime.hpp           -> async, platform, tui. no net.
+```
+
+**Nothing in `src/core/tui/` touches a socket**, and `core::net::withTimeout` -- which replaces
+`tui/runtime/WithTimeout.hpp` -- is socket-free and landed in Task A6. Everything you consume
+(`EventLoop::waitReadable`, `post`, `delay`, `HandleKind::Waitable`, `testing::ScriptedBackend`)
+came from B3, B4 and B7a, all landed. **B6 is the critical path for B7b, B8, B9, B10 and B11. It is
+not yours.**
+
+What you *are* behind is the settled `EventLoop`: B4's `blockOn` fix and B5's wake/arm fix are
+unpushed as this is written. You start from `origin/master` **after** that push, so the semantics
+under you are final rather than in flight.
+
+## Three things from other lanes that are yours and appear nowhere in the plan
+
+(This heading said "Two" over three bullets until I counted them. In a brief whose subject is
+enumerations that stop matching what they enumerate, that is not an amusing coincidence — it is the
+cheapest possible demonstration that **a count written beside a list is a claim about the list**,
+and the only way to keep it true is to derive it from the list every time you touch either.)
+
+- **`cmake/CoreCppModules.cmake`'s `tui` row does not list `net`, and configure refuses a link the
+  module table does not carry.** Extend the row in the same change that adds the include, or your
+  first build fails for a reason that looks nothing like its cause. (From the lane that owns
+  `core::tui`.)
+- **`renames.json` needs a second set of rows in your commit.** `core::tui::runtime` still declares
+  `FdInterest`, `FdToken`, `WaitOutcome`, `FdRegistration` and `FdRegistry`, and the table already
+  carries those names once under `core::net::`. The collision is live *until you delete them* --
+  which is why B3's `removed` rows had to be `core::`-rooted and fully qualified (ruling R104). Your
+  rows are the `core::tui::runtime::`-rooted half, in the same commit as the deletion.
+- **`runtime/PollEventSource.cpp` is the one file in `core::tui` that still picks its platform with
+  an `#ifdef`.** You delete it, so `.agent/rules/platform.md`'s rule -- *an OS difference is an
+  injected implementation, never an `#ifdef` in logic* -- lands in your task by construction. Say so
+  in the report; it is a rulebook claim that becomes true because of this commit.
+
+## The four deferred runtime defects are yours
+
+core-cpp#16, #17, #18 and #19 were found in Task A7's review, deferred here because **B12 deletes
+the code they live in before v0.1.0 ships**. Read them before you start: if your rewrite does not
+happen to remove one of them, it has to fix it, and "the file is gone" is only an answer for the
+ones whose file is actually gone.
