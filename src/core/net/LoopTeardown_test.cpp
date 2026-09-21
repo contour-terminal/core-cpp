@@ -659,6 +659,11 @@ TEST_CASE("A loop frees parked chains while all of its containers are still aliv
     // search both containers rather than stopping at the first.
     auto absent = immediateWithSentinel(FrameSentinel { &counters }, &counters);
 
+    // Declared BEFORE the driver, so it outlives the teardown that reads it: `ReparkOnce` fires
+    // from inside ~EventLoop, which is the driver's destructor, and a flag declared after the
+    // driver is already gone by then.
+    auto armed = true;
+
     {
         ManualDriver driver { core::net::BackendKind::Null };
 
@@ -669,7 +674,6 @@ TEST_CASE("A loop frees parked chains while all of its containers are still aliv
         // And the chain that re-enters, parked on the SUBMIT side. Its `ReparkOnce` member is
         // what makes the fixpoint matter: freeing this chain starts another one, which a single
         // pass would leave for member destruction.
-        auto armed = true;
         parkOnSubmitWithDisarm(&driver.eventLoop(),
                                FrameSentinel { &counters },
                                ReentrantDisarm { &driver.eventLoop(), absent.handle(), &counters },

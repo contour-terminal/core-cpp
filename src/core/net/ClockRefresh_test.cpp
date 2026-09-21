@@ -98,9 +98,11 @@ TEST_CASE("The turn refreshes its clock before it computes the wait's timeout", 
     auto cached = CachedClock { source }; // samples 0
     auto backend = SpendingBackend { source };
     backend.pushTimeout();
+    // Declared BEFORE the loop, so it outlives it: ~EventLoop resumes every borrowed
+    // park, and the flow's unwinding runs on what it was given.
+    auto fired = false;
     auto loop = EventLoop { backend, cached };
 
-    auto fired = false;
     loop.spawn(delayThenFlag(&loop, 500ms, &fired));
     loop.post([&source] { source.advance(100ms); });
 
@@ -122,9 +124,11 @@ TEST_CASE("The turn refreshes its clock after the wait, so a deadline it reached
     auto cached = CachedClock { source };
     auto backend = SpendingBackend { source };
     backend.pushTimeout();
+    // Declared BEFORE the loop, so it outlives it: ~EventLoop resumes every borrowed
+    // park, and the flow's unwinding runs on what it was given.
+    auto fired = false;
     auto loop = EventLoop { backend, cached };
 
-    auto fired = false;
     loop.spawn(delayThenFlag(&loop, 500ms, &fired));
 
     auto const first = loop.runOnce();
@@ -191,9 +195,11 @@ TEST_CASE("A loop given a plain steady clock is unaffected by the refresh calls"
     constexpr auto Turns = 8;
 
     auto clock = core::platform::SteadyClock {};
+    // Declared BEFORE the loop, so it outlives it: ~EventLoop resumes every borrowed
+    // park, and the flow's unwinding runs on what it was given.
+    auto samples = std::vector<core::platform::SteadyTimePoint> {};
     auto loop = core::net::testing::TestLoop { clock };
 
-    auto samples = std::vector<core::platform::SteadyTimePoint> {};
     auto const before = clock.now();
     loop.spawn(sampleClockEachTurn(&loop, &samples, Turns));
     std::ignore = loop.drain();

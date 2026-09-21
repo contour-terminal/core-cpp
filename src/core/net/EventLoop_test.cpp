@@ -900,9 +900,11 @@ TEST_CASE("A cross-thread cancel is resolved before the turn drains, so it unwin
     auto clock = ManualClock {};
     auto source = ScriptedBackend {};
     source.pushTimeout(); // the one wait the parking turn performs
+    // Declared BEFORE the loop, so it outlives it: ~EventLoop resumes every borrowed
+    // park, and the flow's unwinding runs on what it was given.
+    auto outcome = 0;
     auto loop = EventLoop { source, clock };
 
-    auto outcome = 0;
     loop.spawn(parkForAnHour(&loop, &outcome));
 
     auto const parking = loop.runOnce();
@@ -932,9 +934,11 @@ TEST_CASE("A turn resumes at most its dispatch batch and leaves the rest queued"
     // serves would stall behind them. What the bound must not do is DROP anything, so the
     // remainder is asserted as well as the batch.
     auto clock = ManualClock {};
+    // Declared BEFORE the loop, so it outlives it: ~EventLoop resumes every borrowed
+    // park, and the flow's unwinding runs on what it was given.
+    auto passes = 0;
     auto loop = core::net::testing::TestLoop { clock, core::net::EventLoopOptions { .dispatchBatch = 4 } };
 
-    auto passes = 0;
     loop.spawn(yieldRepeatedly(&loop, &passes, 10));
 
     auto const first = loop.runOnce();
@@ -959,10 +963,12 @@ TEST_CASE("IdlePolicy::Return never blocks inside a turn", "[EventLoop][turn]")
     auto clock = ManualClock {};
     auto source = ScriptedBackend {};
     source.pushTimeout();
+    // Declared BEFORE the loop, so it outlives it: ~EventLoop resumes every borrowed
+    // park, and the flow's unwinding runs on what it was given.
+    auto outcome = 0;
     auto loop =
         EventLoop { source, clock, core::net::EventLoopOptions { .idle = core::net::IdlePolicy::Return } };
 
-    auto outcome = 0;
     loop.spawn(parkForAnHour(&loop, &outcome));
 
     auto const turn = loop.runOnce();
@@ -985,10 +991,12 @@ TEST_CASE("G2: a flow is never resumed from inside the backend's wait", "[EventL
 
     auto source = WaitMarkingBackend {};
     source.pushReadable(HandlerId { 1 });
-    auto loop = EventLoop { source };
-
+    // Declared BEFORE the loop, so it outlives it: ~EventLoop resumes every borrowed
+    // park, and the flow's unwinding runs on what it was given.
     auto sawWait = true;
     auto sawDispatch = true;
+    auto loop = EventLoop { source };
+
     loop.blockOn(recordResumptionContext(&loop, &source, (*pipe)->readFd(), &sawWait, &sawDispatch));
 
     CHECK_FALSE(sawWait);
@@ -1063,9 +1071,11 @@ TEST_CASE("spawn releases a finished flow in the turn that finished it", "[Event
     // -- and everything it holds: a socket, a temporary directory, a slot in somebody's counter --
     // alive until the next turn, and would cost O(n) on every turn to do it.
     auto clock = ManualClock {};
+    // Declared BEFORE the loop, so it outlives it: ~EventLoop resumes every borrowed
+    // park, and the flow's unwinding runs on what it was given.
+    auto finished = 0;
     auto loop = core::net::testing::TestLoop { clock };
 
-    auto finished = 0;
     loop.spawn(parkOnce(&loop));         // held: it parks and never comes back
     loop.spawn(finishAtOnce(&finished)); // released: it runs to its end in this turn
     REQUIRE(loop.spawnedCount() == 2);
@@ -1085,9 +1095,11 @@ TEST_CASE("spawn of one hundred thousand flows leaves none behind", "[EventLoop]
     constexpr auto Flows = 100000;
 
     auto clock = ManualClock {};
+    // Declared BEFORE the loop, so it outlives it: ~EventLoop resumes every borrowed
+    // park, and the flow's unwinding runs on what it was given.
+    auto finished = 0;
     auto loop = core::net::testing::TestLoop { clock };
 
-    auto finished = 0;
     for ([[maybe_unused]] auto const index: std::views::iota(0, Flows))
         loop.spawn(finishAtOnce(&finished));
     REQUIRE(loop.spawnedCount() == Flows);
