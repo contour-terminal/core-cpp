@@ -9,6 +9,7 @@
 #include <core/net/ReadinessDial.hpp>
 #include <core/net/SocketAddress.hpp>
 #include <core/net/Sockets.hpp>
+#include <core/net/detail/ScopeGuard.hpp>
 #include <core/net/testing/BackendMatrix.hpp>
 #include <core/net/testing/CoroTestSupport.hpp>
 #include <core/platform/Clock.hpp>
@@ -16,6 +17,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -25,6 +27,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -292,6 +295,83 @@ TEST_CASE("the flow's stop token cancels a dial in flight", "[net]")
 
     // A cancel from the FLOW unwinds; a cancel from the RESOURCE is a value. Either is a report,
     // and what must NOT happen is a dial that resolved into a usable socket after a stop.
+    CHECK((cancelled || !answer.has_value()));
+    CHECK(loop.parkedWaiterCount() == 0);
+    if (before.has_value())
+        CHECK(nextDescriptor() == before);
+}
+
+TEST_CASE("a stop from ANOTHER thread cancels a dial in flight", "[net]")
+{
+    // **Built rather than argued.** The case above stops the flow from the loop's own thread, so
+    // the stop callback runs on the loop and every access to the dial's park id is ordered by
+    // construction. That is the arrangement under which a race between the callback's READ of the
+    // park id and the loop thread's WRITE of it cannot occur — so a green ThreadSanitizer over
+    // that case alone says nothing about the cross-thread path, which is the path
+    // `ResultAwaitable::cancelThrough` exists for: a watchdog, a signal handler, a peer's thread.
+    //
+    // This case is that path. It is also what the dial's own comment is now checkable against: the
+    // park id is written ONCE, before the callback can be registered, and `settleDial` retires the
+    // park without clearing it.
+    auto source = core::net::makeBackend(core::net::preferredBackendKind());
+    REQUIRE(source != nullptr);
+    auto loop = EventLoop { *source };
+
+    auto saturated = SaturatedListener {};
+    loop.blockOn(saturate(&loop, &saturated));
+    if (!saturated.saturated)
+        SKIP("this stack completes a dial whose listener never accepts, so no dial could be left "
+             "outstanding to cancel");
+
+    auto const before = nextDescriptor();
+
+    // Set by the dialling flow immediately before it dials, so the stopping thread waits for the
+    // flow to exist rather than for a fixed time. What is left after it is a socket() and a
+    // connect() — microseconds — and the margin below covers them.
+    auto dialling = std::atomic<bool> { false };
+    auto answer = SocketResult {};
+    auto cancelled = false;
+
+    auto dial = [](EventLoop* lp,
+                   std::uint16_t port,
+                   std::atomic<bool>* started,
+                   SocketResult* out,
+                   bool* threw) -> Task<void> {
+        started->store(true, std::memory_order_release);
+        try
+        {
+            *out = co_await dialReadiness(lp, loopbackEndpoint(port), SteadyTimePoint::max(), KeepAlive::No);
+        }
+        catch (core::async::OperationCancelled const&)
+        {
+            *threw = true;
+        }
+    };
+
+    // **The margin is a margin, not a synchronisation, and the case cannot flake on it.** A stop
+    // that lands before the dial parks is observed by `await_suspend`, which returns without
+    // arming anything and reports the same cancellation; the case still passes, it just covers
+    // the pre-park arm instead of the parked one. Only the parked arm can produce the race this
+    // exists for, and 50ms after the flow has started is ample for a `connect` to `EINPROGRESS`.
+    auto stopper = std::thread { [&loop, &dialling] {
+        while (!dialling.load(std::memory_order_acquire))
+            std::this_thread::sleep_for(std::chrono::milliseconds { 1 });
+        std::this_thread::sleep_for(std::chrono::milliseconds { 50 });
+        // `rootStopSource()` rather than `requestStop()`: the latter must be called on the loop's
+        // thread, and the whole point here is that this one is not. The stop reaches the parked
+        // dial through the callback it registered, which routes to `EventLoop::requestCancel` —
+        // documented safe from any thread.
+        loop.rootStopSource().request_stop();
+    } };
+    // Joined before any assertion, so a failed CHECK cannot leave a thread running into a
+    // destroyed loop — a red turned into a crash is worse than the red.
+    auto const join = core::net::detail::ScopeGuard { [&stopper]() noexcept {
+        if (stopper.joinable())
+            stopper.join();
+    } };
+
+    loop.blockOn(dial(&loop, saturated.port, &dialling, &answer, &cancelled));
+
     CHECK((cancelled || !answer.has_value()));
     CHECK(loop.parkedWaiterCount() == 0);
     if (before.has_value())

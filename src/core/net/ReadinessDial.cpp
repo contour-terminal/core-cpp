@@ -70,13 +70,22 @@ namespace
     /// its end and destroys the frame this op lives in, so nothing here may touch @p op
     /// afterwards.
     ///
-    /// **@c DialOp::park is NOT cleared here, and that is the race rather than an omission.** The
-    /// stop callback reads it, and it may run on any thread; @c ResultAwaitable is safe to read
-    /// its park id unatomically only because the id is written ONCE, on the loop's thread, before
-    /// the callback can be registered. Clearing it here would be a second write, concurrent with
-    /// that read, on a non-atomic field. It costs nothing to leave: the loop's park ids are never
-    /// reused, so a later @c requestCancel naming a retired one resolves to nothing rather than to
-    /// whatever took its place.
+    /// **@c DialOp::park is NOT cleared here, and the omission is deliberate.** The stop callback
+    /// reads it and may run on any thread; @c ResultAwaitable is safe to read its own park id
+    /// unatomically only because that id is written ONCE, on the loop's thread, strictly before
+    /// the callback can be registered. Clearing it here would be a SECOND write to a non-atomic
+    /// field that another thread reads, which is a data race by the memory model however narrow
+    /// the window.
+    ///
+    /// **How narrow, measured rather than guessed:** an ordinary cross-thread stop is not it — the
+    /// callback's read happens-before the settle it provokes, through the loop's inbound queue —
+    /// so the two can only overlap when the dial settles for its OWN reason (a deadline, an
+    /// arriving readiness) in the few instructions a concurrent stop is inside the callback. An
+    /// earlier version of this function did clear it, and 30 ThreadSanitizer runs of a deadline
+    /// deliberately timed against a cross-thread stop did not report it. So this is hardening
+    /// against a race that is real on paper and was not provoked, and it costs nothing: the loop's
+    /// park ids are never reused, so a later @c requestCancel naming a retired one resolves to
+    /// nothing rather than to whatever took its place.
     /// @param op The dial to settle.
     /// @param outcome What happened.
     void settleDial(DialOp& op, DialOutcome outcome) noexcept
