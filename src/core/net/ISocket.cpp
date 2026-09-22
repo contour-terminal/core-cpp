@@ -79,6 +79,13 @@ ResultAwaitable<void> ISocket::handshakeIfNeeded()
     return ResultAwaitable<void> { std::expected<void, NetError> {} };
 }
 
+ResultAwaitable<void> ISocket::shutdownWrite()
+{
+    // Same shape as the handshake above, and for the same reason: nothing to do here, but the verb
+    // has to be awaitable for the transports where it IS work.
+    return ResultAwaitable<void> { std::expected<void, NetError> {} };
+}
+
 IoAwaitable ISocket::waitReadable()
 {
     // The fail-safe direction: a transport that cannot tell must not claim EOF. A false `>0` costs

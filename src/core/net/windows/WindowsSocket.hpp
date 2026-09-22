@@ -77,7 +77,7 @@ class WindowsSocket final: public ISocket
     /// Implemented rather than inherited for the reason the base states: the no-op default is for
     /// FAKES, and a transport that HAS a write half to close costs its peer the early EOF by
     /// inheriting it.
-    void shutdownWrite() noexcept override;
+    [[nodiscard]] ResultAwaitable<void> shutdownWrite() override;
 
     // cancelRead is deliberately NOT overridden here, and it is the one place this class knowingly
     // falls short of the contract. `ISocket::cancelRead`'s own documentation says the inherited

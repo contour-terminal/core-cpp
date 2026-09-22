@@ -6463,7 +6463,8 @@
       "target": {
         "header": "core/net/ISocket.hpp",
         "symbol": "core::net::ISocket::shutdownWrite"
-      }
+      },
+      "note": "it returns ResultAwaitable<void> now, not void: a call in statement position becomes co_await sock->shutdownWrite(), with no write outstanding, and an override returns ResultAwaitable<void> and is no longer noexcept"
     },
     {
       "kind": "member",

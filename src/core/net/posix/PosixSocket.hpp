@@ -56,7 +56,7 @@ class PosixSocket final: public ISocket
                                             std::shared_ptr<void const> keepAlive = {}) override;
 
     void cancelRead() noexcept override;
-    void shutdownWrite() noexcept override;
+    [[nodiscard]] ResultAwaitable<void> shutdownWrite() override;
     void setReceiveDeadline(std::chrono::milliseconds deadline) noexcept override;
 
     [[nodiscard]] std::string peerAddress() const override { return _peerAddress; }

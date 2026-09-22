@@ -148,11 +148,21 @@ void PosixSocket::cancelRead() noexcept
     settleRead(read, makeNetError(NetErrorCode::Cancelled, 0, "the read was retired by cancelRead"));
 }
 
-void PosixSocket::shutdownWrite() noexcept
+ResultAwaitable<void> PosixSocket::shutdownWrite()
 {
+    // Completes INLINE: `::shutdown` is a syscall that either takes or does not, with nothing to
+    // flush first. The awaitable is the interface's shape, not a cost this transport pays.
     if (_closed || _fd < 0 || _plainFd)
-        return;
-    ::shutdown(_fd, SHUT_WR);
+        return ResultAwaitable<void> { std::expected<void, NetError> {} };
+    if (::shutdown(_fd, SHUT_WR) < 0)
+    {
+        auto const err = errno;
+        // ENOTCONN is not a failure to report: the peer is already gone, which is the state the
+        // caller was asking for.
+        if (err != ENOTCONN)
+            return ResultAwaitable<void> { std::unexpected(fromErrno(err, "shutdown")) };
+    }
+    return ResultAwaitable<void> { std::expected<void, NetError> {} };
 }
 
 void PosixSocket::setReceiveDeadline(std::chrono::milliseconds deadline) noexcept

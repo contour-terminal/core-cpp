@@ -97,7 +97,7 @@ Task<void> actOnPeer(EventLoop* loop, ISocket* peer, PeerAction action, Observat
     switch (action)
     {
         case PeerAction::Close: peer->close(); break;
-        case PeerAction::ShutdownWrite: peer->shutdownWrite(); break;
+        case PeerAction::ShutdownWrite: std::ignore = co_await peer->shutdownWrite(); break;
         case PeerAction::Write: {
             auto const payload = std::array<std::byte, 1> { std::byte { 0x7A } };
             std::ignore = co_await peer->write(std::span<std::byte const> { payload });

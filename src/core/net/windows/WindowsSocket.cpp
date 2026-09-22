@@ -168,10 +168,19 @@ IoAwaitable WindowsSocket::waitReadable()
     return IoAwaitable { waitReadableTask() };
 }
 
-void WindowsSocket::shutdownWrite() noexcept
+ResultAwaitable<void> WindowsSocket::shutdownWrite()
 {
-    if (!_closed && _socket != INVALID_SOCKET)
-        ::shutdown(_socket, SD_SEND);
+    // Completes INLINE, as on POSIX: there is nothing to flush before the FIN.
+    if (_closed || _socket == INVALID_SOCKET)
+        return ResultAwaitable<void> { std::expected<void, NetError> {} };
+    if (::shutdown(_socket, SD_SEND) == SOCKET_ERROR)
+    {
+        auto const err = ::WSAGetLastError();
+        // WSAENOTCONN is the state the caller asked for, not a failure to report.
+        if (err != WSAENOTCONN)
+            return ResultAwaitable<void> { std::unexpected(fromWsa(err, "shutdown")) };
+    }
+    return ResultAwaitable<void> { std::expected<void, NetError> {} };
 }
 
 async::Task<IoResult> WindowsSocket::waitReadableTask()

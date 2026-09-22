@@ -208,20 +208,41 @@ class ISocket
     /// has finished sending*. A server answers everything already determined and abandons anything
     /// still pending. So a half-close is a statement about INPUT, not a departure.
     ///
-    /// **The default does nothing, and that is for FAKES.** A no-op costs a peer the early EOF — it
-    /// learns at the eventual @c close instead — which delays a notification rather than falsifying
-    /// one.
+    /// **It is an awaitable because a decorator's half-close is real work, and the shape is
+    /// `handshakeIfNeeded`'s for the same reason.** A clean TLS half-close is a `close_notify`
+    /// record that has to be WRITTEN and flushed before the transport's own FIN goes out. The
+    /// earlier `void ... noexcept` signature could not express that: forwarding to the inner socket
+    /// delivered a FIN with no `close_notify`, which a strict peer reads as a truncation attack
+    /// rather than an orderly end, so a decorator had the choice of doing nothing or doing
+    /// something subtly wrong. That is what forced the signature — the finding was about `Tls.cpp`
+    /// and the fix is here, because no override could have been correct.
+    ///
+    /// A plain socket has nothing to flush, so it completes INLINE and costs no coroutine frame;
+    /// the asynchrony is there for the transports that need it. This is exactly the trade
+    /// @c handshakeIfNeeded already makes, and the two verbs now read the same way.
+    ///
+    /// **Precondition: no write is outstanding.** *Finished sending* is only true once every write
+    /// has resolved, so await it first. The precondition is the contract's own, not a decorator's
+    /// convenience: a transport whose half-close is itself a write sends its `close_notify` through
+    /// the inner socket's @c write, which claims that socket's single write-op slot, and
+    /// @c contract::claimWriteSlot refuses that over a parked write in Debug builds. A plain socket
+    /// claims no slot and so trips nothing, but that is not the call working: on POSIX the parked
+    /// write's next attempt fails with `EPIPE`, so bytes the caller believed queued never leave.
+    /// There is no `cancelWrite`, deliberately (see @c contract::claimWriteSlot), so a caller that
+    /// must abandon a parked write rather than await it has @c close and nothing else.
+    ///
+    /// **`TlsSocket` does not override it yet** and inherits the no-op below, so a TLS peer learns
+    /// of the half-close only at the eventual @c close. Task B11 owns `Tls.cpp`; what this signature
+    /// settles is that an override there CAN be correct.
+    ///
+    /// **The default resolves successfully and does nothing, and that is for FAKES.** A no-op costs
+    /// a peer the early EOF — it learns at the eventual @c close instead — which delays a
+    /// notification rather than falsifying one.
     ///
     /// Idempotent, and not a @c close: reads keep working and @c isClosed stays false. A caller
     /// that wants both calls both.
-    ///
-    /// **A decorator whose framing is protocol-level cannot express this verb correctly, and
-    /// `TlsSocket` does not override it.** A clean TLS half-close is a `close_notify` record that
-    /// must be written and flushed, which this synchronous `void` signature cannot await; simply
-    /// forwarding to the inner socket would deliver a FIN with no `close_notify`, which a strict
-    /// peer reads as a truncation rather than as an orderly end. So the gap is real and the
-    /// signature is part of it. Task B11 owns `Tls.cpp`.
-    virtual void shutdownWrite() noexcept {}
+    /// @return Nothing on success, or a @c NetError where the half-close could not be delivered.
+    [[nodiscard]] virtual ResultAwaitable<void> shutdownWrite();
 
     /// Sets, or removes, how long a single read may wait before it reports a deadline expiry.
     ///

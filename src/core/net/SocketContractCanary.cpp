@@ -248,8 +248,15 @@ int main(int argc, char** argv)
 
         // Half-close, so the NEXT send fails at once with EPIPE rather than blocking on a window
         // that is still full. That is what forces the inline-completion branch deterministically:
-        // draining the peer instead would race the loop's own pump for the freed window.
-        sock->shutdownWrite();
+        // draining the peer instead would race the loop's own pump for the freed window. This
+        // breaks `shutdownWrite`'s own precondition (no write outstanding) on purpose, and only a
+        // plain socket lets it: it claims no write slot, where a TLS half-close would trip the
+        // guard here instead of below.
+        // `shutdownWrite` is an awaitable, and this is `main`, not a coroutine. It completes INLINE
+        // on a plain socket, so `await_ready()` is the whole of driving it -- the same shape the
+        // guarded calls below use.
+        auto halfClose = sock->shutdownWrite();
+        std::ignore = halfClose.await_ready();
 
         announce("write-slot-inline", "a write completing INLINE over a parked write");
         auto const second = sock->write(std::span<std::byte const> { payload });

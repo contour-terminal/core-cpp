@@ -63,7 +63,7 @@ class SplitSocket final: public ISocket
     void cancelRead() noexcept override { _readHalf->cancelRead(); }
 
     /// Half-closes the WRITE half, which is the only half that has a write side to close.
-    void shutdownWrite() noexcept override { _writeHalf->shutdownWrite(); }
+    [[nodiscard]] ResultAwaitable<void> shutdownWrite() override { return _writeHalf->shutdownWrite(); }
 
     /// Bounds a read, so it goes to the half reads come from.
     /// @param deadline How long a read may wait.

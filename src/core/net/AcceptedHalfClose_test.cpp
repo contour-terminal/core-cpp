@@ -54,6 +54,7 @@ struct Exchange
     std::optional<IoResult> peerRead;            ///< What the dialling end's read answered.
     bool connected = false;                      ///< Whether the dial succeeded at all.
     bool accepted = false;                       ///< Whether a connection was accepted at all.
+    bool shutdownOk = false;                     ///< Whether the half-close itself reported success.
 };
 
 /// Dials, accepts, half-closes the accepted end, writes once more, and reads the peer.
@@ -80,7 +81,8 @@ Task<void> halfCloseExchange(EventLoop* loop, IListener* listener, Exchange* out
     auto server = std::move(*accepted);
     out->accepted = true;
 
-    server->shutdownWrite();
+    auto const halfClosed = co_await server->shutdownWrite();
+    out->shutdownOk = halfClosed.has_value();
 
     // One byte, after the half-close. On a correct socket this FAILS -- the write half is gone --
     // and where the half-close was a no-op it succeeds, which is the half of the contract no peer
@@ -114,6 +116,12 @@ TEST_CASE("An accepted socket's shutdownWrite reaches its peer as EOF, and its o
 
             REQUIRE(exchange.connected);
             REQUIRE(exchange.accepted);
+
+            // Zero: the half-close itself succeeded. It is an awaitable now (it has to be, for a
+            // decorator that must flush a `close_notify`), so it can report failure -- and a
+            // half-close that failed would make the two assertions below meaningless rather than
+            // false.
+            CHECK(exchange.shutdownOk);
 
             // One: the FIN reached the peer, and it reads as a clean EOF rather than an error.
             REQUIRE(exchange.peerRead.has_value());

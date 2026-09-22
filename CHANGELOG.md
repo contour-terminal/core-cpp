@@ -704,6 +704,24 @@ workflow refuses one without a section here.
   and not the one that was asked for. `AcceptResult` is now an alias of `SocketResult` rather than a
   second spelling of the same type; nothing a caller writes changes.
 
+- **`core::net::ISocket::shutdownWrite()` returns `ResultAwaitable<void>`**, not `void`, and is no
+  longer `noexcept` -- the shape `handshakeIfNeeded()` already has, for the same reason. A clean
+  TLS half-close is a `close_notify` that has to be written and flushed before the FIN, which a
+  synchronous `void` verb cannot await; forwarding to the inner socket instead sends a FIN with no
+  `close_notify`, which a strict peer reads as truncation. `PosixSocket` and `WindowsSocket`
+  complete it inline, and now report a failed `shutdown` as a `NetError` rather than dropping it
+  (`ENOTCONN` / `WSAENOTCONN` still resolve as success). `TlsSocket` still inherits the no-op.
+
+  It also has a stated precondition: **no write outstanding.** A decorator's half-close writes
+  through the inner socket and so claims its write slot, which the Debug write-slot guard refuses
+  over a parked write; there is no `cancelWrite`.
+
+  Migration: a call in statement position, `sock->shutdownWrite();`, becomes
+  `co_await sock->shutdownWrite();` (inspect or `std::ignore` the result), after awaiting any
+  write in flight. Outside a coroutine, on a plain socket, `await_ready()` drives it, since it
+  completes inline. An override becomes
+  `[[nodiscard]] ResultAwaitable<void> shutdownWrite() override`.
+
 - **`core::tui::runtime::TuiRuntime` is composed on `core::net::EventLoop`, and the project no
   longer carries a second scheduler.** The runtime had its own ready queue, timer min-heap, park
   slots, `pumpOnce` and blocking `EventSource`; all of it is the loop's now, and every scheduling
