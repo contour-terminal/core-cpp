@@ -523,19 +523,15 @@ endif()
 # SKIP_RETURN_CODE is evaluated ahead of both, so a Release build abstains rather than failing for
 # want of a marker NDEBUG was never going to print. These run on Debug legs only.
 #
-# Windows since Task B7b, where the default backend's socket is `IocpSocket` -- for the two READ
-# modes. The two write modes need a write that PARKS, and a Windows non-blocking send takes the
-# canary's 8MiB at once (measured), so each would exit "did not park" and test nothing; they stay
-# POSIX-only until the canary arranges a full send window itself rather than assuming one.
-set(_coreCppSocketContractGuards read-slot empty-read-buffer)
-if(NOT WIN32)
-    list(APPEND _coreCppSocketContractGuards write-slot write-slot-inline)
-endif()
+# Windows too since Task B7b, where the default backend's socket is `IocpSocket`. The two write
+# modes need a write that PARKS, and a Windows non-blocking send takes 8MiB at once (measured), so
+# they keep writing until one stays pending (at most 256MiB) and SKIP with a stderr reason if none
+# ever does -- never a pass on a write that did not park.
 if(CORE_CPP_TESTING AND NOT EMSCRIPTEN)
     add_executable(core-cpp-socket-contract-canary SocketContractCanary.cpp)
     target_link_libraries(core-cpp-socket-contract-canary PRIVATE core::net core::testing_dialogs)
     core_cpp_apply_toolchain(core-cpp-socket-contract-canary)
-    foreach(guard IN LISTS _coreCppSocketContractGuards)
+    foreach(guard IN ITEMS read-slot write-slot write-slot-inline empty-read-buffer)
         add_test(NAME core-cpp.socket-contract-canary.${guard}
                  COMMAND core-cpp-socket-contract-canary ${guard})
         set_tests_properties(core-cpp.socket-contract-canary.${guard} PROPERTIES

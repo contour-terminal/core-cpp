@@ -42,6 +42,14 @@ namespace
     /// completion already has to handle.
     constexpr auto MaxBufferLength = std::size_t { std::numeric_limits<ULONG>::max() };
 
+    /// The most one overlapped receive takes into its node's own buffer. A read may return fewer
+    /// bytes than its span holds, so this bounds the copy and the allocation, not the read.
+    constexpr auto MaxOwnedReceive = std::size_t { 64 } * 1024;
+
+    /// The most one overlapped send copies into its node's own buffer. A partial send already
+    /// re-issues the rest, so a larger write simply takes more operations.
+    constexpr auto MaxOwnedSend = std::size_t { 256 } * 1024;
+
     /// How many segments one gathered `WSASend` carries. The cursor drives the rest, so this
     /// bounds a vector's growth rather than the write.
     constexpr auto MaxSegmentsPerSend = std::size_t { 64 };
@@ -116,6 +124,16 @@ namespace
 /// abort dispatched as a successful read of zero bytes
 /// ([fastcached#884](https://github.com/LASTRADA-Software/fastcached/issues/884)). A write re-uses
 /// its node only once its own completion has come back, to send what a partial completion left.
+///
+/// **The kernel is never handed the CALLER's memory, only the node's own** (@c owned). A caller's
+/// buffer is borrowed for as long as its operation is awaited, and every abandon path ends that
+/// borrow before the kernel is done: an awaitable destroyed while parked, a socket destroyed under
+/// one, a loop torn down. `CancelIoEx` only ASKS for the operation back, so a receive the peer's
+/// data reaches first still completes -- and it would complete into memory the caller has freed.
+/// So an overlapped receive lands in @c owned and is copied out when its completion is delivered to
+/// a flow that is still there; an overlapped send is copied into @c owned when it is issued. The
+/// copy is paid only by an operation that had to wait: a read of data already there and a write
+/// the send buffer takes go straight to and from the caller's memory, synchronously.
 struct IocpSocket::Node: detail::IocpOperation
 {
     /// Which verb armed this node.
@@ -149,6 +167,11 @@ struct IocpSocket::Node: detail::IocpOperation
     /// kernel's last read of it — the second defect of #465, which on a destroyed socket was
     /// corruption on the wire rather than a crash.
     std::shared_ptr<void const> keepAlive;
+
+    /// What the kernel reads from or writes into while it holds this node, in place of the caller's
+    /// buffer; see the type's comment. Lives exactly as long as the node, which the kernel's share
+    /// keeps alive until the port dequeues the packet.
+    std::vector<std::byte> owned;
 
     /// The `WSABUF`s a send was issued with. Winsock captures the array at the call, but it is
     /// kept here anyway: it costs nothing and removes a question.
@@ -435,7 +458,11 @@ std::expected<void, NetError> IocpSocket::issueRead(std::shared_ptr<Node> const&
             return parked;
     }
 
-    auto const destination = node->kind == Node::Kind::Probe ? std::span<std::byte> {} : node->buffer;
+    // Into the node's own buffer, never the caller's: see `Node`. A probe receives nothing at all.
+    if (node->kind == Node::Kind::Bytes)
+        node->owned.resize(std::min(node->buffer.size(), MaxOwnedReceive));
+    auto const destination =
+        node->kind == Node::Kind::Probe ? std::span<std::byte> {} : std::span { node->owned };
     auto issued = handToKernel(
         node,
         [this, destination](LPWSAOVERLAPPED overlapped) -> int {
@@ -479,6 +506,9 @@ IoResult IocpSocket::readResult(Node& node)
         auto const received = node.bytesTransferred();
         if (received == 0)
             _peerClosed = true; // isClosed() now answers true, as ISocket documents
+        // Copied out HERE, where the flow that owns the destination is known to be waiting for it
+        // -- this is only reached on the way to completing its awaitable.
+        std::ranges::copy(std::span { node.owned }.first(received), node.buffer.begin());
         return IoResult { received };
     }
 
@@ -567,8 +597,8 @@ void IocpSocket::onReadWake(void* state, ParkWake wake)
             }
             // A real receive is still the kernel's, and may complete with bytes before the cancel
             // takes. The loop has detached the park the stop came through, so a fresh one is
-            // registered to hear the completion on; the flow resumes when it lands, and never
-            // before -- until then the kernel may still write into its buffer.
+            // registered to hear the completion on, and the flow resumes when it lands: bytes that
+            // beat the cancel are handed over rather than thrown away.
             socket->_loop.unregisterPark(std::exchange(node.park, ParkId {}));
             socket->cancelInKernel(node);
             if (auto parked = socket->park(node); !parked)
@@ -654,9 +684,10 @@ void IocpSocket::setReceiveDeadline(std::chrono::milliseconds deadline) noexcept
 
 ResultAwaitable<void> IocpSocket::shutdownWrite()
 {
-    assert((!_write || _write->awaitable == nullptr)
-           && "shutdownWrite with a write outstanding: 'finished sending' is only true once every "
-              "write has resolved, so await it first (see ISocket::shutdownWrite)");
+    // The precondition -- no write outstanding -- is the caller's, and is not asserted here, as it
+    // is not on any other plain socket: `SocketContractCanary`'s write-slot-inline mode breaks it on
+    // purpose to reach the write-slot guard behind it, and a second assertion in front would take
+    // the guard's place.
     if (_closed || _socket == InvalidSocketValue)
         return ResultAwaitable<void> { std::expected<void, NetError> {} };
     if (::shutdown(_socket, SD_SEND) == SOCKET_ERROR)
@@ -764,7 +795,8 @@ std::expected<void, NetError> IocpSocket::issueWrite(std::shared_ptr<Node> const
             return parked;
     }
 
-    fillBuffers(*node);
+    // A copy of what the cursor still owes, never the caller's bytes: see `Node`.
+    copyOwed(*node);
     return handToKernel(
         node,
         [this, &node](LPWSAOVERLAPPED overlapped) -> int {
@@ -780,6 +812,33 @@ std::expected<void, NetError> IocpSocket::issueWrite(std::shared_ptr<Node> const
                        : ::WSAGetLastError();
         },
         "WSASend");
+}
+
+void IocpSocket::copyOwed(Node& node)
+{
+    node.owned.clear();
+    node.owned.reserve(std::min(node.remaining(), MaxOwnedSend));
+    if (node.segments.empty())
+    {
+        auto const left = node.flat.subspan(node.written);
+        auto const take = left.first(std::min(left.size(), MaxOwnedSend));
+        node.owned.assign(take.begin(), take.end());
+    }
+    else
+    {
+        auto offset = node.segmentOffset;
+        for (auto const index: std::views::iota(node.segmentIndex, node.segments.size()))
+        {
+            auto const segment = node.segments[index].subspan(std::exchange(offset, 0));
+            auto const take = segment.first(std::min(segment.size(), MaxOwnedSend - node.owned.size()));
+            node.owned.insert(node.owned.end(), take.begin(), take.end());
+            if (node.owned.size() == MaxOwnedSend)
+                break;
+        }
+    }
+    node.buffers.assign(1,
+                        WSABUF { .len = static_cast<ULONG>(node.owned.size()),
+                                 .buf = reinterpret_cast<CHAR*>(node.owned.data()) });
 }
 
 void IocpSocket::fillBuffers(Node& node)

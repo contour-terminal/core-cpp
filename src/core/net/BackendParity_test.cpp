@@ -27,6 +27,7 @@
 #include <core/async/WhenAll.hpp>
 #include <core/async/WhenAny.hpp>
 #include <core/net/EventLoop.hpp>
+#include <core/net/HostDrivenBackend.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/IoBackend.hpp>
 #include <core/net/Sockets.hpp>
@@ -34,6 +35,8 @@
 #include <core/net/detail/ScopeGuard.hpp>
 #include <core/net/testing/BackendMatrix.hpp>
 #include <core/net/testing/InMemoryTransport.hpp>
+#include <core/net/testing/ManualHostScheduler.hpp>
+#include <core/platform/Clock.hpp>
 #include <core/platform/SystemPipe.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -1989,4 +1992,72 @@ TEST_CASE("makeBackend answers null for a kind this platform does not build", "[
     CHECK(core::net::makeBackend(BackendKind::Scripted) == nullptr);
     CHECK(core::net::makeBackend(BackendKind::Null) == nullptr);
     CHECK(core::net::makeBackend(BackendKind::HostDriven) == nullptr);
+}
+
+namespace
+{
+
+/// A handler whose callbacks must never run: a refused registration has nothing to report.
+/// @param handler Unused.
+void neverCalled(core::net::ReadinessHandler& /*handler*/) noexcept
+{
+}
+
+/// @param backend The backend to ask.
+/// @param handle A real, open handle, so a refusal cannot be the handle's fault.
+/// @return What the backend answered to a `HandleKind::Completion` registration of it.
+std::expected<void, core::net::NetError> attachAsCompletion(core::net::IoBackend& backend,
+                                                            core::platform::NativeHandle handle)
+{
+    auto handler = core::net::ReadinessHandler { .handle = handle,
+                                                 .kind = core::net::HandleKind::Completion,
+                                                 .owner = nullptr,
+                                                 .onReadable = &neverCalled,
+                                                 .onWritable = &neverCalled,
+                                                 .onError = nullptr };
+    auto answer = backend.attach(handler);
+    if (answer)
+        backend.detach(handler); // never reached on a passing run; keeps a failing one tidy
+    return answer;
+}
+
+} // namespace
+
+TEST_CASE("every backend without a completion port refuses a completion registration by name",
+          "[net][backend][parity]")
+{
+    // `HandleKind::Completion`'s handle is the ADDRESS of an overlapped operation. A backend that
+    // took it would hand that address to poll(2), epoll, kqueue or WaitForMultipleObjects as though
+    // it were a descriptor or a kernel object. "Nothing there can build one" is an argument, not a
+    // guarantee, so each backend that lends no port says Unsupported, and this case holds all of
+    // them to it -- the matrix, plus the host-driven backend, which the matrix does not build.
+    auto pipe = core::platform::createSystemPipe();
+    REQUIRE(pipe.has_value());
+    auto const handle = (*pipe)->waitHandle();
+
+    auto asked = 0;
+    for (auto const& entry: BackendMatrix)
+    {
+        auto const backend = core::net::makeBackend(entry.kind);
+        if (!backend || backend->completionPort() != nullptr)
+            continue; // not built here, or the one kind that serves it
+        DYNAMIC_SECTION("backend=" << entry.name)
+        {
+            auto const answer = attachAsCompletion(*backend, handle);
+            REQUIRE_FALSE(answer.has_value());
+            CHECK(answer.error().code == core::net::NetErrorCode::Unsupported);
+        }
+        ++asked;
+    }
+    CHECK(asked >= 1); // every platform builds at least one readiness backend
+
+    SECTION("backend=host-driven")
+    {
+        auto host = core::net::testing::ManualHostScheduler {};
+        auto clock = core::platform::ManualClock {};
+        auto backend = core::net::HostDrivenBackend { host, clock };
+        auto const answer = attachAsCompletion(backend, handle);
+        REQUIRE_FALSE(answer.has_value());
+        CHECK(answer.error().code == core::net::NetErrorCode::Unsupported);
+    }
 }

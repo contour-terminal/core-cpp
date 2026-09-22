@@ -87,6 +87,13 @@ std::expected<void, NetError> EpollBackend::attach(ReadinessHandler& handler)
             NetErrorCode::SystemError, 0, "EpollBackend::attach: no epoll instance") };
     if (handler.handle == platform::InvalidHandle)
         return std::unexpected { makeNetError(NetErrorCode::BadHandle, 0, "EpollBackend::attach") };
+    // Refused by name rather than handed to the kernel: the handle of a completion registration is
+    // the address of an overlapped operation, and this backend lends no port to issue one on.
+    if (handler.kind == HandleKind::Completion)
+        return std::unexpected { makeNetError(NetErrorCode::Unsupported,
+                                              0,
+                                              "EpollBackend::attach: HandleKind::Completion needs a "
+                                              "completion port, and this backend has none") };
     if (_registrations.contains(&handler))
         return std::unexpected { makeNetError(
             NetErrorCode::BadHandle, 0, "EpollBackend::attach: handler is already attached") };

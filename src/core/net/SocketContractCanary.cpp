@@ -52,6 +52,7 @@
     #include <array>
     #include <cstddef>
     #include <memory>
+    #include <ranges>
     #include <span>
     #include <vector>
 
@@ -66,8 +67,21 @@ namespace
 /// distinguishable: SIGSEGV is not handled, so it still arrives as the exception it is.
 constexpr int RefusedExitCode = 1;
 
-/// Big enough that no platform's send buffer takes it, so the write parks rather than completing.
+/// One write's worth of the payload that fills the send window.
+///
+/// **Not "big enough that no send buffer takes it", which is what it used to claim**: a Windows
+/// non-blocking send takes all 8MiB of it at once (measured, Task B7b), so a single write parks on
+/// POSIX and completes on Windows. What makes a write park is the window being FULL, so the write
+/// modes keep writing until one stays pending (@c parkAWrite), bounded by @c MaxFillWrites.
 constexpr std::size_t UnsendablePayload = std::size_t { 8 } * 1024 * 1024;
+
+/// How many payload-sized writes the write modes issue, at most, waiting for one to park: 256MiB
+/// to a peer that never reads. A stack that takes all of it has no window this canary can fill,
+/// and it SKIPs saying so rather than passing on a write that never parked.
+constexpr int MaxFillWrites = 32;
+
+/// The exit code ctest reads as "this configuration could not run the case".
+constexpr auto SkipExitCode = 77;
 
 /// Turns a guard's abort into an exit code.
 ///
@@ -136,6 +150,36 @@ core::async::Task<void> writeForever(core::net::ISocket* sock, std::vector<std::
     std::ignore = co_await sock->write(std::span<std::byte const> { *payload });
 }
 
+/// Writes @p payload until one write stays PARKED, which is the state both write modes need.
+///
+/// Every write but the last completes -- the send buffer took it -- and its flow finishes; the one
+/// that cannot is left parked on the socket's single write slot.
+/// @param loop The loop the socket is driven by.
+/// @param sock The socket to write to.
+/// @param payload The bytes; must outlive every flow.
+/// @return Whether a write parked within @c MaxFillWrites.
+bool parkAWrite(core::net::EventLoop& loop, core::net::ISocket* sock, std::vector<std::byte> const* payload)
+{
+    for ([[maybe_unused]] auto const attempt: std::views::iota(0, MaxFillWrites))
+    {
+        loop.spawn(writeForever(sock, payload));
+        std::ignore = loop.runOnce();
+        if (loop.parkedWaiterCount() > 0)
+            return true;
+    }
+    return false;
+}
+
+/// Reports that no write could be made to park, and says so as a SKIP rather than a pass.
+/// @return The skip exit code.
+int noWindowToFill()
+{
+    std::fputs("socket-contract-canary: SKIPPED -- no write parked after 32 writes of 8MiB to a peer "
+               "that never reads, so there was no parked write to arm over\n",
+               stderr);
+    return SkipExitCode;
+}
+
 } // namespace
 
 #endif
@@ -147,7 +191,8 @@ core::async::Task<void> writeForever(core::net::ISocket* sock, std::vector<std::
 int main(int argc, char** argv)
 {
 #ifdef NDEBUG
-    /// The exit code ctest is told to read as "this configuration could not run the case".
+    /// The exit code ctest is told to read as "this configuration could not run the case". The
+    /// namespace's own copy is compiled only where assertions are, which this branch is not.
     constexpr auto SkipExitCode = 77;
     std::ignore = argc;
     std::ignore = argv;
@@ -213,13 +258,8 @@ int main(int argc, char** argv)
     if (std::strcmp(argv[1], "write-slot") == 0)
     {
         auto const payload = std::vector<std::byte>(UnsendablePayload, std::byte { 0xA5 });
-        loop.spawn(writeForever(sock, &payload));
-        std::ignore = loop.runOnce();
-        if (loop.parkedWaiterCount() == 0)
-        {
-            std::fputs("socket-contract-canary: the write did not park, so nothing was tested\n", stderr);
-            return 2;
-        }
+        if (!parkAWrite(loop, sock, &payload))
+            return noWindowToFill();
         announce("write-slot", "a write armed over a parked write");
         auto const second = sock->write(std::span<std::byte const> { payload });
         std::ignore = second.await_ready();
@@ -238,13 +278,8 @@ int main(int argc, char** argv)
         // it, dropping the parked awaitable and leaking its park while telling the caller the
         // write had succeeded.
         auto const payload = std::vector<std::byte>(UnsendablePayload, std::byte { 0xA5 });
-        loop.spawn(writeForever(sock, &payload));
-        std::ignore = loop.runOnce();
-        if (loop.parkedWaiterCount() == 0)
-        {
-            std::fputs("socket-contract-canary: the write did not park, so nothing was tested\n", stderr);
-            return 2;
-        }
+        if (!parkAWrite(loop, sock, &payload))
+            return noWindowToFill();
 
         // Half-close, so the NEXT send fails at once with EPIPE rather than blocking on a window
         // that is still full. That is what forces the inline-completion branch deterministically:

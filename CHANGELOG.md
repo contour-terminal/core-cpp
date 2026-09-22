@@ -686,8 +686,13 @@ workflow refuses one without a section here.
   - **a stop of the awaiting flow, a receive deadline and a dial deadline each ask the kernel for
     the operation back and let its completion answer**, so bytes already received win over a
     later stop ([fastcached#884](https://github.com/LASTRADA-Software/fastcached/issues/884)) and
-    a connection the kernel made first is not thrown away. The flow resumes when the operation
-    comes home, never before -- until then the kernel may still write into its buffer;
+    a connection the kernel made first is not thrown away;
+  - **the kernel is never handed the caller's memory**: an overlapped receive lands in a buffer
+    the operation owns (at most 64KiB) and is copied out when it is delivered, and an overlapped
+    send is copied in (at most 256KiB per operation). So a read abandoned mid-flight -- its
+    awaitable destroyed, its socket destroyed, its loop torn down -- cannot have the peer's bytes
+    written into memory the caller has freed. The copy is paid only by an operation that had to
+    wait;
   - **`cancelRead` on a real read settles** with whatever its receive did (its bytes, or
     `Cancelled`) on a later turn; the read SLOT is free at once, and a `waitReadable` probe is
     retired inline as on every other socket;
@@ -710,12 +715,17 @@ workflow refuses one without a section here.
   port, and **`ICompletionPort::beginOperation`/`withdrawOperation`**, the record that lets a port
   tell an owner's packet from its own. It is how a completion reaches the loop's turn step 2 --
   the backend reports the park and the loop resumes, as for readiness -- instead of a callback
-  that resumes a coroutine from inside the backend's own walk. `WfmoBackend` refuses it with
-  `Unsupported`; no other backend lends a port, so nothing can hand one a completion to wait for.
+  that resumes a coroutine from inside the backend's own walk. **Every backend without a port
+  refuses it by name with `Unsupported`** -- poll, epoll, kqueue, WFMO and the host-driven one --
+  rather than handing an operation's address to the kernel as a descriptor, and one parity case
+  holds all of them to it. `EventLoop::completionPort()` is declared on every platform and answers
+  `nullptr` wherever the backend lends no port; callers branch on that, never on the preprocessor.
 
-- **`CancelRead_test` and the socket contract's `read-slot` and `empty-read-buffer` canaries run on
-  Windows**, over `IocpSocket`. The WFMO leg of `CancelRead_test` SKIPs out loud, because
-  `WindowsSocket` does not implement `cancelRead`.
+- **`CancelRead_test` and all four socket-contract canaries run on Windows**, over `IocpSocket`.
+  The WFMO leg of `CancelRead_test` SKIPs out loud, because `WindowsSocket` does not implement
+  `cancelRead`. The two write canaries now keep writing until one write stays pending (a Windows
+  non-blocking send takes 8MiB at once, so one write never parked there), and SKIP with a reason if
+  none does within 256MiB.
 
 - **Three CI legs that never existed, and the gate that makes their absence fatal.** Every visible
   configure preset must now be named by a workflow or allowlisted with a written reason;

@@ -67,6 +67,13 @@ std::expected<void, NetError> PollBackend::attach(ReadinessHandler& handler)
 {
     if (handler.handle == platform::InvalidHandle)
         return std::unexpected { makeNetError(NetErrorCode::BadHandle, 0, "PollBackend::attach") };
+    // Refused by name rather than handed to the kernel: the handle of a completion registration is
+    // the address of an overlapped operation, and this backend lends no port to issue one on.
+    if (handler.kind == HandleKind::Completion)
+        return std::unexpected { makeNetError(NetErrorCode::Unsupported,
+                                              0,
+                                              "PollBackend::attach: HandleKind::Completion needs a "
+                                              "completion port, and this backend has none") };
     if (find(handler) != nullptr)
         return std::unexpected { makeNetError(
             NetErrorCode::BadHandle, 0, "PollBackend::attach: handler is already attached") };

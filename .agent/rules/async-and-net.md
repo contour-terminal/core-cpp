@@ -781,14 +781,24 @@ get right, and each one is a defect that has already happened.
   the single writer of its outcome: `CancelIoEx` makes it complete with an abort or with whatever it
   had already done, and that is what the flow resumes with. Settling at the stop instead throws
   away bytes the kernel had already taken out of the stream
-  ([fastcached#884](https://github.com/LASTRADA-Software/fastcached/issues/884)) and resumes -- and
-  may unwind -- a frame whose buffer the kernel is still writing into. The loop DETACHES the park a
+  ([fastcached#884](https://github.com/LASTRADA-Software/fastcached/issues/884)). The loop DETACHES the park a
   stop came through, so the owner registers a fresh one to hear the abort on, and the port marks an
   operation completed whether or not a park is listening, so a completion that landed in between is
   reported as soon as the new park exists. The two exceptions are the ones that cannot wait:
   `close()` resolves a parked operation at once (closing is what aborts it, and the operation's
   storage outlives the wait on its own share), and a loop being torn down abandons it. Origin: Task
   B7b; the hand-off from Task B8 (`task-B7b-handoff-from-B8.md`) stated it for the dial first.
+- **An overlapped operation is never handed the caller's memory.** The caller's buffer is borrowed
+  for as long as its operation is AWAITED, and every abandon path ends that borrow early -- an
+  awaitable destroyed while parked, a socket destroyed under one, a loop torn down -- while
+  `CancelIoEx` only asks for the operation back. A receive the peer's data reaches first then
+  completes into freed memory, and AddressSanitizer reports nothing, because the kernel's copy is
+  not an instrumented access. So `IocpSocket` receives into a buffer its operation node owns and
+  copies out on delivery, and copies a send in when it issues it; only an operation that had to
+  wait pays for it. `IocpSocket_test.cpp`'s *an abandoned read never lets the kernel write into
+  the caller's buffer* observes the write directly, with a buffer that outlives the read: with the
+  retire path's `CancelIoEx` removed and no owned buffer, it reads `3 == 0`. Origin: Task B7b's fix
+  round, upstream's residual hazard, not exempted by being upstream's.
 - **Windows buffers what a non-blocking send is given, far past `SO_SNDBUF`** -- measured, 8MiB taken
   at once by a socket with a 4KiB send buffer and a peer that never reads. `IocpSocket` tries each
   read and write without an operation first, as libuv does, so a write that fits returns inline and

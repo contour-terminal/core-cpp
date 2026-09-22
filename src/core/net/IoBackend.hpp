@@ -88,10 +88,11 @@ enum class HandleKind : std::uint8_t
     /// whose completion the walk has not finished with. So an `IocpSocket` parks on its
     /// operation, the backend dispatches the park, and the loop resumes.
     ///
-    /// Only a backend with a completion port can serve it; every other one refuses it
-    /// with @c NetErrorCode::Unsupported or has no way to be handed one (nothing issues
-    /// an operation on a port that @c IoBackend::completionPort does not lend). Added by
-    /// Task B7b with its first user.
+    /// Only a backend with a completion port can serve it. Every other one refuses it BY
+    /// NAME, with @c NetErrorCode::Unsupported, rather than handing an operation's address
+    /// to the kernel as a descriptor -- poll, epoll, kqueue, WFMO and the host-driven
+    /// backend, which `BackendParity_test` holds to it. Added by Task B7b with its first
+    /// user.
     Completion
 };
 

@@ -51,6 +51,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -466,9 +467,12 @@ TEST_CASE("An IocpSocket destroyed with a WSARecv in flight survives the complet
 TEST_CASE("An IocpSocket destroyed mid-write holds the payload until the kernel is done",
           "[net][iocp][socket]")
 {
-    // The second defect #465 turned up, and not a crash: WSASend references the payload rather
-    // than copying it, so a payload released at socket teardown is read by the kernel after it is
-    // freed -- corruption on the wire. Asserted through OWNERSHIP rather than by racing the wire.
+    // The second defect #465 turned up, and not a crash: upstream's WSASend referenced the payload
+    // rather than copying it, so a payload released at socket teardown was read by the kernel after
+    // it was freed -- corruption on the wire. Here an overlapped send reads a copy its operation
+    // owns, and the `keepAlive` a caller hands `writeVectored` is still held by that operation
+    // until the kernel is done, which is what the interface promises. Asserted through OWNERSHIP
+    // rather than by racing the wire.
     auto harness = Harness {};
     auto const small = 4096;
     ::setsockopt(harness.socket->native(),
@@ -668,6 +672,69 @@ TEST_CASE("cancelRead over an already-completed receive keeps the bytes", "[net]
     CHECK(first.bytes == 5);
     CHECK_FALSE(second.code.has_value());
     CHECK(second.bytes == 2);
+}
+
+namespace
+{
+/// Reads once into @p buffer. A lazy `Task`, so a case can start it by hand and then DESTROY it
+/// while the read is parked -- the one abandon path that frees the awaiting frame without the
+/// socket going away.
+Task<void> readInto(core::net::ISocket* socket, std::span<std::byte> buffer)
+{
+    std::ignore = co_await socket->read(buffer);
+}
+
+/// @param buffer What to inspect.
+/// @return How many bytes of @p buffer are no longer the zero it was filled with.
+std::size_t bytesWritten(std::span<std::byte const> buffer)
+{
+    return static_cast<std::size_t>(
+        std::ranges::count_if(buffer, [](std::byte b) { return b != std::byte { 0 }; }));
+}
+} // namespace
+
+TEST_CASE("An abandoned read never lets the kernel write into the caller's buffer",
+          "[net][iocp][socket][abandon]")
+{
+    // **The caller's buffer is borrowed for exactly as long as its operation is awaited**
+    // (`ISocket`'s own contract), and on every abandon path that ends before the kernel is done
+    // with the receive: an awaitable destroyed while parked, a socket destroyed under one, a loop
+    // torn down. A receive still in the kernel then completes -- the peer writes after the frame is
+    // gone -- into memory the caller has since freed or reused.
+    //
+    // **Observed directly rather than through AddressSanitizer, because ASan cannot see it.** The
+    // kernel's copy into a user buffer is not an instrumented access, so a freed buffer the kernel
+    // writes into reports nothing. The buffer here therefore OUTLIVES the read on purpose, filled
+    // with zeroes, and the case asserts that the peer's bytes never landed in it: a byte that did
+    // is exactly the write that would have gone into freed memory.
+    auto harness = Harness {};
+    auto buffer = std::array<std::byte, 64> {};
+
+    SECTION("the awaitable is destroyed while its WSARecv is in the kernel")
+    {
+        auto task = readInto(harness.socket.get(), std::span<std::byte> { buffer });
+        task.handle().resume(); // parks on the read: nothing has been sent
+        REQUIRE(harness.backend.issuedOperations() == 1);
+        {
+            auto const discard = std::move(task); // the frame goes, and the awaitable with it
+        }
+        harness.pair.send("XYZ");
+        REQUIRE(drainOwnerOperations(harness.loop, harness.backend));
+    }
+    SECTION("the socket is destroyed under a parked read")
+    {
+        auto read = Outcome {};
+        parkOnRead(harness.socket.get(), &buffer, &read);
+        REQUIRE(harness.backend.issuedOperations() == 1);
+        harness.socket.reset();
+        CHECK(read.abandoned);
+        // The peer's send may be refused outright here -- the close has already reset the
+        // connection -- and that is fine: what matters is that nothing lands in the buffer.
+        std::ignore = ::send(harness.pair.client(), "XYZ", 3, 0);
+        REQUIRE(drainOwnerOperations(harness.loop, harness.backend));
+    }
+
+    CHECK(bytesWritten(buffer) == 0);
 }
 
 TEST_CASE("close() resolves a parked read with a Cancelled VALUE, at once", "[net][iocp][socket]")

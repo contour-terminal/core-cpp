@@ -12,8 +12,15 @@
 /// stop cannot settle an operation on its own; it asks the kernel for the operation back
 /// (`CancelIoEx`) and the completion that follows is the answer. That is how bytes already
 /// received win over a later stop
-/// ([fastcached#884](https://github.com/LASTRADA-Software/fastcached/issues/884)), and why the
-/// kernel never writes into a frame that has already unwound.
+/// ([fastcached#884](https://github.com/LASTRADA-Software/fastcached/issues/884)).
+///
+/// **The kernel is never handed the caller's memory.** An overlapped receive lands in a buffer the
+/// operation owns and is copied out when its completion reaches a flow that is still waiting; an
+/// overlapped send is copied in when it is issued. Every abandon path -- an awaitable destroyed
+/// while parked, a socket destroyed under one, a loop torn down -- ends the caller's borrow before
+/// the kernel is done, and `CancelIoEx` only asks; without the copy, a receive the peer's data
+/// reached first would complete into freed memory. Data already there, and room already in the
+/// send buffer, are still moved synchronously to and from the caller's memory, with no copy.
 ///
 /// **The kernel holds a pointer into an operation node, never into the socket**
 /// ([fastcached#465](https://github.com/LASTRADA-Software/fastcached/issues/465)). Each node owns
@@ -131,9 +138,9 @@ class IocpSocket final: public ISocket
     /// @copydoc ISocket::shutdownWrite
     ///
     /// Completes inline: `shutdown(SD_SEND)` either takes or it does not. The precondition — no
-    /// write outstanding — is asserted in Debug builds rather than left to prose: a parked write
-    /// here is an overlapped `WSASend` the kernel is still working through, and what Winsock does
-    /// with a FIN requested beside one is not something this socket's contract should depend on.
+    /// write outstanding — is the interface's and the caller's; like every other plain socket this
+    /// one does not assert it, because the socket contract's write-slot canary breaks it on purpose
+    /// to reach the guard it exists to watch.
     [[nodiscard]] ResultAwaitable<void> shutdownWrite() override;
 
     void setReceiveDeadline(std::chrono::milliseconds deadline) noexcept override;
@@ -214,7 +221,13 @@ class IocpSocket final: public ISocket
     /// @return The total once every byte is gone, an error, or nullopt when the rest would block.
     [[nodiscard]] std::optional<IoResult> trySend(Node& node) const;
 
-    /// Rebuilds @p node's `WSABUF`s from its cursor.
+    /// Copies what @p node still owes, up to a bound, into its own buffer, and points its one
+    /// `WSABUF` at the copy: an overlapped send never reads the caller's memory.
+    /// @param node The write.
+    static void copyOwed(Node& node);
+
+    /// Rebuilds @p node's `WSABUF`s from its cursor, over the CALLER's memory -- for the
+    /// synchronous attempt only, which is finished with it before the verb returns.
     /// @param node The write.
     static void fillBuffers(Node& node);
 
