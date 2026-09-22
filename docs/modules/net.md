@@ -47,6 +47,14 @@ directory `src/core/net/`. Three targets:
 | `<core/net/SplitSocket.hpp>` | one duplex `ISocket` from two simplex halves |
 | `<core/net/WithTimeout.hpp>` | `withTimeout()`: a task raced against a timer on the loop's clock |
 | `<core/net/HttpServer.hpp>` | a minimal HTTP/1.1 server: `serve()`, `readRequest()`, `writeResponse()`; `Content-Length` bodies only, every response closes |
+| `<core/net/IDatagramSocket.hpp>`, `<core/net/UdpSocket.hpp>` | `IDatagramSocket` (`send`, a bounded `receive`, `close`, `boundAddress`), `DatagramAddress`, `ReceivedDatagram`, `DatagramWait`; `openUdpSocket()` with `BroadcastMode` and `PortSharing`, answering WHY a bind failed. Blocking, on a thread of its own: a datagram socket is not an `ISocket` |
+| `<core/net/SharedPortDatagram.hpp>` | `answerFromOwnAddress()` and `openSharedPortUdpSocket()`: hear the segment on a shared port, send and be answered from an address only this node holds |
+| `<core/net/BlockingSocket.hpp>`, `<core/net/BlockingConnector.hpp>` | the transports for threads that may block: `BlockingSocket`, whose every awaitable is already settled, and `BlockingConnector`, an `IConnector` that dials on the calling thread within its budget and arms `BlockingConnectorOptions::ioTimeout` before handing the socket over. Driven by `core::async::syncRun`; never on a loop thread |
+| `<core/net/TcpClient.hpp>` | the one TCP client: `connectTcp()`, `sendAll()`, `receiveExactly()` |
+| `<core/net/HealthProbe.hpp>` | `probeHttpStatus()`, which returns the status an HTTP endpoint answered, and `httpHealthProbe()`, which is whether it was 200 |
+| `<core/net/testing/InMemorySocket.hpp>` | the deterministic fake: `InMemoryPipe`, `InMemorySocket`, `InMemorySocketPair`, `InMemoryListener` -- no descriptor, no loop, completed inline, and pinned to a real socket in every closed state by `SocketClosedStates_test.cpp`. Not `testing/InMemoryTransport.hpp`, whose `makeSocketPair()` is a pair of REAL sockets |
+| `<core/net/testing/InMemoryDatagram.hpp>`, `<core/net/testing/DatagramPayload.hpp>` | `DatagramBus`, a network segment in one process with scripted loss, and the text-to-payload helpers |
+| `<core/net/testing/SocketDecorator.hpp>`, `<core/net/testing/ParkingReadableSocket.hpp>` | `SocketDecorator`, which forwards every verb so a double overrides only the one it stages; `ParkingReadableSocket` and `ParkingWritableSocket`, which park until the test decides and count how each parked operation ended |
 | `<core/net/Diagnostics.hpp>` | `setDiagnosticSink()`: where a failure nobody can be handed goes (a wait that fails mid-sweep); discarded by default |
 | `<core/net/Tls.hpp>` (`core::net_tls`) | `ITlsContext::wrap()`, a TLS `ISocket` over any other, driven through memory BIOs on the same loop; `makeTlsServerContext()`, `makeSelfSignedServerContext()`, `makeTlsClientContext()` (a pinned CA and a host name, or trust on first use), `generateSelfSignedCertificate()`, `constantTimeEquals()` |
 

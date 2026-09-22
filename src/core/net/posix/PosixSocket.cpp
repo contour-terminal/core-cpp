@@ -49,7 +49,12 @@ namespace
         switch (err)
         {
             case ECONNRESET: code = NetErrorCode::ConnReset; break;
-            case EPIPE: code = NetErrorCode::ConnReset; break;
+            // EPIPE is NOT a reset, and it has no row of its own: it is a write after this end's own
+            // half-close, or after a peer's FIN that the previous write turned into a reset -- which
+            // Winsock reports as `WSAESHUTDOWN` and `WSAECONNABORTED`, both `SystemError`. A reset is
+            // the peer closing over bytes it had not read (`ECONNRESET`), and a caller counts that
+            // apart from a goodbye. `SocketClosedStates_test` pins the fake to this answer against a
+            // real pair; mapping EPIPE here reddened it on every POSIX leg.
             case EBADF: code = NetErrorCode::BadHandle; break;
             default: break;
         }

@@ -868,6 +868,56 @@ get right, and each one is a defect that has already happened.
   the source and churns the heap before reading, with a payload of real size: read inline,
   nothing dangles at any size.
 
+## Datagrams, blocking transports, and the fake a consumer tests on
+
+Task B9. Datagrams (`IDatagramSocket`, `openUdpSocket`, `SharedPortDatagram`), the transports for
+threads that may block (`BlockingSocket`, `BlockingConnector`, `TcpClient`, `HealthProbe`), and the
+in-process doubles (`testing::DatagramBus`, `testing::InMemorySocket`, the parking decorators).
+
+- **A test double is pinned to the real thing by a parity test, or it is not trusted.** A fake a
+  consumer builds its suites on that answers some state MORE permissively than a real socket does
+  not fail anywhere: it manufactures a passing test in every consumer that reaches that state, which
+  is worse than a missing test because it is invisible and it compounds downstream.
+  `SocketClosedStates_test.cpp` runs one table of steps over `testing::InMemorySocket` AND over a
+  real loopback pair, and asserts both. A new closed state, a new verb or a new error mapping on the
+  real sockets is a new row there. Origin:
+  [fastcached#1553](https://github.com/LASTRADA-Software/fastcached/issues/1553).
+- **The real pair and the fake stay two things.** `testing/InMemoryTransport.hpp` is a pair of REAL
+  sockets (a socketpair, or a loopback TCP pair on Windows) and `testing/InMemorySocket.hpp` is the
+  fake. Deduplicating them deletes the difference the parity test measures.
+- **A fake says in its header what it does not model**, and says which failure that produces: the
+  in-memory socket has no loop, so a flow's stop token does not reach a parked operation (a hang,
+  not a false pass), and it has no receive deadline (the interface's weaker-bound default).
+- **EPIPE is not a reset.** A reset is the peer closing over bytes it had not read (`ECONNRESET`,
+  `WSAECONNRESET`, `ConnReset`); a write after this end's own half-close, or after a FIN that the
+  previous write turned into a reset, is `EPIPE`/`WSAESHUTDOWN`/`WSAECONNABORTED` and maps to
+  `SystemError`. `PosixSocket` once mapped EPIPE to `ConnReset`, and the parity test reddened on
+  every POSIX leg until it did not.
+- **A datagram socket is not an `ISocket`, and its receive is always bounded.** There is no stream,
+  no partial read and no slot to share, and POSIX does not unblock a parked `recvfrom` when another
+  thread closes the socket -- so `close()` sets a flag and the bounded receive is how a loop sees it.
+  `SO_RCVTIMEO` of zero means block for ever, so every wait is floored at a millisecond.
+- **A receive buffer below the largest datagram turns an oversized message into a corrupt one**:
+  POSIX truncates silently and Winsock fails the receive. The buffer is `MaxDatagramPayload`,
+  allocated once per socket. A datagram send that places fewer bytes than it was given is
+  `MessageTooLarge`, never a partial write to retry: the rest resent is a second message.
+- **Sharing a port buys hearing a broadcast, and nothing else.** A unicast to a shared port reaches
+  one socket, and which one differs by platform, so a node that shares a port to hear the segment
+  sends -- and is answered -- from an address only it holds (`answerFromOwnAddress`,
+  `openSharedPortUdpSocket`). The broadcast capability belongs to the private socket, which is the
+  one that sends.
+- **A blocking transport never parks, and so is driven by `syncRun`.** Every awaitable
+  `BlockingSocket` returns is already settled, and `BlockingConnector` resolves inline and waits in a
+  syscall. A caller that takes a `BlockingConnector&` rather than an `IConnector&` is stating that it
+  may block. What bounds it is the socket's own `SO_RCVTIMEO`/`SO_SNDTIMEO`, armed before the
+  socket is handed over; a non-positive `setReceiveDeadline` removes the bound, as it does
+  everywhere.
+- **One socket-error table per platform** (`detail/SocketErrors.hpp`). The datagram and blocking
+  transports use it; `PosixSocket`, `WindowsSocket` and the dial primitives still carry private
+  switches, which is the debt this rule names rather than a design: a private switch is the shape
+  that lacked a row and turned a firewall's `EACCES` into an unclassified `SystemError` upstream.
+  A new transport uses the shared table, and moving the other three onto it is owed.
+
 ## Profiling zones never span a `co_await`
 
 `CORE_ZONE_SCOPED` and its variants declare a thread-local, stack-shaped RAII guard. A

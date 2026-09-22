@@ -5,10 +5,13 @@
 /// `ISocket` — a connected, bidirectional byte transport whose operations are frame-free,
 /// stop-aware awaitables.
 ///
-/// Implementations: @c PosixSocket / @c WindowsSocket (production, reactor-driven non-blocking
-/// I/O), @c TlsSocket (a decorator) and @c InMemoryTransport (deterministic, in-process, for
-/// tests). The production ones are driven by an @c EventLoop: a slow read or write parks the
-/// operation on the loop's park table rather than blocking a thread, and allocates no coroutine
+/// Implementations include the loop-driven platform sockets (@c PosixSocket, @c WindowsSocket), a
+/// blocking one for threads that may block (@c BlockingSocket), decorators (@c TlsSocket) and a
+/// deterministic in-process fake for tests (@c testing::InMemorySocket -- not
+/// `testing/InMemoryTransport.hpp`, which is a pair of REAL sockets). Every one of them, and any a
+/// consumer writes, is under the same contract (`<core/net/SocketContract.hpp>`), and the fake is
+/// pinned to the real ones by `SocketClosedStates_test.cpp`. The loop-driven ones park a slow read or
+/// write on the loop's park table rather than blocking a thread, and allocate no coroutine
 /// frame to do it — see `<core/net/IoAwaitable.hpp>` for why that shape, and what it costs a
 /// caller that needs to STORE an operation (`core::async::asTask`).
 ///

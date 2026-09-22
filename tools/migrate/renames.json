@@ -7194,6 +7194,864 @@
         "fastcached"
       ],
       "note": "SO_REUSEPORT is not imported: nothing in core-cpp binds one port from several loops yet, and an option that is never exercised is an option that is never right. ListenOptions is where it would go."
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/IDatagramSocket.hpp",
+      "to": "core/net/IDatagramSocket.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IDatagramSocket.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/UdpSocket.hpp",
+      "to": "core/net/UdpSocket.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/UdpSocket.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/SharedPortDatagram.hpp",
+      "to": "core/net/SharedPortDatagram.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SharedPortDatagram.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/InMemoryDatagram.hpp",
+      "to": "core/net/testing/InMemoryDatagram.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemoryDatagram.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "tests/DatagramPayload.hpp",
+      "to": "core/net/testing/DatagramPayload.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/DatagramPayload.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/InMemoryTransport.hpp",
+      "to": "core/net/testing/InMemorySocket.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemorySocket.hpp"
+      },
+      "note": "the FAKE. core/net/testing/InMemoryTransport.hpp is contour's header and a pair of REAL sockets; an include rewritten to it would compile against makeSocketPair and none of the InMemorySocket types"
+    },
+    {
+      "kind": "include",
+      "from": "tests/SocketDecorator.hpp",
+      "to": "core/net/testing/ParkingReadableSocket.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/ParkingReadableSocket.hpp"
+      },
+      "note": "which includes testing/SocketDecorator.hpp; FailingReadSocket was not imported"
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/BlockingSocket.hpp",
+      "to": "core/net/BlockingSocket.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/BlockingSocket.hpp"
+      },
+      "note": "BlockingListener and the Detail helpers were not imported; see the removed rows"
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/BlockingConnector.hpp",
+      "to": "core/net/BlockingConnector.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/BlockingConnector.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/TcpClient.hpp",
+      "to": "core/net/TcpClient.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/TcpClient.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/HealthProbe.hpp",
+      "to": "core/net/HealthProbe.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/HealthProbe.hpp"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::DatagramAddress",
+      "to": "core::net::DatagramAddress",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IDatagramSocket.hpp",
+        "symbol": "core::net::DatagramAddress"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::ReceivedDatagram",
+      "to": "core::net::ReceivedDatagram",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IDatagramSocket.hpp",
+        "symbol": "core::net::ReceivedDatagram"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::DatagramWait",
+      "to": "core::net::DatagramWait",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IDatagramSocket.hpp",
+        "symbol": "core::net::DatagramWait"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::IDatagramSocket",
+      "to": "core::net::IDatagramSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IDatagramSocket.hpp",
+        "symbol": "core::net::IDatagramSocket"
+      },
+      "note": "Task B9. Its members are camelBack; IDatagramSocket::Close -> close is covered by FastCache::ISocket's Close row, which the table keys on the name alone"
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::BroadcastMode",
+      "to": "core::net::BroadcastMode",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/UdpSocket.hpp",
+        "symbol": "core::net::BroadcastMode"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::PortSharing",
+      "to": "core::net::PortSharing",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/UdpSocket.hpp",
+        "symbol": "core::net::PortSharing"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::OpenUdpSocket",
+      "to": "core::net::openUdpSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/UdpSocket.hpp",
+        "symbol": "core::net::openUdpSocket"
+      },
+      "note": "Task B9. Returns std::expected<std::unique_ptr<IDatagramSocket>, NetError> where upstream returned a pointer that was null on failure: a `== nullptr` test at a call site becomes `.has_value()`"
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::AnswerFromOwnAddress",
+      "to": "core::net::answerFromOwnAddress",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SharedPortDatagram.hpp",
+        "symbol": "core::net::answerFromOwnAddress"
+      },
+      "note": "Task B9. Returns std::expected, BadHandle when either half is null"
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::OpenSharedPortUdpSocket",
+      "to": "core::net::openSharedPortUdpSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/SharedPortDatagram.hpp",
+        "symbol": "core::net::openSharedPortUdpSocket"
+      },
+      "note": "Task B9. Returns std::expected carrying the first failed bind's error"
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::DatagramBus",
+      "to": "core::net::testing::DatagramBus",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemoryDatagram.hpp",
+        "symbol": "core::net::testing::DatagramBus"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::Testing::DatagramBytes",
+      "to": "core::net::testing::datagramBytes",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/DatagramPayload.hpp",
+        "symbol": "core::net::testing::datagramBytes"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::Testing::DatagramText",
+      "to": "core::net::testing::datagramText",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/DatagramPayload.hpp",
+        "symbol": "core::net::testing::datagramText"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::InMemoryPipe",
+      "to": "core::net::testing::InMemoryPipe",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemorySocket.hpp",
+        "symbol": "core::net::testing::InMemoryPipe"
+      },
+      "note": "Task B9. The wake-ups are onReadable/onWritable and wakeReader/wakeWriter, called by the socket LAST; SetProgressCallback is gone, and push/pull no longer wake anyone"
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::InMemorySocket",
+      "to": "core::net::testing::InMemorySocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemorySocket.hpp",
+        "symbol": "core::net::testing::InMemorySocket"
+      },
+      "note": "Task B9. waitReadable PARKS until the pipe has something to say (upstream answered 1 at once), and a bounded pair makes a write WAIT for the reader rather than fail with WouldBlock -- a case that relied on either answer was relying on a fake more permissive than a real socket"
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::InMemorySocketPair",
+      "to": "core::net::testing::InMemorySocketPair",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemorySocket.hpp",
+        "symbol": "core::net::testing::InMemorySocketPair"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::InMemoryListener",
+      "to": "core::net::testing::InMemoryListener",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemorySocket.hpp",
+        "symbol": "core::net::testing::InMemoryListener"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::Testing::SocketDecorator",
+      "to": "core::net::testing::SocketDecorator",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/SocketDecorator.hpp",
+        "symbol": "core::net::testing::SocketDecorator"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::Testing::ParkingReadableSocket",
+      "to": "core::net::testing::ParkingReadableSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/ParkingReadableSocket.hpp",
+        "symbol": "core::net::testing::ParkingReadableSocket"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::Testing::ParkingWritableSocket",
+      "to": "core::net::testing::ParkingWritableSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/ParkingReadableSocket.hpp",
+        "symbol": "core::net::testing::ParkingWritableSocket"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::Testing::CompleteCancelled",
+      "to": "core::net::testing::completeCancelled",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/ParkingReadableSocket.hpp",
+        "symbol": "core::net::testing::completeCancelled"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::BlockingSocket",
+      "to": "core::net::BlockingSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/BlockingSocket.hpp",
+        "symbol": "core::net::BlockingSocket"
+      },
+      "note": "Task B9. Constructed from a platform::NativeHandle rather than Detail::NativeSocket"
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::BlockingConnector",
+      "to": "core::net::BlockingConnector",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/BlockingConnector.hpp",
+        "symbol": "core::net::BlockingConnector"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::BlockingConnectorOptions",
+      "to": "core::net::BlockingConnectorOptions",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/BlockingConnector.hpp",
+        "symbol": "core::net::BlockingConnectorOptions"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::ConnectTcp",
+      "to": "core::net::connectTcp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/TcpClient.hpp",
+        "symbol": "core::net::connectTcp"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::SendAll",
+      "to": "core::net::sendAll",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/TcpClient.hpp",
+        "symbol": "core::net::sendAll"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::RecvExactly",
+      "to": "core::net::receiveExactly",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/TcpClient.hpp",
+        "symbol": "core::net::receiveExactly"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::HttpHealthProbe",
+      "to": "core::net::httpHealthProbe",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/HealthProbe.hpp",
+        "symbol": "core::net::httpHealthProbe"
+      },
+      "note": "Task B9. No longer noexcept, and takes a timeout (default 3s, as upstream fixed it); probeHttpStatus returns the status itself"
+    },
+    {
+      "kind": "member",
+      "from": "Send",
+      "to": "send",
+      "apply": "semantic",
+      "scope": "FastCache::IDatagramSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IDatagramSocket.hpp",
+        "symbol": "core::net::IDatagramSocket::send"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Receive",
+      "to": "receive",
+      "apply": "semantic",
+      "scope": "FastCache::IDatagramSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IDatagramSocket.hpp",
+        "symbol": "core::net::IDatagramSocket::receive"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "BoundAddress",
+      "to": "boundAddress",
+      "apply": "semantic",
+      "scope": "FastCache::IDatagramSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/IDatagramSocket.hpp",
+        "symbol": "core::net::IDatagramSocket::boundAddress"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "DropNext",
+      "to": "dropNext",
+      "apply": "semantic",
+      "scope": "FastCache::DatagramBus",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemoryDatagram.hpp",
+        "symbol": "core::net::testing::DatagramBus::dropNext"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "SendCount",
+      "to": "sendCount",
+      "apply": "semantic",
+      "scope": "FastCache::DatagramBus",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemoryDatagram.hpp",
+        "symbol": "core::net::testing::DatagramBus::sendCount"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "BroadcastAddress",
+      "to": "broadcastAddress",
+      "apply": "semantic",
+      "scope": "FastCache::DatagramBus",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemoryDatagram.hpp",
+        "symbol": "core::net::testing::DatagramBus::broadcastAddress"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "BroadcastAddressOn",
+      "to": "broadcastAddressOn",
+      "apply": "semantic",
+      "scope": "FastCache::DatagramBus",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemoryDatagram.hpp",
+        "symbol": "core::net::testing::DatagramBus::broadcastAddressOn"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "ConnectClient",
+      "to": "connectClient",
+      "apply": "semantic",
+      "scope": "FastCache::InMemoryListener",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemorySocket.hpp",
+        "symbol": "core::net::testing::InMemoryListener::connectClient"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "TryPull",
+      "to": "pull",
+      "apply": "semantic",
+      "scope": "FastCache::InMemoryPipe",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemorySocket.hpp",
+        "symbol": "core::net::testing::InMemoryPipe::pull"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "CloseWrite",
+      "to": "closeWrite",
+      "apply": "semantic",
+      "scope": "FastCache::InMemoryPipe",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemorySocket.hpp",
+        "symbol": "core::net::testing::InMemoryPipe::closeWrite"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "CloseRead",
+      "to": "closeRead",
+      "apply": "semantic",
+      "scope": "FastCache::InMemoryPipe",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemorySocket.hpp",
+        "symbol": "core::net::testing::InMemoryPipe::closeRead"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "IsReset",
+      "to": "isReset",
+      "apply": "semantic",
+      "scope": "FastCache::InMemoryPipe",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemorySocket.hpp",
+        "symbol": "core::net::testing::InMemoryPipe::isReset"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "ResetCode",
+      "to": "resetCode",
+      "apply": "semantic",
+      "scope": "FastCache::InMemoryPipe",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemorySocket.hpp",
+        "symbol": "core::net::testing::InMemoryPipe::resetCode"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "IsWriteClosed",
+      "to": "isWriteClosed",
+      "apply": "semantic",
+      "scope": "FastCache::InMemoryPipe",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemorySocket.hpp",
+        "symbol": "core::net::testing::InMemoryPipe::isWriteClosed"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "IsReadClosed",
+      "to": "isReadClosed",
+      "apply": "semantic",
+      "scope": "FastCache::InMemoryPipe",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemorySocket.hpp",
+        "symbol": "core::net::testing::InMemoryPipe::isReadClosed"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Buffered",
+      "to": "buffered",
+      "apply": "semantic",
+      "scope": "FastCache::InMemoryPipe",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/InMemorySocket.hpp",
+        "symbol": "core::net::testing::InMemoryPipe::buffered"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "ResolveReadable",
+      "to": "resolveReadable",
+      "apply": "semantic",
+      "scope": "FastCache::Testing::ParkingReadableSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/ParkingReadableSocket.hpp",
+        "symbol": "core::net::testing::ParkingReadableSocket::resolveReadable"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "WatchesArmed",
+      "to": "watchesArmed",
+      "apply": "semantic",
+      "scope": "FastCache::Testing::ParkingReadableSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/ParkingReadableSocket.hpp",
+        "symbol": "core::net::testing::ParkingReadableSocket::watchesArmed"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "WatchesOrphaned",
+      "to": "watchesOrphaned",
+      "apply": "semantic",
+      "scope": "FastCache::Testing::ParkingReadableSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/ParkingReadableSocket.hpp",
+        "symbol": "core::net::testing::ParkingReadableSocket::watchesOrphaned"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "WatchesRetiredByCancel",
+      "to": "watchesRetiredByCancel",
+      "apply": "semantic",
+      "scope": "FastCache::Testing::ParkingReadableSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/ParkingReadableSocket.hpp",
+        "symbol": "core::net::testing::ParkingReadableSocket::watchesRetiredByCancel"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "WatchesRetiredByClose",
+      "to": "watchesRetiredByClose",
+      "apply": "semantic",
+      "scope": "FastCache::Testing::ParkingReadableSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/ParkingReadableSocket.hpp",
+        "symbol": "core::net::testing::ParkingReadableSocket::watchesRetiredByClose"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "WatchesResolved",
+      "to": "watchesResolved",
+      "apply": "semantic",
+      "scope": "FastCache::Testing::ParkingReadableSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/ParkingReadableSocket.hpp",
+        "symbol": "core::net::testing::ParkingReadableSocket::watchesResolved"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "IsWatchParked",
+      "to": "isWatchParked",
+      "apply": "semantic",
+      "scope": "FastCache::Testing::ParkingReadableSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/ParkingReadableSocket.hpp",
+        "symbol": "core::net::testing::ParkingReadableSocket::isWatchParked"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "StopReading",
+      "to": "stopReading",
+      "apply": "semantic",
+      "scope": "FastCache::Testing::ParkingWritableSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/ParkingReadableSocket.hpp",
+        "symbol": "core::net::testing::ParkingWritableSocket::stopReading"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "IsWriteParked",
+      "to": "isWriteParked",
+      "apply": "semantic",
+      "scope": "FastCache::Testing::ParkingWritableSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/ParkingReadableSocket.hpp",
+        "symbol": "core::net::testing::ParkingWritableSocket::isWriteParked"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "WritesRetiredByClose",
+      "to": "writesRetiredByClose",
+      "apply": "semantic",
+      "scope": "FastCache::Testing::ParkingWritableSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/ParkingReadableSocket.hpp",
+        "symbol": "core::net::testing::ParkingWritableSocket::writesRetiredByClose"
+      }
+    },
+    {
+      "kind": "member",
+      "from": "Inner",
+      "to": "inner",
+      "apply": "semantic",
+      "scope": "FastCache::Testing::SocketDecorator",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/testing/SocketDecorator.hpp",
+        "symbol": "core::net::testing::SocketDecorator::inner"
+      }
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::BlockingListener",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "never imported: core-cpp's listeners own their bind sequence, and a second, thread-blocking listener would be a second answer to who owns an address. A caller that accepted on a thread of its own drives a loop listener with EventLoop::blockOn, or serves on a loop"
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::detail::AcceptRaw",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "never imported: a bare blocking accept whose only stop mechanism, closing the listener, works on Windows and not on POSIX (fastcached#1238)"
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::testing::FailingReadSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "not imported with its neighbours in tests/SocketDecorator.hpp: nothing in core-cpp stages a failing read through it; SocketDecorator is what one is written over"
     }
   ]
 }

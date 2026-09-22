@@ -108,16 +108,20 @@ endif()
 core_cpp_add_module(net KIND STATIC
     HEADERS
         AsyncBufferedReader.hpp
+        BlockingConnector.hpp
+        BlockingSocket.hpp
         ConnectFlow.hpp
         DeadlineTimer.hpp
         Diagnostics.hpp
         EventLoop.hpp
+        HealthProbe.hpp
         HostDrivenBackend.hpp
         HttpServer.hpp
         IAdmissionControl.hpp
         IAsyncAddressResolver.hpp
         ICompletionPort.hpp
         IConnector.hpp
+        IDatagramSocket.hpp
         IHostScheduler.hpp
         IListener.hpp
         InterruptibleSleep.hpp
@@ -127,13 +131,16 @@ core_cpp_add_module(net KIND STATIC
         KeepAlive.hpp
         PlatformLoop.hpp
         ReadinessDial.hpp
+        SharedPortDatagram.hpp
         SocketAddress.hpp
         SocketContract.hpp
         SocketDeadline.hpp
         SleepUntil.hpp
         Sockets.hpp
         SplitSocket.hpp
+        TcpClient.hpp
         ThreadedAddressResolver.hpp
+        UdpSocket.hpp
         WithTimeout.hpp
         WriteQueue.hpp
         detail/ParkTable.hpp
@@ -141,29 +148,44 @@ core_cpp_add_module(net KIND STATIC
         detail/WorkerIdentity.hpp
         testing/BackendMatrix.hpp
         testing/CoroTestSupport.hpp
+        testing/DatagramPayload.hpp
+        testing/InMemoryDatagram.hpp
+        testing/InMemorySocket.hpp
         testing/InMemoryTransport.hpp
         testing/ManualHostScheduler.hpp
         testing/NullBackend.hpp
+        testing/ParkingReadableSocket.hpp
         testing/ScriptedBackend.hpp
+        testing/SocketDecorator.hpp
         testing/TestLoop.hpp
     SOURCES
         ${_coreCppNetSubset}
         AsyncBufferedReader.cpp
+        BlockingConnector.cpp
+        BlockingSocket.cpp
         ConnectFlow.cpp
         Connector.cpp
         Diagnostics.cpp
+        HealthProbe.cpp
         HttpServer.cpp
         ISocket.cpp
         IoAwaitable.cpp
         ReadinessDial.cpp
+        SharedPortDatagram.cpp
         SocketAddress.cpp
         SocketContract.cpp
         Sockets.cpp
+        TcpClient.cpp
         ThreadedAddressResolver.cpp
         WriteQueue.cpp
+        testing/InMemoryDatagram.cpp
+        testing/InMemorySocket.cpp
         ${_coreCppNetDefaultBackend}
+        detail/BlockingPrimitives.hpp
+        detail/DatagramAddressing.hpp
         detail/DialPrimitives.hpp
         detail/PeerAddress.hpp
+        detail/SocketErrors.hpp
         detail/WaitChunking.hpp
         detail/WakeupChannel.hpp
     SOURCES_POSIX
@@ -171,6 +193,7 @@ core_cpp_add_module(net KIND STATIC
         posix/AcceptLoop.cpp
         posix/DialPrimitives.cpp
         posix/AcceptLoop.hpp
+        posix/BlockingPrimitives.cpp
         posix/FdUtils.hpp
         posix/PollBackend.cpp
         posix/PollBackend.hpp
@@ -178,7 +201,9 @@ core_cpp_add_module(net KIND STATIC
         posix/PosixListener.hpp
         posix/PosixSocket.cpp
         posix/PosixSocket.hpp
+        posix/SocketErrors.cpp
         posix/SocketsPosix.cpp
+        posix/UdpSocket.cpp
         posix/UnixListener.cpp
         posix/UnixListener.hpp
         testing/posix/InMemoryTransport.cpp
@@ -190,12 +215,15 @@ core_cpp_add_module(net KIND STATIC
         bsd/KqueueBackend.hpp
     SOURCES_WINDOWS
         testing/windows/InMemoryTransport.cpp
+        windows/BlockingPrimitives.cpp
         windows/DialPrimitives.cpp
         windows/IocpBackend.cpp
         windows/IocpBackend.hpp
         windows/NetworkEvents.cpp
         windows/NetworkEvents.hpp
+        windows/SocketErrors.cpp
         windows/SocketsWin32.cpp
+        windows/UdpSocket.cpp
         windows/WaitCompletionPacket.cpp
         windows/WaitCompletionPacket.hpp
         windows/WfmoBackend.cpp
@@ -247,21 +275,31 @@ core_cpp_add_test(net
         AcceptedHalfClose_test.cpp
         AsyncBufferedReader_test.cpp
         BackendParity_test.cpp
+        BlockingConnector_test.cpp
+        BlockingSocket_test.cpp
         ClockRefresh_test.cpp
         ConnectFlow_test.cpp
         Connector_test.cpp
         EventLoop_test.cpp
+        HealthProbe_test.cpp
         HttpServer_test.cpp
         IAdmissionControl_test.cpp
         IoAwaitable_test.cpp
         LoopTeardown_test.cpp
         ReadinessDial_test.cpp
+        SharedPortDatagram_test.cpp
         SocketAddress_test.cpp
+        SocketClosedStates_test.cpp
         SocketDeadline_test.cpp
         Socket_test.cpp
+        TcpClient_test.cpp
         ThreadedAddressResolver_test.cpp
+        UdpSocket_test.cpp
         WaitReadable_test.cpp
         WriteQueue_test.cpp
+        testing/InMemoryDatagram_test.cpp
+        testing/InMemorySocket_test.cpp
+        testing/ParkingReadableSocket_test.cpp
         testing/TestLoop_test.cpp
     # POSIX-only, and each for the same reason: they drive verbs that only PosixSocket implements.
     # `ReactorSocket_test` names PosixSocket directly. `CancelRead_test` and `SocketDecorator_test`
@@ -408,6 +446,28 @@ if(CORE_CPP_TESTING AND WIN32)
         set_tests_properties(core-cpp.iocp-canary.${guarantee} PROPERTIES
             PASS_REGULAR_EXPRESSION "${guarantee}: about to"
             FAIL_REGULAR_EXPRESSION "nothing refused it"
+            TIMEOUT 60
+            SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
+            LABELS "core-cpp;net;canary")
+    endforeach()
+endif()
+
+# The in-memory FAKE's two slot guards, watched refusing: a double that let a second read or write
+# arm over a parked one would be more permissive than the sockets it stands for, and an assertion
+# aborts the process, so SocketClosedStates_test cannot see it. Judged on the mode-named marker
+# printed immediately before the guarded call, never WILL_FAIL -- the block below says why. On every
+# platform, Windows included, because the fake has no platform; core::testing_dialogs so an MSVC
+# Debug assert fails instead of opening a dialog and waiting.
+if(CORE_CPP_TESTING AND NOT EMSCRIPTEN)
+    add_executable(core-cpp-inmemory-socket-canary testing/InMemorySocketCanary.cpp)
+    target_link_libraries(core-cpp-inmemory-socket-canary PRIVATE core::net core::testing_dialogs)
+    core_cpp_apply_toolchain(core-cpp-inmemory-socket-canary)
+    foreach(guard IN ITEMS fake-read-slot fake-write-slot)
+        add_test(NAME core-cpp.inmemory-socket-canary.${guard}
+                 COMMAND core-cpp-inmemory-socket-canary ${guard})
+        set_tests_properties(core-cpp.inmemory-socket-canary.${guard} PROPERTIES
+            PASS_REGULAR_EXPRESSION "${guard}: reached the guarded call"
+            FAIL_REGULAR_EXPRESSION "SURVIVED;unknown mode;usage:"
             TIMEOUT 60
             SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
             LABELS "core-cpp;net;canary")

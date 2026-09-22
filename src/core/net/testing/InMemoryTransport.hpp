@@ -2,11 +2,16 @@
 #pragma once
 
 /// @file
-/// A connected pair of in-process @c ISockets for deterministic tests — no TCP,
-/// no listener, no real network. Backed by a bidirectional socket pair (AF_UNIX
-/// socketpair on POSIX, a loopback TCP pair on Windows) so it goes through the
-/// same reactor-driven non-blocking read/write path as a real socket, and so it
-/// parks/cancels exactly like production I/O.
+/// A connected pair of REAL sockets on a loop, for tests that need the production read and write
+/// path without a listener: an AF_UNIX socketpair on POSIX, a loopback TCP pair on Windows, each end
+/// wrapped in the platform socket. It parks, cancels and fails exactly like production I/O because
+/// it IS production I/O -- a kernel and a loop are underneath every call.
+///
+/// **It is not a fake, and `<core/net/testing/InMemorySocket.hpp>` is.** That one is two byte pipes
+/// in the process with no descriptor and no loop, answering inline; this one goes through the
+/// kernel. They are kept apart deliberately: `SocketClosedStates_test.cpp` pins the fake against a
+/// real pair, and merging the two would delete the difference that test measures. The name is
+/// contour's, kept because consumers include it by that name.
 
 #include <core/net/EventLoop.hpp>
 #include <core/net/ISocket.hpp>

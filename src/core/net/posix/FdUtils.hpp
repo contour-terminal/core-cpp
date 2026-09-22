@@ -6,6 +6,7 @@
 
 #include <sys/socket.h>
 
+#include <tuple>
 #include <utility>
 
 #include <fcntl.h>
@@ -46,6 +47,29 @@ namespace core::net
     if (fd < 0)
         return fd;
     std::ignore = makeNonBlockingCloexec(fd);
+    return fd;
+#endif
+}
+
+/// Creates a BLOCKING, close-on-exec datagram socket portably, for the reason @c makeStreamSocket
+/// gives: atomically where `socket()` takes the flag, best-effort through `fcntl` where it does not.
+///
+/// Blocking, unlike every stream socket here, because a datagram socket's receive is bounded by
+/// `SO_RCVTIMEO` on a thread of its own rather than parked on a loop (see `IDatagramSocket`).
+/// @param family Address family (AF_INET / AF_INET6).
+/// @param protocol Protocol (usually 0).
+/// @return The fd, or -1 on failure (errno set).
+[[nodiscard]] inline int makeDatagramSocket(int family, int protocol) noexcept
+{
+#ifdef SOCK_CLOEXEC
+    return ::socket(family, SOCK_DGRAM | SOCK_CLOEXEC, protocol);
+#else
+    auto const fd = ::socket(family, SOCK_DGRAM, protocol);
+    if (fd < 0)
+        return fd;
+    auto const fdFlags = ::fcntl(fd, F_GETFD, 0);
+    if (fdFlags >= 0)
+        std::ignore = ::fcntl(fd, F_SETFD, fdFlags | FD_CLOEXEC);
     return fd;
 #endif
 }

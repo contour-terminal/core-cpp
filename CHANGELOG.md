@@ -11,6 +11,44 @@ workflow refuses one without a section here.
 
 ### Added
 
+- **Datagrams** (`<core/net/IDatagramSocket.hpp>`, `<core/net/UdpSocket.hpp>`,
+  `<core/net/SharedPortDatagram.hpp>`). `openUdpSocket(bindAddress, port, BroadcastMode,
+  PortSharing)` opens a UDP socket and answers WHY a bind failed, where fastcached's returned a null
+  pointer; its receive buffer is the largest datagram IPv4 can carry, so an oversized message is
+  never silently truncated (fastcached's was 8 KiB), and a datagram too large for the path is
+  `NetErrorCode::MessageTooLarge` rather than `SystemError`. `answerFromOwnAddress()` and
+  `openSharedPortUdpSocket()` hear a segment on a shared port and send, and are answered, from an
+  address only this node holds -- because a unicast to a shared port reaches one socket, and which
+  one differs by platform.
+
+- **Transports for threads that may block** (`<core/net/BlockingSocket.hpp>`,
+  `<core/net/BlockingConnector.hpp>`, `<core/net/TcpClient.hpp>`, `<core/net/HealthProbe.hpp>`).
+  `BlockingSocket` answers every verb before its awaitable exists, so `core::async::syncRun` drives
+  it; its `waitReadable` blocks rather than answering `1` at once, and a non-positive
+  `setReceiveDeadline` removes the bound. `BlockingConnector` is an `IConnector` over the shared dial
+  flow that waits on the calling thread within its budget and arms
+  `BlockingConnectorOptions::ioTimeout` before it hands the socket over. `connectTcp`, `sendAll` and
+  `receiveExactly` are the one TCP client. `probeHttpStatus()` returns the status an HTTP endpoint
+  answered, and `httpHealthProbe()` whether it was 200; the status line is parsed strictly, so a
+  500 page mentioning "200 OK" is not healthy.
+
+- **A deterministic socket fake, pinned to a real socket** (`<core/net/testing/InMemorySocket.hpp>`).
+  `InMemorySocketPair::create()`, `InMemoryListener` and the pipe beneath them: no descriptor, no
+  loop, every answer inline. **In every closed state it answers the way a loopback TCP socket does,
+  and `SocketClosedStates_test.cpp` checks that** by running one table of steps over the fake and
+  over a real pair: a write to a peer that has gone fails, a close over unread bytes is a reset, a
+  half-close still reads. Unlike fastcached's, `waitReadable` parks, a bounded pair makes a write
+  wait for the reader rather than fail with `WouldBlock`, and a second concurrent read or write trips
+  the socket contract's slot guard as it does on every real socket. It is NOT
+  `testing/InMemoryTransport.hpp`, whose `makeSocketPair()` is a pair of real sockets, and the two
+  are kept apart on purpose: merging them would delete the difference the parity test measures.
+
+- Test doubles: `testing::DatagramBus` (`<core/net/testing/InMemoryDatagram.hpp>`), a network
+  segment in one process with scripted loss; `testing::SocketDecorator`, which forwards every verb,
+  zero receive deadlines included; `testing::ParkingReadableSocket` and
+  `testing::ParkingWritableSocket`, which park until the test decides and count how each parked
+  operation ended.
+
 - **The dial, and the seam that keeps DNS off an event loop's thread** (`<core/net/IConnector.hpp>`,
   `<core/net/IAsyncAddressResolver.hpp>`, `<core/net/ThreadedAddressResolver.hpp>`,
   `<core/net/SocketAddress.hpp>`, `<core/net/ConnectFlow.hpp>`, `<core/net/ReadinessDial.hpp>`,
@@ -650,6 +688,17 @@ workflow refuses one without a section here.
   `tools/migrate/renames.json` and the codemods, not the compiler, and the row is already there.
 
 ### Breaking
+
+- **`PosixSocket` no longer reports `EPIPE` as `NetErrorCode::ConnReset`; it is `SystemError`.**
+  `EPIPE` is a write after this end's own half-close, or after a peer's FIN that the previous write
+  turned into a reset -- the state Winsock reports as `WSAESHUTDOWN` or `WSAECONNABORTED`, which
+  `WindowsSocket` already answered as `SystemError`. A reset is the peer closing over bytes it had
+  not read (`ECONNRESET`), and a caller counts that apart from a goodbye. The two platforms disagreed
+  about one state until the in-memory socket's parity test ran against both.
+
+  Migration: a caller that treated `ConnReset` as "the peer is gone" on a WRITE should test for
+  `ConnReset` or `SystemError` there, or better, stop writing once a read has seen EOF. No consumer
+  in contour, endo or tuidu branches on `ConnReset`.
 
 - **`core::net::connect()` no longer resolves a name on the calling thread**, and callers of
   contour's `connect(loop, host, port)` inherit that without a source change. The body called
@@ -1747,6 +1796,7 @@ Each file was read as a git blob at the commit named, and none contains a CR byt
 | [contour](https://github.com/contour-terminal/contour) | `6777ff05014f8ff163b071e8b0e942830119db80` | `src/net` as `core::net`, `core::net_types` and `core::net_tls`, `net::` renamed `core::net::` and `coro::` `core::async::`, with its tests but `test_main.cpp`; `net/platform/{Clock,NativeHandle,SystemPipe,WinsockInit}` replaced by `core::platform`, whose `SystemPipe::read()` returns a `ChannelResult`; `platform/PeerAddress.hpp` moved to `detail/` and `platform/WindowsLoopback.*` to `windows/`, so that no `core::net::platform` namespace hides `core::platform`; platform code in platform subdirectories (epoll in `linux/`, kqueue in `bsd/`, `PollEventSource.cpp` split into `posix/` and `windows/`, `WaitChunking.hpp` in `detail/`); `NetError` split out of `IoResult.hpp` into `NetError.hpp`; `testing/TempDir.hpp` not imported (`core::testing::ScopedTempDir`); no `NOLINT`; the C-style `for` loops written as range-`for`s and `while`s; one lambda parameter renamed for GCC's `-Wshadow`, and a `CMSG_FIRSTHDR()` result checked for GCC's `-Wnull-dereference`; the TLS test makes its client context before its server thread starts |
 | [fastcached](https://github.com/LASTRADA-Software/fastcached) | `b461e8b6d367ed22e4bf2935717fa59360a64b7d` | `src/FastCache/Core/Clock.hpp`, merged into `core/platform/Clock.hpp` in camelBack (`Now`/`Refresh` as `now`/`refresh`, `TimePoint`/`Duration` as `SteadyTimePoint`/`SteadyDuration`); `Clock_test.cpp` and `WallClockRef_test.cpp`, merged into `core/platform/Clock_test.cpp` |
 | [fastcached](https://github.com/LASTRADA-Software/fastcached) | `0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21` | `src/FastCache/Async/{ParkedWork,IExecutor,ResumeOn,ThreadPoolExecutor,AsyncQueue}.{hpp,cpp}` and their tests as `core::async`, `FastCache::` renamed `core::async::` and `Detail::` `detail::`; `DetachedTask` and `SyncRun`/`SyncRunWith` out of `Task.hpp` into `DetachedTask.hpp` and `SyncRun.hpp` (Ruling R66), and the rest of that file merged into contour's `Task.hpp`; `ThreadPoolExecutor.cpp` inlined into its header (Ruling R65), over `std::thread` rather than `std::jthread`; `IReactor` replaced by `IExecutor` in `AsyncQueue` and `ParkedWork_test.cpp`, whose reactor-driven cases belong to Task B4 |
+| [fastcached](https://github.com/LASTRADA-Software/fastcached) | `0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21` | `src/FastCache/Net/{IDatagramSocket,UdpSocket,SharedPortDatagram,InMemoryDatagram,BlockingSocket,BlockingConnector,TcpClient,HealthProbe}` and their tests, `InMemoryTransport` as `testing/InMemorySocket` (core-cpp's `testing/InMemoryTransport.hpp` is contour's real socket pair), `SocketClosedStates_test.cpp`, and `src/tests/{DatagramPayload,SocketDecorator}.hpp` as `core::net::testing`, camelBack; `UdpSocket.cpp` split into `posix/` and `windows/`; `BlockingListener`, `Detail::AcceptRaw` and `FailingReadSocket` not imported; `HealthProbe_test.cpp` rewritten against `core::net::serve` |
 
 The rulebook and CI configuration adapt text from fastcached at
 `b5ded89c5ae6ba5b45337335ce774c5ae6986d65`, contour and endo at the commits above, Lightweight at
