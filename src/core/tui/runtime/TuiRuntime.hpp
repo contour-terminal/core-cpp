@@ -251,6 +251,12 @@ class TuiRuntime
 
     /// Sets the policy run when an interrupt (SIGINT / Ctrl+C) is observed. The default requests
     /// stop on the loop, which cancels every flow and unparks what it cancelled.
+    ///
+    /// **The handler must not destroy this runtime.** It runs inline, inside the source flow that
+    /// observed the interrupt, and that flow resumes the moment the handler returns -- into a frame
+    /// and an object that would both be gone. `post()` the teardown to the loop instead: by the
+    /// time it runs, the flow is parked again and the destructor can take it back. Asserted in a
+    /// debug build.
     /// @param handler The interrupt policy, or `nullptr` to restore the default.
     void setInterruptHandler(std::function<void()> handler) { _onInterrupt = std::move(handler); }
 
@@ -438,6 +444,54 @@ class TuiRuntime
     /// the loop is resumed one last time so its `await_resume` can unregister its park, and this
     /// is what stops that resumption from re-entering the body of a runtime that is going away.
     bool _stopping = false;
+
+    /// Whether this runtime is currently running code it does not own -- the interrupt handler, or
+    /// an @c InputSource member. Read only by the destructor's precondition; see @c CalloutScope.
+    bool _inCallout = false;
+
+    /// Marks the window in which this runtime has handed control to code it does not own.
+    ///
+    /// **It exists for one assertion, and that assertion is a precondition the destructor cannot
+    /// serve.** A source flow calls out to the consumer inline -- `_onInterrupt()`, and every
+    /// @c InputSource member -- so a consumer that owns its runtime can reach `~TuiRuntime` from
+    /// inside a flow that is still executing. That is a FOURTH state a source flow can be in at
+    /// teardown, RUNNING, and unlike the other three it has no right answer: `cancelPending`
+    /// correctly declines it (the loop is not holding a running frame), and then `~Task` destroys
+    /// a frame whose body resumes the moment the call returns. Nothing the destructor could do
+    /// helps, because the object the resumed body reads is gone either way. Destroy the runtime
+    /// after the call returns -- `loop.post(...)` is the usual way -- and the flow is parked by
+    /// then, which is state 2.
+    ///
+    /// It restores the previous value rather than clearing it, so a callout that nests another --
+    /// an @c InputSource reached from inside the interrupt handler -- does not end the outer one.
+    class CalloutScope
+    {
+      public:
+        /// @param runtime The runtime handing control out.
+        explicit CalloutScope(TuiRuntime& runtime) noexcept:
+            _runtime(runtime), _outer(std::exchange(runtime._inCallout, true))
+        {
+        }
+        CalloutScope(CalloutScope const&) = delete;
+        CalloutScope(CalloutScope&&) = delete;
+        CalloutScope& operator=(CalloutScope const&) = delete;
+        CalloutScope& operator=(CalloutScope&&) = delete;
+        ~CalloutScope() { _runtime._inCallout = _outer; }
+
+      private:
+        TuiRuntime& _runtime;
+        bool _outer;
+    };
+
+    /// Runs @p call -- code this runtime does not own -- inside a @c CalloutScope.
+    /// @param call The callout.
+    /// @return Whatever @p call returns.
+    template <typename Call>
+    decltype(auto) callOut(Call&& call)
+    {
+        auto const scope = CalloutScope { *this };
+        return std::forward<Call>(call)();
+    }
 };
 
 /// Awaitable yielding the next input event, or throwing @c core::async::OperationCancelled if the

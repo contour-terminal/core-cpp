@@ -109,6 +109,49 @@ Task<int> awaitEventForResult(TuiRuntime* runtime, int timeoutMs)
     co_return event.has_value() ? 1 : 0;
 }
 
+/// The first half of the two-flow interleave on the input slot: it parks on @c nextEventFor and is
+/// woken by non-input ACTIVITY, which takes it out of the slot and hands it to the loop — so its
+/// `await_resume` runs one queue entry later, after a sibling has taken the slot it left.
+/// @param runtime The runtime to await.
+/// @param timeoutMs A timeout long enough that it cannot be what resumes this flow.
+/// @param resumedWithoutEvent Set when the wait resolved with no event, which is what a focus
+///        report produces: consumed by the source, so nothing is buffered.
+Task<void> awaitEventForWokenByActivity(TuiRuntime* runtime, int timeoutMs, bool* resumedWithoutEvent)
+{
+    try
+    {
+        auto const event = co_await runtime->nextEventFor(std::chrono::milliseconds { timeoutMs });
+        *resumedWithoutEvent = !event.has_value();
+    }
+    catch (OperationCancelled const&)
+    {
+        // Teardown after a failed assertion; the flag stays false and the case reports that.
+        co_return;
+    }
+}
+
+/// The second half: it parks on a delay that expires in the same turn the input handle becomes
+/// readable, so it resumes BETWEEN the sibling leaving the slot and the sibling's `await_resume`,
+/// and the deadline it arms there is the one that release would wrongly retire.
+/// @param runtime The runtime to await.
+/// @param delayMs How long to sleep before taking the slot.
+/// @param timeoutMs The timeout whose survival is the assertion.
+/// @param timedOut Set when the wait resolves with nothing — that is, when its deadline fired.
+Task<void> delayThenAwaitEventFor(TuiRuntime* runtime, int delayMs, int timeoutMs, bool* timedOut)
+{
+    try
+    {
+        co_await runtime->delay(std::chrono::milliseconds { delayMs });
+        auto const event = co_await runtime->nextEventFor(std::chrono::milliseconds { timeoutMs });
+        *timedOut = !event.has_value();
+    }
+    catch (OperationCancelled const&)
+    {
+        // Teardown after a failed assertion; the flag stays false and the case reports that.
+        co_return;
+    }
+}
+
 /// Returns the kind of the first activity nextActivity observes (as its enum value).
 Task<int> awaitActivityKind(TuiRuntime* runtime, int timeoutMs)
 {
@@ -618,6 +661,75 @@ TEST_CASE("A read that decodes to something arms no escape flush", "[TuiRuntime]
     REQUIRE(loop.pendingTimerCount() == 0);
 }
 
+TEST_CASE("A waiter released after a sibling took the input slot leaves the sibling's timeout armed",
+          "[TuiRuntime][clock][regression]")
+{
+    // H1: `releaseInputWaiter` retired `_inputDeadline` unconditionally, and by the time a QUEUED
+    // waiter's `await_resume` runs that deadline may belong to a different flow -- so a
+    // `nextEventFor`/`nextActivity` was silently left parked with no timeout at all.
+    //
+    // **The fix shipped with no case because the defect was derived to be unreachable, and the
+    // derivation was wrong.** It ran: the ready queue is FIFO, so anything that could park is
+    // either ahead of the queued waiter -- and so ran while the slot was still occupied, which
+    // `parkOnInput` asserts against -- or appended behind it. The flaw is "ahead ... so ran while
+    // the slot was occupied": the queued waiter is appended DURING the drain, by the entry at its
+    // front, so everything already behind that front entry runs after the slot was emptied and
+    // before the waiter resumes. `EventLoop::turn` produces such neighbours as a matter of course:
+    // step 4 dispatches readiness into `_ready` and step 5 fires expired deadlines into the same
+    // queue, and the next turn's step 2 drains them back to back.
+    //
+    // So the shape below is not contrived, it is the ordinary one:
+    //
+    //   turn 2  step 4 queues the input flow (readable), step 5 queues the sibling (delay due)
+    //   turn 3  drain: input flow -> focus report -> notifyActivity takes the first waiter out of
+    //                  the slot and appends it;  sibling -> parks on input, arming ITS deadline;
+    //                  first waiter -> await_resume -> releaseInputWaiter.
+    //
+    // A focus report is what makes the wake leave the buffer EMPTY: the source consumes it, so the
+    // sibling's `await_ready` does not short-circuit on a buffered event.
+    auto clock = ManualClock {};
+    auto backend = ClockAdvancingBackend { clock, 40ms };
+    auto loop = EventLoop { backend, clock };
+    auto source = ScriptedInputSource { nullptr, nullptr, HandleFor::Input };
+    REQUIRE(source.inputHandle() != core::platform::InvalidHandle); // the premise, checkable
+    source.pushEvents({ InputEvent { core::tui::FocusEvent { .focused = true } } });
+    auto runtime = TuiRuntime { loop, source };
+
+    auto activityResumed = false;
+    auto siblingTimedOut = false;
+    runtime.spawn(awaitEventForWokenByActivity(&runtime, 10'000, &activityResumed));
+    runtime.spawn(delayThenAwaitEventFor(&runtime, 50, 120, &siblingTimedOut));
+
+    // The first wait consumes the wakes `submit` and `spawn` left behind and spends no script
+    // step, as core-cpp#17's case says; the SECOND is the one that reports the input handle ready.
+    backend.pushReadable(HandlerId { 1 });
+    for ([[maybe_unused]] auto const step: std::views::iota(0, 30))
+        backend.pushTimeout();
+
+    std::ignore = loop.runOnce(core::platform::SteadyDuration::zero()); // clock 40ms: all three park
+    std::ignore = loop.runOnce(core::platform::SteadyDuration::zero()); // clock 80ms: readable, 50ms due
+    std::ignore = loop.runOnce(core::platform::SteadyDuration::zero()); // the interleaved drain
+
+    // The premise, asserted rather than assumed: the interleave only happens if the activity wake
+    // really did resume the first flow with no event.
+    REQUIRE(activityResumed);
+    // The sibling's 120ms deadline, still armed. The defect retires it here, and NOTHING else
+    // observable changes -- no assertion trips, nothing is logged, and in a release build the
+    // symptom is a TUI that stops redrawing.
+    CHECK(loop.pendingTimerCount() == 1);
+
+    // And the consequence, which is what a count alone cannot show: the timeout must actually
+    // fire. Bounded at 20 turns -- 3 would do, each wait advancing the clock 40ms past the 200ms
+    // the deadline falls at -- so a lost timeout reports as a failure here rather than as a hang.
+    for ([[maybe_unused]] auto const turn: std::views::iota(0, 20))
+    {
+        if (siblingTimedOut)
+            break;
+        std::ignore = loop.runOnce(core::platform::SteadyDuration::zero());
+    }
+    REQUIRE(siblingTimedOut);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Handle waits, which are the loop's too.
 // ---------------------------------------------------------------------------------------------
@@ -743,6 +855,56 @@ TEST_CASE("An installed interrupt handler replaces the default stop", "[TuiRunti
     constexpr auto Sentinel = -99;
     REQUIRE(runtime.blockOn(awaitKeyOrCancel(&runtime, Sentinel)) == static_cast<int>(U'i'));
     REQUIRE(interrupts == 1);
+    REQUIRE_FALSE(core::platform::SignalHandler::hasPendingSigint());
+}
+
+TEST_CASE("An interrupt handler that ends its runtime posts the teardown, and it leaves nothing",
+          "[TuiRuntime][interrupt][teardown]")
+{
+    // The FOURTH state a source flow can be in at teardown, RUNNING, and the one the destructor
+    // refuses rather than handles. The handler runs inline inside `interruptFlow`, so a handler
+    // that destroyed the runtime directly would destroy that flow's frame -- and the handler's own
+    // `std::function` -- while both are executing. Built and run, not argued: with the assertion
+    // taken out, doing that reports a heap-use-after-free under AddressSanitizer; with it in, the
+    // assertion fires. Neither is a passing case, so what is committed is the prescribed remedy:
+    // post the teardown, and by the time it runs the flow is parked again -- state 2, which the
+    // destructor takes back.
+    auto const pipes = openPipes(1);
+    REQUIRE(pipes.size() == 1);
+    auto const backend = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *backend };
+    auto source = ScriptedInputSource { pipes[0].get() };
+    auto wakeup = core::platform::Wakeup {};
+    auto runtime = std::optional<TuiRuntime> {};
+    runtime.emplace(loop, source, TuiRuntimeOptions { .interruptWakeup = &wakeup });
+
+    auto interrupts = 0;
+    runtime->setInterruptHandler([&interrupts, &loop, &runtime] {
+        ++interrupts;
+        loop.post([&runtime] { runtime.reset(); });
+    });
+
+    // The premise: both source flows are parked before the interrupt, so the teardown has two
+    // registrations to take back and "nothing left" is not what an idle loop reports anyway.
+    std::ignore = loop.runOnce(core::platform::SteadyDuration::zero());
+    REQUIRE(loop.parkedWaiterCount() == 2);
+
+    core::platform::SignalHandler::simulateSigint();
+    wakeup.signal();
+
+    // Bounded: readiness is dispatched in one turn, drained in the next, and the post runs in the
+    // one after that at the latest. A teardown that never ran reports as a failure, not a hang.
+    for ([[maybe_unused]] auto const turn: std::views::iota(0, 10))
+    {
+        if (!runtime)
+            break;
+        std::ignore = loop.runOnce(core::platform::SteadyDuration::zero());
+    }
+
+    REQUIRE(interrupts == 1);
+    REQUIRE_FALSE(runtime.has_value());
+    REQUIRE(loop.parkedWaiterCount() == 0);
+    REQUIRE(loop.readyCount() == 0);
     REQUIRE_FALSE(core::platform::SignalHandler::hasPendingSigint());
 }
 
@@ -899,13 +1061,33 @@ TEST_CASE("A runtime destroyed before its first turn leaves the loop holding not
     // the state was unreachable from the suite, not absent from the program. An error-return path
     // between construction and the first turn reaches it, and so does constructing and destroying
     // a runtime inside a single turn.
-    auto const pipes = openPipes(1);
-    REQUIRE(pipes.size() == 1);
+    //
+    // **All FOUR source flows, not the input one alone.** The fix is a `while (!_stopping)` guard
+    // repeated in each flow, so a case over one of them proves the guard is there in one place and
+    // infers the other three from their resemblance -- which is how the state that started this
+    // finding was missed in the first place. The runtime below is configured so that
+    // `startSourceFlows` starts every flow it knows how to start.
+    auto const pipes = openPipes(3); // input, resize, and a stand-in for the signal fd
+    REQUIRE(pipes.size() == 3);
+    auto wakeup = core::platform::Wakeup {};
     auto const backend = core::net::makeDefaultBackend();
     auto loop = EventLoop { *backend };
-    auto source = ScriptedInputSource { pipes[0].get() };
+    auto source = ScriptedInputSource { pipes[0].get(), pipes[1].get() };
+    auto const options = TuiRuntimeOptions { .interruptWakeup = &wakeup, .signalFd = pipes[2]->waitHandle() };
+
+    // The premise, made checkable, because "the loop holds nothing" is ALSO what a runtime that
+    // started no flow at all would leave behind: this configuration really does start four, and
+    // each of them parks on its own handle.
     {
-        auto runtime = TuiRuntime { loop, source };
+        auto runtime = TuiRuntime { loop, source, options };
+        std::ignore = loop.runOnce(core::platform::SteadyDuration::zero());
+        REQUIRE(loop.parkedWaiterCount() == 4);
+    }
+    REQUIRE(loop.parkedWaiterCount() == 0);
+
+    // And now the state this case exists for: the same four, destroyed with no turn at all.
+    {
+        auto runtime = TuiRuntime { loop, source, options };
         // Deliberately no turn of any kind.
     }
 

@@ -1251,14 +1251,25 @@ workflow refuses one without a section here.
   Reachable by constructing a runtime and destroying it with no turn in between — an error-return
   path, or construction and destruction inside one turn. **No case in the suite reached it**,
   because every one drives the loop first, which is why seven configurations and both sanitizers
-  were green over it. A case that constructs and destroys with no turn now holds it.
+  were green over it. A case that constructs and destroys with no turn now holds it, over all four
+  source flows; reverting any one flow's guard fails it.
+
+- **Destroying a `TuiRuntime` from inside its own interrupt handler is refused in a debug build**
+  instead of destroying a running frame. The handler runs inline inside the source flow that
+  observed the interrupt, so a handler that destroyed the runtime destroyed that flow's frame, and
+  the handler's own `std::function`, while both were executing; AddressSanitizer reports it as a
+  heap-use-after-free in the flow's resumption. It is a precondition rather than a case the
+  destructor can handle, so `~TuiRuntime` now asserts it, `setInterruptHandler` documents it, and
+  the remedy is to `post()` the teardown to the loop, after which the flow is parked and the
+  destructor takes it back. The same holds for an `InputSource` member reached from a source flow.
 
 - **A timed input wait could silently lose its timeout.** `releaseInputWaiter` retired
   `_inputDeadline` unconditionally, but a waiter's deadline is retired where it leaves the slot, so
   by the time a queued waiter's `await_resume` ran the slot could already hold a *different* flow
   and its timer. `nextEventFor`/`nextActivity` then waited forever on a deadline they had asked for
   and never got. The deadline is now retired only in the branch where the slot still holds the
-  resuming waiter.
+  resuming waiter. Reachable through the public API alone: a timed waiter woken by a focus report
+  while a sibling's `delay` expires in the same turn, which a regression case now builds.
 
 - **A focus change no longer closes an open modal.** The runtime woke its input waiter for any
   non-input activity, including a dispatched focus report -- but a `nextEvent()` awaiter can only

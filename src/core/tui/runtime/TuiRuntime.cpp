@@ -39,6 +39,13 @@ TuiRuntime::~TuiRuntime()
     assert(_loop.teardownIsSerialisedWithDispatch()
            && "~TuiRuntime from a second thread while another is driving its loop: this clears "
               "scheduler state beside a turn that is reading it");
+    // The FOURTH state a source flow can be in, RUNNING, and the one that is a precondition rather
+    // than a case to handle -- see state 4 below, and TuiRuntime::CalloutScope.
+    assert(!_inCallout
+           && "~TuiRuntime from inside code this runtime called -- an interrupt handler, or an "
+              "InputSource member reached from a source flow. That flow is still executing and is "
+              "about to have its frame destroyed under it; destroy the runtime after the call "
+              "returns instead, e.g. by posting the teardown to the loop");
     _stopping = true;
 
     unwindParkedWaiters();
@@ -63,8 +70,14 @@ TuiRuntime::~TuiRuntime()
     //      [core-cpp#41](https://github.com/contour-terminal/core-cpp/issues/41), and the resume
     //      below is a WORKAROUND for it: when `cancelPending` learns to unregister the park on a
     //      ready-queue hit, state 3 stops needing a resume and this loop should be revisited.
+    //   4. RUNNING: this destructor was reached from inside a callout of that very flow -- the
+    //      interrupt handler, or an `InputSource` member. `cancelPending` correctly answers false,
+    //      the loop is not holding a running frame, and `~Task` would then destroy a frame whose
+    //      body resumes the moment the callout returns. It has no right answer, so it is refused
+    //      by the assertion above rather than handled here. An earlier version of this comment
+    //      called the three states above exhaustive, which is the same mistake as the one before.
     //
-    // One action serves all three, and it works because of the flows' SHAPE rather than because of
+    // One action serves the three, and it works because of the flows' SHAPE rather than because of
     // a test on the state -- which is what makes it survive a fourth state being added. Resume
     // once, and let `_stopping` end the body at its first statement: state 1 enters its loop,
     // finds `_stopping` and returns without ever awaiting; state 3 runs `await_resume`, which
@@ -177,7 +190,7 @@ async::Task<void> TuiRuntime::inputFlow()
         if (_stopping)
             co_return;
 
-        auto decoded = _input.readReady();
+        auto decoded = callOut([this] { return _input.readReady(); });
         if (decoded.empty())
             // Bytes arrived and decoded to nothing: either a partial escape sequence, or a console
             // record that is not input. Arm the flush so a lone ESC is eventually delivered as
@@ -211,7 +224,7 @@ async::Task<void> TuiRuntime::resizeFlow()
         if (_stopping)
             co_return;
 
-        if (auto resize = _input.readResize())
+        if (auto resize = callOut([this] { return _input.readResize(); }))
         {
             auto events = std::vector<InputEvent> {};
             events.push_back(std::move(*resize));
@@ -285,7 +298,7 @@ async::Task<void> TuiRuntime::signalFlow()
 void TuiRuntime::runInterruptPolicy()
 {
     if (_onInterrupt)
-        _onInterrupt();
+        callOut(_onInterrupt);
     else
         // Not `rootStopSource().request_stop()`, which cancels every flow and unparks none of
         // them: a flow parked on a socket would observe its cancellation only when that socket
@@ -301,7 +314,7 @@ void TuiRuntime::routeDecoded(std::vector<InputEvent> events)
     // The source dispatches the terminal's own protocol responses (colour scheme, focus, cursor
     // position, cell size) and removes them. A focus change is reported back because it is
     // non-input activity an idle flow still wants: focus chrome has to redraw.
-    auto const focusChanged = _input.consumeReports(events);
+    auto const focusChanged = callOut([this, &events] { return _input.consumeReports(events); });
 
     for (auto& event: events)
         // A second filter over a source that is contracted to have applied the first. It is
@@ -323,7 +336,7 @@ bool TuiRuntime::hasBufferedInput()
         // not the reply. Those events were read off the input handle BEFORE anything still on it,
         // so nothing is going to become readable on their account and no source flow will ever
         // notice them. Asking here is what delivers them, at the one moment it matters.
-        for (auto& event: _input.takePending())
+        for (auto& event: callOut([this] { return _input.takePending(); }))
             if (!isProtocolReport(event))
                 _inputBuffer.push_back(std::move(event));
     return !_inputBuffer.empty();
@@ -480,7 +493,7 @@ void TuiRuntime::onEscapeFlush(void* state) noexcept
 {
     auto& self = *static_cast<TuiRuntime*>(state);
     self._escapeFlush = net::TimerId::invalid();
-    self.routeDecoded(self._input.flushPartial());
+    self.routeDecoded(self.callOut([&self] { return self._input.flushPartial(); }));
 }
 
 NextInputEventAwaiter TuiRuntime::nextEvent() noexcept
