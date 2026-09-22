@@ -109,7 +109,7 @@ TEST_CASE("a generated dev certificate drives a verified TLS handshake", "[net][
     // cert+key (the daemon's --tls-cert/--tls-key path), and have the CLIENT PIN
     // that exact certificate as its trust anchor — real peer verification, not the
     // TOFU (VERIFY_NONE) path above.
-    auto material = core::net::generateSelfSignedCertificate("contour-dev");
+    auto material = core::net::generateSelfSignedCertificate({ .commonName = "contour-dev" });
     REQUIRE(material.has_value());
     CHECK(material->certPem.starts_with("-----BEGIN CERTIFICATE-----"));
     CHECK(material->keyPem.contains("PRIVATE KEY"));
@@ -137,7 +137,7 @@ TEST_CASE("a pinned CA is not enough: the certificate must name the host asked f
     // The security property: chain validation proves WHO SIGNED the certificate, never WHO IT WAS
     // ISSUED FOR. Without a name check, any certificate the pinned CA ever signed — for any host —
     // is accepted for any endpoint, which is a machine-in-the-middle away from a full session.
-    auto material = core::net::generateSelfSignedCertificate("the-real-daemon");
+    auto material = core::net::generateSelfSignedCertificate({ .commonName = "the-real-daemon" });
     REQUIRE(material.has_value());
 
     SECTION("the name the certificate carries handshakes")

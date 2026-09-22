@@ -128,6 +128,7 @@ core_cpp_add_module(net KIND STATIC
         IoAwaitable.hpp
         IoBackend.hpp
         ISocket.hpp
+        ITlsContext.hpp
         KeepAlive.hpp
         PlatformLoop.hpp
         ReadinessDial.hpp
@@ -245,10 +246,18 @@ core_cpp_add_module(net KIND STATIC
 
 # detail/ScopeGuard.hpp is listed with core::net, not here: net's own tests use it too, and a
 # header belongs with the target every user of it links.
+#
+# testing/StrictTlsPeer is the TLS layer's test double, public like every double under testing/:
+# OpenSSL driven by hand, which a consumer can hold its own TLS code against as the tests here hold
+# this layer. It is the second of the two units `core-cpp.openssl-seam` lets include OpenSSL
+# (tests/cmake/check-openssl-seam.cmake), and its header names no OpenSSL type.
 core_cpp_add_module(net_tls KIND STATIC
-    HEADERS Tls.hpp
+    HEADERS
+        Tls.hpp
+        testing/StrictTlsPeer.hpp
     SOURCES
         Tls.cpp
+        testing/StrictTlsPeer.cpp
     PUBLIC_LIBS core::net
     PRIVATE_LIBS OpenSSL::SSL OpenSSL::Crypto)
 
@@ -340,7 +349,17 @@ endif()
 
 # TIMEOUT for the same reason as above, and with more cause: two of these cases say in their own
 # comments that a regression does not fail them, it hangs them.
-core_cpp_add_test(net NAME net_tls SOURCES Tls_test.cpp LABELS loopback TIMEOUT 120)
+#
+# The TLS cases are held against `testing::StrictTlsPeer` rather than only against another TLS
+# socket, which would agree with itself. The binary links no OpenSSL of its own: the peer is part of
+# core::net_tls, and OpenSSL stays PRIVATE to it.
+core_cpp_add_test(net NAME net_tls
+    SOURCES
+        TlsContext_test.cpp
+        TlsSocket_test.cpp
+        Tls_test.cpp
+    LABELS loopback
+    TIMEOUT 120)
 
 # `EventLoop::run()` and `EventLoop::blockOn()` on a host-driven loop are precondition violations,
 # and an assertion cannot be asserted from inside a Catch case: it aborts the process, which ends

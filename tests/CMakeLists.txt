@@ -101,6 +101,28 @@ add_test(NAME core-cpp.layering
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-layering.cmake")
 set_tests_properties(core-cpp.layering PROPERTIES LABELS "core-cpp;hygiene;tree-level" TIMEOUT 120)
 
+# "No OpenSSL type appears in any header" (Part I §2 item 8), refused rather than stated: an
+# OpenSSL include outside the units that implement the TLS layer, and an OpenSSL type named in any
+# header, forward declarations included. Registered whether or not CORE_CPP_WITH_TLS is on, because
+# the headers it guards are part of every build. It reads files and nothing else, so it is
+# tree-level, and the `style` job runs it.
+#
+# Bound from measurement: the scan took 65s under WSL, where reading ~560 files from /mnt/d costs
+# far more than the work itself. The self-test stages twelve four-file trees.
+add_test(NAME core-cpp.openssl-seam
+         COMMAND "${CMAKE_COMMAND}"
+                 "-DROOT=${CORE_CPP_SOURCE_DIR}"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-openssl-seam.cmake")
+add_test(NAME core-cpp.openssl-seam-selftest
+         COMMAND "${CMAKE_COMMAND}"
+                 "-DCHECKER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-openssl-seam.cmake"
+                 "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/openssl-seam-selftest"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-openssl-seam-selftest.cmake")
+set_tests_properties(core-cpp.openssl-seam core-cpp.openssl-seam-selftest PROPERTIES
+    FAIL_REGULAR_EXPRESSION "CMake Error"
+    LABELS "core-cpp;hygiene;tree-level"
+    TIMEOUT 300)
+
 # A release tag must name the tree it releases (Part I §4). The release workflow runs
 # check-release.cmake on the pushed tag; this proves that it accepts a matching tree and refuses
 # each mismatch by name.

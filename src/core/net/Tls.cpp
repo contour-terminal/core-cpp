@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/Tls.hpp>
 
+#include <core/net/SocketContract.hpp>
 #include <core/net/detail/ScopeGuard.hpp>
 
 #include <openssl/bio.h>
+#include <openssl/bn.h>
 #include <openssl/crypto.h>
+#include <openssl/ec.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
+#include <openssl/obj_mac.h>
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
@@ -16,6 +20,9 @@
 #include <array>
 #include <coroutine>
 #include <cstddef>
+#include <cstdint>
+#include <fstream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -39,20 +46,137 @@ namespace
         return std::string { buffer.data() };
     }
 
+    /// Clamps a size to the positive `int` range OpenSSL's length parameters take.
+    [[nodiscard]] int clampToInt(std::size_t value) noexcept
+    {
+        constexpr auto Max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+        return static_cast<int>(std::min(value, Max));
+    }
+
     using SslCtxPtr = std::unique_ptr<SSL_CTX, decltype(&SSL_CTX_free)>;
     using BioPtr = std::unique_ptr<BIO, decltype(&BIO_free)>;
     using X509Ptr = std::unique_ptr<X509, decltype(&X509_free)>;
     using PKeyPtr = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
+    using PKeyCtxPtr = std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)>;
+    using BignumPtr = std::unique_ptr<BIGNUM, decltype(&BN_free)>;
+    using Asn1OctetStringPtr = std::unique_ptr<ASN1_OCTET_STRING, decltype(&ASN1_OCTET_STRING_free)>;
 
     [[nodiscard]] BioPtr memBio(std::string_view pem)
     {
-        return BioPtr { BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size())), BIO_free };
+        return BioPtr { BIO_new_mem_buf(pem.data(), clampToInt(pem.size())), BIO_free };
     }
 
-    /// A TLS layer over an inner `ISocket`. OpenSSL talks to two memory BIOs; this
-    /// pumps ciphertext between those BIOs and the inner transport across
-    /// coroutine suspensions, so the handshake and records ride the reactor with
-    /// no blocking. The handshake runs lazily on first read/write.
+    /// Which end of the handshake a context's sockets play.
+    enum class TlsRole : std::uint8_t
+    {
+        Server, ///< `SSL_set_accept_state`: presents the certificate.
+        Client, ///< `SSL_set_connect_state`: verifies it, or trusts on first use.
+    };
+
+    /// Whether a caller of the outbound flush needs it FINISHED or only needs it to HAPPEN.
+    enum class FlushWait : std::uint8_t
+    {
+        /// Wait for a flush already in progress, then flush whatever is left. A write needs this:
+        /// it resolves only once its bytes are on the wire.
+        Join,
+        /// Return at once if a flush is already in progress. A read needs this: the flush in
+        /// progress drains the outgoing BIO to EMPTY, so the read's bytes go with it -- and a read
+        /// that parked behind a WRITE could not be retired by `cancelRead`, which retires only the
+        /// inner read.
+        Skip,
+    };
+
+    /// One coroutine at a time through a stretch of the record pump; the others park until it
+    /// leaves.
+    ///
+    /// **Two of these, because OpenSSL is not reentrant and a socket has one write operation.** A
+    /// socket here may have a read and a write in flight at once -- `WriteQueue`'s drain beside a
+    /// read pump is the ordinary shape -- and both can reach the handshake, and both can reach the
+    /// inner transport's `write` through the outbound flush. Two handshake drivers corrupt the
+    /// handshake; two flushes put a second write into the inner socket's single write slot
+    /// (`contract::claimWriteSlot`), which drops the parked one and interleaves the ciphertext.
+    class SerialGate
+    {
+      public:
+        /// Suspends the awaiting coroutine until the gate is next left.
+        class Awaiter
+        {
+          public:
+            explicit Awaiter(SerialGate* gate) noexcept: _gate(gate) {}
+            [[nodiscard]] bool await_ready() const noexcept { return !_gate->_busy; }
+            void await_suspend(std::coroutine_handle<> handle) const { _gate->_waiters.push_back(handle); }
+            void await_resume() const noexcept {}
+
+          private:
+            SerialGate* _gate;
+        };
+
+        /// @return True while a coroutine is inside.
+        [[nodiscard]] bool busy() const noexcept { return _busy; }
+
+        /// Marks the gate held by the calling coroutine.
+        void enter() noexcept { _busy = true; }
+
+        /// @return An awaitable that parks until the gate is left.
+        [[nodiscard]] Awaiter wait() noexcept { return Awaiter { this }; }
+
+        /// Opens the gate and resumes every coroutine parked on it.
+        ///
+        /// Invoked from a scope guard, so it runs on EVERY exit of the holder -- the exceptional
+        /// one included, which is the whole point. Unwinding through `OperationCancelled` (a
+        /// `whenAny` sibling won, or the loop is shutting down) used to reset the flag and leave
+        /// the parked coroutines suspended for ever, their frames never destroyed: a
+        /// `WriteQueue::drain` waiting here never observed `draining == false`, so
+        /// `flushThenClose()` hung and a TLS client could not exit.
+        ///
+        /// Nothing is invented about the outcome. A released waiter re-decides for itself.
+        void leave() noexcept
+        {
+            _busy = false;
+            for (auto const handle: std::exchange(_waiters, {}))
+            {
+                if (!handle || handle.done())
+                    continue;
+                try
+                {
+                    handle.resume();
+                }
+                catch (...)
+                {
+                    // A waiter resumed while the holder unwinds may unwind too (its next await
+                    // throws OperationCancelled during loop shutdown). That destroys its frame,
+                    // which is exactly what should happen; what must not happen is it taking the
+                    // rest of the queue -- or this noexcept guard -- down with it.
+                    continue;
+                }
+            }
+        }
+
+      private:
+        bool _busy = false;
+        std::vector<std::coroutine_handle<>> _waiters;
+    };
+
+    /// The answer to a transport that ended before the peer's `close_notify`.
+    [[nodiscard]] NetError truncated()
+    {
+        return makeNetError(NetErrorCode::ConnReset, 0, "peer closed without close_notify");
+    }
+
+    /// A TLS layer over an inner `ISocket`. OpenSSL talks to two memory BIOs; this pumps
+    /// ciphertext between those BIOs and the inner transport across coroutine suspensions, so the
+    /// handshake and the records ride the loop with no blocking.
+    ///
+    /// **Every operation is coroutine-backed, and that is the shape a decorator is owed.** A raw
+    /// socket's read is a syscall and a retry, so it needs no frame; a TLS read decrypts, may drive
+    /// the handshake, and may park on a raw read of its own -- a loop with state that outlives each
+    /// step. `ResultAwaitable`'s task constructor owns the frame and hands the awaiting flow's stop
+    /// token down into it, so this is exactly as cancellable as a frame-free operation.
+    ///
+    /// **`ERR_clear_error()` precedes every `SSL_*` call whose result is classified.**
+    /// `SSL_get_error` reads the THREAD's error queue, and every connection on a loop shares that
+    /// thread: an entry another connection left behind turns this one's routine `WANT_READ` into
+    /// `SSL_ERROR_SSL`, and a healthy connection fails for a neighbour's error.
     class TlsSocket final: public ISocket
     {
       public:
@@ -72,26 +196,120 @@ namespace
         TlsSocket(TlsSocket&&) = delete;
         TlsSocket& operator=(TlsSocket&&) = delete;
 
-        /// **Coroutine-backed, and that is the shape a decorator is owed.** A raw socket's read
-        /// is a syscall and a retry, so it needs no frame; a TLS read decrypts, may drive the
-        /// handshake, and may park on a raw read of its own — a loop with state that outlives each
-        /// step. `ResultAwaitable`'s task constructor owns the frame and hands the awaiting flow's
-        /// stop token down into it, so this is exactly as cancellable as a frame-free operation and
-        /// unwinds through its own `co_await`s. Task B11 owns this file's merge; B6 changed the
-        /// signature and nothing of the record pump.
-        /// @param buffer The destination.
-        /// @return The plaintext byte count, `0` at close_notify, or a @c NetError.
-        IoAwaitable read(std::span<std::byte> buffer) override { return IoAwaitable { readPlain(buffer) }; }
+        /// **A transport EOF before `close_notify` is @c NetErrorCode::ConnReset, never `0`.**
+        /// `0` means the peer has finished sending, and answering it for a transport that simply
+        /// ended lets a truncated stream -- cut short by an attacker, or by a crash -- pass as a
+        /// complete one. OpenSSL 3 reading from a socket refuses the same thing
+        /// (`SSL_R_UNEXPECTED_EOF_WHILE_READING`). Plaintext already decoded is delivered first.
+        /// @param buffer The destination; must be non-empty (@c contract::requireReadBuffer).
+        /// @return The plaintext byte count, `0` once the peer sent `close_notify`, or a
+        ///         @c NetError: @c NetErrorCode::ConnReset for a transport that ended without one.
+        [[nodiscard]] IoAwaitable read(std::span<std::byte> buffer) override
+        {
+            contract::requireReadBuffer(buffer);
+            return IoAwaitable { readPlain(buffer) };
+        }
 
         /// @param buffer The source.
         /// @return The byte count written, or a @c NetError.
-        IoAwaitable write(std::span<std::byte const> buffer) override
+        [[nodiscard]] IoAwaitable write(std::span<std::byte const> buffer) override
         {
             return IoAwaitable { writePlain(buffer) };
         }
 
         // writeVectored is NOT overridden: no scattered syscall is reachable through a TLS record
         // layer, so the base's write-each-segment-in-turn default is already the right algorithm.
+
+        /// Drives the handshake to completion now, rather than on the first read or write.
+        ///
+        /// What an accept loop awaits before it reads a request, so a slow or failing handshake is
+        /// settled on the connection's own flow and the first byte framed is plaintext. Idempotent:
+        /// a completed handshake answers at once, and a failed one answers its failure again.
+        /// @return Nothing once the session is up, or why it could not be established.
+        [[nodiscard]] ResultAwaitable<void> handshakeIfNeeded() override
+        {
+            return ResultAwaitable<void> { handshake() };
+        }
+
+        /// Reports whether the peer has finished sending, decrypting whatever records that takes
+        /// and consuming no plaintext.
+        ///
+        /// **A TLS peer closes by sending a RECORD, so the inner socket cannot answer this.** A
+        /// well-behaved peer emits `close_notify` and only then the transport FIN, so at the instant
+        /// it goes away there are bytes on the wire and a raw peek reports data pending for a peer
+        /// that has in fact finished sending
+        /// ([fastcached#712](https://github.com/LASTRADA-Software/fastcached/issues/712)). So the
+        /// record is decrypted by `SSL_peek`, which leaves every plaintext byte it decoded in
+        /// OpenSSL's buffer for the next `read`. Raw ciphertext IS consumed, into this decorator's
+        /// own BIO, and that is not what the interface's "consumes nothing" forbids.
+        ///
+        /// A transport EOF before `close_notify` is not an end but a truncation, and it is answered
+        /// as @c read answers it.
+        ///
+        /// It parks on an inner read, so it holds the read slot while parked, and @c cancelRead
+        /// retires it.
+        /// @return The decoded bytes pending (`>0`), `0` once the peer has finished sending --
+        ///         `close_notify` -- or a @c NetError, @c NetErrorCode::ConnReset for a transport
+        ///         that ended without one, as @c read answers it.
+        [[nodiscard]] IoAwaitable waitReadable() override
+        {
+            if (_peerClosed)
+                return IoAwaitable { IoResult { std::size_t { 0 } } };
+            if (_handshakeDone)
+                if (auto const pending = SSL_pending(_ssl); pending > 0)
+                    return IoAwaitable { IoResult { static_cast<std::size_t>(pending) } };
+            return IoAwaitable { probeReadable() };
+        }
+
+        /// Half-closes the TLS session: writes `close_notify`, flushes it, and only then half-closes
+        /// the inner transport.
+        ///
+        /// **The order is the whole contract.** A FIN with no `close_notify` before it is what a
+        /// truncation attack looks like, and a strict peer -- OpenSSL 3's own default, reading from
+        /// a socket -- reports it as an error rather than as the end of the stream. So forwarding to
+        /// the inner socket, which is all a synchronous signature could do, was never correct.
+        ///
+        /// **Precondition: no write outstanding** (@c ISocket::shutdownWrite). The alert goes out
+        /// through the inner socket's `write`, and that socket has one write operation.
+        ///
+        /// Reads keep working: OpenSSL delivers the peer's records until its own `close_notify`.
+        /// A write after this fails, as on any half-closed socket. A session whose handshake never
+        /// began has nothing to close cryptographically, so only the transport is half-closed.
+        /// @return Nothing on success, or why the alert or the half-close could not be delivered.
+        [[nodiscard]] ResultAwaitable<void> shutdownWrite() override
+        {
+            return ResultAwaitable<void> { closeNotify() };
+        }
+
+        /// Retires a read parked on the INNER transport.
+        ///
+        /// **A TLS read is not read-only at the transport layer**, which is why this override
+        /// exists and why the base's no-op would be wrong here: a read or a `waitReadable` parks on
+        /// a raw read whenever OpenSSL wants more bytes, so inheriting the no-op would leave the
+        /// inner socket's slot occupied and hand the next read a double-arm. The inner read
+        /// completes with `Cancelled`, the pump returns it, and the caller's operation resolves
+        /// with it.
+        void cancelRead() noexcept override { _inner->cancelRead(); }
+
+        /// @param deadline How long a read may wait; bounds the INNER transport's read, which is
+        ///        where a TLS read actually waits.
+        void setReceiveDeadline(std::chrono::milliseconds deadline) noexcept override
+        {
+            _inner->setReceiveDeadline(deadline);
+        }
+
+        [[nodiscard]] std::string peerAddress() const override { return _inner->peerAddress(); }
+
+        /// Closes the inner transport, WITHOUT a `close_notify`: a synchronous `noexcept` close
+        /// cannot await the write an alert needs. A caller that wants its peer to see an orderly
+        /// end awaits @c shutdownWrite first.
+        void close() noexcept override { _inner->close(); }
+
+        /// True once this end closed, or a read observed the peer's EOF -- which for a TLS layer
+        /// arrives as a close_notify, possibly while the inner transport is still open. Asking only
+        /// the inner socket would therefore answer "open" for a session the peer has already ended.
+        /// @see ISocket::isClosed.
+        [[nodiscard]] bool isClosed() const noexcept override { return _peerClosed || _inner->isClosed(); }
 
       private:
         async::Task<IoResult> readPlain(std::span<std::byte> buffer)
@@ -101,7 +319,8 @@ namespace
 
             while (true)
             {
-                auto const n = SSL_read(_ssl, buffer.data(), static_cast<int>(buffer.size()));
+                ERR_clear_error();
+                auto const n = SSL_read(_ssl, buffer.data(), clampToInt(buffer.size()));
                 if (n > 0)
                     co_return static_cast<std::size_t>(n);
                 switch (SSL_get_error(_ssl, n))
@@ -110,19 +329,19 @@ namespace
                         _peerClosed = true; // a close_notify IS this layer's EOF
                         co_return std::size_t { 0 };
                     case SSL_ERROR_WANT_WRITE:
-                        if (auto const flushed = co_await flushOut(); !flushed)
+                        if (auto const flushed = co_await flushOut(FlushWait::Skip); !flushed)
                             co_return std::unexpected(flushed.error());
                         break;
                     case SSL_ERROR_WANT_READ: {
-                        if (auto const flushed = co_await flushOut(); !flushed)
+                        if (auto const flushed = co_await flushOut(FlushWait::Skip); !flushed)
                             co_return std::unexpected(flushed.error());
                         auto const fed = co_await feedIn();
                         if (!fed)
                             co_return std::unexpected(fed.error());
                         if (*fed == 0)
                         {
-                            _peerClosed = true;          // the inner transport ended under us
-                            co_return std::size_t { 0 }; // inner EOF mid-stream
+                            _peerClosed = true; // the peer is gone -- but it did not say goodbye
+                            co_return std::unexpected(truncated());
                         }
                         break;
                     }
@@ -141,23 +360,27 @@ namespace
             auto total = std::size_t { 0 };
             while (total < buffer.size())
             {
-                auto const n =
-                    SSL_write(_ssl, buffer.data() + total, static_cast<int>(buffer.size() - total));
+                ERR_clear_error();
+                auto const n = SSL_write(_ssl, buffer.data() + total, clampToInt(buffer.size() - total));
                 if (n > 0)
                 {
                     total += static_cast<std::size_t>(n);
-                    if (auto const flushed = co_await flushOut(); !flushed)
+                    if (auto const flushed = co_await flushOut(FlushWait::Join); !flushed)
                         co_return std::unexpected(flushed.error());
                     continue;
                 }
                 switch (SSL_get_error(_ssl, n))
                 {
                     case SSL_ERROR_WANT_WRITE:
-                        if (auto const flushed = co_await flushOut(); !flushed)
+                        if (auto const flushed = co_await flushOut(FlushWait::Join); !flushed)
                             co_return std::unexpected(flushed.error());
                         break;
+                    // Unreachable once the handshake is done, and deliberately so: every context
+                    // sets SSL_OP_NO_RENEGOTIATION, and TLS 1.3 never needs a read to write. Were
+                    // it reached, feeding here beside a parked read would put a second read into
+                    // the inner socket's single read slot.
                     case SSL_ERROR_WANT_READ: {
-                        if (auto const flushed = co_await flushOut(); !flushed)
+                        if (auto const flushed = co_await flushOut(FlushWait::Join); !flushed)
                             co_return std::unexpected(flushed.error());
                         auto const fed = co_await feedIn();
                         if (!fed)
@@ -175,113 +398,102 @@ namespace
             co_return total;
         }
 
-      public:
-        /// Retires a read parked on the INNER transport.
-        ///
-        /// **A TLS read is not read-only at the transport layer**, which is why this override
-        /// exists and why the base's no-op would be wrong here: a `waitReadable` decrypts and parks
-        /// on a raw read whenever OpenSSL wants more bytes, so inheriting the no-op would leave the
-        /// inner socket's slot occupied and hand the next read a double-arm.
-        void cancelRead() noexcept override { _inner->cancelRead(); }
-
-        /// @param deadline How long a read may wait; bounds the INNER transport's read, which is
-        ///        where a TLS read actually waits.
-        void setReceiveDeadline(std::chrono::milliseconds deadline) noexcept override
+        /// Answers @c waitReadable once the answer is a TLS-level one.
+        async::Task<IoResult> probeReadable()
         {
-            _inner->setReceiveDeadline(deadline);
-        }
+            if (auto const handshaken = co_await handshake(); !handshaken)
+                co_return std::unexpected(handshaken.error());
 
-        [[nodiscard]] std::string peerAddress() const override { return _inner->peerAddress(); }
-        void close() noexcept override { _inner->close(); }
-
-        /// True once this end closed, or a read observed the peer's EOF — which for a TLS
-        /// layer arrives as a close_notify, possibly while the inner transport is still open.
-        /// Asking only the inner socket would therefore answer "open" for a session the peer
-        /// has already ended. @see ISocket::isClosed.
-        [[nodiscard]] bool isClosed() const noexcept override { return _peerClosed || _inner->isClosed(); }
-
-      private:
-        /// Suspends a caller until the in-flight handshake, driven by another
-        /// coroutine, completes. OpenSSL is not reentrant, so concurrent read() and
-        /// write() (as NativeClient does) must NOT both call SSL_do_handshake — the
-        /// single-loop path serialized them by timing; a real two-reactor connection
-        /// interleaves them and corrupts the handshake without this gate.
-        struct HandshakeGate
-        {
-            TlsSocket* self;
-            [[nodiscard]] bool await_ready() const noexcept { return !self->_handshaking; }
-            void await_suspend(std::coroutine_handle<> handle) const
+            // One byte, never taken: SSL_peek decrypts the whole record into OpenSSL's read buffer
+            // and removes nothing, so the caller's next read returns every byte of it.
+            auto probe = std::array<std::byte, 1> {};
+            while (true)
             {
-                self->_handshakeWaiters.push_back(handle);
-            }
-            void await_resume() const noexcept {}
-        };
-
-        /// Releases every coroutine parked on the gate, and reopens it.
-        ///
-        /// Invoked from a scope guard, so it runs on EVERY exit of handshake() — the exceptional
-        /// one included, which is the whole point. Unwinding via OperationCancelled (a whenAny
-        /// sibling won, or the loop is shutting down) used to reset `_handshaking` and leave the
-        /// parked coroutines suspended forever, their frames never destroyed: a
-        /// `WriteQueue::drain` waiting here never observed `draining == false`, so
-        /// `flushThenClose()` hung and a TLS client could not exit.
-        ///
-        /// Nothing is invented about the outcome. A released waiter re-decides for itself and
-        /// finds the handshake done, failed, or NEITHER — the cancelled case — and in that last
-        /// one it becomes the driver instead of assuming a handshake that never happened.
-        /// Recording a cancellation as a handshake ERROR would be just as wrong the other way: a
-        /// socket whose handshake was merely raced would then refuse every later read and write.
-        void openHandshakeGate() noexcept
-        {
-            _handshaking = false;
-            for (auto const handle: std::exchange(_handshakeWaiters, {}))
-            {
-                if (!handle || handle.done())
-                    continue;
-                try
+                ERR_clear_error();
+                auto const n = SSL_peek(_ssl, probe.data(), clampToInt(probe.size()));
+                if (n > 0)
+                    co_return static_cast<std::size_t>(std::max(SSL_pending(_ssl), 1));
+                switch (SSL_get_error(_ssl, n))
                 {
-                    handle.resume();
-                }
-                catch (...)
-                {
-                    // A waiter resumed while WE are unwinding may unwind too (its next await
-                    // throws OperationCancelled during loop shutdown). That destroys its frame,
-                    // which is exactly what should happen; what must not happen is it taking the
-                    // rest of the queue — or this noexcept guard — down with it.
-                    continue;
+                    case SSL_ERROR_ZERO_RETURN: co_return std::size_t { 0 }; // close_notify
+                    case SSL_ERROR_WANT_WRITE:
+                        if (auto const flushed = co_await flushOut(FlushWait::Skip); !flushed)
+                            co_return std::unexpected(flushed.error());
+                        break;
+                    case SSL_ERROR_WANT_READ: {
+                        if (auto const flushed = co_await flushOut(FlushWait::Skip); !flushed)
+                            co_return std::unexpected(flushed.error());
+                        auto const fed = co_await feedIn();
+                        if (!fed)
+                            co_return std::unexpected(fed.error());
+                        // A raw EOF with no close_notify is a truncation, and `0` would tell the
+                        // caller the stream ended whole. Answered as the next read would be.
+                        if (*fed == 0)
+                            co_return std::unexpected(truncated());
+                        break;
+                    }
+                    default:
+                        co_return std::unexpected(
+                            makeNetError(NetErrorCode::SystemError, 0, "SSL_peek: " + opensslError()));
                 }
             }
         }
 
-        /// Drives the handshake to completion (idempotent), or — if another coroutine
-        /// is already driving it — waits for that to finish. Both roles pump BIOs.
+        /// Writes and flushes `close_notify`, then half-closes the inner transport.
+        async::Task<std::expected<void, NetError>> closeNotify()
+        {
+            if (_handshaking.busy() || _handshakeDone)
+            {
+                if (auto const handshaken = co_await handshake(); handshaken)
+                {
+                    if ((SSL_get_shutdown(_ssl) & SSL_SENT_SHUTDOWN) == 0)
+                    {
+                        ERR_clear_error();
+                        // 0: our alert is queued and the peer's is not yet seen, which is exactly
+                        // a half-close. 1: the peer had already closed. Negative: it failed.
+                        if (SSL_shutdown(_ssl) < 0)
+                            co_return std::unexpected(makeNetError(
+                                NetErrorCode::SystemError, 0, "SSL_shutdown: " + opensslError()));
+                    }
+                    if (auto const flushed = co_await flushOut(FlushWait::Join); !flushed)
+                        co_return std::unexpected(flushed.error());
+                }
+            }
+            co_return co_await _inner->shutdownWrite();
+        }
+
+        /// Drives the handshake to completion (idempotent), or -- if another coroutine is already
+        /// driving it -- waits for that to finish. OpenSSL is not reentrant, so concurrent read()
+        /// and write() must NOT both call SSL_do_handshake: on one loop the two interleave at every
+        /// suspension and corrupt the handshake without this gate.
         async::Task<std::expected<void, NetError>> handshake()
         {
-            // A loop rather than a one-shot check, because a released waiter re-decides HERE:
-            // the driver may have completed, failed, or been cancelled mid-flight, and only the
-            // last case leaves `_handshaking` false with neither flag set. Falling out of the
-            // loop then makes this call the new driver. @see openHandshakeGate.
+            // A loop rather than a one-shot check, because a released waiter re-decides HERE: the
+            // driver may have completed, failed, or been cancelled mid-flight, and only the last
+            // case leaves the gate open with neither flag set. Falling out of the loop then makes
+            // this call the new driver.
             while (true)
             {
                 if (_handshakeDone)
                     co_return std::expected<void, NetError> {};
                 if (_handshakeError)
                     co_return std::unexpected(*_handshakeError);
-                if (!_handshaking)
+                if (!_handshaking.busy())
                     break;
-                co_await HandshakeGate { this };
+                co_await _handshaking.wait();
             }
 
-            _handshaking = true;
+            _handshaking.enter();
             auto outcome = std::expected<void, NetError> {};
-            auto const openGate = detail::ScopeGuard { [this]() noexcept { openHandshakeGate(); } };
+            auto const openGate = detail::ScopeGuard { [this]() noexcept { _handshaking.leave(); } };
             while (true)
             {
+                ERR_clear_error();
                 auto const result = SSL_do_handshake(_ssl);
                 auto const err = SSL_get_error(_ssl, result);
-                // Always flush whatever the last step queued (ClientHello, the
-                // server's flight, Finished, …) before deciding what to await.
-                if (auto const flushed = co_await flushOut(); !flushed)
+                // Always flush whatever the last step queued (ClientHello, the server's flight,
+                // Finished, ...) before deciding what to await.
+                if (auto const flushed = co_await flushOut(FlushWait::Join); !flushed)
                 {
                     outcome = std::unexpected(flushed.error());
                     break;
@@ -315,19 +527,25 @@ namespace
             }
 
             if (!outcome)
-                // The reason travels in NetError::context ("TLS handshake: <openssl error>"),
-                // which NetError::toString() folds in and the connection's own diagnostic prints
-                // with its identity. net stays a layer that RETURNS failures rather than logging
-                // them — logging here would duplicate that line, minus the identity.
+                // The reason travels in NetError::context ("TLS handshake: <openssl error>"), which
+                // NetError::toString() folds in. net RETURNS failures rather than logging them.
                 _handshakeError = outcome.error(); // parked waiters observe the same failure
-            // The gate opens from `openGate` above, on the way out of this scope — so the waiters
-            // are released here on the normal path and on the cancelled one alike.
             co_return outcome;
         }
 
-        /// Drains OpenSSL's outgoing BIO to the inner socket.
-        async::Task<std::expected<void, NetError>> flushOut()
+        /// Drains OpenSSL's outgoing BIO to the inner socket, one flush at a time.
+        /// @param wait Whether to wait for a flush already in progress (see @c FlushWait).
+        async::Task<std::expected<void, NetError>> flushOut(FlushWait wait)
         {
+            while (_flushing.busy())
+            {
+                if (wait == FlushWait::Skip)
+                    co_return std::expected<void, NetError> {};
+                co_await _flushing.wait();
+            }
+
+            _flushing.enter();
+            auto const openGate = detail::ScopeGuard { [this]() noexcept { _flushing.leave(); } };
             auto& chunk = _outChunk;
             while (true)
             {
@@ -335,12 +553,11 @@ namespace
                 if (pending == 0)
                     co_return std::expected<void, NetError> {};
                 auto const take = std::min<std::size_t>(chunk.size(), pending);
-                auto const n = BIO_read(_wbio, chunk.data(), static_cast<int>(take));
+                auto const n = BIO_read(_wbio, chunk.data(), clampToInt(take));
                 // Reached only after BIO_ctrl_pending said bytes WERE queued, so a read that
                 // yields none is a failed BIO, not an empty one. Reporting "nothing to flush"
-                // silently dropped that ciphertext: the handshake then waited for a peer
-                // response to a flight never written, and both ends hung until an outer
-                // timeout. A pending-but-unreadable write BIO is an error; say so.
+                // silently dropped that ciphertext: the handshake then waited for a peer response
+                // to a flight never written, and both ends hung until an outer timeout.
                 if (n <= 0)
                     co_return std::unexpected(makeNetError(
                         NetErrorCode::SystemError, 0, "TLS flushOut: BIO_read failed: " + opensslError()));
@@ -361,56 +578,74 @@ namespace
                 co_return std::unexpected(n.error());
             if (*n == 0)
                 co_return std::size_t { 0 };
-            auto const written = BIO_write(_rbio, chunk.data(), static_cast<int>(*n));
+            auto const written = BIO_write(_rbio, chunk.data(), clampToInt(*n));
             if (written <= 0)
                 co_return std::unexpected(
                     makeNetError(NetErrorCode::SystemError, 0, "TLS feedIn: BIO_write failed"));
             co_return *n;
         }
 
-        /// A TLS record is at most 16 KiB of payload, so this is the size at which neither direction
-        /// ever needs a second trip through OpenSSL for one record.
+        /// A TLS record is at most 16 KiB of payload, so this is the size at which neither
+        /// direction ever needs a second trip through OpenSSL for one record.
         static constexpr std::size_t ChunkSize = 16384;
 
         /// The staging buffers the two BIO bridges copy through.
         ///
         /// MEMBERS, not coroutine locals: an array this size declared inside `feedIn`/`flushOut`
-        /// becomes part of their coroutine frame, so every read and every flush — the hot path of an
-        /// encrypted connection — paid a >16 KiB heap allocation. One per direction rather than one
-        /// shared, because the read and write paths run as independent coroutines.
+        /// becomes part of their coroutine frame, so every read and every flush -- the hot path of
+        /// an encrypted connection -- paid a >16 KiB heap allocation. One per direction, because
+        /// the read and write paths run as independent coroutines, and @c _flushing is what keeps
+        /// two of them off `_outChunk`.
         std::array<std::byte, ChunkSize> _inChunk {};
         std::array<std::byte, ChunkSize> _outChunk {};
 
         std::unique_ptr<ISocket> _inner;
         SSL* _ssl;
-        BIO* _rbio; ///< Network → SSL (owned by _ssl).
-        BIO* _wbio; ///< SSL → network (owned by _ssl).
+        BIO* _rbio; ///< Network -> SSL (owned by _ssl).
+        BIO* _wbio; ///< SSL -> network (owned by _ssl).
         bool _handshakeDone = false;
         bool _peerClosed = false;                ///< A read saw the peer's close_notify or inner EOF.
-        bool _handshaking = false;               ///< A coroutine is currently driving the handshake.
         std::optional<NetError> _handshakeError; ///< Set once the handshake fails (sticky).
-        std::vector<std::coroutine_handle<>> _handshakeWaiters; ///< Parked on the in-flight handshake.
+        SerialGate _handshaking;                 ///< Held by the coroutine driving the handshake.
+        SerialGate _flushing;                    ///< Held by the coroutine writing ciphertext out.
     };
+
+    /// The SHA-256 fingerprint of @p cert as lower-case hex, or empty if it cannot be computed.
+    [[nodiscard]] std::string fingerprintOf(X509 const* cert)
+    {
+        auto digest = std::array<unsigned char, EVP_MAX_MD_SIZE> {};
+        auto length = 0U;
+        if (cert == nullptr || X509_digest(cert, EVP_sha256(), digest.data(), &length) != 1)
+            return {};
+        constexpr auto Hex = std::string_view { "0123456789abcdef" };
+        auto out = std::string {};
+        out.reserve(std::size_t { length } * 2);
+        for (auto const byte: std::span { digest.data(), length })
+        {
+            out += Hex[byte >> 4U];
+            out += Hex[byte & 0x0FU];
+        }
+        return out;
+    }
 
     /// The DI context: a configured SSL_CTX plus its handshake role.
     class TlsContext final: public ITlsContext
     {
       public:
-        TlsContext(SslCtxPtr ctx, bool server): _ctx(std::move(ctx)), _server(server) {}
+        TlsContext(SslCtxPtr ctx, TlsRole role): _ctx(std::move(ctx)), _role(role) {}
 
         std::unique_ptr<ISocket> wrap(std::unique_ptr<ISocket> inner) override
         {
             auto* ssl = SSL_new(_ctx.get());
             if (ssl == nullptr)
                 return nullptr;
-            // Memory BIOs bridge OpenSSL and the coroutine transport; SSL_set_bio
-            // takes ownership of both, so SSL_free later releases them.
+            // Memory BIOs bridge OpenSSL and the coroutine transport; SSL_set_bio takes ownership
+            // of both, so SSL_free later releases them.
             //
-            // Checked like SSL_new above: handing a null BIO to SSL_set_bio yields a socket
-            // that LOOKS constructed and dereferences null on its first read or write —
-            // breaking this method's own documented "null on allocation failure". Ownership
-            // has not transferred yet on this path, so both BIOs and the SSL are released
-            // here (BIO_free tolerates null, which is what makes the one-sided case work).
+            // Checked like SSL_new above: handing a null BIO to SSL_set_bio yields a socket that
+            // LOOKS constructed and dereferences null on its first read or write. Ownership has not
+            // transferred yet on this path, so both BIOs and the SSL are released here (BIO_free
+            // tolerates null, which is what makes the one-sided case work).
             auto* const rbio = BIO_new(BIO_s_mem());
             auto* const wbio = BIO_new(BIO_s_mem());
             if (rbio == nullptr || wbio == nullptr)
@@ -421,24 +656,164 @@ namespace
                 return nullptr;
             }
             SSL_set_bio(ssl, rbio, wbio);
-            if (_server)
+            if (_role == TlsRole::Server)
                 SSL_set_accept_state(ssl);
             else
                 SSL_set_connect_state(ssl);
             return std::make_unique<TlsSocket>(std::move(inner), ssl);
         }
 
+        [[nodiscard]] std::string certificateFingerprint() const override
+        {
+            return fingerprintOf(SSL_CTX_get0_certificate(_ctx.get()));
+        }
+
       private:
         SslCtxPtr _ctx;
-        bool _server;
+        TlsRole _role;
     };
 
+    /// A context with the floor every one of them shares: TLS 1.2 and no renegotiation.
+    ///
+    /// Renegotiation is refused because it is the one way a WRITE can need a READ after the
+    /// handshake (`SSL_write` answering `WANT_READ`), and a socket with a read already parked has
+    /// no second read slot to give it. TLS 1.3 has no renegotiation at all.
     [[nodiscard]] SslCtxPtr newCtx(SSL_METHOD const* method)
     {
+        ERR_clear_error();
         auto ctx = SslCtxPtr { SSL_CTX_new(method), SSL_CTX_free };
         if (ctx)
+        {
             SSL_CTX_set_min_proto_version(ctx.get(), TLS1_2_VERSION);
+            SSL_CTX_set_options(ctx.get(), SSL_OP_NO_RENEGOTIATION);
+        }
         return ctx;
+    }
+
+    /// Installs a PEM certificate chain and its key into a server context.
+    /// @param ctx The context to fill.
+    /// @param certPem The leaf, then any intermediates.
+    /// @param keyPem The leaf's private key.
+    /// @return Nothing, or why the material could not be used.
+    [[nodiscard]] std::expected<void, std::string> useServerMaterial(SSL_CTX* ctx,
+                                                                     std::string_view certPem,
+                                                                     std::string_view keyPem)
+    {
+        auto certBio = memBio(certPem);
+        auto const leaf = X509Ptr { PEM_read_bio_X509(certBio.get(), nullptr, nullptr, nullptr), X509_free };
+        if (!leaf)
+            return std::unexpected("invalid certificate PEM: " + opensslError());
+        if (SSL_CTX_use_certificate(ctx, leaf.get()) != 1)
+            return std::unexpected("SSL_CTX_use_certificate: " + opensslError());
+
+        // Every certificate after the leaf is served as part of the chain. Only reading the first
+        // one silently dropped the intermediates of a named certificate, and a client that could
+        // not build the chain to its anchor then failed a handshake the operator had configured
+        // correctly.
+        while (true)
+        {
+            auto const intermediate =
+                X509Ptr { PEM_read_bio_X509(certBio.get(), nullptr, nullptr, nullptr), X509_free };
+            if (!intermediate)
+                break;
+            // add1, not add0: the context takes a reference of its own, so ours is released by
+            // the smart pointer on every path, and no ownership changes hands mid-statement.
+            if (SSL_CTX_add1_chain_cert(ctx, intermediate.get()) != 1)
+                return std::unexpected("SSL_CTX_add1_chain_cert: " + opensslError());
+        }
+        // Reading past the last certificate leaves "no start line" on the queue; it is the loop's
+        // end, not a failure, and must not be reported as the reason for a later one.
+        ERR_clear_error();
+
+        auto keyBio = memBio(keyPem);
+        auto const key =
+            PKeyPtr { PEM_read_bio_PrivateKey(keyBio.get(), nullptr, nullptr, nullptr), EVP_PKEY_free };
+        if (!key)
+            return std::unexpected("invalid private key PEM: " + opensslError());
+        if (SSL_CTX_use_PrivateKey(ctx, key.get()) != 1)
+            return std::unexpected("SSL_CTX_use_PrivateKey: " + opensslError());
+        if (SSL_CTX_check_private_key(ctx) != 1)
+            return std::unexpected(std::string { "certificate and private key do not match" });
+        return {};
+    }
+
+    /// Reads a whole file, for PEM material named by path.
+    /// @param path The file.
+    /// @param what What the file is, for the error.
+    /// @return The contents, or a reason naming the file.
+    [[nodiscard]] std::expected<std::string, std::string> readFile(std::filesystem::path const& path,
+                                                                   std::string_view what)
+    {
+        // The path as UTF-8, for the message: `path::string()` converts through the ANSI code page
+        // on Windows and THROWS for a name it cannot represent, which would turn a refusal into an
+        // exception on exactly the path that is reporting one.
+        auto const u8 = path.u8string();
+        auto const refusal = "cannot read " + std::string { what } + " '"
+                             + std::string { reinterpret_cast<char const*>(u8.data()), u8.size() } + "'";
+
+        // Sized and read in one call rather than through `istreambuf_iterator`, which GCC 14's
+        // -Wnull-dereference reports inside libstdc++'s streambuf at -O3.
+        auto stream = std::ifstream { path, std::ios::binary | std::ios::ate };
+        if (!stream)
+            return std::unexpected(refusal);
+        auto const size = static_cast<std::streamoff>(stream.tellg());
+        if (size < 0)
+            return std::unexpected(refusal);
+        auto contents = std::string(static_cast<std::size_t>(size), '\0');
+        stream.seekg(0);
+        if (!stream.read(contents.data(), static_cast<std::streamsize>(size)))
+            return std::unexpected(refusal);
+        return contents;
+    }
+
+    /// Reads a BIO's whole content out as a string (for PEM export).
+    [[nodiscard]] std::string bioToString(BIO* bio)
+    {
+        auto* data = static_cast<char const*>(nullptr);
+        auto const length = BIO_get_mem_data(bio, &data);
+        return std::string { data, static_cast<std::size_t>(length) };
+    }
+
+    /// Generates a P-256 key through the generic `EVP_PKEY_CTX` API.
+    [[nodiscard]] PKeyPtr generateKey()
+    {
+        auto ctx = PKeyCtxPtr { EVP_PKEY_CTX_new_id(EVP_PKEY_EC, nullptr), EVP_PKEY_CTX_free };
+        if (!ctx || EVP_PKEY_keygen_init(ctx.get()) != 1)
+            return PKeyPtr { nullptr, EVP_PKEY_free };
+        // A named curve rather than explicit parameters: some clients refuse the explicit encoding
+        // outright, and it is larger for no benefit.
+        if (EVP_PKEY_CTX_set_ec_paramgen_curve_nid(ctx.get(), NID_X9_62_prime256v1) != 1
+            || EVP_PKEY_CTX_set_ec_param_enc(ctx.get(), OPENSSL_EC_NAMED_CURVE) != 1)
+            return PKeyPtr { nullptr, EVP_PKEY_free };
+        auto* raw = static_cast<EVP_PKEY*>(nullptr);
+        if (EVP_PKEY_keygen(ctx.get(), &raw) != 1)
+            return PKeyPtr { nullptr, EVP_PKEY_free };
+        return PKeyPtr { raw, EVP_PKEY_free };
+    }
+
+    /// Renders the subjectAltName extension value for @p names.
+    ///
+    /// Each name is classified by what it IS rather than by how it is spelled: `a2i_IPADDRESS` is
+    /// asked whether the text parses as an address literal, and only what it refuses becomes a DNS
+    /// name. Guessing from the spelling gets `2001:db8::1` and a host called `10things` wrong in
+    /// opposite directions.
+    /// @param names What the certificate should be valid for; empty entries are skipped.
+    /// @return An OpenSSL SAN configuration string.
+    [[nodiscard]] std::string subjectAltNames(std::vector<std::string> const& names)
+    {
+        auto value = std::string {};
+        for (auto const& name: names)
+        {
+            if (name.empty())
+                continue;
+            if (!value.empty())
+                value += ',';
+            auto const address = Asn1OctetStringPtr { a2i_IPADDRESS(name.c_str()), ASN1_OCTET_STRING_free };
+            value += address ? "IP:" : "DNS:";
+            value += name;
+        }
+        ERR_clear_error(); // a refused parse is a DNS name, not an error to report later
+        return value;
     }
 } // namespace
 
@@ -448,56 +823,93 @@ std::expected<std::shared_ptr<ITlsContext>, std::string> makeTlsServerContext(st
     auto ctx = newCtx(TLS_server_method());
     if (!ctx)
         return std::unexpected("SSL_CTX_new failed: " + opensslError());
-
-    auto certBio = memBio(certPem);
-    auto const cert = X509Ptr { PEM_read_bio_X509(certBio.get(), nullptr, nullptr, nullptr), X509_free };
-    if (!cert)
-        return std::unexpected("invalid certificate PEM: " + opensslError());
-    if (SSL_CTX_use_certificate(ctx.get(), cert.get()) != 1)
-        return std::unexpected("SSL_CTX_use_certificate: " + opensslError());
-
-    auto keyBio = memBio(keyPem);
-    auto const key =
-        PKeyPtr { PEM_read_bio_PrivateKey(keyBio.get(), nullptr, nullptr, nullptr), EVP_PKEY_free };
-    if (!key)
-        return std::unexpected("invalid private key PEM: " + opensslError());
-    if (SSL_CTX_use_PrivateKey(ctx.get(), key.get()) != 1)
-        return std::unexpected("SSL_CTX_use_PrivateKey: " + opensslError());
-    if (SSL_CTX_check_private_key(ctx.get()) != 1)
-        return std::unexpected("certificate and private key do not match");
-
-    return std::make_shared<TlsContext>(std::move(ctx), /*server=*/true);
+    if (auto used = useServerMaterial(ctx.get(), certPem, keyPem); !used)
+        return std::unexpected(std::move(used.error()));
+    return std::make_shared<TlsContext>(std::move(ctx), TlsRole::Server);
 }
 
-namespace
+std::expected<std::shared_ptr<ITlsContext>, std::string> makeTlsServerContextFromFiles(
+    std::filesystem::path const& certPath, std::filesystem::path const& keyPath)
 {
-    /// Reads a BIO's whole content out as a string (for PEM export).
-    [[nodiscard]] std::string bioToString(BIO* bio)
-    {
-        auto* data = static_cast<char const*>(nullptr);
-        auto const length = BIO_get_mem_data(bio, &data);
-        return std::string { data, static_cast<std::size_t>(length) };
-    }
-} // namespace
+    // Read here rather than through OpenSSL's own file functions, so a path takes the platform's
+    // spelling -- a wide one on Windows -- and the same material function serves both entry points.
+    auto const certPem = readFile(certPath, "certificate file");
+    if (!certPem)
+        return std::unexpected(certPem.error());
+    auto const keyPem = readFile(keyPath, "private key file");
+    if (!keyPem)
+        return std::unexpected(keyPem.error());
+    return makeTlsServerContext(*certPem, *keyPem);
+}
 
-std::expected<CertKeyPem, std::string> generateSelfSignedCertificate(std::string_view commonName)
+std::expected<CertKeyPem, std::string> generateSelfSignedCertificate(SelfSignedOptions const& options)
 {
-    auto const key = PKeyPtr { EVP_RSA_gen(2048), EVP_PKEY_free };
+    ERR_clear_error();
+    if (options.commonName.empty())
+        return std::unexpected(std::string { "a self-signed certificate needs a common name" });
+
+    auto const& names =
+        options.subjectNames.empty() ? std::vector<std::string> { options.commonName } : options.subjectNames;
+    // A comma ENDS one entry and starts another in the grammar below, so a name carrying one would
+    // silently add a subject name nobody asked for. A colon is NOT refused: OpenSSL splits the type
+    // from the value at the FIRST one, which is what makes `::1` a legal IP entry.
+    if (auto const injected =
+            std::ranges::find_if(names, [](auto const& name) { return name.contains(','); });
+        injected != names.end())
+        return std::unexpected("a subject name may not contain a comma: '" + *injected + "'");
+    auto const altNames = subjectAltNames(names);
+    if (altNames.empty())
+        return std::unexpected(std::string { "a self-signed certificate needs at least one subject name" });
+
+    auto const key = generateKey();
     if (!key)
-        return std::unexpected("key generation failed: " + opensslError());
+        return std::unexpected("generating a P-256 key: " + opensslError());
 
     auto const cert = X509Ptr { X509_new(), X509_free };
     if (!cert)
         return std::unexpected("X509_new failed: " + opensslError());
-    ASN1_INTEGER_set(X509_get_serialNumber(cert.get()), 1);
-    X509_gmtime_adj(X509_getm_notBefore(cert.get()), 0);
-    X509_gmtime_adj(X509_getm_notAfter(cert.get()), 60L * 60 * 24 * 3650); // ~10 years
-    X509_set_pubkey(cert.get(), key.get());
-    auto* name = X509_get_subject_name(cert.get());
-    auto const cn = std::string { commonName };
-    X509_NAME_add_entry_by_txt(
-        name, "CN", MBSTRING_ASC, reinterpret_cast<unsigned char const*>(cn.c_str()), -1, -1, 0);
-    X509_set_issuer_name(cert.get(), name); // self-signed: issuer == subject
+    // Version 3, which an extension requires; the field is zero-based, so 2 IS version 3.
+    if (X509_set_version(cert.get(), 2) != 1)
+        return std::unexpected("setting the certificate version: " + opensslError());
+
+    // A random serial, not a fixed one: a client that has seen two certificates with the same
+    // issuer and serial -- which every certificate generated here would be, after a restart --
+    // refuses the second outright rather than asking.
+    auto const serial = BignumPtr { BN_new(), BN_free };
+    if (!serial || BN_rand(serial.get(), 127, BN_RAND_TOP_ANY, BN_RAND_BOTTOM_ANY) != 1
+        || BN_to_ASN1_INTEGER(serial.get(), X509_get_serialNumber(cert.get())) == nullptr)
+        return std::unexpected("setting the certificate serial: " + opensslError());
+
+    if (X509_gmtime_adj(X509_getm_notBefore(cert.get()), 0) == nullptr
+        || X509_gmtime_adj(X509_getm_notAfter(cert.get()), static_cast<long>(options.validity.count()))
+               == nullptr)
+        return std::unexpected("setting the certificate validity: " + opensslError());
+    if (X509_set_pubkey(cert.get(), key.get()) != 1)
+        return std::unexpected("setting the certificate public key: " + opensslError());
+
+    auto* const subject = X509_get_subject_name(cert.get());
+    if (X509_NAME_add_entry_by_txt(subject,
+                                   "CN",
+                                   MBSTRING_UTF8,
+                                   reinterpret_cast<unsigned char const*>(options.commonName.c_str()),
+                                   -1,
+                                   -1,
+                                   0)
+            != 1
+        || X509_set_issuer_name(cert.get(), subject) != 1) // self-signed: issuer == subject
+        return std::unexpected("setting the certificate subject: " + opensslError());
+
+    auto extensionContext = X509V3_CTX {};
+    X509V3_set_ctx_nodb(&extensionContext);
+    X509V3_set_ctx(&extensionContext, cert.get(), cert.get(), nullptr, nullptr, 0);
+    auto* const san = X509V3_EXT_conf_nid(nullptr, &extensionContext, NID_subject_alt_name, altNames.c_str());
+    if (san == nullptr)
+        return std::unexpected("building the subjectAltName extension: " + opensslError());
+    auto const added = X509_add_ext(cert.get(), san, -1);
+    X509_EXTENSION_free(san);
+    if (added != 1)
+        return std::unexpected("adding the subjectAltName extension: " + opensslError());
+
     if (X509_sign(cert.get(), key.get(), EVP_sha256()) == 0)
         return std::unexpected("X509_sign failed: " + opensslError());
 
@@ -513,11 +925,12 @@ std::expected<CertKeyPem, std::string> generateSelfSignedCertificate(std::string
     return CertKeyPem { .certPem = bioToString(certBio.get()), .keyPem = bioToString(keyBio.get()) };
 }
 
-std::expected<std::shared_ptr<ITlsContext>, std::string> makeSelfSignedServerContext()
+std::expected<std::shared_ptr<ITlsContext>, std::string> makeSelfSignedServerContext(
+    SelfSignedOptions const& options)
 {
-    // Single-source the self-signed material through the PEM generator, then reuse
-    // the same file-backed path the daemon takes with --tls-cert/--tls-key.
-    auto material = generateSelfSignedCertificate();
+    // Single-sourced through the PEM generator and the PEM context, so a generated certificate is
+    // served by exactly the path a named one is.
+    auto material = generateSelfSignedCertificate(options);
     if (!material)
         return std::unexpected(material.error());
     return makeTlsServerContext(material->certPem, material->keyPem);
@@ -532,8 +945,8 @@ std::expected<std::shared_ptr<ITlsContext>, std::string> makeTlsClientContext(
 
     if (caPem.empty())
     {
-        // TOFU: the preshared token authenticates; TLS only encrypts. The caller
-        // may still pin the daemon's certificate fingerprint out of band.
+        // Trust on first use: something else authenticates; TLS only encrypts. The caller may
+        // still pin the server's certificate fingerprint out of band.
         SSL_CTX_set_verify(ctx.get(), SSL_VERIFY_NONE, nullptr);
     }
     else
@@ -547,16 +960,17 @@ std::expected<std::shared_ptr<ITlsContext>, std::string> makeTlsClientContext(
         SSL_CTX_set_verify(ctx.get(), SSL_VERIFY_PEER, nullptr);
 
         // Bind the certificate to the host that was asked for. Without this, verification proves
-        // only that the pinned CA signed the certificate — so ANY certificate it ever signed,
-        // for any name, would be accepted here. Set on the CTX, so it governs every SSL object
-        // wrap() creates from it.
+        // only that the pinned CA signed the certificate -- so ANY certificate it ever signed, for
+        // any name, would be accepted here. Set on the CTX, so it governs every SSL object wrap()
+        // creates from it.
         if (!expectedHostName.empty())
         {
             auto* const param = SSL_CTX_get0_param(ctx.get());
-            // An IP-literal host must be checked as an IP: X509_VERIFY_PARAM_set1_host would
-            // look for it in a dNSName, which a correct certificate does not carry.
+            // An IP-literal host must be checked as an IP: X509_VERIFY_PARAM_set1_host would look
+            // for it in a dNSName, which a correct certificate does not carry.
             auto const isIpLiteral =
                 X509_VERIFY_PARAM_set1_ip_asc(param, std::string { expectedHostName }.c_str()) == 1;
+            ERR_clear_error(); // a refused IP parse means "a DNS name", not a failure
             if (!isIpLiteral
                 && X509_VERIFY_PARAM_set1_host(param, expectedHostName.data(), expectedHostName.size()) != 1)
                 return std::unexpected("X509_VERIFY_PARAM_set1_host: " + opensslError());
@@ -566,7 +980,20 @@ std::expected<std::shared_ptr<ITlsContext>, std::string> makeTlsClientContext(
         }
     }
 
-    return std::make_shared<TlsContext>(std::move(ctx), /*server=*/false);
+    return std::make_shared<TlsContext>(std::move(ctx), TlsRole::Client);
+}
+
+std::expected<std::string, std::string> certificateFingerprint(std::string_view certPem)
+{
+    ERR_clear_error();
+    auto bio = memBio(certPem);
+    auto const cert = X509Ptr { PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr), X509_free };
+    if (!cert)
+        return std::unexpected("invalid certificate PEM: " + opensslError());
+    auto fingerprint = fingerprintOf(cert.get());
+    if (fingerprint.empty())
+        return std::unexpected("X509_digest failed: " + opensslError());
+    return fingerprint;
 }
 
 bool constantTimeEquals(std::string_view lhs, std::string_view rhs) noexcept

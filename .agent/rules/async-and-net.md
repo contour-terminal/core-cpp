@@ -926,6 +926,37 @@ in-process doubles (`testing::DatagramBus`, `testing::InMemorySocket`, the parki
   that lacked a row and turned a firewall's `EACCES` into an unclassified `SystemError` upstream.
   A new transport uses the shared table, and moving the other three onto it is owed.
 
+## TLS
+
+- **A decorator's half-close writes before it forwards.** A TLS `shutdownWrite` is `close_notify`,
+  flushed through the inner socket, and only then the inner socket's own half-close. A FIN with no
+  alert before it is what a truncation looks like, and OpenSSL 3 reading from a socket reports it
+  as an error rather than an end. A decorator is tested against a peer that is NOT itself --
+  `testing::StrictTlsPeer` -- because two copies of one lenient reader agree with each other.
+  Origin: Task B11; [fastcached#712](https://github.com/LASTRADA-Software/fastcached/issues/712)
+  for the `waitReadable` half of the same fact (a `close_notify` is a record, so a raw peek
+  reads it as data).
+- **A TLS read answers `0` for `close_notify` and nothing else.** A transport EOF before the
+  alert is `NetErrorCode::ConnReset` ("peer closed without close_notify"), because `0` tells the
+  caller the stream ended whole, and a truncated stream -- an attacker's cut, or a crash -- would
+  pass as a complete one. `waitReadable` answers the same way. OpenSSL 3 reading from a socket
+  refuses the same thing (`SSL_R_UNEXPECTED_EOF_WHILE_READING`). Origin: Task B11's review.
+- **`ERR_clear_error()` before every `SSL_*` call whose result is classified.** `SSL_get_error`
+  reads the THREAD's error queue, and every connection on a loop shares that thread: an entry
+  another connection left behind turns this one's `WANT_READ` into `SSL_ERROR_SSL`, and a healthy
+  connection fails for a neighbour's error. Origin: fastcached `Net/TlsSocket.cpp` at
+  `0708dd54`, and `TlsSocket_test`'s stale-error case, which fails without it.
+- **One outbound flush at a time, and a READ never waits for one.** A socket may have a read and
+  a write in flight at once, and both reach the inner socket's `write` through the flush. Two
+  flushes are two writes in a slot that holds one (`contract::claimWriteSlot`) and interleaved
+  ciphertext. A write waits for a flush in progress; a read skips it, because that flush drains
+  the BIO to empty -- the read's bytes included -- and a read parked behind a write could not be
+  retired by `cancelRead`. Origin: Task B11, found by counting writes at a gated inner socket.
+- **No OpenSSL type in any header, not even a forward-declared struct tag**, and no OpenSSL
+  include outside the permitted units. `core-cpp.openssl-seam` holds both; a new unit that needs
+  OpenSSL is a new row there, with its reason. Origin: the design spec's "No OpenSSL type appears
+  in any header", which had no gate until Task B11.
+
 ## Profiling zones never span a `co_await`
 
 `CORE_ZONE_SCOPED` and its variants declare a thread-local, stack-shaped RAII guard. A

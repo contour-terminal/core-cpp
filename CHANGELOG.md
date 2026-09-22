@@ -51,6 +51,27 @@ workflow refuses one without a section here.
   `testing::ParkingWritableSocket`, which park until the test decides and count how each parked
   operation ended.
 
+- **One TLS layer, `core::net_tls`: fastcached's record pump behind contour's `ITlsContext` seam**
+  (Task B11). `TlsSocket` now overrides the three verbs it inherited: `handshakeIfNeeded()` drives
+  the handshake to completion, so an accept loop -- `core::net::serve` included -- frames its first
+  byte after it; `waitReadable()` decrypts through `SSL_peek` and answers `0` for a `close_notify`
+  rather than reporting the alert record as data, and parks rather than answering at once;
+  `shutdownWrite()` writes and flushes `close_notify` and only then half-closes the transport, so a
+  strict peer reads an orderly end rather than a truncation. New in `<core/net/Tls.hpp>`:
+  `SelfSignedOptions` (common name, subject names, validity), `makeTlsServerContextFromFiles()`,
+  `certificateFingerprint()` of a PEM certificate and `ITlsContext::certificateFingerprint()` of a
+  context's own. `<core/net/ITlsContext.hpp>` holds the seam in `core::net` itself, with
+  `wrapTls(socket, context)`, which hands the socket back unchanged for a null context -- so an
+  accept path compiles identically in a build without TLS. `core::net::testing::StrictTlsPeer`
+  is the layer's test double: OpenSSL driven by hand, reading a FIN with no `close_notify` as the
+  truncation OpenSSL 3 calls it.
+- **`core-cpp.openssl-seam`, the gate for "no OpenSSL type appears in any header"** (Task B11). The
+  design spec required it and nothing checked it. It refuses an OpenSSL include outside `Tls.cpp`
+  and `testing/StrictTlsPeer.cpp`, and an OpenSSL type named in any header -- a forward-declared
+  `struct ssl_st` included, which is what fastcached's TLS headers did. Each permitted unit must be
+  seen including OpenSSL, or the row is refused as stale; `core-cpp.openssl-seam-selftest` proves
+  twelve verdicts. Both are `tree-level` and run in the `style` job.
+
 - **The dial, and the seam that keeps DNS off an event loop's thread** (`<core/net/IConnector.hpp>`,
   `<core/net/IAsyncAddressResolver.hpp>`, `<core/net/ThreadedAddressResolver.hpp>`,
   `<core/net/SocketAddress.hpp>`, `<core/net/ConnectFlow.hpp>`, `<core/net/ReadinessDial.hpp>`,
@@ -703,6 +724,37 @@ workflow refuses one without a section here.
   branches on `ConnReset`: not contour, endo, tuidu, Lightweight or morph, and fastcached only
   produces it in its test doubles.
 
+- **A TLS read of a transport that ended before the peer's `close_notify` is
+  `NetErrorCode::ConnReset` ("peer closed without close_notify"), not a zero-byte read** (Task B11).
+  `0` says the stream ended whole, so answering it for a bare FIN let a truncated stream -- cut
+  short by an attacker, or by a crash -- pass as a complete one; OpenSSL 3 reading from a socket
+  refuses the same thing. `close_notify` is still `0`, and `waitReadable()` answers as `read()` does.
+
+  Migration: a caller that read `0` as "the peer is gone" also gets `ConnReset` from a TLS peer that
+  closes without the alert -- which some clients do -- and should treat both as the connection's
+  end. Only a caller that trusts the stream's end as the end of a MESSAGE must treat `ConnReset` as
+  a message that did not arrive whole.
+
+- **`generateSelfSignedCertificate()` and `makeSelfSignedServerContext()` take a
+  `SelfSignedOptions`, and the default common name is `"localhost"`, not `"contour-daemon"`**
+  (Task B11). A consumer's name had no place as a library default. The generated certificate also
+  changes: a P-256 key rather than RSA-2048 (sub-millisecond rather than occasionally a second), a
+  subjectAltName carrying the names -- which is what a client checks -- and a random serial, since
+  a client that has seen two certificates with one issuer and serial refuses the second.
+
+  Migrations:
+
+  - `generateSelfSignedCertificate("contour-dev")` becomes
+    `generateSelfSignedCertificate({ .commonName = "contour-dev" })`.
+  - A caller relying on the old default passes `{ .commonName = "contour-daemon" }`.
+  - A client pinning a certificate by host name is unaffected: the subjectAltName carries the
+    common name when no other names are given.
+  - fastcached's `TlsContext::CreateSelfSigned(names, validity)` becomes
+    `makeSelfSignedServerContext({ .commonName = ..., .subjectNames = names, .validity = validity })`,
+    and `TlsContext::Create(cert, key)` becomes `makeTlsServerContextFromFiles(cert, key)`; both
+    return `std::shared_ptr<ITlsContext>` and a string reason. `tools/migrate/renames.json` has the
+    rows.
+
 - **`core::net::connect()` no longer resolves a name on the calling thread**, and callers of
   contour's `connect(loop, host, port)` inherit that without a source change. The body called
   `getaddrinfo` inline, which on an event loop is a stall of unbounded length: a lookup with a dead
@@ -1331,6 +1383,22 @@ workflow refuses one without a section here.
   which says the same thing.
 
 ### Fixed
+
+- **A TLS read beside a parked TLS write no longer puts a second write into the inner socket**
+  (Task B11). A write larger than one flush chunk leaves ciphertext queued in OpenSSL's BIO while
+  its first chunk parks; a read reaching `WANT_READ` then flushed that remainder itself -- a second
+  operation in the inner socket's single write slot, which a real socket answers by dropping the
+  parked one, and ciphertext out of order either way. One flush runs at a time: a write waits for
+  one in progress, a read leaves the bytes to it. Found by counting writes at a gated inner socket
+  (`TlsSocket_test`, `maxInFlight` 2 before, 1 after).
+- **A healthy TLS connection no longer fails for another connection's OpenSSL error** (Task B11).
+  `SSL_get_error` reads the thread's error queue, which every connection on a loop shares, and the
+  record pump never cleared it: a stale entry turned a routine `WANT_READ` into `SSL_ERROR_SSL`.
+  `ERR_clear_error()` now precedes every classified call, as it did in fastcached.
+- **A server certificate chain is served whole** (Task B11). `makeTlsServerContext()` read only the
+  first certificate of `certPem`, which its documentation called a chain, so a named certificate
+  lost its intermediates and a client that could not build the chain to its anchor failed the
+  handshake.
 
 - **`SplitSocket::close()` no longer reads a destroyed object when a retirement drops its owner**
   (Task B10). It closed its read half and then its write half, and closing the read half completes

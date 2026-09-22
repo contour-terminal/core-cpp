@@ -56,7 +56,8 @@ directory `src/core/net/`. Three targets:
 | `<core/net/testing/InMemoryDatagram.hpp>`, `<core/net/testing/DatagramPayload.hpp>` | `DatagramBus`, a network segment in one process with scripted loss, and the text-to-payload helpers |
 | `<core/net/testing/SocketDecorator.hpp>`, `<core/net/testing/ParkingReadableSocket.hpp>` | `SocketDecorator`, which forwards every verb so a double overrides only the one it stages; `ParkingReadableSocket` and `ParkingWritableSocket`, which park until the test decides and count how each parked operation ended |
 | `<core/net/Diagnostics.hpp>` | `setDiagnosticSink()`: where a failure nobody can be handed goes (a wait that fails mid-sweep); discarded by default |
-| `<core/net/Tls.hpp>` (`core::net_tls`) | `ITlsContext::wrap()`, a TLS `ISocket` over any other, driven through memory BIOs on the same loop; `makeTlsServerContext()`, `makeSelfSignedServerContext()`, `makeTlsClientContext()` (a pinned CA and a host name, or trust on first use), `generateSelfSignedCertificate()`, `constantTimeEquals()` |
+| `<core/net/ITlsContext.hpp>` (`core::net`) | `ITlsContext`, the seam a TLS implementation plugs in behind, and `wrapTls(socket, context)`, which hands a socket back unchanged for a null context -- so an accept path compiles identically in a build without TLS |
+| `<core/net/Tls.hpp>` (`core::net_tls`) | a TLS `ISocket` over any other, driven through memory BIOs on the same loop, with an eager `handshakeIfNeeded()`, a `waitReadable()` that tells `close_notify` from data and a `shutdownWrite()` that sends `close_notify` before the FIN; `makeTlsServerContext()` and `makeTlsServerContextFromFiles()` (a chain and its key), `makeSelfSignedServerContext(SelfSignedOptions)`, `makeTlsClientContext()` (a pinned CA and a host name, or trust on first use), `generateSelfSignedCertificate(SelfSignedOptions)`, `certificateFingerprint()`, `constantTimeEquals()` |
 
 ## The error vocabulary
 
@@ -164,8 +165,16 @@ From contour's `src/net/README.md` at `6777ff05`, as far as they hold here:
   create its wakeup channel (descriptor exhaustion). That channel belongs to the backend, because
   `IoBackend::wake()` is the one member of the interface another thread may call, and it is what
   `EventLoop::post()` uses to break a wait in flight.
-- **No OpenSSL type crosses a header.** `Tls.cpp` keeps it behind `ITlsContext`, and
-  `core::net_tls` links OpenSSL PRIVATE.
+- **No OpenSSL type crosses a header**, and `core-cpp.openssl-seam` refuses one that does -- a
+  forward-declared struct tag included -- as well as an OpenSSL include outside `Tls.cpp` and the
+  tests' strict peer. `core::net_tls` links OpenSSL PRIVATE.
+- **A TLS connection closes in the order a strict peer requires.** `shutdownWrite()` writes and
+  flushes `close_notify`, then half-closes the transport; a FIN with no alert before it is what a
+  truncation looks like, and OpenSSL 3 reading from a socket reports it as an error. `close()` is
+  synchronous and sends no alert, so a caller that wants an orderly end awaits `shutdownWrite()`
+  first. It reads the same way: a transport EOF before `close_notify` is
+  `NetErrorCode::ConnReset` ("peer closed without close_notify"), never the zero-byte read that
+  would pass a truncated stream off as a complete one.
 - **A loop that does not own its thread is pumped, not blocked.** `HostDrivenBackend` has no wait:
   it asks its `IHostScheduler` for a pump and returns, and the host is what waits. Several
   requests before the host gets a turn become ONE pump, or a burst of `post()`s would queue a
@@ -181,8 +190,6 @@ These are contour's, carried as they are:
   A `Task` starts when it is awaited, so the string must live until then: awaiting the call in
   the same expression is safe, storing the task and awaiting it after the string is gone is not.
   Phase B's dialler takes a `std::string`.
-- `generateSelfSignedCertificate()` defaults its common name to `"contour-daemon"`, and
-  `makeSelfSignedServerContext()` uses that default. Phase B's `SelfSignedOptions` names it.
 - `IoBackend::wait()` takes a `SteadyDuration`, but every backend's native wait but kqueue's
   takes milliseconds, so a timer still fires no more precisely than that. A positive duration
   under a millisecond rounds UP to one rather than truncating to zero, which would turn the wait
@@ -195,7 +202,8 @@ These are contour's, carried as they are:
 | `core-cpp.net_types` | `core-cpp-net_types-test` | `core-cpp`, `net` | `NetError_test.cpp`; runs under Emscripten too |
 | `core-cpp.net_backend` | `core-cpp-net_backend-test` | `core-cpp`, `net` | the backend contract that needs no kernel (`selectReadinessCallback`, the ready batch, the timeout conversion) and the host-driven backend over `ManualHostScheduler`; runs under Emscripten too |
 | `core-cpp.net` | `core-cpp-net-test` | `core-cpp`, `net`, `loopback` | the event loop, the backends' parity, sockets, AF_UNIX and descriptor passing (POSIX), the buffered reader, the write queue, the HTTP server |
-| `core-cpp.net_tls` | `core-cpp-net_tls-test` | `core-cpp`, `net`, `loopback` | `Tls_test.cpp`, with `CORE_CPP_WITH_TLS` |
+| `core-cpp.net_tls` | `core-cpp-net_tls-test` | `core-cpp`, `net`, `loopback` | `Tls_test.cpp`, `TlsContext_test.cpp` and `TlsSocket_test.cpp`, with `CORE_CPP_WITH_TLS`; the last two hold the TLS socket against `testing::StrictTlsPeer`, OpenSSL driven by hand, which reads a FIN with no `close_notify` as the truncation it is |
+| `core-cpp.openssl-seam`, `core-cpp.openssl-seam-selftest` | (a `cmake -P` scan) | `core-cpp`, `hygiene`, `tree-level` | no OpenSSL type in any header and no OpenSSL include outside the permitted units, in every build whether or not TLS is on |
 
 Nearly every case of the last two moves bytes over a socket, a socketpair or, on Windows, the
 loopback TCP pair behind `SystemPipe` and `makeSocketPair()`, hence `loopback` on the binaries.

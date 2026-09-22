@@ -121,6 +121,19 @@ jobs:
       - name: Preset-coverage self-test
         run: python scripts/check-preset-coverage-selftest.py
 
+      # "No OpenSSL type appears in any header", as a scan: an OpenSSL include outside the TLS
+      # units, or an OpenSSL type named in any header, is refused by file and line.
+      # covers: core-cpp.openssl-seam
+      - name: OpenSSL stays behind the TLS seam
+        run: cmake -DROOT="$GITHUB_WORKSPACE" -P tests/cmake/check-openssl-seam.cmake
+
+      # covers: core-cpp.openssl-seam-selftest
+      - name: OpenSSL-seam self-test
+        run: >-
+          cmake -DCHECKER="$GITHUB_WORKSPACE/tests/cmake/check-openssl-seam.cmake"
+          -DWORK_DIR="$RUNNER_TEMP/openssl-seam-selftest"
+          -P tests/cmake/check-openssl-seam-selftest.cmake
+
       # covers: core-cpp.check-release-selftest
       - name: Release-check self-test
         run: >-

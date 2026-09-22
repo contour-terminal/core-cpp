@@ -6696,6 +6696,111 @@
       "note": "as PlatformConnector.hpp"
     },
     {
+      "kind": "include",
+      "from": "FastCache/Net/TlsContext.hpp",
+      "to": "core/net/Tls.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/Tls.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/TlsSocket.hpp",
+      "to": "core/net/Tls.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/Tls.hpp"
+      }
+    },
+    {
+      "kind": "include",
+      "from": "FastCache/Net/TlsWrap.hpp",
+      "to": "core/net/ITlsContext.hpp",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ITlsContext.hpp"
+      }
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::TlsContext",
+      "to": "core::net::ITlsContext",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ITlsContext.hpp",
+        "symbol": "core::net::ITlsContext"
+      },
+      "note": "Task B11. An interface rather than upstream's concrete class, and held by std::shared_ptr: every factory below returns std::shared_ptr<ITlsContext>, and a socket is wrapped through ITlsContext::wrap or wrapTls rather than constructed."
+    },
+    {
+      "kind": "symbol",
+      "from": "FastCache::WrapTls",
+      "to": "core::net::wrapTls",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ITlsContext.hpp",
+        "symbol": "core::net::wrapTls"
+      },
+      "note": "Task B11. Takes an ITlsContext* and needs no FC_TLS_ENABLED: the seam is in core::net, so the call compiles in a build without TLS and a null context hands the socket back unchanged."
+    },
+    {
+      "kind": "member",
+      "from": "CertificateFingerprint",
+      "to": "certificateFingerprint",
+      "apply": "semantic",
+      "scope": "FastCache::TlsContext",
+      "profiles": [
+        "fastcached"
+      ],
+      "target": {
+        "header": "core/net/ITlsContext.hpp",
+        "symbol": "core::net::ITlsContext::certificateFingerprint"
+      }
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::ITlsContext::Create",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "Task B11: makeTlsServerContextFromFiles(certPath, keyPath) in core/net/Tls.hpp. It returns std::expected<std::shared_ptr<ITlsContext>, std::string> -- a construction failure is configuration, not a connection, so it is not a NetError -- and it serves every certificate in the file, intermediates included."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::ITlsContext::CreateSelfSigned",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "Task B11: makeSelfSignedServerContext(SelfSignedOptions{.commonName, .subjectNames, .validity}) in core/net/Tls.hpp. The common name is no longer hard-coded to \"fastcache-node\"; pass it. subjectNames is upstream's span of names, and an empty one means the common name alone. The default validity is ten years, not one: pass .validity = std::chrono::days{365} to keep upstream's."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::ITlsContext::Native",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "Task B11: no OpenSSL type crosses a core-cpp header (core-cpp.openssl-seam refuses one), so the SSL_CTX is not reachable. What callers used it for is on the interface: wrap() and certificateFingerprint()."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::TlsSocket",
+      "profiles": [
+        "fastcached"
+      ],
+      "note": "Task B11: the TLS socket is private to core::net_tls. Wrap an accepted socket with ITlsContext::wrap or wrapTls, and await handshakeIfNeeded() before reading, as upstream's accept path did. Its ShutdownWrite now sends close_notify before the FIN, where upstream's forwarded straight to the raw socket."
+    },
+    {
       "kind": "symbol",
       "from": "FastCache::IConnector",
       "to": "core::net::IConnector",

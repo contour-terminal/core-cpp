@@ -131,12 +131,10 @@ class ISocket
     /// once before protocol autodetection, so it stays transport-agnostic and a slow handshake runs
     /// on the per-connection flow rather than blocking the accept loop.
     ///
-    /// **No transport in this tree overrides it yet, including `TlsSocket`** — an earlier version
-    /// of this comment said a TLS decorator did, which was a description of the intended design
-    /// rather than of the shipped code. `TlsSocket` drives its handshake lazily inside its read and
-    /// write paths instead, so no bytes are lost today; what an accept loop does NOT get is the
-    /// handshake completing before it begins autodetection, which is the whole reason this verb
-    /// exists. Task B11 owns that file.
+    /// `TlsSocket` overrides it: it drives the TLS handshake to completion, and answers a failed one
+    /// with the same failure on every later call. It still negotiates lazily on its first read or
+    /// write for a caller that never asks, so nothing is lost by not awaiting this; what an accept
+    /// loop gains by awaiting it is the handshake settled before it frames its first byte.
     /// @return Nothing on success, or a @c NetError.
     [[nodiscard]] virtual ResultAwaitable<void> handshakeIfNeeded();
 
@@ -159,8 +157,8 @@ class ISocket
     /// discovers the truth, while a false `0` tells a caller its peer is gone. But the default also
     /// never SUSPENDS, so a transport that inherits it turns a parked watch into a spin — a
     /// watchdog loop of the shape @c cancelRead documents would then burn a core rather than wait.
-    /// **A transport whose reads can block owes an override**, and `TlsSocket` currently does not
-    /// have one (Task B11 owns that file); `PosixSocket` and `WindowsSocket` both do.
+    /// **A transport whose reads can block owes an override**, and `PosixSocket`, `WindowsSocket`
+    /// and `TlsSocket` all have one.
     ///
     /// **"Consumes nothing" is about bytes the CALLER could have read**, not about the transport's
     /// own buffering. A decorator may have to consume and decode raw bytes to answer at all — a TLS
@@ -234,9 +232,8 @@ class ISocket
     /// There is no `cancelWrite`, deliberately (see @c contract::claimWriteSlot), so a caller that
     /// must abandon a parked write rather than await it has @c close and nothing else.
     ///
-    /// **`TlsSocket` does not override it yet** and inherits the no-op below, so a TLS peer learns
-    /// of the half-close only at the eventual @c close. Task B11 owns `Tls.cpp`; what this signature
-    /// settles is that an override there CAN be correct.
+    /// `TlsSocket` overrides it with exactly that: `close_notify` written and flushed through the
+    /// inner socket, and only then the inner socket's own half-close.
     ///
     /// **The default resolves successfully and does nothing, and that is for FAKES.** A no-op costs
     /// a peer the early EOF — it learns at the eventual @c close instead — which delays a
