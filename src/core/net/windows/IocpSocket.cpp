@@ -711,6 +711,8 @@ IoAwaitable IocpSocket::write(std::span<std::byte const> buffer)
     if (buffer.empty())
         return IoAwaitable { IoResult { std::size_t { 0 } } };
 
+    keepOrphanedWrite();
+
     auto node = std::make_shared<Node>();
     node->kind = Node::Kind::Write;
     node->socket = this;
@@ -752,6 +754,8 @@ IoAwaitable IocpSocket::writeVectored(std::span<std::span<std::byte const> const
     if (auto error = unusable("write"))
         return IoAwaitable { std::unexpected(std::move(*error)) };
 
+    keepOrphanedWrite();
+
     auto node = std::make_shared<Node>();
     node->kind = Node::Kind::Write;
     node->socket = this;
@@ -785,6 +789,28 @@ IoAwaitable IocpSocket::writeVectored(std::span<std::span<std::byte const> const
                         },
                          &IocpSocket::retireWrite,
                          this };
+}
+
+void IocpSocket::keepOrphanedWrite()
+{
+    // Release builds, where the verb's guard is gone: the orphan is kept reachable, as the read
+    // side keeps one, rather than dropped while its park still names it. Dropped, it would live on
+    // the kernel's share alone, and its completion would free it in the dequeue and then be
+    // dispatched through it. Kept, its completion resumes its own flow and close() still settles
+    // it; the order the two writes reach the wire in is whatever the broken contract makes it.
+    if (_write && _write->awaitable != nullptr)
+        _settling.push_back(std::move(_write));
+}
+
+std::shared_ptr<IocpSocket::Node> IocpSocket::holding(Node const& node) const noexcept
+{
+    if (_write.get() == &node)
+        return _write;
+    if (_read.get() == &node)
+        return _read;
+    auto const found =
+        std::ranges::find_if(_settling, [&node](auto const& held) { return held.get() == &node; });
+    return found != _settling.end() ? *found : nullptr;
 }
 
 std::expected<void, NetError> IocpSocket::issueWrite(std::shared_ptr<Node> const& node)
@@ -944,9 +970,13 @@ void IocpSocket::onWriteWake(void* state, ParkWake wake)
 {
     auto& node = *static_cast<Node*>(state);
     auto* const socket = node.socket;
-    if (node.awaitable == nullptr || socket->_write.get() != &node)
+    if (node.awaitable == nullptr)
         return;
-    auto const held = socket->_write; // keeps the node through a re-issue
+    // The slot's write, or one orphaned by a second write in a Release build: either way the
+    // socket holds it while its park is registered, and this keeps it through a re-issue.
+    auto const held = socket->holding(node);
+    if (!held)
+        return;
 
     switch (wake)
     {
@@ -993,9 +1023,16 @@ void IocpSocket::onWriteWake(void* state, ParkWake wake)
 void IocpSocket::retireWrite(void* owner, void* awaitable) noexcept
 {
     auto* const socket = static_cast<IocpSocket*>(owner);
-    if (!socket->_write || socket->_write->awaitable != awaitable)
+    // Identity, as on the read side: the slot's write, or an orphan a second write displaced.
+    auto node = std::shared_ptr<Node> {};
+    if (socket->_write && socket->_write->awaitable == awaitable)
+        node = socket->_write;
+    else if (auto const found = std::ranges::find_if(
+                 socket->_settling, [awaitable](auto const& held) { return held->awaitable == awaitable; });
+             found != socket->_settling.end())
+        node = *found;
+    if (!node)
         return;
-    auto const node = socket->_write;
     socket->cancelInKernel(*node);
     std::ignore = socket->take(*node);
 }
@@ -1241,6 +1278,14 @@ async::Task<AcceptResult> IocpListener::accept()
         _family, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
     if (accepted == InvalidSocketValue)
         co_return std::unexpected(detail::fromWinsockError(::WSAGetLastError(), "socket(accept)"));
+    // Closed on every way out but the hand-off to `IocpSocket` -- a frame destroyed while parked
+    // included, which no line below would otherwise see. Closing it is what aborts an AcceptEx
+    // nothing will wait for, whose completion lands in the operation's own share; left open, it
+    // would take the next client into a socket nobody owns.
+    auto const discard = detail::ScopeGuard { [&accepted]() noexcept {
+        if (accepted != InvalidSocketValue)
+            ::closesocket(accepted);
+    } };
 
     auto operation = std::make_shared<AcceptOperation>();
     operation->onDequeued = &AcceptOperation::released;
@@ -1262,7 +1307,6 @@ async::Task<AcceptResult> IocpListener::accept()
         {
             port->withdrawOperation(static_cast<detail::IocpOperation*>(operation.get()));
             operation->self.reset();
-            ::closesocket(accepted);
             co_return std::unexpected(detail::fromWinsockError(err, "AcceptEx"));
         }
     }
@@ -1277,9 +1321,6 @@ async::Task<AcceptResult> IocpListener::accept()
 
     if (wait.outcome() != detail::CompletionWait::Outcome::Completed)
     {
-        // Closing the half-born socket is what aborts an AcceptEx nothing will wait for; its
-        // completion arrives into the node's own share.
-        ::closesocket(accepted);
         switch (wait.outcome())
         {
             case detail::CompletionWait::Outcome::Refused: co_return std::unexpected(parkRefused());
@@ -1293,10 +1334,7 @@ async::Task<AcceptResult> IocpListener::accept()
     // since -- which is then what aborted it.
     auto const error = detail::completionError(shared->socket, *operation);
     if (error != 0)
-    {
-        ::closesocket(accepted);
         co_return std::unexpected(detail::fromWinsockError(static_cast<int>(error), "AcceptEx"));
-    }
 
     // Without this the socket is connected and yet `shutdown` fails on it with WSAENOTCONN:
     // AcceptEx leaves the handle's context unset until asked, so a server that half-closed sent no
@@ -1332,7 +1370,8 @@ async::Task<AcceptResult> IocpListener::accept()
             peer = formatPeer(storage);
         }
     }
-    co_return std::unique_ptr<ISocket> { new IocpSocket(*loop, accepted, std::move(peer)) };
+    co_return std::unique_ptr<ISocket> { new IocpSocket(
+        *loop, std::exchange(accepted, InvalidSocketValue), std::move(peer)) };
 }
 
 } // namespace core::net

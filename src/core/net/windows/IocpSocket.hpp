@@ -178,6 +178,14 @@ class IocpSocket final: public ISocket
     /// @return Nothing, or why it could not be issued.
     [[nodiscard]] std::expected<void, NetError> issueWrite(std::shared_ptr<Node> const& node);
 
+    /// Moves a parked write out of the write slot into `_settling` before a second write takes the
+    /// slot -- reachable only where `contract::claimWriteSlot` is compiled out.
+    void keepOrphanedWrite();
+
+    /// @param node An operation of this socket's.
+    /// @return The share this socket holds of @p node, from whichever slot it is in; empty if none.
+    [[nodiscard]] std::shared_ptr<Node> holding(Node const& node) const noexcept;
+
     /// Parks @p node on the loop, so its completion reaches this socket.
     /// @param node The operation to park.
     /// @return Nothing, or the loop's refusal.
@@ -274,9 +282,10 @@ class IocpSocket final: public ISocket
     std::shared_ptr<Node> _read;  ///< The read slot: the operation a read verb last armed.
     std::shared_ptr<Node> _write; ///< The write slot.
 
-    /// Reads `cancelRead` retired while their operation was still the kernel's: each resolves
-    /// with whatever its completion says, and is held here so that close and the destructor can
-    /// still reach its waiter.
+    /// Reads `cancelRead` retired while their operation was still the kernel's, and -- in a
+    /// Release build only -- a parked write a second write displaced: each resolves with whatever
+    /// its completion says, and is held here so that close and the destructor can still reach its
+    /// waiter.
     std::vector<std::shared_ptr<Node>> _settling;
 
     /// How long a single read may wait, or zero for no bound; @see ISocket::setReceiveDeadline.

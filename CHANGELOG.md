@@ -699,7 +699,9 @@ workflow refuses one without a section here.
   - **an operation outlives its socket**: each holds itself until the port dequeues it, so a
     socket or listener destroyed mid-operation leaves the kernel writing into, and reading a
     gathered write's payload out of, storage that still exists
-    ([fastcached#465](https://github.com/LASTRADA-Software/fastcached/issues/465));
+    ([fastcached#465](https://github.com/LASTRADA-Software/fastcached/issues/465)); an accept
+    whose frame is destroyed while it waits closes the socket its AcceptEx was issued into, so
+    the next client is the next accept's rather than accepted into a socket nobody owns;
   - bytes already there, and room already in the send buffer, are taken **without an operation**,
     so a read or a write costs the same number of turns as on every other socket.
 
@@ -707,7 +709,7 @@ workflow refuses one without a section here.
   `SO_UPDATE_CONNECT_CONTEXT`; an accepted socket gets `SO_UPDATE_ACCEPT_CONTEXT`, without which
   `shutdownWrite` sent no FIN (fastcached#1556). `IocpListener` claims its address with
   `SO_EXCLUSIVEADDRUSE`. Ported from fastcached `Net/IocpSocket.{hpp,cpp}`, `Net/IocpDial.hpp` and
-  `Net/IocpStatus.hpp` at `0708dd54`; 16 cases in `windows/IocpSocket_test.cpp` and 4 in
+  `Net/IocpStatus.hpp` at `0708dd54`; 21 cases in `windows/IocpSocket_test.cpp` and 4 in
   `windows/IocpDial_test.cpp`, and every socket suite that runs over `BackendMatrix` now covers
   both Windows sockets.
 

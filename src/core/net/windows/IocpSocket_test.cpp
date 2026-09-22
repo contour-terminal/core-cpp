@@ -280,14 +280,14 @@ DetachedTask parkOnProbe(core::net::ISocket* socket, Outcome* out)
 
 /// The client end of the round trip: connects, sends, reads the echo. Asserts nothing, because a
 /// Catch assertion belongs to the case's thread; it reports and the case asserts after `join`.
+/// Connects a plain blocking client to a listener on the loopback address.
 /// @param port The listener's port.
-/// @param response Where the echo goes.
-/// @return Whether it connected.
-bool echoClient(std::uint16_t port, std::string* response)
+/// @return The connected socket, which the caller closes, or `INVALID_SOCKET`.
+SOCKET connectTo(std::uint16_t port)
 {
     auto const client = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (client == InvalidSocketValue)
-        return false;
+        return InvalidSocketValue;
     auto address = sockaddr_in {};
     address.sin_family = AF_INET;
     address.sin_port = htons(port);
@@ -295,8 +295,19 @@ bool echoClient(std::uint16_t port, std::string* response)
     if (::connect(client, reinterpret_cast<sockaddr const*>(&address), sizeof(address)) != 0)
     {
         ::closesocket(client);
-        return false;
+        return InvalidSocketValue;
     }
+    return client;
+}
+
+/// @param port The listener's port.
+/// @param response Where the echo goes.
+/// @return Whether it connected.
+bool echoClient(std::uint16_t port, std::string* response)
+{
+    auto const client = connectTo(port);
+    if (client == InvalidSocketValue)
+        return false;
     constexpr auto Message = std::string_view { "ping!" };
     std::ignore = ::send(client, Message.data(), static_cast<int>(Message.size()), 0);
     auto buffer = std::array<char, 64> {};
@@ -319,6 +330,107 @@ Task<void> echoOnce(core::net::IListener* listener, std::string* peer, bool* acc
     if (got.has_value() && *got > 0)
         std::ignore = co_await (*connection)->write(std::span<std::byte const> { buffer.data(), *got });
     (*connection)->close();
+}
+
+/// Accepts once and records the answer.
+DetachedTask acceptInto(core::net::IListener* listener, std::optional<core::net::AcceptResult>* out)
+{
+    *out = co_await listener->accept();
+}
+
+/// Accepts once and records the answer, or that the flow was stopped: a `Task`, for `anyOf`.
+Task<void> acceptReporting(core::net::IListener* listener,
+                           std::optional<core::net::AcceptResult>* out,
+                           bool* abandoned)
+{
+    try
+    {
+        *out = co_await listener->accept();
+    }
+    catch (core::async::OperationCancelled const&)
+    {
+        *abandoned = true;
+    }
+}
+
+/// The byte the pipe is filled with, which the payload under test never is at a filler offset.
+constexpr auto FillerByte = 'f';
+
+/// Fills the pipe from the socket under test to its peer until the kernel says it would block.
+///
+/// The socket sends what the send buffer takes WITHOUT an operation, and Windows buffers a great
+/// deal for a non-blocking send -- measured: all 8MiB, at once. So a case about the OVERLAPPED
+/// send fills the pipe first, and only then issues the write under test: it cannot take the fast
+/// path and has to become an operation.
+/// @param harness The socket under test and its peer, whose buffers this shrinks.
+/// @return How many filler bytes are now queued for the peer, or 0 if the pipe never filled.
+std::size_t fillThePipe(Harness& harness)
+{
+    auto const small = 4096;
+    ::setsockopt(harness.socket->native(),
+                 SOL_SOCKET,
+                 SO_SNDBUF,
+                 reinterpret_cast<char const*>(&small),
+                 sizeof(small));
+    ::setsockopt(
+        harness.pair.client(), SOL_SOCKET, SO_RCVBUF, reinterpret_cast<char const*>(&small), sizeof(small));
+
+    auto const filler = std::vector<char>(std::size_t { 64 } * 1024, FillerByte);
+    auto queued = std::size_t { 0 };
+    for ([[maybe_unused]] auto const attempt: std::views::iota(0, 100'000))
+    {
+        auto const sent = ::send(harness.socket->native(), filler.data(), static_cast<int>(filler.size()), 0);
+        if (sent == SOCKET_ERROR)
+            return ::WSAGetLastError() == WSAEWOULDBLOCK ? queued : 0;
+        queued += static_cast<std::size_t>(sent);
+    }
+    return 0;
+}
+
+/// Reads up to @p count bytes from a blocking @p socket, each `recv` bounded by the completion
+/// budget. Asserts nothing: it runs on a peer thread, and a Catch assertion belongs to the case's.
+/// @return What arrived, which is short of @p count only if the peer stopped sending or the budget
+///         ran out.
+std::vector<char> receiveExactly(SOCKET socket, std::size_t count)
+{
+    auto const timeout =
+        static_cast<DWORD>(std::chrono::duration_cast<std::chrono::milliseconds>(CompletionBudget).count());
+    ::setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<char const*>(&timeout), sizeof(timeout));
+    auto received = std::vector<char>(count);
+    auto got = std::size_t { 0 };
+    while (got < count)
+    {
+        auto const room = std::span<char> { received }.subspan(got);
+        auto const n =
+            ::recv(socket, room.data(), static_cast<int>(std::min(room.size(), std::size_t { 65536 })), 0);
+        if (n <= 0)
+            break;
+        got += static_cast<std::size_t>(n);
+    }
+    received.resize(got);
+    return received;
+}
+
+/// The payload byte at @p offset. The period, 251, is prime and so shares no factor with any size
+/// the copy has a bound at: a segment copied twice, skipped, or resumed at the wrong offset
+/// changes the bytes from that point on.
+std::byte patternAt(std::size_t offset)
+{
+    return static_cast<std::byte>(((offset * 31) + 7) % 251);
+}
+
+/// Parks a flow on one `write` and records how it ends.
+DetachedTask writeOnce(core::net::ISocket* socket, std::span<std::byte const> bytes, Outcome* out)
+{
+    try
+    {
+        out->record(co_await socket->write(bytes));
+    }
+    catch (core::async::OperationCancelled const&)
+    {
+        out->resumed = true;
+        out->abandoned = true;
+    }
 }
 
 } // namespace
@@ -474,31 +586,7 @@ TEST_CASE("An IocpSocket destroyed mid-write holds the payload until the kernel 
     // until the kernel is done, which is what the interface promises. Asserted through OWNERSHIP
     // rather than by racing the wire.
     auto harness = Harness {};
-    auto const small = 4096;
-    ::setsockopt(harness.socket->native(),
-                 SOL_SOCKET,
-                 SO_SNDBUF,
-                 reinterpret_cast<char const*>(&small),
-                 sizeof(small));
-    ::setsockopt(
-        harness.pair.client(), SOL_SOCKET, SO_RCVBUF, reinterpret_cast<char const*>(&small), sizeof(small));
-
-    // The socket sends what the send buffer takes WITHOUT an operation, and Windows buffers a
-    // great deal for a non-blocking send -- measured: all 8MiB, at once. So the pipe is filled
-    // first, until the kernel says it would block, and only then is the write under test issued:
-    // it cannot take the fast path and has to become the overlapped operation this case is about.
-    auto const filler = std::vector<char>(std::size_t { 64 } * 1024, 'f');
-    auto filled = false;
-    for ([[maybe_unused]] auto const attempt: std::views::iota(0, 100'000))
-    {
-        if (::send(harness.socket->native(), filler.data(), static_cast<int>(filler.size()), 0)
-            == SOCKET_ERROR)
-        {
-            filled = ::WSAGetLastError() == WSAEWOULDBLOCK;
-            break;
-        }
-    }
-    REQUIRE(filled);
+    REQUIRE(fillThePipe(harness) > 0);
 
     auto payload = std::make_shared<std::vector<std::byte>>(8U * 1024U * 1024U, std::byte { 0xAB });
     auto const observer = std::weak_ptr<void const> { payload };
@@ -913,4 +1001,213 @@ TEST_CASE("waitReadable measures what a zero-byte completion found", "[net][iocp
         CHECK_FALSE(watch.code.has_value());
         CHECK(watch.bytes == 0);
     }
+}
+
+TEST_CASE("An accept destroyed while parked leaves the next client to the next accept",
+          "[net][iocp][listener][abandon]")
+{
+    // An accept issues its AcceptEx into a socket the accepting FRAME creates. A frame destroyed
+    // while parked -- a lazy `Task` dropped, a chain whose root is freed -- must close that socket,
+    // because closing it is what aborts the AcceptEx: left armed, it takes the next client, which
+    // completes its handshake with nobody while the next accept() waits for a connection that has
+    // already been used up.
+    auto backend = IocpBackend {};
+    auto loop = EventLoop { backend };
+    auto bound = IocpListener::bind(loop, "127.0.0.1", 0);
+    REQUIRE(bound.has_value());
+    auto listener = std::move(*bound);
+
+    {
+        auto first = listener->accept();
+        first.handle().resume(); // parks on the AcceptEx: nothing has connected
+        REQUIRE_FALSE(first.done());
+        REQUIRE(backend.issuedOperations() == 1);
+    } // the frame goes while parked, and with it the only reference to the accept socket
+
+    auto const client = connectTo(listener->boundPort());
+    REQUIRE(client != InvalidSocketValue);
+    auto const hangUp = core::net::detail::ScopeGuard { [client]() noexcept { ::closesocket(client); } };
+
+    auto answer = std::optional<core::net::AcceptResult> {};
+    acceptInto(listener.get(), &answer);
+    REQUIRE(pumpUntil(loop, [&answer] { return answer.has_value(); }));
+    REQUIRE(answer->has_value());
+
+    // Served, not merely accepted: bytes from THIS client reach the socket the accept handed out.
+    REQUIRE(::send(client, "ping", 4, 0) == 4);
+    auto buffer = std::array<std::byte, 64> {};
+    auto read = Outcome {};
+    parkOnRead(answer->value().get(), &buffer, &read);
+    REQUIRE(pumpUntil(loop, [&read] { return read.resumed; }));
+    CHECK_FALSE(read.code.has_value());
+    CHECK(read.bytes == 4);
+
+    answer.reset();
+    listener.reset();
+    CHECK(drainOwnerOperations(loop, backend));
+}
+
+TEST_CASE("A stop of the accepting flow takes the AcceptEx back, and the listener still serves",
+          "[net][iocp][listener][stop]")
+{
+    // `CompletionWait` on an accept: the stop asks for the AcceptEx back and the abort completion
+    // answers, which the listener converts -- as a Cancelled VALUE, the same answer a closed
+    // listener gives -- rather than letting the frame unwind before the kernel is done with it.
+    auto backend = IocpBackend {};
+    auto loop = EventLoop { backend };
+    auto bound = IocpListener::bind(loop, "127.0.0.1", 0);
+    REQUIRE(bound.has_value());
+    auto listener = std::move(*bound);
+
+    auto stopped = std::optional<core::net::AcceptResult> {};
+    auto abandoned = false;
+    loop.blockOn(core::net::testing::anyOf(acceptReporting(listener.get(), &stopped, &abandoned),
+                                           winAfter(nullptr, {}, {})));
+    REQUIRE(pumpUntil(loop, [&] { return stopped.has_value() || abandoned; }));
+    REQUIRE(stopped.has_value());
+    REQUIRE_FALSE(stopped->has_value());
+    CHECK(stopped->error().code == NetErrorCode::Cancelled);
+
+    // The stopped accept's socket went with it: the next client is the next accept's.
+    auto const client = connectTo(listener->boundPort());
+    REQUIRE(client != InvalidSocketValue);
+    auto const hangUp = core::net::detail::ScopeGuard { [client]() noexcept { ::closesocket(client); } };
+    auto answer = std::optional<core::net::AcceptResult> {};
+    acceptInto(listener.get(), &answer);
+    REQUIRE(pumpUntil(loop, [&answer] { return answer.has_value(); }));
+    CHECK(answer->has_value());
+
+    answer.reset();
+    listener.reset();
+    CHECK(drainOwnerOperations(loop, backend));
+}
+
+TEST_CASE("An overlapped write puts the caller's bytes on the wire exactly, in order, across the copy bound",
+          "[net][iocp][socket][write]")
+{
+    // The copy-in path and every boundary it has. The pipe is filled first, so the writes cannot
+    // take the fast path and are sent from copies their operations own (`copyOwed`), at most
+    // 256KiB per operation, re-issued from the cursor each completion leaves:
+    //
+    // - a gathered write of 301'076 bytes, so it takes more than one operation, with the bound
+    //   falling part-way THROUGH a segment (31'070 bytes into the fourth) and an empty segment the
+    //   flattening must step over;
+    // - a flat write of 300'007 bytes after it, the other branch of the copy. By the time it runs
+    //   the peer is draining, so it may send part of itself inline and the rest overlapped, from a
+    //   cursor that is not at zero.
+    //
+    // The peer asserts the count, the content and the order, byte for byte.
+    auto harness = Harness {};
+    auto const filler = fillThePipe(harness);
+    REQUIRE(filler > 0);
+
+    constexpr auto SegmentSizes = std::array<std::size_t, 5> { 100'003, 0, 131'071, 70'001, 1 };
+    constexpr auto FlatSize = std::size_t { 300'007 };
+    auto const gatheredSize = std::ranges::fold_left(SegmentSizes, std::size_t { 0 }, std::plus {});
+    auto payload = std::vector<std::byte>(gatheredSize + FlatSize);
+    for (auto const offset: std::views::iota(std::size_t { 0 }, payload.size()))
+        payload[offset] = patternAt(offset);
+
+    auto const whole = std::span<std::byte const> { payload };
+    auto segments = std::vector<std::span<std::byte const>> {};
+    auto cursor = std::size_t { 0 };
+    for (auto const size: SegmentSizes)
+    {
+        segments.push_back(whole.subspan(cursor, size));
+        cursor += size;
+    }
+
+    auto gathered = Outcome {};
+    auto flat = Outcome {};
+    auto writing = [](core::net::ISocket* socket,
+                      std::span<std::span<std::byte const> const> gather,
+                      std::span<std::byte const> rest,
+                      Outcome* first,
+                      Outcome* second) -> DetachedTask {
+        first->record(co_await socket->writeVectored(gather, nullptr));
+        second->record(co_await socket->write(rest));
+    };
+    writing(harness.socket.get(), segments, whole.subspan(gatheredSize), &gathered, &flat);
+    // Genuinely overlapped, or the case proves nothing about the copy.
+    REQUIRE_FALSE(gathered.resumed);
+    REQUIRE(harness.backend.issuedOperations() == 1);
+
+    auto const expected = filler + payload.size();
+    auto received = std::vector<char> {};
+    auto peer = std::jthread { [client = harness.pair.client(), expected, &received] {
+        received = receiveExactly(client, expected);
+    } };
+    REQUIRE(pumpUntil(harness.loop, [&flat] { return flat.resumed; }));
+    peer.join();
+
+    CHECK_FALSE(gathered.code.has_value());
+    CHECK(gathered.bytes == gatheredSize);
+    CHECK_FALSE(flat.code.has_value());
+    CHECK(flat.bytes == FlatSize);
+    REQUIRE(received.size() == expected);
+    auto const wire = std::span<char const> { received };
+    CHECK(std::ranges::all_of(wire.first(filler), [](char c) { return c == FillerByte; }));
+    auto const sent = wire.subspan(filler);
+    auto const differs = std::ranges::mismatch(
+        sent, payload, [](char c, std::byte b) { return static_cast<std::byte>(c) == b; });
+    auto const firstDifference = static_cast<std::size_t>(differs.in1 - sent.begin());
+    INFO("the first byte that differs is at payload offset " << firstDifference);
+    CHECK(firstDifference == payload.size());
+}
+
+namespace
+{
+/// Whether this build compiled the socket contract's slot guards out (`SocketContract.hpp`).
+#ifdef NDEBUG
+constexpr auto SlotGuardsCompiledOut = true;
+#else
+constexpr auto SlotGuardsCompiledOut = false;
+#endif
+} // namespace
+
+TEST_CASE("A write armed over a parked one keeps the parked one reachable where the guard is compiled out",
+          "[net][iocp][socket][write]")
+{
+    // Arming a second write over a parked one breaks the contract, and a Debug build refuses it
+    // (`contract::claimWriteSlot`, watched by `write-slot-guard-canary`). Under NDEBUG the guard is
+    // gone, and what the socket does then is still its own business: it used to drop its share of
+    // the parked write's node while that node's park still named it, so the completion, dequeued,
+    // freed the node on the kernel's share and was then dispatched through it -- a use-after-free
+    // on the loop's thread. The read side has always kept such an orphan reachable; this pins the
+    // write side doing the same, which also means the parked write's flow is resumed rather than
+    // lost. Which bytes go first is not asserted: the contract was broken, and it says nothing.
+    if (!SlotGuardsCompiledOut)
+        SKIP("the write-slot guard refuses this sequence in a build without NDEBUG, before the socket "
+             "sees it; write-slot-guard-canary watches that, and the Release presets run this case");
+
+    auto harness = Harness {};
+    auto const filler = fillThePipe(harness);
+    REQUIRE(filler > 0);
+
+    constexpr auto WriteSize = std::size_t { 300'000 };
+    auto const first = std::vector<std::byte>(WriteSize, std::byte { 0xA1 });
+    auto const second = std::vector<std::byte>(WriteSize, std::byte { 0xB2 });
+    auto firstWrite = Outcome {};
+    auto secondWrite = Outcome {};
+    writeOnce(harness.socket.get(), first, &firstWrite);
+    REQUIRE_FALSE(firstWrite.resumed);
+    REQUIRE(harness.backend.issuedOperations() == 1);
+    writeOnce(harness.socket.get(), second, &secondWrite);
+    REQUIRE_FALSE(secondWrite.resumed);
+
+    auto const expected = filler + (2 * WriteSize);
+    auto received = std::vector<char> {};
+    auto peer = std::jthread { [client = harness.pair.client(), expected, &received] {
+        received = receiveExactly(client, expected);
+    } };
+    REQUIRE(pumpUntil(harness.loop, [&] { return firstWrite.resumed && secondWrite.resumed; }));
+    peer.join();
+
+    CHECK_FALSE(firstWrite.code.has_value());
+    CHECK(firstWrite.bytes == WriteSize);
+    CHECK_FALSE(secondWrite.code.has_value());
+    CHECK(secondWrite.bytes == WriteSize);
+    REQUIRE(received.size() == expected);
+    CHECK(std::ranges::count(received, static_cast<char>(0xA1)) == static_cast<std::ptrdiff_t>(WriteSize));
+    CHECK(std::ranges::count(received, static_cast<char>(0xB2)) == static_cast<std::ptrdiff_t>(WriteSize));
 }
