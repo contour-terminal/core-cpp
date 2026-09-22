@@ -183,6 +183,7 @@ core_cpp_add_module(net KIND STATIC
         ${_coreCppNetDefaultBackend}
         detail/BlockingPrimitives.hpp
         detail/DatagramAddressing.hpp
+        detail/DatagramReceiveBuffer.hpp
         detail/DialPrimitives.hpp
         detail/PeerAddress.hpp
         detail/SocketErrors.hpp

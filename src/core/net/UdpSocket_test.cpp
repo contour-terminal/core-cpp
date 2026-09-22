@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/UdpSocket.hpp>
+#include <core/net/detail/DatagramReceiveBuffer.hpp>
 #include <core/net/testing/DatagramPayload.hpp>
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <chrono>
 #include <cstddef>
@@ -13,6 +16,7 @@
 using namespace std::chrono_literals;
 using core::net::BroadcastMode;
 using core::net::DatagramAddress;
+using core::net::DatagramWait;
 using core::net::NetErrorCode;
 using core::net::openUdpSocket;
 using core::net::PortSharing;
@@ -71,29 +75,92 @@ TEST_CASE("A datagram too large for the path is MessageTooLarge, not a short sen
     CHECK(result.error().code == NetErrorCode::MessageTooLarge);
 }
 
-TEST_CASE("A datagram past the old 8 KiB receive bound arrives whole or not at all", "[net][datagram][udp]")
+TEST_CASE("A datagram past the old 8 KiB receive bound arrives whole", "[net][datagram][udp]")
 {
     // **Never truncated**, which is the property and the reason the receive buffer is the largest a
-    // datagram can be rather than a figure chosen for memory. `recvfrom` into a smaller buffer
-    // truncates silently — the caller gets a full buffer and no way to tell it from a datagram that
-    // happened to be exactly that long — so a bound below the maximum turns an oversized message
-    // into a corrupt one. Upstream's bound was 8192.
+    // datagram can be rather than a figure chosen for memory. Upstream's bound was 8192: on POSIX
+    // it delivered the first 8192 bytes of a longer datagram as the message, and on Winsock it
+    // failed the receive with `WSAEMSGSIZE`.
     //
-    // "Or not at all" because UDP may drop it and a test that demanded delivery would be asserting
-    // something the transport does not promise. What it must never do is deliver 8192 of the 20000
-    // bytes and call that the message.
+    // Arrival is REQUIRED, not hoped for. UDP may drop a datagram, but loopback does not drop one
+    // this size in practice, and a case that passed when nothing arrived would pass under exactly
+    // the regression it guards: the Winsock half of that regression IS nothing arriving.
+    //
+    // 9000 bytes: past 8192, so the old bound fails it, and under the 9216 macOS allows an outgoing
+    // datagram by default (`net.inet.udp.maxdgram`), so the send succeeds on every platform.
     auto receiver = openUdpSocket("127.0.0.1", 0, BroadcastMode::Off);
     REQUIRE(receiver.has_value());
 
     auto sender = openUdpSocket("127.0.0.1", 0, BroadcastMode::Off);
     REQUIRE(sender.has_value());
 
-    std::string const payload(20000, 'x');
+    std::string const payload(9000, 'x');
     REQUIRE((*sender)->send(datagramBytes(payload), (*receiver)->boundAddress()).has_value());
 
     auto const received = (*receiver)->receive(2s);
-    if (received.has_value())
-        CHECK(received->payload.size() == payload.size());
+    INFO("waited 2s for a 9000-byte datagram over loopback");
+    REQUIRE(received.has_value());
+    CHECK(received->payload.size() == payload.size());
+}
+
+TEST_CASE("An IPv6 socket receives a datagram longer than IPv4 allows, whole", "[net][datagram][udp]")
+{
+    // An IPv6 UDP payload may be 65527 bytes -- the IPv6 payload length field does not count the
+    // IPv6 header -- which is 20 more than IPv4's 65507. A receive buffer sized for IPv4 would drop
+    // every legal IPv6 datagram in between, so the buffer is sized by the family that bound.
+    auto receiver = openUdpSocket("::1", 0, BroadcastMode::Off);
+    if (!receiver.has_value())
+        SKIP("this host has no IPv6 loopback: " << receiver.error().toString());
+
+    auto sender = openUdpSocket("::1", 0, BroadcastMode::Off);
+    REQUIRE(sender.has_value());
+
+    auto const length = GENERATE(core::net::MaxIpv4DatagramPayload + 1, core::net::MaxIpv6DatagramPayload);
+    std::string const payload(length, 'v');
+    auto const sent = (*sender)->send(datagramBytes(payload), (*receiver)->boundAddress());
+    // macOS refuses an outgoing datagram past its send buffer, 9216 bytes by default
+    // (`net.inet.udp.maxdgram`), and this interface does not raise it: that is the sender's platform
+    // refusing, before the receive this case is about.
+    if (!sent.has_value() && sent.error().code == NetErrorCode::MessageTooLarge)
+        SKIP("this platform refuses to send a " << length << "-byte datagram: " << sent.error().toString());
+    REQUIRE(sent.has_value());
+
+    auto const received = (*receiver)->receive(2s);
+    INFO("waited 2s for a " << length << "-byte datagram over IPv6 loopback");
+    REQUIRE(received.has_value());
+    CHECK(received->payload.size() == length);
+}
+
+TEST_CASE("A datagram longer than the receive buffer is MessageTooLarge, and the next one arrives",
+          "[net][datagram][udp]")
+{
+    // With the buffer sized by family no legal datagram reaches this path, so the receiver is
+    // opened with a short buffer through the one seam that allows it. What must hold: the long
+    // datagram is never handed back cut short -- POSIX reports it through `MSG_TRUNC`, Winsock
+    // through `WSAEMSGSIZE` -- and it is not mistaken for a timeout, because a loop told only
+    // `TimedOut` would never learn that something arrived. The short one after it proves the long
+    // one was dropped whole rather than left to be read in pieces.
+    constexpr auto Buffer = std::size_t { 1024 };
+    auto receiver = core::net::detail::openUdpSocketWithReceiveBuffer(
+        "127.0.0.1", 0, BroadcastMode::Off, PortSharing::Exclusive, Buffer);
+    REQUIRE(receiver.has_value());
+
+    auto sender = openUdpSocket("127.0.0.1", 0, BroadcastMode::Off);
+    REQUIRE(sender.has_value());
+
+    auto const to = (*receiver)->boundAddress();
+    REQUIRE((*sender)->send(datagramBytes(std::string(Buffer * 2, 'L')), to).has_value());
+    REQUIRE((*sender)->send(datagramBytes("after"), to).has_value());
+
+    auto const tooLong = (*receiver)->receive(2s);
+    INFO("waited 2s for the long datagram");
+    REQUIRE_FALSE(tooLong.has_value());
+    CHECK(tooLong.error() == DatagramWait::MessageTooLarge);
+
+    auto const next = (*receiver)->receive(2s);
+    INFO("waited 2s for the short datagram after it");
+    REQUIRE(next.has_value());
+    CHECK(datagramText(*next) == "after");
 }
 
 TEST_CASE("Two real UDP sockets on one port: only one is handed a unicast", "[net][datagram][udp]")

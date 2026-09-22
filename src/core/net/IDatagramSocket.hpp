@@ -71,6 +71,12 @@ enum class DatagramWait : std::uint8_t
 {
     TimedOut, ///< Nothing arrived within the deadline. Ordinary, not a fault.
     Closed,   ///< The socket was shut down; the loop should end.
+
+    /// A datagram arrived larger than the receive buffer and was dropped rather than handed back
+    /// cut short. The loop may go on: the next receive answers the next datagram. With the buffer
+    /// @c openUdpSocket sizes by address family this cannot happen to a legal datagram, so seeing it
+    /// means the sender is not speaking UDP as the family defines it.
+    MessageTooLarge,
 };
 
 /// A connectionless socket.

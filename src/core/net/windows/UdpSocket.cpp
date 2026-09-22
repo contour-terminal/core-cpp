@@ -2,6 +2,7 @@
 #include <core/net/UdpSocket.hpp>
 
 #include <core/net/detail/DatagramAddressing.hpp>
+#include <core/net/detail/DatagramReceiveBuffer.hpp>
 #include <core/net/detail/SocketErrors.hpp>
 #include <core/platform/WinsockInit.hpp>
 
@@ -9,6 +10,7 @@
 #include <atomic>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -35,16 +37,15 @@ namespace
         /// Takes ownership of an already-bound socket.
         /// @param socket The native handle.
         /// @param bound What it bound.
-        WindowsUdpSocket(SOCKET socket, DatagramAddress bound):
+        /// @param receiveBuffer The receive buffer's length; see @c detail::receiveBufferFor.
+        WindowsUdpSocket(SOCKET socket, DatagramAddress bound, std::size_t receiveBuffer):
             _socket { socket },
             _bound { std::move(bound) },
             // One buffer for the socket's life rather than one per receive: a receive loop that
             // allocated 64 KiB per call would spend more time in the allocator than on the wire,
             // and a buffer short enough to make that cheap is the truncation defect
-            // `MaxDatagramPayload` exists to remove. On Winsock a short buffer does not truncate
-            // silently — it fails the whole receive with `WSAEMSGSIZE` — which would present here
-            // as a datagram that never arrived.
-            _buffer(MaxDatagramPayload)
+            // `MaxIpv4DatagramPayload` exists to remove.
+            _buffer(receiveBuffer)
         {
         }
 
@@ -123,8 +124,13 @@ namespace
             if (_closed.load(std::memory_order_acquire))
                 return std::unexpected(DatagramWait::Closed);
 
+            // `WSAEMSGSIZE` is a datagram longer than the buffer: Winsock has filled the buffer and
+            // dropped the rest, and it is reported rather than read as a timeout, because a loop
+            // that saw only `TimedOut` would never learn that something arrived. POSIX reports the
+            // same drop as `MSG_TRUNC`.
             if (received == SOCKET_ERROR)
-                return std::unexpected(DatagramWait::TimedOut);
+                return std::unexpected(::WSAGetLastError() == WSAEMSGSIZE ? DatagramWait::MessageTooLarge
+                                                                          : DatagramWait::TimedOut);
 
             auto const count = static_cast<std::size_t>(received);
             return ReceivedDatagram {
@@ -198,6 +204,16 @@ std::expected<std::unique_ptr<IDatagramSocket>, NetError> openUdpSocket(std::str
                                                                         BroadcastMode broadcast,
                                                                         PortSharing sharing)
 {
+    return detail::openUdpSocketWithReceiveBuffer(bindAddress, port, broadcast, sharing, std::nullopt);
+}
+
+std::expected<std::unique_ptr<IDatagramSocket>, NetError> detail::openUdpSocketWithReceiveBuffer(
+    std::string_view bindAddress,
+    std::uint16_t port,
+    BroadcastMode broadcast,
+    PortSharing sharing,
+    std::optional<std::size_t> receiveBuffer)
+{
     // Winsock refuses every call until WSAStartup has run, and there is no diagnostic to
     // distinguish "the stack is not up" from "this address will not bind". The TCP side already has
     // this; a second socket family reaching the network without it is how a Windows-only failure
@@ -257,7 +273,8 @@ std::expected<std::unique_ptr<IDatagramSocket>, NetError> openUdpSocket(std::str
         if (::getsockname(socket, reinterpret_cast<sockaddr*>(&actual), &actualLength) == 0)
             bound = detail::datagramAddressOf(actual, static_cast<socklen_t>(actualLength));
 
-        return std::make_unique<WindowsUdpSocket>(socket, std::move(bound));
+        return std::make_unique<WindowsUdpSocket>(
+            socket, std::move(bound), receiveBuffer.value_or(detail::receiveBufferFor(candidate->ai_family)));
     }
 
     return std::unexpected(std::move(failure));

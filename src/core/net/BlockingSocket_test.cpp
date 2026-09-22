@@ -20,7 +20,9 @@
 #include <core/net/BlockingSocket.hpp>
 #include <core/net/IListener.hpp>
 #include <core/net/PlatformLoop.hpp>
+#include <core/net/SocketAddress.hpp>
 #include <core/net/Sockets.hpp>
+#include <core/net/WithTimeout.hpp>
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -31,6 +33,7 @@
 #include <cstddef>
 #include <expected>
 #include <memory>
+#include <optional>
 #include <ranges>
 #include <span>
 #include <string>
@@ -46,6 +49,7 @@ using namespace std::chrono_literals;
 using core::async::syncRun;
 using core::async::Task;
 using core::net::BlockingConnector;
+using core::net::BlockingConnectorOptions;
 using core::net::DialOptions;
 using core::net::IoResult;
 using core::net::ISocket;
@@ -89,7 +93,23 @@ Task<std::expected<void, core::net::NetError>> shutOnce(ISocket* socket)
     co_return co_await socket->shutdownWrite();
 }
 
+/// How long any one wait in this file may take before the case fails instead of hanging.
+constexpr auto WaitBound = 5s;
+
+/// Reads once on the loop, bounded by @c WaitBound.
+/// @param loop The loop @p socket belongs to.
+/// @param socket The loop socket to read.
+/// @param buffer Where the bytes go.
+/// @return The read's answer, or `std::nullopt` when @c WaitBound passed first.
+std::optional<IoResult> readOnLoop(core::net::EventLoop& loop, ISocket* socket, std::span<std::byte> buffer)
+{
+    return loop.blockOn(core::net::withTimeout(&loop, readOnce(socket, buffer), WaitBound));
+}
+
 /// Dials a loopback listener with a @c BlockingConnector and accepts the connection on a loop.
+///
+/// The client's reads and writes are bounded by @c WaitBound through the connector's `ioTimeout`,
+/// so a blocking verb that should have returned fails the case rather than hanging it.
 /// @param out Where both ends go; left without a client when the dial failed.
 void connectPair(Connected& out)
 {
@@ -97,7 +117,8 @@ void connectPair(Connected& out)
     REQUIRE(listener.has_value());
     out.listener = std::move(*listener);
 
-    auto connector = BlockingConnector {};
+    auto connector = BlockingConnector { core::net::defaultAddressResolver(),
+                                         BlockingConnectorOptions { .ioTimeout = WaitBound } };
     auto client = syncRun(
         connector.connect("127.0.0.1", out.listener->boundPort(), DialOptions { .connectTimeout = 2s }));
     INFO("dial: " << (client.has_value() ? std::string { "connected" } : client.error().toString()));
@@ -227,9 +248,11 @@ TEST_CASE("A blocking socket's half-close reaches the peer as EOF, and its own w
 
     REQUIRE(syncRun(shutOnce(pair.client.get())).has_value());
     auto buffer = std::array<std::byte, 4> {};
-    auto const atPeer = pair.loop.blockOn(readOnce(pair.accepted.get(), buffer));
+    auto const atPeer = readOnLoop(pair.loop, pair.accepted.get(), buffer);
+    INFO("the peer's read waited " << WaitBound.count() << "s for the half-close's EOF");
     REQUIRE(atPeer.has_value());
-    CHECK(*atPeer == 0);
+    REQUIRE(atPeer->has_value());
+    CHECK(**atPeer == 0);
 
     CHECK_FALSE(syncRun(writeOnce(pair.client.get(), std::array { std::byte { 1 } })).has_value());
     CHECK_FALSE(pair.client->isClosed()); // a half-close is not a close
@@ -266,14 +289,22 @@ TEST_CASE("A blocking socket's receive deadline expires, and a zero removes it",
         pair.client->setReceiveDeadline(Bound);
         pair.client->setReceiveDeadline(0ms);
 
-        auto late = std::jthread { [&pair, Bound] {
+        // The read below has no bound by design, so the peer half-closes after its write whatever
+        // the write answered: a write that failed still ends the read, at EOF, and the case fails
+        // on the write's answer rather than hanging in `recv`. The loop is driven from this thread
+        // alone while the main thread blocks in the read, so it still has one thread at a time.
+        auto wrote = std::optional<IoResult> {};
+        auto late = std::thread { [&pair, &wrote, Bound] {
             std::this_thread::sleep_for(Bound * 3);
-            std::ignore = pair.loop.blockOn(writeOnce(pair.accepted.get(), std::array { std::byte { 42 } }));
+            wrote = pair.loop.blockOn(writeOnce(pair.accepted.get(), std::array { std::byte { 42 } }));
+            std::ignore = pair.loop.blockOn(shutOnce(pair.accepted.get()));
         } };
 
         auto buffer = std::array<std::byte, 4> {};
         auto const got = syncRun(readOnce(pair.client.get(), buffer));
         late.join();
+        REQUIRE(wrote.has_value());
+        REQUIRE(wrote->has_value());
         REQUIRE(got.has_value());
         CHECK(*got == 1);
     }

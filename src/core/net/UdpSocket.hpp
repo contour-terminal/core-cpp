@@ -52,17 +52,23 @@ enum class PortSharing : std::uint8_t
     Shared,
 };
 
-/// The largest payload this socket will hand back from one receive.
+/// The largest payload a UDP datagram can carry over IPv4: 65535 minus the 8-byte UDP header and
+/// the 20-byte IP header, which the IPv4 length field counts.
 ///
-/// **The largest a UDP datagram can carry over IPv4 (65535 minus the 8-byte UDP header and the
-/// 20-byte IP header), so a legal datagram is never truncated.** That is the reason for the number
-/// rather than a smaller one chosen for memory: `recvfrom` into a short buffer truncates *silently*
-/// — the caller gets a full buffer and no way to distinguish it from a message that happened to be
-/// exactly that long — so any bound below the maximum turns an oversized datagram into a corrupt
-/// one. Upstream's bound was 8192 and it had exactly that gap.
+/// An IPv4 socket's receive buffer is this long, so a legal datagram is never cut short. That is the
+/// reason for the number rather than a smaller one chosen for memory: a receive into a short buffer
+/// truncates, and upstream's bound of 8192 delivered the first 8192 bytes of a longer datagram as
+/// though they were the message. A datagram longer than the buffer is dropped and reported as
+/// @c DatagramWait::MessageTooLarge, never delivered cut short.
 ///
 /// It costs one buffer per socket, allocated once and reused, not one per receive.
-inline constexpr std::size_t MaxDatagramPayload = 65507;
+inline constexpr std::size_t MaxIpv4DatagramPayload = 65507;
+
+/// The largest payload a UDP datagram can carry over IPv6: 65535 minus the 8-byte UDP header only,
+/// because the IPv6 payload length field does not count the IPv6 header. Twenty bytes more than
+/// @c MaxIpv4DatagramPayload, so an IPv6 socket's receive buffer is this long; sized for IPv4, a
+/// legal IPv6 datagram of 65508 to 65527 bytes would not fit.
+inline constexpr std::size_t MaxIpv6DatagramPayload = 65527;
 
 /// Opens a UDP socket bound to @p bindAddress : @p port.
 ///

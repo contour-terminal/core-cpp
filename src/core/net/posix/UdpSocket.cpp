@@ -2,16 +2,19 @@
 #include <core/net/UdpSocket.hpp>
 
 #include <core/net/detail/DatagramAddressing.hpp>
+#include <core/net/detail/DatagramReceiveBuffer.hpp>
 #include <core/net/detail/SocketErrors.hpp>
 #include <core/net/posix/FdUtils.hpp>
 
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <sys/uio.h>
 
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -40,14 +43,15 @@ namespace
         /// Takes ownership of an already-bound descriptor.
         /// @param fd The descriptor.
         /// @param bound What it bound.
-        PosixUdpSocket(int fd, DatagramAddress bound):
+        /// @param receiveBuffer The receive buffer's length; see @c detail::receiveBufferFor.
+        PosixUdpSocket(int fd, DatagramAddress bound, std::size_t receiveBuffer):
             _fd { fd },
             _bound { std::move(bound) },
             // One buffer for the socket's life rather than one per receive: a receive loop that
             // allocated 64 KiB per call would spend more time in the allocator than on the wire,
-            // and a buffer short enough to make that cheap is the silent-truncation defect
-            // `MaxDatagramPayload` exists to remove.
-            _buffer(MaxDatagramPayload)
+            // and a buffer short enough to make that cheap is the truncation defect
+            // `MaxIpv4DatagramPayload` exists to remove.
+            _buffer(receiveBuffer)
         {
         }
 
@@ -106,11 +110,20 @@ namespace
 
             applyReceiveTimeout(timeout);
 
+            // `recvmsg` rather than `recvfrom`, for the one thing only it reports: `MSG_TRUNC` in
+            // the returned flags, which is the difference between a datagram that fit and one the
+            // kernel cut to the buffer. `recvfrom` returns the same count for both.
             auto from = sockaddr_storage {};
-            auto fromLength = static_cast<socklen_t>(sizeof(from));
+            auto vector = iovec {};
+            vector.iov_base = _buffer.data();
+            vector.iov_len = _buffer.size();
+            auto message = msghdr {};
+            message.msg_name = &from;
+            message.msg_namelen = static_cast<socklen_t>(sizeof(from));
+            message.msg_iov = &vector;
+            message.msg_iovlen = 1;
 
-            auto const received = ::recvfrom(
-                _fd, _buffer.data(), _buffer.size(), 0, reinterpret_cast<sockaddr*>(&from), &fromLength);
+            auto const received = ::recvmsg(_fd, &message, 0);
 
             // Checked AFTER the receive as well as before: `close()` may have been called while
             // this call was parked, and the timeout is what let it return at all.
@@ -120,10 +133,16 @@ namespace
             if (received < 0)
                 return std::unexpected(DatagramWait::TimedOut);
 
+            // The rest of the datagram is already gone; what is left is the part that fit, and
+            // handing that back as the message is the corruption the buffer's length exists to rule
+            // out. Winsock drops it the same way and says `WSAEMSGSIZE`.
+            if ((message.msg_flags & MSG_TRUNC) != 0)
+                return std::unexpected(DatagramWait::MessageTooLarge);
+
             auto const count = static_cast<std::size_t>(received);
             return ReceivedDatagram { .payload = { _buffer.begin(),
                                                    _buffer.begin() + static_cast<std::ptrdiff_t>(count) },
-                                      .from = detail::datagramAddressOf(from, fromLength) };
+                                      .from = detail::datagramAddressOf(from, message.msg_namelen) };
         }
 
         void close() noexcept override { _closed.store(true, std::memory_order_release); }
@@ -184,6 +203,16 @@ std::expected<std::unique_ptr<IDatagramSocket>, NetError> openUdpSocket(std::str
                                                                         BroadcastMode broadcast,
                                                                         PortSharing sharing)
 {
+    return detail::openUdpSocketWithReceiveBuffer(bindAddress, port, broadcast, sharing, std::nullopt);
+}
+
+std::expected<std::unique_ptr<IDatagramSocket>, NetError> detail::openUdpSocketWithReceiveBuffer(
+    std::string_view bindAddress,
+    std::uint16_t port,
+    BroadcastMode broadcast,
+    PortSharing sharing,
+    std::optional<std::size_t> receiveBuffer)
+{
     auto const resolved =
         detail::resolveDatagramEndpoint(std::string { bindAddress }, port, detail::EndpointUse::Bind);
     if (!resolved)
@@ -233,7 +262,8 @@ std::expected<std::unique_ptr<IDatagramSocket>, NetError> openUdpSocket(std::str
         if (::getsockname(fd, reinterpret_cast<sockaddr*>(&actual), &actualLength) == 0)
             bound = detail::datagramAddressOf(actual, actualLength);
 
-        return std::make_unique<PosixUdpSocket>(fd, std::move(bound));
+        return std::make_unique<PosixUdpSocket>(
+            fd, std::move(bound), receiveBuffer.value_or(detail::receiveBufferFor(candidate->ai_family)));
     }
 
     return std::unexpected(std::move(failure));

@@ -77,7 +77,7 @@ class ServedLoop
     void run(Task<void> flow)
     {
         _loop.spawn(std::move(flow));
-        _thread = std::jthread { [this] { _loop.run(); } };
+        _thread = std::thread { [this] { _loop.run(); } };
     }
 
     [[nodiscard]] IListener* listener() const noexcept { return _listener.get(); }
@@ -87,12 +87,14 @@ class ServedLoop
     void hold(std::unique_ptr<ISocket> socket) noexcept { _held = std::move(socket); }
 
   private:
-    // Declared in the order that makes the implicit destruction safe: the thread is joined before
-    // anything the loop owns goes, and a held socket goes before the loop it is pinned to.
+    // Declared in the order that makes the implicit destruction safe: a held socket goes before the
+    // loop it is pinned to. The thread is joined explicitly, in the destructor's body, before any
+    // member goes: a `std::thread` rather than a `std::jthread`, because AppleClang's libc++ has no
+    // `<stop_token>` and so no `jthread`.
     core::net::PlatformLoop _loop;
     std::unique_ptr<IListener> _listener;
     std::unique_ptr<ISocket> _held;
-    std::jthread _thread;
+    std::thread _thread;
 };
 
 /// Answers `/healthz` with 200 and anything else with 404.

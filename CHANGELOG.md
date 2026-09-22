@@ -14,9 +14,11 @@ workflow refuses one without a section here.
 - **Datagrams** (`<core/net/IDatagramSocket.hpp>`, `<core/net/UdpSocket.hpp>`,
   `<core/net/SharedPortDatagram.hpp>`). `openUdpSocket(bindAddress, port, BroadcastMode,
   PortSharing)` opens a UDP socket and answers WHY a bind failed, where fastcached's returned a null
-  pointer; its receive buffer is the largest datagram IPv4 can carry, so an oversized message is
-  never silently truncated (fastcached's was 8 KiB), and a datagram too large for the path is
-  `NetErrorCode::MessageTooLarge` rather than `SystemError`. `answerFromOwnAddress()` and
+  pointer; its receive buffer is the largest datagram the bound family can carry
+  (`MaxIpv4DatagramPayload`, `MaxIpv6DatagramPayload`), and a datagram longer than that is dropped
+  and answered `DatagramWait::MessageTooLarge` rather than handed back truncated (fastcached's
+  buffer was 8 KiB); a datagram too large for the path is `NetErrorCode::MessageTooLarge` at the
+  send rather than `SystemError`. `answerFromOwnAddress()` and
   `openSharedPortUdpSocket()` hear a segment on a shared port and send, and are answered, from an
   address only this node holds -- because a unicast to a shared port reaches one socket, and which
   one differs by platform.
@@ -698,7 +700,8 @@ workflow refuses one without a section here.
 
   Migration: a caller that treated `ConnReset` as "the peer is gone" on a WRITE should test for
   `ConnReset` or `SystemError` there, or better, stop writing once a read has seen EOF. No consumer
-  in contour, endo or tuidu branches on `ConnReset`.
+  branches on `ConnReset`: not contour, endo, tuidu, Lightweight or morph, and fastcached only
+  produces it in its test doubles.
 
 - **`core::net::connect()` no longer resolves a name on the calling thread**, and callers of
   contour's `connect(loop, host, port)` inherit that without a source change. The body called

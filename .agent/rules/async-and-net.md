@@ -898,8 +898,11 @@ in-process doubles (`testing::DatagramBus`, `testing::InMemorySocket`, the parki
   thread closes the socket -- so `close()` sets a flag and the bounded receive is how a loop sees it.
   `SO_RCVTIMEO` of zero means block for ever, so every wait is floored at a millisecond.
 - **A receive buffer below the largest datagram turns an oversized message into a corrupt one**:
-  POSIX truncates silently and Winsock fails the receive. The buffer is `MaxDatagramPayload`,
-  allocated once per socket. A datagram send that places fewer bytes than it was given is
+  POSIX truncates silently and Winsock fails the receive. The buffer is sized by the family that
+  bound (`MaxIpv4DatagramPayload`, 65507; `MaxIpv6DatagramPayload`, 65527, because the IPv6 length
+  field does not count its header), allocated once per socket, and a datagram that still does not
+  fit is dropped and answered `DatagramWait::MessageTooLarge` -- `MSG_TRUNC` through `recvmsg`,
+  `WSAEMSGSIZE` -- never handed back cut short and never read as a timeout. A datagram send that places fewer bytes than it was given is
   `MessageTooLarge`, never a partial write to retry: the rest resent is a second message.
 - **Sharing a port buys hearing a broadcast, and nothing else.** A unicast to a shared port reaches
   one socket, and which one differs by platform, so a node that shares a port to hear the segment

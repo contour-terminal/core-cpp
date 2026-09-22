@@ -654,13 +654,16 @@ Task<void> writeBytes(ISocket* socket, std::size_t count)
 
 } // namespace
 
-TEST_CASE("A receive deadline of zero removes the bound, on the fake and on a real socket",
-          "[net][socket][deadline]")
+TEST_CASE("A receive deadline of zero removes the bound on a real socket", "[net][socket][deadline]")
 {
     // `ISocket::setReceiveDeadline`: a positive duration bounds reads started after it, and a
     // NON-POSITIVE one removes the bound. That second half changed meaning -- zero once meant "leave
-    // the current setting alone" -- so it is asserted on both transports: a read started after the
-    // zero waits for data rather than expiring.
+    // the current setting alone" -- so it is asserted here: a read started after the zero waits for
+    // data rather than expiring.
+    //
+    // The real socket only. The fake has no receive deadline at all (`InMemorySocket.hpp` says so),
+    // so a section over it would pass whatever zero meant, and a section that cannot fail asserts
+    // nothing.
     constexpr auto Bound = 50ms;
     constexpr auto Outlast = 300ms;
 
@@ -712,22 +715,5 @@ TEST_CASE("A receive deadline of zero removes the bound, on the fake and on a re
         REQUIRE(read.result.has_value());
         REQUIRE_FALSE(read.result->has_value());
         CHECK(core::net::isDeadlineExpiry(read.result->error().code));
-    }
-
-    SECTION("the fake: the read waits for the peer's bytes")
-    {
-        auto pair = core::net::testing::InMemorySocketPair::create();
-        pair.server->setReceiveDeadline(Bound);
-        pair.server->setReceiveDeadline(0ms);
-
-        auto read = ParkedRead {};
-        readOnce(pair.server.get(), &read);
-        REQUIRE_FALSE(read.resolved);
-
-        core::async::syncRun(writeBytes(pair.client.get(), 3));
-        REQUIRE(read.resolved);
-        REQUIRE(read.result.has_value());
-        REQUIRE(read.result->has_value());
-        CHECK(**read.result == 3);
     }
 }

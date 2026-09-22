@@ -89,11 +89,12 @@ namespace
                 if (received.has_value())
                     return received;
 
-                // Closed ends the wait rather than falling through to the other socket: they are
+                // Only a timeout falls through to the other socket. Closed ends the wait: they are
                 // closed together, and a loop told to stop should not spend the rest of its timeout
-                // finding out again.
-                if (received.error() == DatagramWait::Closed)
-                    return std::unexpected(DatagramWait::Closed);
+                // finding out again. MessageTooLarge is an answer: a datagram arrived and was
+                // dropped, and the caller is told so rather than handed the other socket's silence.
+                if (received.error() != DatagramWait::TimedOut)
+                    return received;
             }
 
             return std::unexpected(DatagramWait::TimedOut);

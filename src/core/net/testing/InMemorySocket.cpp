@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/testing/InMemorySocket.hpp>
 
+#include <core/Ranges.hpp>
 #include <core/net/SocketContract.hpp>
 
 #include <algorithm>
@@ -378,7 +379,7 @@ IoAwaitable InMemorySocket::startWrite(std::span<std::span<std::byte const> cons
 
     // One write on the wire, so one answer when the peer has gone: a vectored write is the first
     // after a close, or a later one, exactly as a contiguous one would be.
-    auto const length = std::ranges::fold_left(
+    auto const length = core::ranges::FoldLeft(
         segments | std::views::transform([](auto const& segment) { return segment.size(); }),
         std::size_t { 0 },
         std::plus {});
