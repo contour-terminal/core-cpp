@@ -297,6 +297,7 @@ core_cpp_add_test(net
         ThreadedAddressResolver_test.cpp
         UdpSocket_test.cpp
         WaitReadable_test.cpp
+        WithTimeout_test.cpp
         WriteQueue_test.cpp
         testing/InMemoryDatagram_test.cpp
         testing/InMemorySocket_test.cpp

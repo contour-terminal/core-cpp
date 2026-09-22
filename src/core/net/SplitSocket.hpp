@@ -72,9 +72,21 @@ class SplitSocket final: public ISocket
         _readHalf->setReceiveDeadline(deadline);
     }
 
+    /// Closes both halves, and touches nothing of this object once a retirement has run.
+    ///
+    /// **Two retirements, and either may destroy this object.** Closing a half completes the
+    /// operation parked on it, which resumes a coroutine that may own this socket and drop it
+    /// before the half's `close()` returns -- taking both halves with it. Ordering the two calls
+    /// cannot help, because whichever runs first can do that. So the second call is made only if
+    /// this object is still alive afterwards, which @c _alive answers without touching a member.
+    /// Where it is not, the second half was destroyed with it, and a destroyed socket ABANDONS
+    /// whatever was parked on it (@c ResultAwaitable::abandon), so nothing is left unretired.
     void close() noexcept override
     {
+        auto const alive = std::weak_ptr<void const> { _alive };
         _readHalf->close();
+        if (alive.expired())
+            return;
         _writeHalf->close();
     }
 
@@ -92,6 +104,9 @@ class SplitSocket final: public ISocket
   private:
     std::unique_ptr<ISocket> _readHalf;
     std::unique_ptr<ISocket> _writeHalf;
+
+    /// Expires with this object, so @c close can tell whether a retirement destroyed it.
+    std::shared_ptr<void const> _alive = std::make_shared<char>();
 };
 
 /// Combines two simplex transports into one duplex socket.

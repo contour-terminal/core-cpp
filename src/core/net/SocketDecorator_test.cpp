@@ -173,3 +173,43 @@ TEST_CASE("A decorator forwards the rule along with the verb", "[net][socket][de
         }
     }
 }
+
+TEST_CASE("A decorator's close() touches nothing once a completion has run", "[net][socket][decorator]")
+{
+    // `SplitSocket::close()` retires TWO operations, one per half, and each retirement resumes a
+    // coroutine that may own the decorator. So "complete last" cannot be satisfied by ordering the
+    // two calls: whichever half closes first may destroy the decorator -- and both halves with it
+    // -- before the second call is made. The second call then reads a member of a freed object.
+    //
+    // The watch parks on the READ half, which `close()` retires first, and its resumption drops the
+    // only owner. What the case asserts is that `close()` returns at all: without a liveness check
+    // between the two retirements, it goes on to call `close()` through a destroyed `_writeHalf`.
+    for (auto const& backend: BackendMatrix)
+    {
+        auto source = core::net::makeBackend(backend.kind);
+        if (!source)
+            continue;
+        DYNAMIC_SECTION("backend=" << backend.name)
+        {
+            auto loop = EventLoop { *source };
+            auto readPair = core::net::testing::makeSocketPair(loop);
+            auto writePair = core::net::testing::makeSocketPair(loop);
+            REQUIRE(readPair.has_value());
+            REQUIRE(writePair.has_value());
+            auto keepReadPeer = std::move(readPair->second);
+            auto keepWritePeer = std::move(writePair->second);
+
+            auto owner = std::shared_ptr<ISocket> { core::net::combineHalves(std::move(readPair->first),
+                                                                             std::move(writePair->first)) };
+            auto* const socket = owner.get();
+            auto const watched = std::weak_ptr<ISocket> { owner };
+            watchThenDrop(std::move(owner));
+
+            REQUIRE(loop.parkedWaiterCount() > 0);
+            REQUIRE_FALSE(watched.expired());
+
+            socket->close(); // retires the read half's watch, whose resumption destroys the decorator
+            CHECK(watched.expired());
+        }
+    }
+}

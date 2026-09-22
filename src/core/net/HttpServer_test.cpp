@@ -2,6 +2,7 @@
 #include <core/async/Task.hpp>
 #include <core/async/WhenAny.hpp>
 #include <core/net/HttpServer.hpp>
+#include <core/net/IListener.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/IoBackend.hpp>
 #include <core/net/Sockets.hpp>
@@ -12,6 +13,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -76,6 +79,69 @@ Task<void> exchange(core::net::ISocket* client,
     server->close();
     co_await drain(client, reply);
 }
+
+/// A connection whose transport handshake fails, and which counts what is asked of it afterwards.
+class HandshakeRefusingSocket final: public core::net::ISocket
+{
+  public:
+    /// @param reads Incremented on every read; must outlive this socket.
+    /// @param writes Incremented on every write; must outlive this socket.
+    HandshakeRefusingSocket(int* reads, int* writes) noexcept: _reads { reads }, _writes { writes } {}
+
+    /// @return A handshake failure, with no wait.
+    [[nodiscard]] core::net::ResultAwaitable<void> handshakeIfNeeded() override
+    {
+        return core::net::ResultAwaitable<void> { std::unexpected(
+            core::net::makeNetError(NetErrorCode::SystemError, 0, "handshake refused")) };
+    }
+
+    /// @return A clean EOF, counted.
+    [[nodiscard]] core::net::IoAwaitable read(std::span<std::byte> /*buffer*/) override
+    {
+        ++*_reads;
+        return core::net::IoAwaitable { core::net::IoResult { std::size_t { 0 } } };
+    }
+
+    /// @param buffer The source.
+    /// @return The byte count, counted.
+    [[nodiscard]] core::net::IoAwaitable write(std::span<std::byte const> buffer) override
+    {
+        ++*_writes;
+        return core::net::IoAwaitable { core::net::IoResult { buffer.size() } };
+    }
+
+    void close() noexcept override { _closed = true; }
+    [[nodiscard]] bool isClosed() const noexcept override { return _closed; }
+
+  private:
+    int* _reads;
+    int* _writes;
+    bool _closed = false;
+};
+
+/// Hands out one prepared connection, then reports itself closed.
+class OneShotListener final: public core::net::IListener
+{
+  public:
+    /// @param connection The connection the first accept returns.
+    explicit OneShotListener(std::unique_ptr<core::net::ISocket> connection) noexcept:
+        _connection { std::move(connection) }
+    {
+    }
+
+    [[nodiscard]] Task<core::net::AcceptResult> accept() override
+    {
+        if (_connection)
+            co_return std::move(_connection);
+        co_return std::unexpected(core::net::makeNetError(NetErrorCode::Cancelled, 0, "listener closed"));
+    }
+
+    [[nodiscard]] std::uint16_t boundPort() const noexcept override { return 0; }
+    void close() noexcept override { _connection.reset(); }
+
+  private:
+    std::unique_ptr<core::net::ISocket> _connection;
+};
 
 } // namespace
 
@@ -647,4 +713,30 @@ TEST_CASE("serve answers 500 when a handler throws rather than dying", "[net][ht
     loop.blockOn(run(&loop, listener->get(), std::move(handler), port, &reply, client));
 
     REQUIRE(reply.starts_with("HTTP/1.1 500 Internal Server Error\r\n"));
+}
+
+TEST_CASE("serve completes the transport handshake before it reads a request", "[net][http]")
+{
+    // `handshakeIfNeeded` is the accept loop's to await, once, before anything reads the stream:
+    // a transport that negotiates (TLS) must have finished before the server starts framing
+    // bytes. A connection whose handshake fails has no request to read and no channel to answer
+    // on -- so it is dropped with nothing read and nothing written, rather than answered with a
+    // 400 that would go out over a transport that just refused to come up.
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
+
+    auto reads = 0;
+    auto writes = 0;
+    auto listener = OneShotListener { std::make_unique<HandshakeRefusingSocket>(&reads, &writes) };
+    auto handled = false;
+    auto handler = core::net::HttpHandler { [&handled](HttpRequest const&) {
+        handled = true;
+        return HttpResponse::ok("unreachable");
+    } };
+
+    loop.blockOn(core::net::serve(&listener, std::move(handler)));
+
+    CHECK(reads == 0);
+    CHECK(writes == 0);
+    CHECK_FALSE(handled);
 }

@@ -18,6 +18,7 @@
 #include <core/net/ISocket.hpp>
 #include <core/net/IoResult.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -139,6 +140,9 @@ class AsyncBufferedReader
         _scanDelimiter = delimiter;
     }
 
+    /// How many bytes one refill asks the socket for.
+    static constexpr std::size_t ReadChunkSize = 4096;
+
     ISocket* _socket;                 ///< The transport read from (not owned).
     std::size_t _maxLineLength;       ///< Reject lines longer than this.
     std::string _buffer;              ///< Received bytes; [0, _consumed) already delivered.
@@ -147,6 +151,13 @@ class AsyncBufferedReader
     Scanner _scanner = Scanner::None; ///< Which scanner _scanOffset belongs to.
     std::string _scanDelimiter;       ///< Which delimiter _scanOffset belongs to (empty for a line).
     std::size_t _scannedBytes = 0;    ///< Lifetime count of bytes examined (see scannedBytes()).
+
+    /// Where one refill lands before it is appended to @c _buffer.
+    ///
+    /// A MEMBER, not a local of `fill()`: a local array is part of that coroutine's frame, so
+    /// every refill paid a heap allocation of more than 4 KiB for it. It stays at one address for
+    /// the reader's lifetime, which is what a parked read requires of its destination.
+    std::array<std::byte, ReadChunkSize> _chunk {};
 };
 
 } // namespace core::net

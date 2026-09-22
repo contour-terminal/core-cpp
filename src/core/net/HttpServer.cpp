@@ -327,6 +327,12 @@ async::Task<void> serve(IListener* listener, HttpHandler handler, HttpLimits lim
         if (!accepted.has_value())
             co_return; // listener closed or cancelled
         auto conn = std::move(*accepted);
+        // Once per connection, before anything frames the stream: a transport that negotiates
+        // (TLS) has finished doing so before the first request byte is read. A connection whose
+        // handshake fails has no channel to answer on, so it is dropped unanswered -- and closed
+        // by `conn`'s destructor, as every connection here is (core-cpp#35).
+        if (auto const handshaken = co_await conn->handshakeIfNeeded(); !handshaken.has_value())
+            continue;
         co_await handleConnection(conn.get(), &handler, limits);
     }
 }

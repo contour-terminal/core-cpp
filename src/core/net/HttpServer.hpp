@@ -89,6 +89,14 @@ struct HttpLimits
 /// to @p handler. Connections are handled in sequence on the loop thread (a slow
 /// handler stalls the accept loop), which suits the single-threaded model this
 /// layer targets. Returns when the listener is closed or the flow is cancelled.
+///
+/// Each connection's @c ISocket::handshakeIfNeeded is awaited before its request is
+/// read, and a connection whose handshake fails is dropped without an answer.
+///
+/// **Every connection is closed by its destructor, straight after the response is
+/// written**, with no lingering close: a request refused with its body still unread
+/// (a 413) can have that refusal destroyed in flight by the reset the close sends
+/// ([core-cpp#35](https://github.com/contour-terminal/core-cpp/issues/35)).
 /// @param listener The bound listener to accept from (not owned).
 /// @param handler The request handler.
 /// @param limits Parsing limits applied to every request.

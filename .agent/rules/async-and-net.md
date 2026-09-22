@@ -777,6 +777,11 @@ get right, and each one is a defect that has already happened.
   can run to its end and destroy it before `complete` returns. Detach every parked awaitable
   first, complete them last. Origin: fastcached wire-and-protocol, "Socket and coroutine
   lifetime".
+- **A decorator whose `close()` retires more than one operation checks it is still alive between
+  them.** "Complete last" cannot be met by ordering when there are two completions, because either
+  can destroy the decorator and everything it owns. `SplitSocket` holds a liveness token and returns
+  once it has expired; the operations it did not reach were abandoned by the destructors that ran.
+  Origin: Task B10, a SIGSEGV in `SocketDecorator_test`.
 - **An object an event loop owns is destroyed on that loop's thread, or with the loop
   stopped:** `EventLoop::teardownIsSerialisedWithDispatch()`, which is
   `!running() || isOnWorkerThread()`. Every socket, listener and dial destructor asserts it

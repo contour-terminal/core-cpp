@@ -10,6 +10,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -17,6 +18,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 using core::async::Task;
 using core::net::EventLoop;
@@ -102,6 +104,75 @@ class ParkingSocket: public core::net::ISocket
     bool _isClosed = false;
 };
 
+/// An @c ISocket that parks every write until the test grants it a permit, and records how many
+/// writes it was holding at once.
+///
+/// **What it watches is the contract's write slot, from the outside.** A socket has ONE write
+/// operation, and a second one armed over a parked one drops it (@c contract::claimWriteSlot). A
+/// reactor socket only asserts that in Debug and only when both writes reach the SAME socket's
+/// slot, so the queue's single-writer promise needs an observer that counts rather than aborts --
+/// one that turns a second writer into a failed assertion in a case, on every build.
+///
+/// Every write parks, not just the first, because the interleaving that would expose a second
+/// writer is a producer enqueuing while a write is PARKED -- which `ParkingSocket` offers only once.
+class PermitSocket: public core::net::ISocket
+{
+  public:
+    /// @param loop The loop a parked write polls on (not owned; outlives this socket).
+    explicit PermitSocket(EventLoop& loop) noexcept: _loop { loop } {}
+
+    /// Lets exactly one parked (or future) write complete.
+    void grant() noexcept { ++_permits; }
+
+    /// @return Each write's bytes, one entry per `write` call, in call order.
+    [[nodiscard]] std::vector<std::string> const& writes() const noexcept { return _writes; }
+
+    /// @return The most writes this socket was ever holding at once. The contract allows one.
+    [[nodiscard]] int maxInFlight() const noexcept { return _maxInFlight; }
+
+    /// @return How many writes are parked right now.
+    [[nodiscard]] int inFlight() const noexcept { return _inFlight; }
+
+    /// Never exercised: a WriteQueue only ever writes.
+    /// @return A clean EOF, with no wait.
+    [[nodiscard]] core::net::IoAwaitable read(std::span<std::byte> /*buffer*/) override
+    {
+        return core::net::IoAwaitable { core::net::IoResult { std::size_t { 0 } } };
+    }
+
+    /// @param buffer The source.
+    /// @return The byte count once a permit is granted, or BadHandle if closed while parked.
+    [[nodiscard]] core::net::IoAwaitable write(std::span<std::byte const> buffer) override
+    {
+        return core::net::IoAwaitable { writeOnPermit(buffer) };
+    }
+
+    void close() noexcept override { _isClosed = true; }
+    [[nodiscard]] bool isClosed() const noexcept override { return _isClosed; }
+
+  private:
+    Task<core::net::IoResult> writeOnPermit(std::span<std::byte const> buffer)
+    {
+        ++_inFlight;
+        _maxInFlight = std::max(_maxInFlight, _inFlight);
+        co_await core::net::pollUntil(&_loop, [this] { return _permits > 0 || _isClosed; });
+        --_inFlight;
+        if (_isClosed)
+            co_return std::unexpected(
+                core::net::makeNetError(core::net::NetErrorCode::BadHandle, 0, "write on closed socket"));
+        --_permits;
+        _writes.emplace_back(reinterpret_cast<char const*>(buffer.data()), buffer.size());
+        co_return buffer.size();
+    }
+
+    EventLoop& _loop;                 ///< Drives the poll a parked write suspends on.
+    std::vector<std::string> _writes; ///< One entry per completed write.
+    int _permits = 0;                 ///< Writes allowed to complete.
+    int _inFlight = 0;                ///< Writes parked right now.
+    int _maxInFlight = 0;             ///< The high-water mark of `_inFlight`.
+    bool _isClosed = false;
+};
+
 /// Waits for room on @p queue and records that it resumed.
 ///
 /// A free coroutine taking pointers, not a capturing lambda: `spawn` outlives the expression
@@ -155,6 +226,46 @@ TEST_CASE("WriteQueue drains frames in FIFO order, each frame atomically", "[net
 
     REQUIRE(received == "AAAAbbCCCC");
     REQUIRE(queue.queuedBytes() == 0);
+}
+
+TEST_CASE("WriteQueue never has two writes in flight, and writes one frame per write", "[net][writequeue]")
+{
+    // The queue exists to serialise writes over a socket that has ONE write operation. Frames are
+    // enqueued in every state the drain can be in -- before it starts, while its write is parked,
+    // between two writes, and after it has finished and a new burst must start a new drain -- and
+    // at no point may the socket be holding two writes, nor may a frame be split or merged.
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
+
+    auto socket = PermitSocket { loop };
+    auto queue = WriteQueue { loop, &socket, 1024 };
+
+    auto const settleUntil = [&](auto predicate) {
+        REQUIRE(loop.blockOn(core::net::testing::waitUntil(&loop, predicate)));
+    };
+
+    REQUIRE(queue.enqueue("one"));
+    REQUIRE(queue.enqueue("two"));
+    settleUntil([&] { return socket.inFlight() > 0; }); // the drain's first write is parked
+
+    REQUIRE(queue.enqueue("three")); // lands while a write is parked
+    socket.grant();
+    settleUntil([&] { return socket.writes().size() == 1 && socket.inFlight() > 0; });
+
+    REQUIRE(queue.enqueue("four")); // lands between two writes of the same drain
+    socket.grant();
+    socket.grant();
+    socket.grant();
+    settleUntil([&] { return !queue.draining(); }); // the burst is out and the drain has ended
+
+    REQUIRE(queue.enqueue("five")); // a new burst: a new drain, never a second one
+    REQUIRE(queue.enqueue("six"));
+    socket.grant();
+    socket.grant();
+    settleUntil([&] { return !queue.draining(); });
+
+    CHECK(socket.maxInFlight() == 1);
+    CHECK(socket.writes() == std::vector<std::string> { "one", "two", "three", "four", "five", "six" });
 }
 
 TEST_CASE("WriteQueue rejects frames that push the backlog beyond its byte bound", "[net][writequeue]")

@@ -1249,6 +1249,18 @@ workflow refuses one without a section here.
   skipped on the next wait.
 
 ### Changed
+- **`core::net::serve` awaits each connection's `handshakeIfNeeded()` before reading a request**
+  (Task B10), and drops a connection whose handshake fails without reading from it or answering it.
+  A plaintext socket completes the verb inline, so nothing changes for one; a negotiating transport
+  has finished negotiating before the server frames a byte. The server still closes every
+  connection through its destructor with no lingering close -- a refusal written over an unread
+  request body can be destroyed by the reset that close sends
+  ([core-cpp#35](https://github.com/contour-terminal/core-cpp/issues/35)), and that is recorded on
+  `serve` rather than fixed here.
+- **`AsyncBufferedReader` refills through a member buffer rather than a coroutine-frame array**
+  (Task B10), so a refill no longer costs a heap allocation of more than 4 KiB for its frame, and it
+  asserts `contract::requireReadBuffer` on the span it hands the socket. `sizeof(AsyncBufferedReader)`
+  grows by 4 KiB accordingly.
 - **`check-cmake-hygiene` reports how many files it *checked*, and refuses a count it cannot
   reconcile.** The gate printed the number of files it *found*, which is not the number any rule ran
   over: the kind dispatch skips a file silently, so a defect there shrinks the checked set without
@@ -1319,6 +1331,16 @@ workflow refuses one without a section here.
   which says the same thing.
 
 ### Fixed
+
+- **`SplitSocket::close()` no longer reads a destroyed object when a retirement drops its owner**
+  (Task B10). It closed its read half and then its write half, and closing the read half completes
+  a parked read -- which resumes a coroutine that may own the `SplitSocket` and destroy it, both
+  halves included, before `close()` returns. The write half was then closed through a freed
+  `unique_ptr`: a SIGSEGV in a plain debug build, not merely under a sanitizer. Ordering the two
+  calls cannot fix it, because whichever runs first can do that, so `close()` now checks a liveness
+  token between them and returns if the socket is gone; the other half's parked operation was
+  abandoned by its destructor, which is what a destroyed socket does. `SocketDecorator_test`
+  reproduces it on every POSIX backend.
 
 - **The TUI runtime's four deferred defects, all closed by composing it on `core::net::EventLoop`
   (Task B12).** They were found reviewing Task A7's import from endo and deferred here because this

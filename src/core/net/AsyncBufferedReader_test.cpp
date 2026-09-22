@@ -4,6 +4,7 @@
 #include <core/net/EventLoop.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/IoBackend.hpp>
+#include <core/net/SocketContract.hpp>
 #include <core/net/testing/InMemoryTransport.hpp>
 #include <core/net/testing/ScriptedBackend.hpp>
 
@@ -49,6 +50,9 @@ class FakeSocket final: public core::net::ISocket
     /// @return The next scripted chunk, EOF, or the injected failure.
     core::net::IoAwaitable read(std::span<std::byte> buffer) override
     {
+        // A double is a transport, so it is held to the contract a real one enforces: without
+        // this, a reader that handed it an empty span would be answered EOF and pass.
+        core::net::contract::requireReadBuffer(buffer);
         return core::net::IoAwaitable { readScripted(buffer) };
     }
 

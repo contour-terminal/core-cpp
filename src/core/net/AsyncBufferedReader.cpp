@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/AsyncBufferedReader.hpp>
 
+#include <core/net/SocketContract.hpp>
 #include <core/net/Sockets.hpp>
 
 #include <algorithm>
@@ -11,12 +12,6 @@
 
 namespace core::net
 {
-
-namespace
-{
-    /// How many bytes one refill asks the socket for.
-    constexpr std::size_t ReadChunkSize = 4096;
-} // namespace
 
 async::Task<std::expected<std::string, NetError>> AsyncBufferedReader::readLine()
 {
@@ -128,14 +123,16 @@ async::Task<std::expected<void, NetError>> AsyncBufferedReader::fill()
         _consumed = 0;
     }
 
-    auto chunk = std::array<std::byte, ReadChunkSize> {};
-    auto const got = co_await _socket->read(chunk);
+    // The span is the reader's to get right, so it states the contract where the span is made: an
+    // empty destination would be answered 0, which this reader would report as the peer's EOF.
+    contract::requireReadBuffer(_chunk);
+    auto const got = co_await _socket->read(_chunk);
     if (!got.has_value())
         co_return std::unexpected(got.error());
     if (*got == 0)
         co_return std::unexpected(makeNetError(NetErrorCode::Eof, 0, "peer closed"));
 
-    _buffer.append(reinterpret_cast<char const*>(chunk.data()), *got);
+    _buffer.append(reinterpret_cast<char const*>(_chunk.data()), *got);
     co_return {};
 }
 
