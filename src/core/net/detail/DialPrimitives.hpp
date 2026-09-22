@@ -10,11 +10,13 @@
 /// while on Windows readiness for a socket arrives through a `WSAEVENT` associated with it — and
 /// @c DialHandles is the shape that lets the dial itself stay written once.
 
+#include <core/async/Task.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/IoBackend.hpp>
 #include <core/net/KeepAlive.hpp>
 #include <core/net/NetError.hpp>
 #include <core/net/SocketAddress.hpp>
+#include <core/platform/Clock.hpp>
 #include <core/platform/Types.hpp>
 
 #include <cstdint>
@@ -113,6 +115,36 @@ namespace detail
     [[nodiscard]] std::unique_ptr<ISocket> adoptDialled(EventLoop& loop,
                                                         DialHandles& handles,
                                                         std::string peer);
+
+    /// Dials one candidate as ONE overlapped `ConnectEx` on @p loop's completion port — the
+    /// completion-model counterpart of @c dialReadiness, and what a connector uses whenever
+    /// @c EventLoop::completionPort answers.
+    ///
+    /// **Two things are the opposite of the readiness dial, and both are the completion model's**
+    /// (the hand-off from Task B8 names them):
+    ///
+    /// - **The outcome is the completion's STATUS, never `SO_ERROR`.** Ruling R101's principle —
+    ///   ask the operation, not the notification — carries over; its readiness idiom does not. A
+    ///   successful completion is followed by `SO_UPDATE_CONNECT_CONTEXT`, without which the socket
+    ///   refuses `getpeername` and `shutdown`.
+    /// - **A deadline, or a stop, CANCELS the operation and lets the completion report.** The
+    ///   completion is the single writer of the outcome; settling at the deadline instead would let
+    ///   it land later into a frame that is gone. The abort then settles as @c NetErrorCode::Timeout
+    ///   for the deadline and as `OperationCancelled` for a stop — and a connection the kernel had
+    ///   already made before either took effect is handed back rather than thrown away.
+    ///
+    /// A platform whose loops never lend a completion port answers @c NetErrorCode::Unsupported,
+    /// because no connector there asks.
+    /// @param loop The loop whose port completes the dial; not owned.
+    /// @param endpoint The candidate; by value, for the coroutine-frame reason.
+    /// @param deadline When to give up on this candidate; `SteadyTimePoint::max()` for never.
+    /// @param keepAlive Whether the connected socket probes a silent peer.
+    /// @return The connected socket, or why this candidate did not produce one.
+    /// @throws async::OperationCancelled when the awaiting flow's own token stops the dial.
+    [[nodiscard]] async::Task<SocketResult> dialCompletion(EventLoop* loop,
+                                                           ResolvedEndpoint endpoint,
+                                                           platform::SteadyTimePoint deadline,
+                                                           KeepAlive keepAlive);
 
 } // namespace detail
 

@@ -72,9 +72,27 @@ enum class Interest : std::uint8_t
 /// instead of waiting on it and reporting nothing.
 enum class HandleKind : std::uint8_t
 {
-    Fd,      ///< A POSIX file descriptor: what poll(2), epoll and kqueue take.
-    Socket,  ///< A Winsock SOCKET.
-    Waitable ///< A Windows object with a signalled state (an event, console input, a WSAEVENT).
+    Fd,       ///< A POSIX file descriptor: what poll(2), epoll and kqueue take.
+    Socket,   ///< A Winsock SOCKET.
+    Waitable, ///< A Windows object with a signalled state (an event, console input, a WSAEVENT).
+
+    /// Not a kernel object: the address of one overlapped operation an OWNER issued on
+    /// the backend's completion port (@c IoBackend::completionPort), and the registration
+    /// is readable once that operation's completion has been dequeued.
+    ///
+    /// **It exists so a completion reaches its owner the way readiness does**, through
+    /// the loop's park and the loop's turn step 2, rather than through a callback the
+    /// backend invokes from inside its own walk — which is Rule 1 from the other side:
+    /// a completion is exactly the event on which a socket would want to resume its
+    /// reader, and a backend that resumed it there would let the reader free the socket
+    /// whose completion the walk has not finished with. So an `IocpSocket` parks on its
+    /// operation, the backend dispatches the park, and the loop resumes.
+    ///
+    /// Only a backend with a completion port can serve it; every other one refuses it
+    /// with @c NetErrorCode::Unsupported or has no way to be handed one (nothing issues
+    /// an operation on a port that @c IoBackend::completionPort does not lend). Added by
+    /// Task B7b with its first user.
+    Completion
 };
 
 /// What a handle is on this platform when the caller does not say.
@@ -266,11 +284,13 @@ enum class BackendKind : std::uint8_t
     Poll = 0, ///< poll(2), POSIX. Portable; a wait is O(registered).
     Epoll,    ///< epoll(7), Linux only. A wait is O(ready).
     Kqueue,   ///< kqueue(2), macOS and the BSDs. A wait is O(ready).
-    /// I/O completion ports, Windows. A wait is O(ready), and it is the only backend here that
-    /// can serve a console handle and a socket from one wait. Available by name; Task B7b makes
-    /// it the Windows default, once the sockets that issue overlapped operations on it exist.
+    /// I/O completion ports, Windows, and the Windows default since Task B7b. A wait is
+    /// O(ready), and it is the only backend here that can serve a console handle and a socket
+    /// from one wait.
     Iocp,
-    Wfmo, ///< WSAEventSelect + WaitForMultipleObjects, Windows. Still the default; IOCP's fallback after.
+    /// WSAEventSelect + WaitForMultipleObjects, Windows. No longer the default: kept by name for
+    /// one release as the fallback ([core-cpp#6](https://github.com/contour-terminal/core-cpp/issues/6)).
+    Wfmo,
     HostDriven, ///< No wait of its own: a host (a browser's event loop, a Qt one) pumps the loop.
     Scripted,   ///< The test double whose readiness a case writes out in advance.
     Null,       ///< Reports nothing, ever. What a loop with no I/O at all is driven by.

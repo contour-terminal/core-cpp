@@ -12,7 +12,9 @@
 #include <core/net/detail/DialPrimitives.hpp>
 
 #include <core/net/EventLoop.hpp>
+#include <core/net/detail/SocketErrors.hpp>
 #include <core/net/windows/WindowsSocket.hpp>
+#include <core/net/windows/WinsockError.hpp>
 #include <core/platform/WinsockInit.hpp>
 
 #include <chrono>
@@ -26,34 +28,6 @@ namespace core::net::detail
 
 namespace
 {
-    /// Maps a Winsock error from the dial path onto the vocabulary a caller can act on.
-    ///
-    /// The same two distinctions the POSIX side draws, for the same reason: `ConnRefused` says
-    /// nothing is listening there and `HostUnreach` says this machine cannot get there, and a
-    /// connector that answers `SystemError` to both cannot do the job it exists for.
-    /// @param err The `WSAGetLastError` value.
-    /// @param context What was being attempted.
-    /// @return The classified error.
-    [[nodiscard]] NetError fromDialError(int err, std::string context)
-    {
-        auto code = NetErrorCode::SystemError;
-        switch (err)
-        {
-            case WSAECONNREFUSED: code = NetErrorCode::ConnRefused; break;
-            case WSAECONNRESET: code = NetErrorCode::ConnReset; break;
-            case WSAETIMEDOUT: code = NetErrorCode::Timeout; break;
-            case WSAEHOSTUNREACH:
-            case WSAENETUNREACH: code = NetErrorCode::HostUnreach; break;
-            case WSAEADDRNOTAVAIL: code = NetErrorCode::AddressNotAvail; break;
-            case WSAEACCES: code = NetErrorCode::PermissionDenied; break;
-            case WSAEAFNOSUPPORT:
-            case WSAEPROTONOSUPPORT: code = NetErrorCode::Unsupported; break;
-            case WSAENOTSOCK: code = NetErrorCode::BadHandle; break;
-            default: break;
-        }
-        return makeNetError(code, err, std::move(context));
-    }
-
     /// Arms TCP keepalive with @p settings. Best-effort by contract; see the header.
     ///
     /// One ioctl sets the flag and both intervals together, so there is no partially-armed state
@@ -88,13 +62,32 @@ namespace
 
 } // namespace
 
+NetError fromWinsockError(int error, std::string context)
+{
+    // The module's Winsock table (`windows/SocketErrors.cpp`) answers every `WSAE*` code, so a
+    // reset, an abort after a FIN and a refused connect mean the same here as on every other
+    // Windows transport. Only two rows are the completion's and the dial's own: an ABORT is
+    // `Cancelled`, because on a completion port that is what a `close()`, a `cancelRead()` or a stop
+    // looks like from the operation's side -- the kernel answers `ERROR_OPERATION_ABORTED`, which
+    // is not a `WSAE*` code at all -- and a family or protocol the host lacks is `Unsupported`.
+    auto code = NetErrorCode::SystemError;
+    switch (error)
+    {
+        case ERROR_OPERATION_ABORTED: code = NetErrorCode::Cancelled; break;
+        case WSAEAFNOSUPPORT:
+        case WSAEPROTONOSUPPORT: code = NetErrorCode::Unsupported; break;
+        default: code = classifySocketError(error); break;
+    }
+    return makeNetError(code, error, std::move(context));
+}
+
 std::expected<DialHandles, NetError> openDialSocket(ResolvedEndpoint const& endpoint)
 {
     platform::ensureWinsockInitialized();
 
     auto const socket = ::socket(endpoint.family, SOCK_STREAM, endpoint.protocol);
     if (socket == INVALID_SOCKET)
-        return std::unexpected(fromDialError(WSAGetLastError(), "socket"));
+        return std::unexpected(fromWinsockError(WSAGetLastError(), "socket"));
 
     // **The socket is not what the loop watches here.** Winsock reports readiness for a socket
     // through a `WSAEVENT` associated with it, which is what the WFMO backend waits on — so a
@@ -108,7 +101,7 @@ std::expected<DialHandles, NetError> openDialSocket(ResolvedEndpoint const& endp
         if (event != WSA_INVALID_EVENT)
             ::WSACloseEvent(event);
         ::closesocket(socket);
-        return std::unexpected(fromDialError(err, "WSAEventSelect"));
+        return std::unexpected(fromWinsockError(err, "WSAEventSelect"));
     }
 
     // A dialled socket is created by a plain `::socket`, so it is inheritable unless told
@@ -142,7 +135,7 @@ std::expected<ConnectProgress, NetError> beginConnect(DialHandles const& handles
     auto const err = WSAGetLastError();
     if (err == WSAEWOULDBLOCK || err == WSAEALREADY || err == WSAEINPROGRESS)
         return ConnectProgress::Pending;
-    return std::unexpected(fromDialError(err, "connect"));
+    return std::unexpected(fromWinsockError(err, "connect"));
 }
 
 std::expected<void, NetError> pendingSocketError(DialHandles const& handles)
@@ -155,9 +148,9 @@ std::expected<void, NetError> pendingSocketError(DialHandles const& handles)
                      reinterpret_cast<char*>(&pending),
                      &length)
         != 0)
-        return std::unexpected(fromDialError(WSAGetLastError(), "getsockopt(SO_ERROR)"));
+        return std::unexpected(fromWinsockError(WSAGetLastError(), "getsockopt(SO_ERROR)"));
     if (pending != 0)
-        return std::unexpected(fromDialError(pending, "connect"));
+        return std::unexpected(fromWinsockError(pending, "connect"));
     return {};
 }
 

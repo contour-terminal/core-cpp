@@ -7250,7 +7250,7 @@
       "profiles": [
         "fastcached"
       ],
-      "note": "as EpollConnector: never imported. The Windows dial goes through WSAEventSelect readiness, which is what WindowsSocket already is; the ConnectEx form needs an IocpSocket, which Task B7b owns."
+      "note": "as EpollConnector: never imported, because makeConnector(loop, resolver) is the one connector on every platform. Since Task B7b it dials through ConnectEx (core::net::detail::dialCompletion) whenever the loop lends a completion port, which on Windows is by default, and through WSAEventSelect readiness over the WFMO backend."
     },
     {
       "kind": "removed",
@@ -7258,7 +7258,7 @@
       "profiles": [
         "fastcached"
       ],
-      "note": "the IOCP dial op (Net/IocpDial.hpp) is not imported: it issues ConnectEx against an IocpSocket this tree does not have. core::net::detail::dialReadiness serves Windows too."
+      "note": "not a type any more: since Task B7b the ConnectEx dial is core::net::detail::dialCompletion, and its per-dial wait is the private CompletionWait it shares with IocpListener::accept. Reach it through makeConnector or connect()."
     },
     {
       "kind": "removed",

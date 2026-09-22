@@ -17,8 +17,9 @@ directory `src/core/net/`. Three targets:
     Done so far: Task B2's merged error vocabulary; Task B3's `IoBackend`, which replaces
     `EventSource` — a backend dispatches readiness to the callbacks a caller registers, instead of
     reporting tokens for the caller to route; Task B4's `EventLoop`, `PlatformLoop` and
-    `testing::TestLoop`; and Task B5's timers. Still to come: IOCP as the Windows default, and
-    fastcached's sockets and dialler (Tasks B6 to B11). Under Emscripten `core::net_types` builds,
+    `testing::TestLoop`; Task B5's timers; and Task B7's completion port, the Windows default since
+    B7b, with the sockets, listener and `ConnectEx` dial that issue operations on it. Still to come:
+    the rest of Phase B, through Task B11. Under Emscripten `core::net_types` builds,
     and so does the WebAssembly subset of `core::net`: `IoBackend`, `IHostScheduler`,
     `HostDrivenBackend`, the test doubles, and — since Tasks B4 and B5 — the event loop and its
     timers. The sockets do not. A loop there has no thread to block and no descriptor to poll, so
@@ -35,7 +36,7 @@ directory `src/core/net/`. Three targets:
 | `<core/net/SleepUntil.hpp>` | `sleepUntil(EventLoop*, tp)`, the free form for a caller whose loop may be null — a null loop or a deadline already gone resolves inline, without suspending; and `nextWakeStep()`, the arithmetic of a bounded wait, which core-cpp itself no longer needs |
 | `<core/net/InterruptibleSleep.hpp>` | `interruptibleSleepUntil()` and `WakeReason`: sleep to a deadline or until a stop token is stopped, whichever comes first. It parks ONCE and the stop callback wakes it; the wait does not poll |
 | `<core/net/DeadlineTimer.hpp>` | `DeadlineTimer`: a deadline as an object, disarmed by `disarm()` or by destruction, for a timeout that has to tear an operation down rather than merely stop waiting for it. No coroutine frame, no allocation and no poll interval — an armed timer is what bounds the loop's next wait |
-| `<core/net/IoBackend.hpp>` | `IoBackend`, the injected blocking wait the loop drives and the readiness dispatcher behind it: `ReadinessHandler` (a handle, an owner and the callbacks a backend invokes), `Interest`, `HandleKind`, `Readiness`, `selectReadinessCallback()`, `BackendKind`, `WaitResult`; and the factories `makeDefaultBackend()`, `makeBackend(BackendKind)` and `preferredBackendKind()`. Every backend's own header is private, so the factories are how a program gets one: poll(2) on POSIX, epoll on Linux, kqueue on macOS and the BSDs, and on Windows both `WSAEventSelect` + `WaitForMultipleObjects` (which `preferredBackendKind()` still answers) and an I/O completion port, reachable as `makeBackend(BackendKind::Iocp)`. `completionPort()` answers non-null on a completion-based backend and `nullptr` on every other, which is how a socket knows whether to issue overlapped operations or to park on readiness |
+| `<core/net/IoBackend.hpp>` | `IoBackend`, the injected blocking wait the loop drives and the readiness dispatcher behind it: `ReadinessHandler` (a handle, an owner and the callbacks a backend invokes), `Interest`, `HandleKind`, `Readiness`, `selectReadinessCallback()`, `BackendKind`, `WaitResult`; and the factories `makeDefaultBackend()`, `makeBackend(BackendKind)` and `preferredBackendKind()`. Every backend's own header is private, so the factories are how a program gets one: poll(2) on POSIX, epoll on Linux, kqueue on macOS and the BSDs, and on Windows an I/O completion port, which `preferredBackendKind()` answers since Task B7b, and `WSAEventSelect` + `WaitForMultipleObjects`, kept by name (`makeBackend(BackendKind::Wfmo)`) for one release. `completionPort()` answers non-null on a completion-based backend and `nullptr` on every other, which is how a socket factory knows whether to hand out a socket that issues overlapped operations or one that parks on readiness; `EventLoop::completionPort()` asks it for them. `HandleKind::Completion` is a park on an overlapped operation an owner issued, which is how a completion reaches the loop's turn |
 | `<core/net/IHostScheduler.hpp>` | `IHostScheduler::callAfter()`, the one thing a host event loop has to lend core-cpp's, and `HostCallback` |
 | `<core/net/HostDrivenBackend.hpp>` | `HostDrivenBackend`: the backend for a loop that is PUMPED rather than one that blocks. It has no readiness (`attach` and `setInterest` answer `Unsupported`), its `wait()` never blocks, `wake()` and `armWakeAt()` ask the host for a pump and coalesce, and `isHostDriven()` is true. Portable, and the browser is only one of its hosts |
 | `<core/net/ISocket.hpp>`, `<core/net/IListener.hpp>` | the transport interfaces. `read`, `readWithFd`, `write`, `writeVectored`, `waitReadable`, `handshakeIfNeeded`, `cancelRead`, `shutdownWrite`, `setReceiveDeadline`, `close`; `accept`, `boundPort`. Every operation is a frame-free, stop-aware awaitable, not a `Task` |
@@ -118,8 +119,9 @@ was not imported: [`core::testing::ScopedTempDir`](testing.md) does the same.
 The module's own directory holds only platform-independent code. What one platform needs is
 private, and CMake's per-platform source lists choose it: `posix/` (`poll(2)`, the listeners,
 `PosixSocket`, the accept loop), `linux/` (epoll), `bsd/` (kqueue, for Apple and the BSDs) and
-`windows/` (`WfmoBackend`, `IocpBackend` and its wait-completion-packet probe, `WindowsSocket`
-and `WindowsListener` over `WSAEventSelect`, the loopback pair). No file there guards itself with an `#ifdef` of its platform. contour's
+`windows/` (`IocpBackend` and its wait-completion-packet probe, `IocpSocket`, `IocpListener` and
+the `ConnectEx` dial over it; `WfmoBackend`, with `WindowsSocket` and `WindowsListener` over
+`WSAEventSelect`, which also carry AF_UNIX on either backend; the loopback pair). No file there guards itself with an `#ifdef` of its platform. contour's
 `PollEventSource.cpp` is split along its `#ifdef` into `posix/PollBackend.cpp` and
 `windows/WfmoBackend.cpp`, and `makeSocketPair()` into `testing/posix/` and `testing/windows/`.
 `DefaultBackend.cpp` sits in each of those and in `emscripten/` (the browser's own host, over

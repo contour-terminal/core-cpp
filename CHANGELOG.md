@@ -623,10 +623,9 @@ workflow refuses one without a section here.
 
 - **`core::net::IocpBackend`, the Windows completion-port backend, and the readiness bridge that
   lets one wait serve a server's sockets and a TUI's console input.** Reachable as
-  `makeBackend(BackendKind::Iocp)`; **available by name, not yet the default** — `WfmoBackend`
-  stays what `preferredBackendKind()` answers until the sockets that issue overlapped operations
-  on a port arrive, because moving every Windows consumer onto a completion port that nothing
-  completes on buys nothing. The header is private, like every other backend's.
+  `makeBackend(BackendKind::Iocp)`, and **the Windows default** since the sockets that issue
+  overlapped operations on a port arrived with it (see **Changed**). The header is private, like
+  every other backend's.
 
   A completion port reports *completions* and has no notion of "this handle is readable", so
   readiness is synthesised, and each kind of handle needs its own source: a **waitable HANDLE**
@@ -672,6 +671,51 @@ workflow refuses one without a section here.
   where assertions are compiled out. They exist because neither violation fails
   on its own: IOCP is *designed* to be drained by many threads, and a lost association is a socket
   awaiting completions that are delivered elsewhere — a hang with nothing in any log.
+
+- **`core::net::IocpSocket` and `core::net::IocpListener`, the Windows socket and listener whose
+  operations are overlapped `WSARecv`, `WSASend` and `AcceptEx` completed by the loop's port,
+  and a `ConnectEx` dial beside them.** Nothing is chosen at compile time: `listen`,
+  `adoptListener`, `connect`, `makeConnector` and `testing::makeSocketPair` ask the loop
+  (`EventLoop::completionPort()`, new) and hand out these over a completion port and
+  `WindowsSocket`/`WindowsListener` over WFMO. AF_UNIX (`listenUnix`, `connectUnix`) stays on
+  `WindowsSocket`/`WindowsListener`, which the port serves through its waitable-handle bridge. The
+  headers are private; a consumer reaches them through `ISocket` and `IListener`.
+
+  What a consumer can observe, since the kernel performs the operation and the completion reports
+  what it did:
+  - **a stop of the awaiting flow, a receive deadline and a dial deadline each ask the kernel for
+    the operation back and let its completion answer**, so bytes already received win over a
+    later stop ([fastcached#884](https://github.com/LASTRADA-Software/fastcached/issues/884)) and
+    a connection the kernel made first is not thrown away. The flow resumes when the operation
+    comes home, never before -- until then the kernel may still write into its buffer;
+  - **`cancelRead` on a real read settles** with whatever its receive did (its bytes, or
+    `Cancelled`) on a later turn; the read SLOT is free at once, and a `waitReadable` probe is
+    retired inline as on every other socket;
+  - **an operation outlives its socket**: each holds itself until the port dequeues it, so a
+    socket or listener destroyed mid-operation leaves the kernel writing into, and reading a
+    gathered write's payload out of, storage that still exists
+    ([fastcached#465](https://github.com/LASTRADA-Software/fastcached/issues/465));
+  - bytes already there, and room already in the send buffer, are taken **without an operation**,
+    so a read or a write costs the same number of turns as on every other socket.
+
+  The dial's outcome is the completion's status, never `SO_ERROR`, followed by
+  `SO_UPDATE_CONNECT_CONTEXT`; an accepted socket gets `SO_UPDATE_ACCEPT_CONTEXT`, without which
+  `shutdownWrite` sent no FIN (fastcached#1556). `IocpListener` claims its address with
+  `SO_EXCLUSIVEADDRUSE`. Ported from fastcached `Net/IocpSocket.{hpp,cpp}`, `Net/IocpDial.hpp` and
+  `Net/IocpStatus.hpp` at `0708dd54`; 16 cases in `windows/IocpSocket_test.cpp` and 4 in
+  `windows/IocpDial_test.cpp`, and every socket suite that runs over `BackendMatrix` now covers
+  both Windows sockets.
+
+- **`HandleKind::Completion`**, a park on an overlapped operation an owner issued on a completion
+  port, and **`ICompletionPort::beginOperation`/`withdrawOperation`**, the record that lets a port
+  tell an owner's packet from its own. It is how a completion reaches the loop's turn step 2 --
+  the backend reports the park and the loop resumes, as for readiness -- instead of a callback
+  that resumes a coroutine from inside the backend's own walk. `WfmoBackend` refuses it with
+  `Unsupported`; no other backend lends a port, so nothing can hand one a completion to wait for.
+
+- **`CancelRead_test` and the socket contract's `read-slot` and `empty-read-buffer` canaries run on
+  Windows**, over `IocpSocket`. The WFMO leg of `CancelRead_test` SKIPs out loud, because
+  `WindowsSocket` does not implement `cancelRead`.
 
 - **Three CI legs that never existed, and the gate that makes their absence fatal.** Every visible
   configure preset must now be named by a workflow or allowlisted with a written reason;
@@ -1325,6 +1369,17 @@ workflow refuses one without a section here.
   (Task B10), so a refill no longer costs a heap allocation of more than 4 KiB for its frame, and it
   asserts `contract::requireReadBuffer` on the span it hands the socket. `sizeof(AsyncBufferedReader)`
   grows by 4 KiB accordingly.
+- **The Windows default backend is the I/O completion port.** `preferredBackendKind()` answers
+  `BackendKind::Iocp` and `makeDefaultBackend()` builds an `IocpBackend`, so every Windows loop
+  made the default way -- `PlatformLoop` included -- now completes socket operations on a port
+  and hands out `IocpSocket`/`IocpListener`. It scales past WFMO's 64-handle wait, and it serves
+  a console handle and a socket from one wait. **To get the old backend back**, construct it by
+  name: `core::net::makeBackend(core::net::BackendKind::Wfmo)`, and give that backend to your
+  `EventLoop` -- the socket factories ask the loop, so they hand out `WindowsSocket` and
+  `WindowsListener` again with no other change. `makeDefaultBackend()` also falls back to WFMO when
+  the port itself cannot be created. `BackendKind::Wfmo` is kept for one release and then removed
+  ([core-cpp#6](https://github.com/contour-terminal/core-cpp/issues/6)); say so there if you need
+  it longer.
 - **`check-cmake-hygiene` reports how many files it *checked*, and refuses a count it cannot
   reconcile.** The gate printed the number of files it *found*, which is not the number any rule ran
   over: the kind dispatch skips a file silently, so a defect there shrinks the checked set without

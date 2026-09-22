@@ -11,6 +11,7 @@
 
 #include <core/net/Diagnostics.hpp>
 #include <core/net/detail/WaitTimeout.hpp>
+#include <core/net/windows/IocpOperation.hpp>
 #include <core/net/windows/NetworkEvents.hpp>
 #include <core/net/windows/WaitCompletionPacket.hpp>
 
@@ -233,6 +234,12 @@ class IocpBackend::Slot final: public detail::ReadinessSlot
     WSAEVENT writeEvent = WSA_INVALID_EVENT; ///< `FD_WRITE` selection; socket registrations only.
     SOCKET socket = InvalidSocketValue;      ///< The socket, for a `HandleKind::Socket` registration.
 
+    /// The owner's operation, for a `HandleKind::Completion` registration, and null for every
+    /// other kind. Its `route` names this slot for exactly as long as this field names it; both
+    /// are cleared together in @c IocpBackend::retire, which is what lets a completion dequeued
+    /// after the park is gone find no route rather than a freed slot.
+    detail::IocpOperation* operation = nullptr;
+
     using detail::ReadinessSlot::nextGeneration;
     using detail::ReadinessSlot::retire;
 
@@ -398,7 +405,19 @@ std::expected<void, NetError> IocpBackend::attach(ReadinessHandler& handler)
     auto* const slot = new Slot { handler, _port };
     handler.slot = detail::ReadinessSlotRef { *slot };
 
-    if (handler.kind == HandleKind::Socket)
+    if (handler.kind == HandleKind::Completion)
+    {
+        // The handle IS the operation. Two parks naming one operation would be two owners each
+        // expecting the one completion, and the loser would wait for ever -- G4's shape, one
+        // level up -- so it is asserted rather than quietly routed to whichever came last.
+        auto* const operation = static_cast<detail::IocpOperation*>(handler.handle);
+        assert(operation->route == nullptr
+               && "two HandleKind::Completion registrations named one operation; only one of them "
+                  "can be told of its completion");
+        slot->operation = operation;
+        operation->route = slot;
+    }
+    else if (handler.kind == HandleKind::Socket)
     {
         slot->socket = reinterpret_cast<SOCKET>(handler.handle);
         // G4 lives in the port, and this is where a socket registration reaches it. An
@@ -626,6 +645,19 @@ bool IocpBackend::rearm(Registration& registration, ArmFailure report) noexcept
             }
             break;
         }
+        case HandleKind::Completion: {
+            // Nothing to arm: the OWNER issued the operation, and its completion is what makes
+            // this readable. What is done here is the level-triggering the other kinds get from
+            // re-arming: a completion that has been dequeued is reported on every wait until the
+            // owner takes the park back. That is also what reports a park registered AFTER its
+            // completion arrived -- a cancel detaches the park a stop came through, and the
+            // owner registers a fresh one to hear the abort on -- because the dequeue marked the
+            // operation whether or not anything was registered to hear it.
+            if (hasInterest(registration.interest, Interest::Read) && slot.operation != nullptr
+                && slot.operation->completed)
+                _batch.add(*handler, Readiness::Readable);
+            break;
+        }
         case HandleKind::Fd: armed = false; break; // refused at attach; unreachable
     }
 
@@ -720,6 +752,13 @@ void IocpBackend::retire(Slot& slot) noexcept
         cancelOperation(*node);
     slot.closeBridges();
     slot.retireAll();
+    // The route goes with the registration: a completion dequeued after this finds none and is
+    // only accounted for. The operation itself belongs to its owner and is not touched.
+    if (slot.operation != nullptr)
+    {
+        slot.operation->route = nullptr;
+        slot.operation = nullptr;
+    }
     // The port's association record is deliberately NOT cleared here. An association
     // outlives a registration — it ends when the HANDLE is closed, which is the
     // owner's event and not this one — and forgetting it here would make the next
@@ -744,15 +783,20 @@ void IocpBackend::consumeCompletion(std::uintptr_t key, void* overlapped, Collec
     // read an arbitrary struct as this backend's own. So a packet belongs to this
     // backend exactly when its pointer is one this backend handed over.
     //
-    // What is left over is dropped, which is the right answer today (nothing else
-    // issues operations on this port yet) and the wrong one as soon as something does:
-    // an owner's completion dropped here is an awaitable that never resolves. Task B7b
-    // adds the routing — an overlapped header carrying a dispatch pointer, which is
-    // what fastcached's `IocpCompletion` is — and this is the seam it plugs into.
+    // An OWNER's operation -- a socket's receive, a listener's accept, a dial's connect -- is
+    // recognised by the record `beginOperation` made before it was issued, and routed rather
+    // than interpreted: this backend never reads what it did.
+    if (_issued.erase(overlapped) != 0)
+    {
+        consumeOwnerCompletion(*static_cast<detail::IocpOperation*>(overlapped), collect);
+        return;
+    }
+    // Anything else is a pointer nobody told this port about, and reading it as either kind
+    // would be reading an arbitrary struct. It is dropped, and said.
     if (!_inFlight.contains(overlapped))
     {
-        reportDiagnostic("IocpBackend: a completion arrived for an operation this backend did not "
-                         "issue and cannot route; it was dropped (Task B7b adds the routing)");
+        reportDiagnostic("IocpBackend: a completion arrived for an operation nobody announced to "
+                         "this port (ICompletionPort::beginOperation); it was dropped");
         return;
     }
 
@@ -793,6 +837,40 @@ void IocpBackend::consumeCompletion(std::uintptr_t key, void* overlapped, Collec
     _inFlight.erase(overlapped);
     slot.removeNode(*node);
     slot.release();
+}
+
+void IocpBackend::consumeOwnerCompletion(detail::IocpOperation& operation, Collect collect) noexcept
+{
+    operation.completed = true;
+
+    // Reported to the park waiting for it, if there is one and it still listens. `route` is
+    // cleared by `retire` whenever the park goes, so a non-null route names a live slot; the
+    // registration is looked up rather than trusted for its interest, because a mute is recorded
+    // there and not on the slot.
+    if (auto* const slot = static_cast<Slot*>(operation.route);
+        slot != nullptr && !slot->retired() && collect == Collect::Yes)
+    {
+        if (auto const* const registration = find(*slot->handler);
+            registration != nullptr && hasInterest(registration->interest, Interest::Read))
+            _batch.add(*slot->handler, Readiness::Readable);
+    }
+
+    // LAST, and nothing touches `operation` afterwards: this is where its owner gives back the
+    // share that kept it alive while the kernel held it, so it may be freed right here. A packet
+    // that names a socket already destroyed is the ordinary case this exists for
+    // ([fastcached#465](https://github.com/LASTRADA-Software/fastcached/issues/465)).
+    if (auto* const onDequeued = operation.onDequeued; onDequeued != nullptr)
+        onDequeued(operation);
+}
+
+void IocpBackend::beginOperation(void* operation)
+{
+    _issued.insert(operation);
+}
+
+void IocpBackend::withdrawOperation(void* operation) noexcept
+{
+    _issued.erase(operation);
 }
 
 WaitResult IocpBackend::wait(std::optional<platform::SteadyDuration> timeout)
@@ -842,12 +920,12 @@ WaitResult IocpBackend::wait(std::optional<platform::SteadyDuration> timeout)
 
 void IocpBackend::drainOutstanding() noexcept
 {
-    if (_inFlight.empty())
+    if (_inFlight.empty() && _issued.empty())
         return;
 
     auto entries = std::array<OVERLAPPED_ENTRY, CompletionBatch> {};
     auto const deadline = std::chrono::steady_clock::now() + DrainBudget;
-    while (!_inFlight.empty())
+    while (!_inFlight.empty() || !_issued.empty())
     {
         auto removed = ULONG { 0 };
         auto const ok = GetQueuedCompletionStatusEx(
@@ -862,10 +940,11 @@ void IocpBackend::drainOutstanding() noexcept
             // share the kernel never gave back, which leaks the slots it names. A
             // sanitizer run reports the leak; this reports which side of the handover
             // it came from, which the leak alone does not say.
-            reportDiagnostic(std::format(
-                "IocpBackend: {} operation(s) still held by the kernel after {}ms; their slots leak",
-                _inFlight.size(),
-                DrainBudget.count()));
+            reportDiagnostic(std::format("IocpBackend: {} readiness and {} owner operation(s) still "
+                                         "held by the kernel after {}ms; what they name leaks",
+                                         _inFlight.size(),
+                                         _issued.size(),
+                                         DrainBudget.count()));
             return;
         }
     }

@@ -7,26 +7,28 @@
 /// DefaultBackend.cpp — this one — which is how no `#ifdef` chooses a backend
 /// (Ruling R40).
 ///
-/// **The preferred kind is still `Wfmo`, deliberately.** `IocpBackend` is complete and
-/// reachable by name, but the sockets that issue overlapped operations on its port are
-/// Task B7b's; Windows' sockets today are `WindowsSocket`, which parks on a WSAEVENT.
-/// Both backends serve that (a WSAEVENT is a waitable HANDLE and IOCP bridges those), so
-/// the parity matrix covers IOCP either way — but making it the DEFAULT before its
-/// sockets exist would move every Windows consumer onto a completion port that nothing
-/// completes on, for no gain. Task B7b flips this line and keeps Wfmo one release as the
-/// fallback ([core-cpp#6](https://github.com/contour-terminal/core-cpp/issues/6)).
+/// **The preferred kind is `Iocp`, since Task B7b.** Task B7a built the port and kept it off
+/// the default, because the sockets that issue overlapped operations on it did not exist yet;
+/// `IocpSocket`, `IocpListener` and the `ConnectEx` dial are those sockets, and every factory asks
+/// the loop which one to build (`EventLoop::completionPort`). `Wfmo` stays reachable by name for
+/// one release as the fallback — `makeBackend(BackendKind::Wfmo)` for a caller that wants it
+/// explicitly, and the fallback below when the port cannot be created — and is then removed
+/// ([core-cpp#6](https://github.com/contour-terminal/core-cpp/issues/6)).
+#include <core/net/Diagnostics.hpp>
 #include <core/net/IoBackend.hpp>
 #include <core/net/windows/IocpBackend.hpp>
 #include <core/net/windows/WfmoBackend.hpp>
 
 #include <memory>
+#include <stdexcept>
+#include <string>
 
 namespace core::net
 {
 
 BackendKind preferredBackendKind() noexcept
 {
-    return BackendKind::Wfmo;
+    return BackendKind::Iocp;
 }
 
 std::unique_ptr<IoBackend> makeBackend(BackendKind kind)
@@ -54,10 +56,24 @@ std::unique_ptr<IoBackend> makeBackend(BackendKind kind)
 std::unique_ptr<IoBackend> makeDefaultBackend()
 {
     // Through makeBackend rather than straight to the constructor, so that this file is
-    // the same shape as the other four, and so that the fallback is one line when Task
-    // B7b makes IOCP the preferred kind.
-    if (auto native = makeBackend(preferredBackendKind()))
-        return native;
+    // the same shape as the other four. The fallback is WFMO, and the case it covers is
+    // narrow: `IocpBackend` throws only when the port itself cannot be created, which is
+    // handle exhaustion -- and a WFMO backend is then the one that can still be built.
+    try
+    {
+        if (auto native = makeBackend(preferredBackendKind()))
+            return native;
+    }
+    catch (std::runtime_error const& refusal)
+    {
+        // Said, then fallen through to the backend that needs no port: silent to the caller, who
+        // has nothing to decide (every backend behaves alike), and not silent to whoever reads the
+        // diagnostics of a process that is running short of handles. If handles are exhausted,
+        // WFMO's own constructor throws the same kind of error, and that one propagates.
+        reportDiagnostic(std::string { "core::net: the IOCP backend could not be created, so the default "
+                                       "is WFMO: " }
+                         + refusal.what());
+    }
     return std::make_unique<WfmoBackend>();
 }
 

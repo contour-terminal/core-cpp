@@ -78,6 +78,11 @@
 namespace core::net
 {
 
+namespace detail
+{
+    struct IocpOperation;
+}
+
 /// An @c IoBackend over a Windows I/O completion port.
 ///
 /// It IS its own @c ICompletionPort rather than owning one, which is what makes the
@@ -149,6 +154,10 @@ class IocpBackend final: public IoBackend, public ICompletionPort
 
     [[nodiscard]] platform::NativeHandle nativeHandle() const noexcept override { return _port; }
 
+    void beginOperation(void* operation) override;
+
+    void withdrawOperation(void* operation) noexcept override;
+
     /// @return Whether a thread is currently inside @c wait().
     ///
     /// Exists for the G1 canary, which must provoke a SECOND `wait()` while the first
@@ -165,6 +174,11 @@ class IocpBackend final: public IoBackend, public ICompletionPort
     /// @return How many operations the kernel still holds a share of. Zero on a backend
     ///         with nothing armed; what the teardown drain waits to reach.
     [[nodiscard]] std::size_t outstandingOperations() const noexcept { return _inFlight.size(); }
+
+    /// @return How many operations OWNERS have issued on this port (@c beginOperation) whose
+    ///         completions have not been dequeued yet. The teardown drain waits for these too:
+    ///         each one is a share its owner gives back only when its packet comes home.
+    [[nodiscard]] std::size_t issuedOperations() const noexcept { return _issued.size(); }
 
   private:
     /// Where a failure to arm is reported.
@@ -243,6 +257,12 @@ class IocpBackend final: public IoBackend, public ICompletionPort
     /// @param collect Whether to collect readiness.
     void consumeCompletion(std::uintptr_t key, void* overlapped, Collect collect) noexcept;
 
+    /// Routes one dequeued completion of an operation an owner issued: marks it completed,
+    /// reports the park waiting for it, and runs its dequeue hook last.
+    /// @param operation The owner's operation.
+    /// @param collect Whether to collect readiness.
+    void consumeOwnerCompletion(detail::IocpOperation& operation, Collect collect) noexcept;
+
     /// Dequeues and discards until nothing the kernel still holds remains.
     ///
     /// Bounded, and it is the second half of the refcount: a share the kernel holds is
@@ -286,6 +306,12 @@ class IocpBackend final: public IoBackend, public ICompletionPort
     /// Loop-thread only: an arm and a dequeue both happen there, and a helper thread
     /// only posts.
     std::unordered_set<void*> _inFlight;
+
+    /// Every operation an OWNER has announced through @c beginOperation and whose packet has not
+    /// come back. Disjoint from @c _inFlight by construction -- one set holds pointers this
+    /// backend allocated, the other pointers an owner did -- and asked second, so the backend's
+    /// own packets are never mistaken for an owner's. Loop-thread only, like @c _inFlight.
+    std::unordered_set<void*> _issued;
 };
 
 } // namespace core::net

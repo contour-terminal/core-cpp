@@ -9,6 +9,7 @@
 // clang-format on
 
 #include <core/net/Sockets.hpp>
+#include <core/net/windows/IocpSocket.hpp>
 #include <core/net/windows/WindowsListener.hpp>
 #include <core/net/windows/WindowsSocket.hpp>
 #include <core/platform/WinsockInit.hpp>
@@ -26,6 +27,14 @@ namespace core::net
 std::expected<std::unique_ptr<IListener>, NetError> listen(EventLoop& loop, ListenOptions options)
 {
     platform::ensureWinsockInitialized();
+    // Which listener is the loop's question, not the platform's: a completion port completes
+    // AcceptEx, and a readiness backend is told FD_ACCEPT. Both are built on Windows, and
+    // `BackendKind::Wfmo` stays reachable by name for a release after IOCP became the default.
+    if (loop.completionPort() != nullptr)
+        return IocpListener::bind(loop, options.host, options.port, options.backlog)
+            .transform([](std::unique_ptr<IocpListener> listener) -> std::unique_ptr<IListener> {
+                return listener;
+            });
     return WindowsListener::bind(loop, options.host, options.port, options.backlog)
         .transform(
             [](std::unique_ptr<WindowsListener> listener) -> std::unique_ptr<IListener> { return listener; });
@@ -45,6 +54,11 @@ std::expected<std::unique_ptr<IListener>, NetError> adoptListener(EventLoop& loo
     platform::ensureWinsockInitialized();
     if (handle == platform::InvalidHandle)
         return std::unexpected(makeNetError(NetErrorCode::BadHandle, 0, "adoptListener"));
+    if (loop.completionPort() != nullptr)
+        return IocpListener::adopt(loop, reinterpret_cast<SOCKET>(handle))
+            .transform([](std::unique_ptr<IocpListener> listener) -> std::unique_ptr<IListener> {
+                return listener;
+            });
     return WindowsListener::adopt(loop, reinterpret_cast<SOCKET>(handle))
         .transform(
             [](std::unique_ptr<WindowsListener> listener) -> std::unique_ptr<IListener> { return listener; });

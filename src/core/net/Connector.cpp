@@ -3,6 +3,7 @@
 #include <core/net/EventLoop.hpp>
 #include <core/net/IConnector.hpp>
 #include <core/net/ReadinessDial.hpp>
+#include <core/net/detail/DialPrimitives.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -26,12 +27,12 @@ namespace
     /// pinned to one loop, so which loop is a property of the connector. Passing one per call
     /// would let a caller obtain a socket wired to a loop other than the one its coroutine runs
     /// on — a data race with no symptom until load.
-    class ReadinessConnector final: public IConnector
+    class LoopConnector final: public IConnector
     {
       public:
         /// @param loop The loop the returned sockets are pinned to; not owned.
         /// @param resolver The name-resolution seam; not owned.
-        ReadinessConnector(EventLoop& loop, IAsyncAddressResolver& resolver) noexcept:
+        LoopConnector(EventLoop& loop, IAsyncAddressResolver& resolver) noexcept:
             _loop(loop), _resolver(resolver)
         {
         }
@@ -46,22 +47,16 @@ namespace
         }
 
       private:
-        /// The @c detail::DialStep over the readiness dial.
+        /// The @c detail::DialStep: a completion-port dial where the loop lends a port, the
+        /// readiness dial everywhere else.
         ///
-        /// **This is the seam an IOCP dial plugs into**, as a second step selected where the
-        /// loop's backend is @c BackendKind::Iocp, once an `IocpSocket` exists (Task B7b). Two
-        /// things differ there, and neither may be carried over from this one by habit:
-        ///
-        /// - `ConnectEx` reports its outcome in the COMPLETION STATUS, followed by
-        ///   `setsockopt(SO_UPDATE_CONNECT_CONTEXT)` before the socket is usable. It is not read
-        ///   out of `SO_ERROR`. R101's principle carries over — ask the operation, never the
-        ///   notification — but its literal idiom does not.
-        /// - The completion is the single writer of the outcome, so the deadline must CANCEL the
-        ///   operation (`CancelIoEx`) and let the completion report, rather than settle the dial
-        ///   itself as the readiness dial does. Settling from the deadline would let a completion
-        ///   arrive afterwards into a frame that is gone.
-        ///
-        /// The refused-connect case over `BackendMatrix` gains an IOCP leg with it.
+        /// **Asked of the loop, per candidate, rather than chosen at compile time**, because on
+        /// Windows both backends are built and a loop may be driven by either: `BackendKind::Wfmo`
+        /// stays reachable by name for a release after IOCP became the default. The two dials
+        /// differ in the two ways `detail::dialCompletion` states — the outcome is the completion's
+        /// status rather than `SO_ERROR`, and a deadline cancels the operation and lets the
+        /// completion report rather than settling the dial itself — and a dial that carried the
+        /// readiness rules onto a port would get both wrong.
         /// @param state The loop, as a `void*`.
         /// @param endpoint The candidate to dial.
         /// @param deadline When to give up on it.
@@ -72,8 +67,10 @@ namespace
                                                   platform::SteadyTimePoint deadline,
                                                   KeepAlive keepAlive)
         {
-            co_return co_await detail::dialReadiness(
-                static_cast<EventLoop*>(state), endpoint, deadline, keepAlive);
+            auto* const loop = static_cast<EventLoop*>(state);
+            if (loop->completionPort() != nullptr)
+                co_return co_await detail::dialCompletion(loop, endpoint, deadline, keepAlive);
+            co_return co_await detail::dialReadiness(loop, endpoint, deadline, keepAlive);
         }
 
         EventLoop& _loop;
@@ -84,7 +81,7 @@ namespace
 
 std::unique_ptr<IConnector> makeConnector(EventLoop& loop, IAsyncAddressResolver& resolver)
 {
-    return std::make_unique<ReadinessConnector>(loop, resolver);
+    return std::make_unique<LoopConnector>(loop, resolver);
 }
 
 } // namespace core::net

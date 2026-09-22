@@ -186,18 +186,15 @@ constexpr auto ErrorAnswers = std::array {
     std::pair { NetErrorCode::WouldBlock, Answer::Retry },
 };
 
-// The one platform test in this file, and both answers are facts ABOUT the platform rather than
-// branches in the code under test:
-//   - whether the model is this platform's own answers, so no row's latitude applies;
-//   - whether this platform's socket implements a receive deadline at all. `WindowsSocket` does
-//     not override `setReceiveDeadline` -- it inherits the interface's no-op, which that default
-//     documents as a weaker bound rather than a wrong one -- and Task B7's IOCP socket replaces it.
+// The one platform test in this file, and its answer is a fact ABOUT the platform rather than a
+// branch in the code under test: whether the model is this platform's own answers, so no row's
+// latitude applies. (It once had a second: whether the platform socket implements a receive
+// deadline at all. `WindowsSocket` does not, and since Task B7b the platform loop's socket on
+// Windows is `IocpSocket`, which does.)
 #ifdef _WIN32
 constexpr bool ModelIsThisPlatform = true;
-constexpr bool PlatformSocketHasReceiveDeadline = false;
 #else
 constexpr bool ModelIsThisPlatform = false;
-constexpr bool PlatformSocketHasReceiveDeadline = true;
 #endif
 
 /// How long the real run lets whatever a step sent -- bytes, a FIN, a reset -- land before the
@@ -695,10 +692,7 @@ TEST_CASE("A receive deadline of zero removes the bound on a real socket", "[net
     SECTION("a real socket, the control: without the zero the same read expires")
     {
         // Without this, "the zero removed the bound" and "the bound never worked" are one passing
-        // section -- which is also why the section above says nothing where this one skips.
-        if constexpr (!PlatformSocketHasReceiveDeadline)
-            SKIP("this platform's socket has no receive deadline (WindowsSocket inherits ISocket's "
-                 "no-op); the zero case above holds vacuously here, and Task B7's socket owns the gap");
+        // section.
         auto loop = core::net::PlatformLoop {};
         auto listener = core::net::listen(loop, "127.0.0.1", 0);
         REQUIRE(listener.has_value());

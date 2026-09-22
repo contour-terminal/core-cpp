@@ -9,9 +9,10 @@ imported as they are (Tasks A5 and A6: `core::async`, and `core::net` with its `
 API), then fastcached's async and networking layer is merged into them (Phase B). Task B1 has
 landed the first half of that merge — the ownership rules under "Task ownership" below are live
 code, not a forecast — and Task B3 has landed `IoBackend`, so `EventSource` is gone and the
-backend rules below are live code too. Task B7a has landed `IocpBackend` and its readiness bridges:
-it is reachable as `makeBackend(BackendKind::Iocp)` and is NOT yet the Windows default, which Task
-B7b changes once the sockets that issue overlapped operations on its port exist. The rules are
+backend rules below are live code too. Task B7a landed `IocpBackend` and its readiness bridges, and
+Task B7b the sockets that issue overlapped operations on its port (`IocpSocket`, `IocpListener`, the
+`ConnectEx` dial) -- which is when IOCP became the Windows default; WFMO stays reachable by name for
+one release. The rules are
 written against the merged design's names, from the design spec,
 [Part I §2](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/specs/2026-09-18-core-cpp-design.md),
 so the tasks that implement it inherit them; each Phase B task extends this file with the rules
@@ -763,6 +764,37 @@ get right, and each one is a defect that has already happened.
   nobody will ever collect. Worth knowing that this was invisible: deleting the re-arm left all 166
   cases in the suite green, because every other registration is armed by `setInterest` and
   dispatched exactly once.
+- **A completion reaches its owner through the loop's turn, never from inside the port's
+  dequeue.** fastcached's `IocpCompletion` carried a dispatch pointer the reactor called, and that
+  call resumed the waiting coroutine -- Rule 1 broken on the one event where a socket most wants to
+  resume its reader. Here the owner parks on its operation (`HandleKind::Completion`, whose handle
+  is the operation's address), the port marks the operation completed and reports that park, and
+  the loop runs the owner's callback in turn step 2. The one call the port still makes into the
+  owner is the dequeue hook, which only lets go of the operation's own share, and is the last thing
+  the port does with the pointer. A port recognises an owner's packet by the record
+  `ICompletionPort::beginOperation` made BEFORE the Winsock call -- a packet can be queued the
+  instant the call is issued -- and a packet nobody announced is dropped and said, because reading
+  it as either kind is reading an arbitrary struct. Origin: Task B7b,
+  [fastcached#475](https://github.com/LASTRADA-Software/fastcached/issues/475).
+- **On a completion model, a stop, a receive deadline or a dial deadline ASKS for the operation
+  back and lets the completion answer.** The kernel performs the operation, so the completion is
+  the single writer of its outcome: `CancelIoEx` makes it complete with an abort or with whatever it
+  had already done, and that is what the flow resumes with. Settling at the stop instead throws
+  away bytes the kernel had already taken out of the stream
+  ([fastcached#884](https://github.com/LASTRADA-Software/fastcached/issues/884)) and resumes -- and
+  may unwind -- a frame whose buffer the kernel is still writing into. The loop DETACHES the park a
+  stop came through, so the owner registers a fresh one to hear the abort on, and the port marks an
+  operation completed whether or not a park is listening, so a completion that landed in between is
+  reported as soon as the new park exists. The two exceptions are the ones that cannot wait:
+  `close()` resolves a parked operation at once (closing is what aborts it, and the operation's
+  storage outlives the wait on its own share), and a loop being torn down abandons it. Origin: Task
+  B7b; the hand-off from Task B8 (`task-B7b-handoff-from-B8.md`) stated it for the dial first.
+- **Windows buffers what a non-blocking send is given, far past `SO_SNDBUF`** -- measured, 8MiB taken
+  at once by a socket with a 4KiB send buffer and a peer that never reads. `IocpSocket` tries each
+  read and write without an operation first, as libuv does, so a write that fits returns inline and
+  costs the same turns as on every other socket; the price is that "a payload big enough to park"
+  does not exist here. A case that needs a PARKED write fills the send window itself, until the
+  kernel answers `WSAEWOULDBLOCK`, and only then issues the write under test. Origin: Task B7b.
 - **IOCP specifics:** an accept must be awaited while it is outstanding, or an early completion
   is dropped; `ConnectEx` needs a `bind` to the family's wildcard first and
   `SO_UPDATE_CONNECT_CONTEXT` after; and `OVERLAPPED::Internal` is an `NTSTATUS`, not a Winsock

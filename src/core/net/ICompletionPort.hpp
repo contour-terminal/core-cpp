@@ -82,6 +82,34 @@ class ICompletionPort
     /// @param handle The handle being closed.
     virtual void forget(platform::NativeHandle handle) noexcept = 0;
 
+    /// Records that an owner is about to hand the kernel @p operation on this port, so the
+    /// completion it produces is routed back rather than dropped.
+    ///
+    /// **Called BEFORE the Winsock call, and withdrawn if that call fails outright.** A
+    /// completion can be queued the instant the call is issued, and a port that did not
+    /// yet know the pointer would have nothing to recognise it by. A port serves
+    /// everything associated with it, so without this record a packet naming an owner's
+    /// operation is indistinguishable from one naming the backend's own, and casting one
+    /// to the other is a use-after-free with extra steps.
+    ///
+    /// What the port does with it, stated where an owner reads it: when the packet is
+    /// dequeued the operation is marked completed, a @c HandleKind::Completion
+    /// registration naming it is reported readable, and the operation's own dequeue hook
+    /// runs LAST — after which the port never touches the pointer again, because the hook
+    /// is where the owner gives back the share that kept the operation alive while the
+    /// kernel held it ([fastcached#465](https://github.com/LASTRADA-Software/fastcached/issues/465)).
+    ///
+    /// The pointer is typed `void*` so this header stays portable; it is the address of a
+    /// `core::net::detail::IocpOperation` (`windows/IocpOperation.hpp`), whose first member is
+    /// the `OVERLAPPED` the kernel is handed.
+    /// @param operation The operation about to be issued.
+    virtual void beginOperation(void* operation) = 0;
+
+    /// Takes back @c beginOperation for an operation the kernel refused synchronously, so
+    /// no completion will ever arrive for it.
+    /// @param operation The operation that was not issued after all.
+    virtual void withdrawOperation(void* operation) noexcept = 0;
+
     /// The raw port, for the two Winsock calls that take one by name (`AcceptEx` and
     /// `ConnectEx` need the association in place before they are issued, and a
     /// diagnostic sometimes wants the number).

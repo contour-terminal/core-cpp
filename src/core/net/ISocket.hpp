@@ -5,8 +5,9 @@
 /// `ISocket` — a connected, bidirectional byte transport whose operations are frame-free,
 /// stop-aware awaitables.
 ///
-/// Implementations include the loop-driven platform sockets (@c PosixSocket, @c WindowsSocket), a
-/// blocking one for threads that may block (@c BlockingSocket), decorators (@c TlsSocket) and a
+/// Implementations include the loop-driven platform sockets (@c PosixSocket, @c WindowsSocket, and
+/// @c IocpSocket -- overlapped I/O completed by a Windows completion port, the Windows default since
+/// Task B7b), a blocking one for threads that may block (@c BlockingSocket), decorators (@c TlsSocket) and a
 /// deterministic in-process fake for tests (@c testing::InMemorySocket -- not
 /// `testing/InMemoryTransport.hpp`, which is a pair of REAL sockets). Every one of them, and any a
 /// consumer writes, is under the same contract (`<core/net/SocketContract.hpp>`), and the fake is
@@ -157,8 +158,8 @@ class ISocket
     /// discovers the truth, while a false `0` tells a caller its peer is gone. But the default also
     /// never SUSPENDS, so a transport that inherits it turns a parked watch into a spin — a
     /// watchdog loop of the shape @c cancelRead documents would then burn a core rather than wait.
-    /// **A transport whose reads can block owes an override**, and `PosixSocket`, `WindowsSocket`
-    /// and `TlsSocket` all have one.
+    /// **A transport whose reads can block owes an override**, and `PosixSocket`, `WindowsSocket`,
+    /// `IocpSocket` and `TlsSocket` all have one.
     ///
     /// **"Consumes nothing" is about bytes the CALLER could have read**, not about the transport's
     /// own buffering. A decorator may have to consume and decode raw bytes to answer at all — a TLS
@@ -186,6 +187,14 @@ class ISocket
     /// **The parked awaitable is COMPLETED with @c NetErrorCode::Cancelled, not dropped**, or this
     /// would be the leak it exists to remove — and as a VALUE rather than an exception, because a
     /// cancel from the resource is not a cancel of the flow.
+    ///
+    /// **On a completion-based transport a retired READ settles instead** — `IocpSocket`'s does:
+    /// the kernel may already have taken its bytes out of the stream, and nothing at the moment of
+    /// the call can tell, so its waiter resolves on a later turn with whatever the receive did
+    /// (those bytes, or `Cancelled`)
+    /// ([fastcached#884](https://github.com/LASTRADA-Software/fastcached/issues/884)). The slot is free at
+    /// once on every transport, and a `waitReadable` probe, which carries nothing to lose, is completed
+    /// inline on every transport.
     ///
     /// **It retires whatever is parked NOW, which is not the same as being idempotent**
     /// ([fastcached#1233](https://github.com/LASTRADA-Software/fastcached/issues/1233)). A

@@ -221,6 +221,10 @@ core_cpp_add_module(net KIND STATIC
         windows/DialPrimitives.cpp
         windows/IocpBackend.cpp
         windows/IocpBackend.hpp
+        windows/IocpDial.cpp
+        windows/IocpOperation.hpp
+        windows/IocpSocket.cpp
+        windows/IocpSocket.hpp
         windows/NetworkEvents.cpp
         windows/NetworkEvents.hpp
         windows/SocketErrors.cpp
@@ -236,6 +240,7 @@ core_cpp_add_module(net KIND STATIC
         windows/WindowsLoopback.hpp
         windows/WindowsSocket.cpp
         windows/WindowsSocket.hpp
+        windows/WinsockError.hpp
     SOURCES_EMSCRIPTEN
         ${_coreCppNetSubset}
         ${_coreCppNetDefaultBackend}
@@ -287,6 +292,7 @@ core_cpp_add_test(net
         BackendParity_test.cpp
         BlockingConnector_test.cpp
         BlockingSocket_test.cpp
+        CancelRead_test.cpp
         ClockRefresh_test.cpp
         ConnectFlow_test.cpp
         Connector_test.cpp
@@ -312,12 +318,11 @@ core_cpp_add_test(net
         testing/InMemorySocket_test.cpp
         testing/ParkingReadableSocket_test.cpp
         testing/TestLoop_test.cpp
-    # POSIX-only, and each for the same reason: they drive verbs that only PosixSocket implements.
-    # `ReactorSocket_test` names PosixSocket directly. `CancelRead_test` and `SocketDecorator_test`
-    # retire a parked read through `cancelRead`, which `WindowsSocket` deliberately does not
-    # override -- retiring its park needs a handle on it that a coroutine awaiting the loop does not
-    # have, and Task B7 replaces that class with an IOCP socket that owns its operations. The gap is
-    # stated on `WindowsSocket` itself; this is where it costs coverage.
+    # POSIX-only, each for its own reason. `ReactorSocket_test` names PosixSocket directly.
+    # `SocketDecorator_test` needs a WRITE that parks, and assumes no send buffer takes 8MiB: on
+    # Windows a non-blocking send takes all of it at once (measured, Task B7b), so its third
+    # section would retire nothing. `CancelRead_test` left this list with Task B7b: `IocpSocket`
+    # implements `cancelRead`, and the case SKIPs the WFMO leg, whose `WindowsSocket` does not.
     #
     # `posix/AdoptListener_test` is the exception to that sentence: it is NOT a POSIX-only
     # BEHAVIOUR, it is a POSIX-only way to ARRANGE one. `adoptListener` exists for a listening
@@ -327,7 +332,6 @@ core_cpp_add_test(net
     # portable file would have had to carry both spellings behind an `#ifdef`, which is the shape
     # Ruling R40 keeps out of this module.
     SOURCES_POSIX
-        CancelRead_test.cpp
         ReactorSocket_test.cpp
         SocketDecorator_test.cpp
         posix/AdoptListener_test.cpp
@@ -336,6 +340,8 @@ core_cpp_add_test(net
     SOURCES_WINDOWS
         windows/AdoptListener_test.cpp
         windows/IocpBackend_test.cpp
+        windows/IocpDial_test.cpp
+        windows/IocpSocket_test.cpp
         windows/NetworkEvents_test.cpp
         windows/WfmoBackend_test.cpp
     LABELS loopback
@@ -517,13 +523,19 @@ endif()
 # SKIP_RETURN_CODE is evaluated ahead of both, so a Release build abstains rather than failing for
 # want of a marker NDEBUG was never going to print. These run on Debug legs only.
 #
-# POSIX only for now, because the socket they drive is PosixSocket; Task B7's Windows socket enrols
-# `windows` here with no change to the modes, which are the contract's and not the platform's.
-if(CORE_CPP_TESTING AND NOT EMSCRIPTEN AND NOT WIN32)
+# Windows since Task B7b, where the default backend's socket is `IocpSocket` -- for the two READ
+# modes. The two write modes need a write that PARKS, and a Windows non-blocking send takes the
+# canary's 8MiB at once (measured), so each would exit "did not park" and test nothing; they stay
+# POSIX-only until the canary arranges a full send window itself rather than assuming one.
+set(_coreCppSocketContractGuards read-slot empty-read-buffer)
+if(NOT WIN32)
+    list(APPEND _coreCppSocketContractGuards write-slot write-slot-inline)
+endif()
+if(CORE_CPP_TESTING AND NOT EMSCRIPTEN)
     add_executable(core-cpp-socket-contract-canary SocketContractCanary.cpp)
     target_link_libraries(core-cpp-socket-contract-canary PRIVATE core::net core::testing_dialogs)
     core_cpp_apply_toolchain(core-cpp-socket-contract-canary)
-    foreach(guard IN ITEMS read-slot write-slot write-slot-inline empty-read-buffer)
+    foreach(guard IN LISTS _coreCppSocketContractGuards)
         add_test(NAME core-cpp.socket-contract-canary.${guard}
                  COMMAND core-cpp-socket-contract-canary ${guard})
         set_tests_properties(core-cpp.socket-contract-canary.${guard} PROPERTIES

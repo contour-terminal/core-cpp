@@ -112,6 +112,15 @@ std::expected<void, NetError> WfmoBackend::attach(ReadinessHandler& handler)
     if (find(handler) != nullptr)
         return std::unexpected { makeNetError(
             NetErrorCode::BadHandle, 0, "WfmoBackend::attach: handler is already attached") };
+    // Refused rather than waited on: the handle of a completion registration is the address of
+    // an overlapped operation, and `WaitForMultipleObjects` would read it as a kernel object.
+    // Nothing reaches here in practice -- this backend lends no completion port, so nothing
+    // issues an operation to name -- which is exactly why the refusal must be loud if it ever does.
+    if (handler.kind == HandleKind::Completion)
+        return std::unexpected { makeNetError(NetErrorCode::Unsupported,
+                                              0,
+                                              "WfmoBackend::attach: HandleKind::Completion needs a "
+                                              "completion port, and this backend has none") };
 
     _registrations.push_back(Registration { .handler = &handler, .interest = Interest::None });
     return {};

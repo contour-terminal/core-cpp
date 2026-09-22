@@ -169,4 +169,15 @@ std::unique_ptr<ISocket> adoptDialled(EventLoop& loop, DialHandles& handles, std
     return std::unique_ptr<ISocket> { new PosixSocket(loop, fd, std::move(peer)) };
 }
 
+async::Task<SocketResult> dialCompletion(EventLoop* /*loop*/,
+                                         ResolvedEndpoint /*endpoint*/,
+                                         platform::SteadyTimePoint /*deadline*/,
+                                         KeepAlive /*keepAlive*/)
+{
+    // No loop here lends a completion port, so no connector asks for this; the answer is still a
+    // true one rather than an unresolved symbol, because the declaration is portable.
+    co_return std::unexpected(
+        makeNetError(NetErrorCode::Unsupported, 0, "a completion-port dial on a platform without one"));
+}
+
 } // namespace core::net::detail

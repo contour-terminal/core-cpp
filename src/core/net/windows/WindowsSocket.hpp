@@ -47,11 +47,12 @@ class WindowsSocket final: public ISocket
 
     /// @copydoc ISocket::read
     ///
-    /// **Coroutine-backed rather than frame-free, and deliberately so until Task B7.** The
-    /// frame-free shape exists to save a coroutine frame per parked operation; buying it here means
-    /// rewriting the WSAEventSelect retry loop into a readiness callback, in a class Task B7
-    /// replaces outright with an IOCP socket. So B6 changed the SIGNATURE -- which is the
-    /// interface's, and had to change everywhere at once -- and left the body alone. The awaiting
+    /// **Coroutine-backed rather than frame-free, and deliberately so.** The frame-free shape
+    /// exists to save a coroutine frame per parked operation; buying it here means rewriting the
+    /// WSAEventSelect retry loop into a readiness callback, in a class that since Task B7b serves
+    /// only the WFMO backend -- kept one release (core-cpp#6) -- and AF_UNIX, while `IocpSocket`
+    /// carries TCP on the default one. So B6 changed the SIGNATURE -- which is the interface's,
+    /// and had to change everywhere at once -- and left the body alone. The awaiting
     /// flow's stop token still reaches it, through `Task`'s own awaiter.
     /// @param buffer The destination.
     /// @return The byte count read, `0` on a clean EOF, or a @c NetError.
@@ -84,10 +85,10 @@ class WindowsSocket final: public ISocket
     // no-op is unsafe for a transport whose reads park, and this one's do -- on the WSAEventSelect
     // event, through `parkUntilReady`. Retiring that park needs a handle on it, which a socket whose
     // read is an ordinary coroutine awaiting the loop does not have; giving it one is a redesign of
-    // this class, and Task B7 replaces the class outright with an IOCP socket that owns its
+    // this class, and Task B7b's `IocpSocket` -- the Windows default's socket -- owns its
     // operations the way PosixSocket does. So the gap is named here rather than papered over with an
     // override that does not retire anything. No caller in this library calls cancelRead on Windows
-    // today; `CancelRead_test` and `SocketDecorator_test` are registered POSIX-only and say so.
+    // today; `CancelRead_test` SKIPs this socket's backend out loud, and runs over `IocpSocket`.
 
     [[nodiscard]] std::string peerAddress() const override { return _peerAddress; }
 

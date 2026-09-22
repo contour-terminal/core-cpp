@@ -537,6 +537,16 @@ class EventLoop: public async::IExecutor
         return !running() || isOnWorkerThread();
     }
 
+    /// The completion port behind this loop's backend, or nullptr on a readiness backend.
+    ///
+    /// **What a socket factory asks to decide which socket to build**, and the only thing about
+    /// the backend it needs: a port means "issue an overlapped operation and be completed", no
+    /// port means "park on readiness and then call the syscall". It lends the PORT and not the
+    /// backend, for the reason @c ICompletionPort is narrow: a socket that could reach the
+    /// backend could dequeue it, and one thread dequeues a loop (G1).
+    /// @return The port, valid for the backend's lifetime, or nullptr.
+    [[nodiscard]] ICompletionPort* completionPort() noexcept { return _backend.completionPort(); }
+
     /// @name Awaiter-facing scheduler primitives
     /// Called by the loop's own awaitables and by the socket layer built on it.
     /// @{
