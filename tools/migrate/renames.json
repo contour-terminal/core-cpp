@@ -5436,6 +5436,20 @@
     },
     {
       "kind": "symbol",
+      "from": "net::connect",
+      "to": "core::net::connect",
+      "apply": "manual",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/net/Sockets.hpp",
+        "symbol": "core::net::connect"
+      },
+      "note": "Task B8. Three changes a caller can see: host is std::string, not std::string_view (the task is lazy, so a view could dangle before the body copies it; a literal or a std::string compiles unchanged, a string_view argument becomes std::string { view }); a stop of the flow's own token throws core::async::OperationCancelled instead of returning NetErrorCode::Cancelled; an unresolvable name is NetErrorCode::AddressError. Resolution no longer runs on the loop's thread."
+    },
+    {
+      "kind": "symbol",
       "from": "net::preferredEventSourceKind",
       "to": "core::net::preferredBackendKind",
       "profiles": [
@@ -6798,7 +6812,8 @@
       "target": {
         "header": "core/net/IAsyncAddressResolver.hpp",
         "symbol": "core::net::IAsyncAddressResolver"
-      }
+      },
+      "note": "resolve() gains a documented duty upstream did not state: an implementation that suspends must honour the awaiting flow's stop token, resuming it on its loop with core::async::OperationCancelled and discarding the answer that arrives later. A dial's budget and whenAny(connect, delay) both end resolution that way. A test fake that parks must honour it too, or a bounded dial through it hangs."
     },
     {
       "kind": "symbol",
@@ -6834,7 +6849,8 @@
       "target": {
         "header": "core/net/IAsyncAddressResolver.hpp",
         "symbol": "core::net::resolveFailure"
-      }
+      },
+      "note": "its code is NetErrorCode::AddressError (address resolution or parsing failed), as NetError.hpp defines it; a branch that matched AddressNotAvail for a failed lookup must match AddressError."
     },
     {
       "kind": "symbol",
@@ -7013,44 +7029,47 @@
     {
       "kind": "member",
       "from": "AllowAccept",
-      "to": "allowAccept",
-      "apply": "semantic",
+      "to": "tryAdmit",
+      "apply": "manual",
       "scope": "FastCache::IAdmissionControl",
       "profiles": [
         "fastcached"
       ],
       "target": {
         "header": "core/net/IAdmissionControl.hpp",
-        "symbol": "core::net::IAdmissionControl::allowAccept"
-      }
+        "symbol": "core::net::IAdmissionControl::tryAdmit"
+      },
+      "note": "AllowAccept() and OnConnectionStarted() are ONE call now: tryAdmit() decides and counts in a single atomic step, so two loops cannot both be admitted to the last slot. It returns std::optional<AdmissionLease>; hold the lease for the connection's life. `if (p.AllowAccept()) { p.OnConnectionStarted(); ... }` becomes `if (auto lease = p.tryAdmit()) { ... }`."
     },
     {
       "kind": "member",
       "from": "OnConnectionStarted",
-      "to": "onConnectionStarted",
-      "apply": "semantic",
+      "to": "tryAdmit",
+      "apply": "manual",
       "scope": "FastCache::IAdmissionControl",
       "profiles": [
         "fastcached"
       ],
       "target": {
         "header": "core/net/IAdmissionControl.hpp",
-        "symbol": "core::net::IAdmissionControl::onConnectionStarted"
-      }
+        "symbol": "core::net::IAdmissionControl::tryAdmit"
+      },
+      "note": "folded into tryAdmit(), which counts the connection as it admits it; see the AllowAccept row. Delete the call."
     },
     {
       "kind": "member",
       "from": "OnConnectionEnded",
-      "to": "onConnectionEnded",
-      "apply": "semantic",
+      "to": "AdmissionLease",
+      "apply": "manual",
       "scope": "FastCache::IAdmissionControl",
       "profiles": [
         "fastcached"
       ],
       "target": {
         "header": "core/net/IAdmissionControl.hpp",
-        "symbol": "core::net::IAdmissionControl::onConnectionEnded"
-      }
+        "symbol": "core::net::AdmissionLease"
+      },
+      "note": "the AdmissionLease that tryAdmit() returned ends the connection when it is destroyed, exactly once on every path. Delete the call and let the lease go out of scope (or move it into whatever owns the connection). An unmatched OnConnectionEnded() used to wrap the counter to SIZE_MAX."
     },
     {
       "kind": "member",
@@ -7067,18 +7086,13 @@
       }
     },
     {
-      "kind": "member",
-      "from": "SetMax",
-      "to": "setMax",
-      "apply": "semantic",
-      "scope": "FastCache::CountingAdmissionControl",
+      "kind": "removed",
+      "from": "core::net::CountingAdmissionControl::setMax",
       "profiles": [
         "fastcached"
       ],
-      "target": {
-        "header": "core/net/IAdmissionControl.hpp",
-        "symbol": "core::net::CountingAdmissionControl::setMax"
-      }
+      "apply": "none",
+      "note": "the cap is fixed at construction: SetMax wrote a plain field that accepting threads read, which is a data race, and a cap changed under live connections has no answer for the ones already over it. A reload constructs a new CountingAdmissionControl for the loops that start after it."
     },
     {
       "kind": "member",

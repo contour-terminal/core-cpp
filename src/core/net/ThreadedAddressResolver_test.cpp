@@ -1,18 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/async/Cancellation.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/IoBackend.hpp>
 #include <core/net/SocketAddress.hpp>
 #include <core/net/ThreadedAddressResolver.hpp>
+#include <core/net/detail/ScopeGuard.hpp>
 #include <core/net/testing/TestLoop.hpp>
 #include <core/platform/Clock.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <mutex>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -111,6 +116,23 @@ Task<void> resolveOn(EventLoop* loop,
 {
     *out = co_await resolver->resolve(std::move(host), 80, loop);
     *resumedOn = std::this_thread::get_id();
+}
+
+/// As @c resolveOn, but a cancellation is recorded rather than escaping.
+Task<void> resolveOrUnwind(EventLoop* loop,
+                           core::net::IAsyncAddressResolver* resolver,
+                           std::string host,
+                           ResolveResult* out,
+                           bool* cancelled)
+{
+    try
+    {
+        *out = co_await resolver->resolve(std::move(host), 80, loop);
+    }
+    catch (core::async::OperationCancelled const&)
+    {
+        *cancelled = true;
+    }
 }
 
 } // namespace
@@ -241,10 +263,114 @@ TEST_CASE("stopping the resolver resumes a queued lookup rather than stranding i
     loop.spawn(resolveOn(&loop, &resolver, "queued.test", &queued, &where));
     loop.runUntilIdle();
 
-    inner.release(); // so the in-flight lookup can finish and the join can complete
-    resolver.stop();
-    loop.runUntilIdle();
+    // **`stop` runs on its own thread, and the in-flight lookup is released only once the queued
+    // one has been failed.** Releasing first and then stopping — which this case used to do —
+    // races the single worker for the queued job: if the worker takes it before `stop` swaps the
+    // queue, the lookup succeeds and the assertion below reads a scheduling accident. `stop`
+    // fails the queue and THEN joins, so its join waits on the held worker, and the queued
+    // lookup's hand-back is visible on this loop before anything is released.
+    auto stopper = std::thread { [&resolver] { resolver.stop(); } };
+    auto const joinStopper = core::net::detail::ScopeGuard { [&]() noexcept {
+        inner.release();
+        if (stopper.joinable())
+            stopper.join();
+    } };
+    for ([[maybe_unused]] auto const turn: std::views::iota(0, 5000))
+    {
+        if (loop.runUntilIdle() > 0)
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds { 1 });
+    }
 
     REQUIRE_FALSE(queued.has_value());
     CHECK(queued.error().code == core::net::NetErrorCode::Cancelled);
+}
+
+TEST_CASE("a stop ends a lookup that never returns and the answer that arrives later is dropped", "[net]")
+{
+    // **The flow's stop token reaches a flow parked on a lookup.** A nameserver that drops
+    // packets holds `getaddrinfo` for the platform's full retry schedule, and nothing can
+    // interrupt it; what CAN end is the wait for it. Before this, the park ignored the token, so
+    // `whenAny(connect, delay(2s))`, a dial's own budget and a loop's shutdown all waited for the
+    // lookup regardless.
+    //
+    // The inner is held for the whole of the flow's life, so from the flow's side it never
+    // returns. It is released only after the flow is gone, which is the second half: the worker
+    // then publishes an answer for a frame that no longer exists, and that answer must go
+    // nowhere. A hand-back queued to the loop is what delivering it would look like.
+    auto inner = ScriptedResolver {};
+    inner.hold();
+    auto resolver = ThreadedAddressResolver { inner, { .threads = 1, .maxQueueDepth = 8 } };
+
+    auto clock = core::platform::ManualClock {};
+    auto loop = core::net::testing::TestLoop { clock };
+
+    auto answer = ResolveResult {};
+    auto cancelled = false;
+    loop.spawn(resolveOrUnwind(&loop, &resolver, "silent.test", &answer, &cancelled));
+    loop.drain();
+    inner.awaitEntered(1);
+
+    loop.rootStopSource().request_stop();
+    loop.drain();
+    CHECK(cancelled);
+
+    inner.release();
+    resolver.stop(); // joins: the worker has published by the time this returns
+
+    // Nothing is left for the loop to run. Asked by DRAINING rather than by `pendingSubmissions`,
+    // which counts the ready queue only: a hand-back from a worker arrives through the loop's
+    // cross-thread inbound queue and would not show there. A turn that resumes something is what
+    // delivering the late answer looks like, and it resumes rather than leaks it on the way.
+    CHECK(loop.drain() == 0);
+}
+
+TEST_CASE("a stop from another thread ends a lookup that never returns", "[net]")
+{
+    // The same property with the stop requested where a watchdog or a signal handler would
+    // request it: off the loop. The stop callback then runs on THAT thread, beside a worker
+    // thread that may be publishing at the same moment, which is the arrangement
+    // ThreadSanitizer needs to see.
+    auto inner = ScriptedResolver {};
+    inner.hold();
+    auto resolver = ThreadedAddressResolver { inner, { .threads = 1, .maxQueueDepth = 8 } };
+
+    auto backend = core::net::makeBackend(core::net::preferredBackendKind());
+    REQUIRE(backend != nullptr);
+    auto loop = EventLoop { *backend };
+
+    auto answer = ResolveResult {};
+    auto cancelled = false;
+    auto flowDone = std::atomic<bool> { false };
+
+    // **Bounded, and the bound says what it bounds.** The stopper waits up to five seconds for
+    // the flow to finish after the stop, and then releases the lookup whatever happened. With the
+    // stop honoured the flow is done within a turn and the wait ends at once; with it ignored, the
+    // release is what finally resumes the flow — with an ANSWER, which the CHECK below reports as
+    // a red instead of the case hanging until ctest's TIMEOUT says nothing about why.
+    auto stopper = std::thread { [&loop, &inner, &flowDone] {
+        inner.awaitEntered(1);
+        loop.rootStopSource().request_stop();
+        for ([[maybe_unused]] auto const tick: std::views::iota(0, 5000))
+        {
+            if (flowDone.load(std::memory_order_acquire))
+                break;
+            std::this_thread::sleep_for(std::chrono::milliseconds { 1 });
+        }
+        inner.release();
+    } };
+    auto const joinStopper = core::net::detail::ScopeGuard { [&]() noexcept {
+        flowDone.store(true, std::memory_order_release);
+        if (stopper.joinable())
+            stopper.join();
+    } };
+
+    loop.blockOn(resolveOrUnwind(&loop, &resolver, "silent.test", &answer, &cancelled));
+    flowDone.store(true, std::memory_order_release);
+    CHECK(cancelled);
+    CHECK_FALSE((answer.has_value() && !answer->empty())); // no answer reached the flow after the stop
+
+    if (stopper.joinable())
+        stopper.join();
+    resolver.stop();
 }

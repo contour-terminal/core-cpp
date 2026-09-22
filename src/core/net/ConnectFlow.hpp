@@ -55,7 +55,9 @@ namespace detail
     ///   `0.0.0.0` reaches localhost on Linux, so the mistake would not even be loud.
     /// - **The budget covers the whole call**, resolution and every candidate included. A host
     ///   with both an AAAA and an A record used to be able to take twice what the caller asked
-    ///   for, which is a bound that is not one.
+    ///   for, which is a bound that is not one. Resolution is RACED against the deadline rather
+    ///   than checked once it returns, because a lookup against a dead nameserver does not
+    ///   return for about 30 s, and a budget applied only afterwards is not applied at all.
     /// - **Every candidate is tried, and the LAST failure is what is reported.** A peer whose
     ///   name has both records, on a machine with no IPv6 route, is reachable through the second
     ///   — and a dial that gave up after the first would report a healthy peer as down for a
@@ -66,6 +68,7 @@ namespace detail
     ///        that may block, and nothing here will suspend.
     /// @param clock The source of the deadline. Injected so the total-budget rule is a
     ///        @c platform::ManualClock unit test rather than a sleep. Null means no budget at all.
+    ///        With a @p loop it must be that loop's own clock: the deadline is armed there.
     /// @param host The target host, unbracketed. By value, for the coroutine-frame reason
     ///        @c IConnector::connect documents.
     /// @param port The target port in host byte order.
@@ -73,7 +76,10 @@ namespace detail
     ///        platform's own — and whether each candidate socket is armed with keepalive.
     /// @param dial The per-candidate attempt.
     /// @param dialState The opaque pointer handed to @p dial.
-    /// @return The connected socket, or why no candidate produced one.
+    /// @return The connected socket, or why no candidate produced one: @c NetErrorCode::Timeout
+    ///         when the budget ran out, during resolution included.
+    /// @throws async::OperationCancelled if the awaiting flow's stop token is stopped, while
+    ///         resolving or while dialling. A cancel from the flow's own token unwinds.
     [[nodiscard]] async::Task<SocketResult> runConnectFlow(IAsyncAddressResolver* resolver,
                                                            EventLoop* loop,
                                                            platform::IClock* clock,

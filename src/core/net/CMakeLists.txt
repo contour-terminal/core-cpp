@@ -252,10 +252,12 @@ core_cpp_add_test(net
         Connector_test.cpp
         EventLoop_test.cpp
         HttpServer_test.cpp
+        IAdmissionControl_test.cpp
         IoAwaitable_test.cpp
         LoopTeardown_test.cpp
         ReadinessDial_test.cpp
         SocketAddress_test.cpp
+        SocketDeadline_test.cpp
         Socket_test.cpp
         ThreadedAddressResolver_test.cpp
         WaitReadable_test.cpp

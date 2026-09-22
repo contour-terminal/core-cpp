@@ -78,6 +78,11 @@ class ThreadedAddressResolver final: public IAsyncAddressResolver
     ~ThreadedAddressResolver() override;
 
     /// @copydoc IAsyncAddressResolver::resolve
+    ///
+    /// A stop reaches a lookup that is queued or running alike: the awaiting flow is handed back
+    /// to @p loop cancelled at once, and the worker, which cannot be interrupted inside the
+    /// blocking resolver, finishes in its own time and publishes into a slot nobody waits on.
+    /// The lookup still occupies its thread until then — a stop ends the WAIT, not the lookup.
     [[nodiscard]] async::Task<ResolveResult> resolve(std::string host,
                                                      std::uint16_t port,
                                                      EventLoop* loop) override;
@@ -102,10 +107,8 @@ class ThreadedAddressResolver final: public IAsyncAddressResolver
     ///         the one a test asserts.
     [[nodiscard]] std::size_t offloaded() const noexcept;
 
-    /// Implementation detail; public so the `.cpp`'s worker can name it.
-    struct Impl;
-
   private:
+    struct Impl;
     std::unique_ptr<Impl> _impl;
 };
 

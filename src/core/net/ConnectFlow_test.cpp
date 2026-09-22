@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/async/Cancellation.hpp>
 #include <core/async/Task.hpp>
 #include <core/net/ConnectFlow.hpp>
 #include <core/net/EventLoop.hpp>
@@ -75,6 +76,34 @@ class ScriptedAsyncResolver final: public core::net::IAsyncAddressResolver
     std::size_t _candidates;
 };
 
+/// A resolver whose lookup never comes back — the nameserver that drops packets.
+///
+/// **It honours the flow's stop token, because the interface says it must**, and it does so the
+/// cheapest way there is: it parks on the loop's own deadline, a day away on a clock nobody
+/// advances that far, and that awaitable already unwinds on a stop. What it models is therefore
+/// not a broken resolver but a correct one with a dead nameserver behind it, which is the case the
+/// budget has to cover and the one a resolver that RETURNS cannot test: a scripted lookup that
+/// advances the clock and then answers proves only that the budget is checked afterwards.
+class SilentResolver final: public core::net::IAsyncAddressResolver
+{
+  public:
+    explicit SilentResolver(core::platform::ManualClock* clock) noexcept: _clock(clock) {}
+
+    [[nodiscard]] Task<ResolveResult> resolve(std::string /*host*/,
+                                              std::uint16_t /*port*/,
+                                              core::net::EventLoop* loop) override
+    {
+        ++calls;
+        co_await loop->sleepUntil(_clock->now() + std::chrono::hours { 24 });
+        co_return std::unexpected(core::net::makeNetError(NetErrorCode::SystemError, 0, "unreachable"));
+    }
+
+    std::size_t calls = 0;
+
+  private:
+    core::platform::ManualClock* _clock;
+};
+
 /// One dial attempt as a case describes it: what it costs, and what it answers.
 struct DialScript
 {
@@ -144,7 +173,7 @@ TEST_CASE("an empty host is refused before the resolver is touched", "[net]")
     loop.blockOn(runFlow(&resolver, &loop, &clock, "", DialOptions {}, &script, &answer));
 
     REQUIRE_FALSE(answer.has_value());
-    CHECK(answer.error().code == NetErrorCode::AddressNotAvail);
+    CHECK(answer.error().code == NetErrorCode::AddressError);
     CHECK(resolver.calls == 0);
     CHECK(script.attempts.empty());
 }
@@ -209,6 +238,98 @@ TEST_CASE("the budget covers the whole call, resolution included", "[net]")
     CHECK(script.attempts.empty());
 }
 
+TEST_CASE("the budget ends a lookup that never answers, at the deadline and not after it", "[net]")
+{
+    // **The case the budget exists for, and the one the case above cannot be.** Above, the
+    // resolver RETURNS after eating the allowance, so all it shows is that the budget is looked
+    // at once the lookup is over. A nameserver that drops packets does not return: glibc retries
+    // it for about 30 s, and a caller that asked for one second must get its answer in one
+    // second, whatever the lookup is doing.
+    //
+    // Driven a turn at a time on a `ManualClock`, never through `blockOn`: a flow nothing
+    // advances would spin a `TestLoop`'s `blockOn` for ever, and a defect here is exactly that
+    // flow. This way a regression is a red CHECK, not a hang.
+    auto clock = core::platform::ManualClock {};
+    auto loop = core::net::testing::TestLoop { clock };
+    auto resolver = SilentResolver { &clock };
+    auto script = DialScript { .clock = &clock, .loop = &loop };
+
+    auto answer = SocketResult {};
+    auto finished = false;
+    auto flow = [](core::net::IAsyncAddressResolver* r,
+                   core::net::EventLoop* lp,
+                   core::platform::IClock* c,
+                   DialScript* s,
+                   SocketResult* out,
+                   bool* done) -> Task<void> {
+        co_await runFlow(
+            r, lp, c, "silent.test", DialOptions { .connectTimeout = std::chrono::seconds { 1 } }, s, out);
+        *done = true;
+    };
+    loop.spawn(flow(&resolver, &loop, &clock, &script, &answer, &finished));
+    loop.drain();
+    REQUIRE(resolver.calls == 1);
+
+    clock.advance(std::chrono::milliseconds { 999 });
+    loop.drain();
+    CHECK_FALSE(finished); // not early: the budget is what ends it, not something else
+
+    clock.advance(std::chrono::milliseconds { 1 });
+    loop.drain();
+    CHECK(finished); // and not late: at the deadline, while the lookup is still outstanding
+
+    if (finished)
+    {
+        REQUIRE_FALSE(answer.has_value());
+        CHECK(answer.error().code == NetErrorCode::Timeout);
+        CHECK(answer.error().context.contains("silent.test"));
+    }
+    CHECK(script.attempts.empty());
+
+    // A flow the budget failed to end is still parked; unwind it, so a red here stays a red.
+    loop.requestStop();
+    loop.drain();
+}
+
+TEST_CASE("a stop ends a flow parked on a lookup, and it unwinds rather than answering", "[net]")
+{
+    // The other half of the same property, and the one `whenAny(connect, delay)` and a loop's
+    // shutdown both depend on: with no budget at all, the flow's own stop token still ends it.
+    auto clock = core::platform::ManualClock {};
+    auto loop = core::net::testing::TestLoop { clock };
+    auto resolver = SilentResolver { &clock };
+    auto script = DialScript { .clock = &clock, .loop = &loop };
+
+    auto answer = SocketResult {};
+    auto threw = false;
+    auto flow = [](core::net::IAsyncAddressResolver* r,
+                   core::net::EventLoop* lp,
+                   core::platform::IClock* c,
+                   DialScript* s,
+                   SocketResult* out,
+                   bool* cancelled) -> Task<void> {
+        try
+        {
+            co_await runFlow(r, lp, c, "silent.test", DialOptions {}, s, out);
+        }
+        catch (core::async::OperationCancelled const&)
+        {
+            *cancelled = true;
+        }
+    };
+    loop.spawn(flow(&resolver, &loop, &clock, &script, &answer, &threw));
+    loop.drain();
+    REQUIRE(resolver.calls == 1);
+
+    loop.rootStopSource().request_stop();
+    loop.drain();
+
+    CHECK(threw);
+    CHECK(script.attempts.empty());
+    loop.requestStop();
+    loop.drain();
+}
+
 TEST_CASE("each candidate gets a share of what is left, not the whole of it", "[net]")
 {
     // Both halves matter and they pull against each other. Handing every candidate the full
@@ -267,7 +388,9 @@ TEST_CASE("a resolver failure is reported as itself, not as a dial failure", "[n
     loop.blockOn(runFlow(&resolver, &loop, &clock, "bad.test", DialOptions {}, &script, &answer));
 
     REQUIRE_FALSE(answer.has_value());
-    CHECK(answer.error().code == NetErrorCode::AddressNotAvail);
+    // `AddressError`, "address resolution or parsing failed", as `NetError.hpp` defines it. Not
+    // `AddressNotAvail`, which that header reserves for a bind whose address is not local.
+    CHECK(answer.error().code == NetErrorCode::AddressError);
     CHECK(answer.error().context.contains("bad.test"));
     CHECK(script.attempts.empty());
 }

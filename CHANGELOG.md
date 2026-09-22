@@ -15,12 +15,26 @@ workflow refuses one without a section here.
   `<core/net/IAsyncAddressResolver.hpp>`, `<core/net/ThreadedAddressResolver.hpp>`,
   `<core/net/SocketAddress.hpp>`, `<core/net/ConnectFlow.hpp>`, `<core/net/ReadinessDial.hpp>`,
   `<core/net/KeepAlive.hpp>`, `<core/net/SocketDeadline.hpp>`, `<core/net/IAdmissionControl.hpp>`).
+  `IAdmissionControl` caps concurrent connections with one atomic `tryAdmit()`, which returns an
+  `AdmissionLease` whose destructor gives the slot back; `CountingAdmissionControl` fixes its cap
+  at construction.
   `makeConnector(loop, resolver)` builds an `IConnector` whose sockets are pinned to `loop`;
   `connect(host, port, DialOptions)` resolves through the injected `IAsyncAddressResolver`, budgets
   the whole call, tries every candidate address in preference order and reports the last failure.
   `ThreadedAddressResolver` is the shipped resolver: a fixed pool of two threads, a bounded queue
   that is refused rather than waited on, and a fast path that never hands a LITERAL address to a
   thread at all -- so a process that only dials literals creates no thread.
+
+  **The budget covers resolution, and so does a stop.** A lookup against a nameserver that drops
+  packets does not come back for the platform's whole retry schedule -- about 30 s with glibc's
+  defaults -- so `DialOptions::connectTimeout` RACES resolution against its deadline rather than
+  checking it once the lookup returns, and a dial parked on a lookup ends at the deadline with
+  `NetErrorCode::Timeout`. What makes that possible is a duty `IAsyncAddressResolver::resolve`
+  documents: a resolver that suspends must honour the awaiting flow's stop token, resuming it on
+  its loop with `core::async::OperationCancelled` and discarding the answer that arrives later.
+  `ThreadedAddressResolver` does. The lookup itself cannot be interrupted -- `getaddrinfo` has no
+  cancellation -- so a stop ends the WAIT and the worker finishes in its own time; the same is what
+  lets `whenAny(connect(...), delay(...))` and a loop's shutdown end a dial that is resolving.
 
   **The seam is the deliverable, not the thread.** A test injects an `IAddressResolver` and can say
   what resolution costs and observe which thread paid for it; `InlineAddressResolver` is the
@@ -37,7 +51,8 @@ workflow refuses one without a section here.
 - `listen(loop, ListenOptions)`, the named form of the bind, and `adoptListener(loop, handle)` for a
   listening socket this process did not create -- one inherited from a supervisor, or one a test
   bound for itself. It prepares the handle (non-blocking and close-on-exec on POSIX, a readiness
-  event on Windows) and asks the kernel which port it is on, rather than taking one on trust.
+  event on Windows) and asks the kernel which port it is on, rather than taking one on trust. On
+  failure the caller still owns the handle, on every platform.
 
 - `core::tui::runtime::InputSource`, the TUI runtime's one dependency-injection seam now that the
   waiting is `core::net::EventLoop`'s: it names the handles to watch and decodes what is ready
@@ -645,8 +660,23 @@ workflow refuses one without a section here.
 
   Migrations:
 
-  - **Nothing to change for the common call.** `co_await core::net::connect(&loop, host, port)`
-    keeps its signature and its result type.
+  - **`host` is a `std::string`, not a `std::string_view`**, in both overloads. The task is lazy,
+    so its body -- and any copy it made -- first runs when the task is awaited, by which time a
+    view may name a temporary that died with the call expression:
+    `auto t = connect(&loop, makeHost(), port); co_await t;` sent freed bytes to the resolver. A
+    string literal or a `std::string` compiles unchanged; a `std::string_view` argument is spelled
+    `std::string { view }`.
+  - **A stop of the awaiting flow's own token throws `core::async::OperationCancelled`**, where
+    contour's body caught it and returned `NetErrorCode::Cancelled`. That is the rule every loop
+    awaitable follows -- a cancel from the flow unwinds, a cancel from the resource is a value. A
+    loop such as `while (true) { auto r = co_await connect(...); if (!r && r.error().code ==
+    NetErrorCode::Cancelled) break; }` now leaves by the exception instead: catch it, or let it
+    unwind the flow that was stopped. `connectUnix` still returns `Cancelled` as a value until it
+    moves onto the same dial (Task B9); `Sockets.hpp` documents the difference on both.
+  - **A name that cannot be resolved is `NetErrorCode::AddressError`**, as contour's `connect`
+    reported it and as `NetError.hpp` defines it ("address resolution or parsing failed"). So is
+    an empty host, and so is `core::net::resolveFailure`. `AddressNotAvail` is a bind's code: a
+    local address that is not available.
   - **Anything that assumed resolution happened INLINE is now wrong.** A dial to a name may suspend
     before it reaches a descriptor, so a caller that counted turns, or that relied on `connect`
     having touched the network by the time the first `co_await` returned, has to be re-read. A dial
@@ -657,6 +687,16 @@ workflow refuses one without a section here.
   - **Stop the resolver before the loops it hands results back to.** `defaultAsyncResolver()` is a
     process singleton and joins at exit; a resolver a consumer owns must be stopped while the loops
     it was given are still able to run a turn, or a queued lookup's hand-back is a leaked frame.
+
+- **fastcached's `IAdmissionControl` is one atomic `tryAdmit()` and a lease, not three calls.**
+  `AllowAccept()` followed by `OnConnectionStarted()` was a check-then-act: two loops sharing a
+  policy capped at 100 with 99 in flight could both be told yes, and hold 101. `tryAdmit()` decides
+  and counts in one step and returns `std::optional<AdmissionLease>`; the lease's destructor is
+  what `OnConnectionEnded()` was, so it runs exactly once on every path, where an unmatched end
+  used to wrap the counter to `SIZE_MAX` and refuse every accept after it. `SetMax` is gone: it
+  wrote a plain field other threads read, and the cap is now a constructor argument -- a reload
+  builds a new policy. `renames.json` carries the rows, as `manual` because each is a reshaping
+  rather than a rename.
 
 - **`IListener::localPort()` is `IListener::boundPort()`.** Mechanical: `tools/migrate/renames.json`
   carries the row and `tools/migrate/rewrite.py` applies it. The name says what the value is -- a

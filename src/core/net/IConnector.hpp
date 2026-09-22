@@ -102,7 +102,10 @@ class IConnector
     ///        is one the implementation needed anyway.
     /// @param port TCP port in host byte order.
     /// @param options The budget, and whether the connection carries keepalive.
-    /// @return The connected socket, or why the attempt did not succeed.
+    /// @return The connected socket, or why the attempt did not succeed: @c NetErrorCode::Timeout
+    ///         when @c DialOptions::connectTimeout ran out, name resolution included.
+    /// @throws async::OperationCancelled if the awaiting flow's stop token is stopped while the dial
+    ///         is outstanding, while resolving included.
     [[nodiscard]] virtual async::Task<SocketResult> connect(std::string host,
                                                             std::uint16_t port,
                                                             DialOptions options) = 0;

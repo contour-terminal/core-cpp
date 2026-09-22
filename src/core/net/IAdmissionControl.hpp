@@ -9,15 +9,68 @@
 /// only moved the queue somewhere the client cannot see.
 ///
 /// Imported from fastcached's `Net/IAdmissionControl.hpp` at
-/// `0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21`.
+/// `0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21`, and reshaped rather than renamed: upstream asked
+/// `AllowAccept()` and then told `OnConnectionStarted()`, which is a check-then-act across two
+/// calls, and ended a connection with a third call nothing paired with the first two.
 
 #include <atomic>
 #include <cstddef>
+#include <optional>
+#include <utility>
 
 namespace core::net
 {
 
-/// Whether another connection may be admitted right now.
+class IAdmissionControl;
+
+/// One admitted connection's hold on its policy's capacity; ending the lease gives the slot back.
+///
+/// **A lease rather than an `onConnectionEnded()` call, because a call is something a caller can
+/// forget to make, or make twice.** Upstream's counter wrapped to `SIZE_MAX` on an end with no
+/// matching start, after which every accept was refused for good. Here the slot is returned by a
+/// destructor, exactly once, on every path out of the connection — an exception included.
+///
+/// Move-only. A moved-from lease holds nothing and gives nothing back. It must not outlive the
+/// policy that granted it.
+class AdmissionLease
+{
+  public:
+    AdmissionLease(AdmissionLease const&) = delete;
+    AdmissionLease& operator=(AdmissionLease const&) = delete;
+
+    AdmissionLease(AdmissionLease&& other) noexcept: _policy(std::exchange(other._policy, nullptr)) {}
+
+    AdmissionLease& operator=(AdmissionLease&& other) noexcept
+    {
+        if (this != &other)
+        {
+            end();
+            _policy = std::exchange(other._policy, nullptr);
+        }
+        return *this;
+    }
+
+    /// Gives the slot back, unless this lease was moved from.
+    ~AdmissionLease() { end(); }
+
+  private:
+    friend class IAdmissionControl;
+
+    /// @param policy The policy whose slot this lease holds.
+    explicit AdmissionLease(IAdmissionControl& policy) noexcept: _policy(&policy) {}
+
+    /// Returns the slot to the policy, once.
+    inline void end() noexcept;
+
+    IAdmissionControl* _policy = nullptr;
+};
+
+/// Whether another connection may be admitted right now, decided and counted in one step.
+///
+/// **One atomic `tryAdmit()` rather than a question followed by a report.** Two accept loops
+/// sharing a policy, capped at 100 with 99 in flight, would both be told "yes" by a separate
+/// `allowAccept()` before either reported its start, and the server would hold 101: a cap
+/// exceeded under exactly the load it exists for.
 class IAdmissionControl
 {
   public:
@@ -29,46 +82,73 @@ class IAdmissionControl
     IAdmissionControl(IAdmissionControl&&) = delete;
     IAdmissionControl& operator=(IAdmissionControl&&) = delete;
 
-    /// @return True if a new connection may be admitted right now.
-    [[nodiscard]] virtual bool allowAccept() noexcept = 0;
+    /// Admits one connection if the policy allows it, and counts it in the same step.
+    ///
+    /// Safe to call from any thread. Of two callers racing for the last slot exactly one is
+    /// admitted.
+    /// @return The lease that holds the slot for as long as the connection lives, or nothing if
+    ///         the policy refuses — in which case the caller closes the connection rather than
+    ///         queueing it.
+    [[nodiscard]] virtual std::optional<AdmissionLease> tryAdmit() noexcept = 0;
 
-    /// Tells the policy a connection has been admitted — handed to a worker — so @c allowAccept
-    /// can refuse the next call once the cap is reached.
-    virtual void onConnectionStarted() noexcept = 0;
+  protected:
+    /// Builds the lease an implementation hands out from @c tryAdmit once it has counted it.
+    /// @return A lease that calls @c release exactly once when it ends.
+    [[nodiscard]] AdmissionLease grant() noexcept { return AdmissionLease { *this }; }
 
-    /// Tells the policy a connection has ended, cleanly or not.
-    virtual void onConnectionEnded() noexcept = 0;
+  private:
+    friend class AdmissionLease;
+
+    /// Gives back one slot a lease held. Called exactly once per lease @c grant produced, from
+    /// whichever thread ends the lease.
+    virtual void release() noexcept = 0;
 };
 
+inline void AdmissionLease::end() noexcept
+{
+    if (auto* const policy = std::exchange(_policy, nullptr); policy != nullptr)
+        policy->release();
+}
+
 /// The default policy: a cap on concurrent connections. Thread-safe.
+///
+/// **The cap is fixed at construction.** Upstream's `SetMax` wrote a plain field that accepting
+/// threads read — a data race — and changing a cap under live leases has no answer this class
+/// could give for the connections already over it. A reload builds a new policy for the loops
+/// that start after it.
 class CountingAdmissionControl final: public IAdmissionControl
 {
   public:
     /// @param maxConcurrent The connection cap; 0 means unlimited.
     explicit CountingAdmissionControl(std::size_t maxConcurrent = 0) noexcept: _max(maxConcurrent) {}
 
-    /// @copydoc IAdmissionControl::allowAccept
-    [[nodiscard]] bool allowAccept() noexcept override
+    /// @copydoc IAdmissionControl::tryAdmit
+    ///
+    /// A compare-and-swap on the in-flight count: the check against the cap and the increment are
+    /// one step, so no second caller can slip between them.
+    [[nodiscard]] std::optional<AdmissionLease> tryAdmit() noexcept override
     {
         if (_max == 0)
-            return true;
-        return _inFlight.load(std::memory_order_acquire) < _max;
+        {
+            _inFlight.fetch_add(1, std::memory_order_acq_rel);
+            return grant();
+        }
+        auto current = _inFlight.load(std::memory_order_acquire);
+        while (current < _max)
+        {
+            if (_inFlight.compare_exchange_weak(
+                    current, current + 1, std::memory_order_acq_rel, std::memory_order_acquire))
+                return grant();
+        }
+        return std::nullopt;
     }
 
-    /// @copydoc IAdmissionControl::onConnectionStarted
-    void onConnectionStarted() noexcept override { _inFlight.fetch_add(1, std::memory_order_acq_rel); }
-
-    /// @copydoc IAdmissionControl::onConnectionEnded
-    void onConnectionEnded() noexcept override { _inFlight.fetch_sub(1, std::memory_order_acq_rel); }
-
-    /// @return How many connections are in flight.
+    /// @return How many connections are in flight: leases granted and not yet ended.
     [[nodiscard]] std::size_t inFlight() const noexcept { return _inFlight.load(std::memory_order_acquire); }
 
-    /// Adjusts the cap at runtime — a configuration reload.
-    /// @param newMax The new cap; 0 means unlimited.
-    void setMax(std::size_t newMax) noexcept { _max = newMax; }
-
   private:
+    void release() noexcept override { _inFlight.fetch_sub(1, std::memory_order_acq_rel); }
+
     std::size_t _max;
     std::atomic<std::size_t> _inFlight { 0 };
 };

@@ -229,7 +229,9 @@ std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::adopt
         auto const err = WSAGetLastError();
         if (event != WSA_INVALID_EVENT)
             WSACloseEvent(event);
-        closesocket(socket);
+        // The socket is NOT closed: on failure the caller still owns it, as `adoptListener`
+        // documents and as the POSIX adopt does. Closing it here as well would make a caller
+        // that follows the documentation close it a second time.
         return std::unexpected(makeNetError(NetErrorCode::SystemError, err, "WSAEventSelect"));
     }
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/async/Cancellation.hpp>
 #include <core/async/Task.hpp>
+#include <core/async/WhenAny.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/IListener.hpp>
 #include <core/net/ISocket.hpp>
@@ -9,6 +10,7 @@
 #include <core/net/ReadinessDial.hpp>
 #include <core/net/SocketAddress.hpp>
 #include <core/net/Sockets.hpp>
+#include <core/net/detail/DialPrimitives.hpp>
 #include <core/net/detail/ScopeGuard.hpp>
 #include <core/net/testing/BackendMatrix.hpp>
 #include <core/net/testing/CoroTestSupport.hpp>
@@ -82,6 +84,25 @@ namespace
     ::close(probe);
     return probe;
 #endif
+}
+
+/// How a non-blocking connect to @p endpoint is answered on this machine: at once, or later
+/// through readiness.
+///
+/// Asked with the dial's OWN primitives, in the dial's own order (`openDialSocket`, then
+/// `beginConnect`), so the answer is the path `dialReadiness` takes for the same endpoint rather
+/// than a guess about the stack. The probe's socket is closed before anything is dialled for real.
+/// @return True when the connect was left outstanding — the dial then parks and reads `SO_ERROR`
+///         after the loop reports readiness; false when it was answered synchronously, in which
+///         case the dial never parks at all.
+[[nodiscard]] bool connectGoesThroughReadiness(ResolvedEndpoint const& endpoint)
+{
+    auto opened = core::net::detail::openDialSocket(endpoint);
+    REQUIRE(opened.has_value());
+    auto handles = *opened;
+    auto const started = core::net::detail::beginConnect(handles, endpoint);
+    core::net::detail::closeDialSocket(nullptr, handles);
+    return started.has_value() && *started == core::net::detail::ConnectProgress::Pending;
 }
 
 /// A listening port that accepts nothing, plus enough pending connections to saturate its
@@ -219,13 +240,30 @@ TEST_CASE("a refused connect completes with the refusal on every backend", "[net
             }
             REQUIRE(closedPort != 0);
 
+            // **Which path the refusal takes, asked rather than assumed.** R101 exists for the
+            // path through readiness: the dial parks, the loop reports the socket ready — on
+            // kqueue as `EV_EOF` on the write filter, which the backend reports as `Writable` —
+            // and only `SO_ERROR` says it was a refusal. A stack that refuses a loopback connect
+            // SYNCHRONOUSLY never takes that path: the dial leaves through `beginConnect`'s errno
+            // and the refusal below would be green without R101 having been exercised. BSD-derived
+            // stacks may do exactly that, since the reset is processed inline.
+            auto const throughReadiness = connectGoesThroughReadiness(loopbackEndpoint(closedPort));
+
             auto answer = SocketResult {};
             loop.blockOn(dialOnce(&loop, closedPort, std::chrono::milliseconds { 5000 }, &answer));
 
             REQUIRE_FALSE(answer.has_value());
             INFO("dialled the just-closed port " << closedPort << " and got: " << answer.error().context);
+            INFO("the refusal was reported " << (throughReadiness ? "through readiness" : "synchronously"));
             CHECK(answer.error().code == NetErrorCode::ConnRefused);
             CHECK(loop.parkedWaiterCount() == 0);
+
+            // Said out loud rather than passed quietly: on such a stack this section shows that a
+            // refusal reaches the caller, and NOT that the dial ignores which callback fired.
+            if (!throughReadiness)
+                SKIP("backend=" << backend.name
+                                << ": this stack refused the loopback connect synchronously, so the dial "
+                                   "never parked and R101's readiness path was not exercised here");
         }
     }
 }
@@ -296,6 +334,65 @@ TEST_CASE("the flow's stop token cancels a dial in flight", "[net]")
     // A cancel from the FLOW unwinds; a cancel from the RESOURCE is a value. Either is a report,
     // and what must NOT happen is a dial that resolved into a usable socket after a stop.
     CHECK((cancelled || !answer.has_value()));
+    CHECK(loop.parkedWaiterCount() == 0);
+    if (before.has_value())
+        CHECK(nextDescriptor() == before);
+}
+
+TEST_CASE("a whenAny loser's stop cancels a parked dial through the dial's own callback", "[net]")
+{
+    // **The common real use, and the only arm that is the dial's own.** The two cases around this
+    // one stop the loop's ROOT token: `requestStop()` also unparks everything, so it would end a
+    // dial with no stop callback at all, and the cross-thread case may land before the park. A
+    // `whenAny` loser is stopped through a CHILD token the loop knows nothing about — nothing
+    // unparks it but the callback the dial registered on that token.
+    //
+    // The delay arm asserts the dial is parked at the moment it wins, so this case says which arm
+    // it covered instead of leaving that to timing.
+    auto source = core::net::makeBackend(core::net::preferredBackendKind());
+    REQUIRE(source != nullptr);
+    auto loop = EventLoop { *source };
+
+    auto saturated = SaturatedListener {};
+    loop.blockOn(saturate(&loop, &saturated));
+    if (!saturated.saturated)
+        SKIP("this stack completes a dial whose listener never accepts, so no dial could be left "
+             "outstanding to cancel");
+
+    auto const before = nextDescriptor();
+
+    auto answer = SocketResult {};
+    auto threw = false;
+    auto parkedWhenStopped = std::size_t { 0 };
+    auto winner = std::optional<std::size_t> {};
+
+    auto dial = [](EventLoop* lp, std::uint16_t port, SocketResult* out, bool* cancelled) -> Task<void> {
+        try
+        {
+            *out = co_await dialReadiness(lp, loopbackEndpoint(port), SteadyTimePoint::max(), KeepAlive::No);
+        }
+        catch (core::async::OperationCancelled const&)
+        {
+            *cancelled = true;
+            throw; // a loser unwinds; swallowing it would make it look like the winner
+        }
+    };
+    auto delayArm = [](EventLoop* lp, std::size_t* parked) -> Task<void> {
+        co_await lp->delay(std::chrono::milliseconds { 100 });
+        *parked = lp->parkedWaiterCount();
+    };
+    auto race = [](Task<void> dialArm, Task<void> timerArm, std::optional<std::size_t>* won) -> Task<void> {
+        auto arms = std::vector<Task<void>> {};
+        arms.push_back(std::move(dialArm));
+        arms.push_back(std::move(timerArm));
+        *won = co_await core::async::whenAny(std::move(arms));
+    };
+    loop.blockOn(
+        race(dial(&loop, saturated.port, &answer, &threw), delayArm(&loop, &parkedWhenStopped), &winner));
+
+    CHECK(winner == std::optional<std::size_t> { 1 });
+    CHECK(parkedWhenStopped == 1); // the dial was parked, so the callback is what reached it
+    CHECK(threw);
     CHECK(loop.parkedWaiterCount() == 0);
     if (before.has_value())
         CHECK(nextDescriptor() == before);

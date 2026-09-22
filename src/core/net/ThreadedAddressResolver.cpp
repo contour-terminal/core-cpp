@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/ThreadedAddressResolver.hpp>
 
+#include <core/async/Awaitable.hpp>
+#include <core/async/Cancellation.hpp>
 #include <core/async/ParkedWork.hpp>
+#include <core/async/StopToken.hpp>
 #include <core/net/EventLoop.hpp>
 
 #include <atomic>
@@ -11,6 +14,7 @@
 #include <format>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <ranges>
 #include <thread>
 #include <utility>
@@ -27,13 +31,34 @@ namespace
     /// Shared, because either side may reach it last: the worker must be able to publish into it
     /// after the task was abandoned, and the task must be able to read it after the worker is
     /// gone.
+    ///
+    /// **Whoever takes @c waiter first decides the outcome**, and the other finds it empty. The
+    /// worker takes it to deliver an answer (@c done), a stop takes it to deliver a cancellation
+    /// (@c cancelled), and both do so under @c mutex — so exactly one of them hands the coroutine
+    /// back, and the loser's news goes nowhere. That is what makes an answer arriving after a
+    /// stop harmless: the frame it would have been delivered into may already be gone.
     struct ResolveSlot
     {
         std::mutex mutex;
         ResolveResult result { std::vector<ResolvedEndpoint> {} };
         async::ParkedWork waiter {};
         bool done = false;
+        bool cancelled = false;
     };
+
+    /// Hands @p waiter back to @p loop, or frees it where there is nowhere to hand it.
+    ///
+    /// An `async::detail::Parked` rather than a bare `ParkedWork`, so the branch that hands
+    /// nothing on FREES an unowned chain instead of dropping it. That is `ParkedWork`'s contract —
+    /// resumed or freed, never neither. Nothing changes for a BORROWED handle: the claim is empty,
+    /// so the guard destroys nothing and the caller's owner still frees it.
+    /// @param waiter What was taken out of the slot; may be empty.
+    /// @param loop Where to hand it back, or null.
+    void handBack(async::detail::Parked waiter, EventLoop* loop)
+    {
+        if (waiter.handle() && loop != nullptr)
+            loop->submit(waiter.take());
+    }
 
     /// Publishes a result and hands the waiter back to its loop.
     ///
@@ -46,11 +71,6 @@ namespace
     /// @param result What the lookup produced.
     void settle(ResolveSlot& slot, EventLoop* loop, ResolveResult result)
     {
-        // An `async::detail::Parked` rather than a bare `ParkedWork`, so the branch that hands
-        // nothing on FREES an unowned chain instead of dropping it. That is `ParkedWork`'s
-        // contract — resumed or freed, never neither — and the no-loop arm is the only place here
-        // that can decline to hand it on. Nothing changes for a BORROWED handle: the claim is
-        // empty, so the guard destroys nothing and the caller's owner still frees it.
         auto waiter = async::detail::Parked {};
         {
             auto const guard = std::scoped_lock { slot.mutex };
@@ -58,18 +78,57 @@ namespace
             slot.done = true;
             waiter = async::detail::Parked { std::exchange(slot.waiter, async::ParkedWork {}) };
         }
-        if (waiter.handle() && loop != nullptr)
-            loop->submit(waiter.take());
+        handBack(std::move(waiter), loop);
     }
 
-    /// Suspends until a slot is filled.
+    /// The stop callback of a parked lookup: takes the waiter back from the worker and hands it
+    /// to the loop, cancelled.
+    ///
+    /// **It may run on any thread** — the loop's, a whenAny sibling's, a watchdog's — so it does
+    /// what @c settle does and nothing more: it takes the waiter under the slot's lock and
+    /// SUBMITS it. It never resumes, for @c settle's reason: the flow continues on the loop's
+    /// thread and on no other.
+    ///
+    /// A named functor holding two plain pointers rather than a `std::function`, so registering
+    /// the callback allocates nothing. The slot outlives it: the awaiter that owns this callback
+    /// also holds the slot's `shared_ptr`, and drops the callback first.
+    struct CancelLookup
+    {
+        ResolveSlot* slot = nullptr;
+        EventLoop* loop = nullptr;
+
+        void operator()() const
+        {
+            auto waiter = async::detail::Parked {};
+            {
+                auto const guard = std::scoped_lock { slot->mutex };
+                // An answer that got here first is delivered, and a stop after it changes nothing:
+                // the flow is already on its way back with a result it can use.
+                if (slot->done)
+                    return;
+                slot->cancelled = true;
+                waiter = async::detail::Parked { std::exchange(slot->waiter, async::ParkedWork {}) };
+            }
+            handBack(std::move(waiter), loop);
+        }
+    };
+
+    /// Suspends until a slot is filled, or until the awaiting flow is stopped.
     ///
     /// Race-free the way @c ResultAwaitable is: the completion check and the waiter registration
     /// happen under one lock, so a result landing between them resumes through the normal path
     /// rather than parking on an answer that has already arrived.
+    ///
+    /// **Stop-aware, because @c IAsyncAddressResolver says a suspending resolver must be.** The
+    /// lookup itself cannot be interrupted — `getaddrinfo` has no cancellation — but the WAIT for
+    /// it can, and that wait is what a dial's budget, a `whenAny` and a loop's shutdown all need
+    /// to end. On a stop the flow is handed back cancelled and throws; the worker finishes in its
+    /// own time and publishes into a slot nobody is waiting on.
     struct SlotPark
     {
         std::shared_ptr<ResolveSlot> slot;
+        EventLoop* loop = nullptr;
+        std::optional<async::StopCallback<CancelLookup>> cancelReg {};
 
         [[nodiscard]] bool await_ready() const noexcept
         {
@@ -80,23 +139,41 @@ namespace
         /// Templated on the promise so `parkedWorkFor` can ask the PARKING coroutine's own
         /// promise whether anything else owns its chain: @c settle hands this chain to a loop
         /// that may be destroyed before it runs it, and by then the handle is erased, so this is
-        /// the last place the question can be asked.
+        /// the last place the question can be asked. The same promise is where the flow's stop
+        /// token is read.
+        ///
+        /// **The stop callback is registered BEFORE the waiter is published.** A stop landing in
+        /// between then finds no waiter, records @c ResolveSlot::cancelled, and the check below
+        /// sees it and does not park; registered after, a stop that had already fired would run
+        /// the callback inline, find the waiter, and hand it to the loop while this function is
+        /// still deciding whether to suspend — the same frame queued and returned-into at once.
         /// @tparam Promise The suspending coroutine's promise type.
         /// @param handle The suspended lookup.
-        /// @return True to stay suspended; false when the answer arrived first.
+        /// @return True to stay suspended; false when the answer or the stop arrived first.
         template <typename Promise>
-        [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> handle) const noexcept
+        [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> handle)
         {
+            if constexpr (async::HasStopToken<Promise>)
+                cancelReg.emplace(handle.promise().stopToken(),
+                                  CancelLookup { .slot = slot.get(), .loop = loop });
+
             auto const guard = std::scoped_lock { slot->mutex };
-            if (slot->done)
+            if (slot->done || slot->cancelled)
                 return false;
             slot->waiter = async::detail::parkedWorkFor(handle);
             return true;
         }
 
-        [[nodiscard]] ResolveResult await_resume() const
+        /// @return The lookup's answer.
+        /// @throws async::OperationCancelled if the flow was stopped before the answer arrived.
+        [[nodiscard]] ResolveResult await_resume()
         {
+            // Dropped first: it waits for a callback running on another thread to finish, so the
+            // slot is not read while that callback is still writing it.
+            cancelReg.reset();
             auto const guard = std::scoped_lock { slot->mutex };
+            if (slot->cancelled)
+                throw async::OperationCancelled {};
             return slot->result;
         }
     };
@@ -267,7 +344,7 @@ async::Task<ResolveResult> ThreadedAddressResolver::resolve(std::string host,
     }
     _impl->wake.notify_one();
 
-    co_return co_await SlotPark { .slot = std::move(slot) };
+    co_return co_await SlotPark { .slot = std::move(slot), .loop = loop };
 }
 
 ThreadedAddressResolver& defaultAsyncResolver()

@@ -47,6 +47,21 @@ namespace
 
       private:
         /// The @c detail::DialStep over the readiness dial.
+        ///
+        /// **This is the seam an IOCP dial plugs into**, as a second step selected where the
+        /// loop's backend is @c BackendKind::Iocp, once an `IocpSocket` exists (Task B7b). Two
+        /// things differ there, and neither may be carried over from this one by habit:
+        ///
+        /// - `ConnectEx` reports its outcome in the COMPLETION STATUS, followed by
+        ///   `setsockopt(SO_UPDATE_CONNECT_CONTEXT)` before the socket is usable. It is not read
+        ///   out of `SO_ERROR`. R101's principle carries over — ask the operation, never the
+        ///   notification — but its literal idiom does not.
+        /// - The completion is the single writer of the outcome, so the deadline must CANCEL the
+        ///   operation (`CancelIoEx`) and let the completion report, rather than settle the dial
+        ///   itself as the readiness dial does. Settling from the deadline would let a completion
+        ///   arrive afterwards into a frame that is gone.
+        ///
+        /// The refused-connect case over `BackendMatrix` gains an IOCP leg with it.
         /// @param state The loop, as a `void*`.
         /// @param endpoint The candidate to dial.
         /// @param deadline When to give up on it.
