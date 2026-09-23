@@ -11,6 +11,7 @@
 #include <core/net/ISocket.hpp>
 #include <core/net/Sockets.hpp>
 #include <core/net/testing/BackendMatrix.hpp>
+#include <core/net/testing/RawSockets.hpp>
 #include <core/platform/Types.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -25,149 +26,17 @@
 #include <string_view>
 #include <utility>
 
-#ifdef _WIN32
-    #include <core/platform/WinsockInit.hpp>
-
-    #include <winsock2.h>
-#else
-    #include <sys/socket.h>
-
-    #include <unistd.h>
-
-    #include <arpa/inet.h>
-    #include <netinet/in.h>
-#endif
-
 using core::async::Task;
 using core::net::EventLoop;
 using core::net::ISocket;
 using core::net::testing::BackendMatrix;
-using core::platform::NativeHandle;
+using core::net::testing::rawLoopbackConnection;
+using core::net::testing::rawReceive;
+using core::net::testing::rawSendAll;
+using core::net::testing::RawSocket;
 
 namespace
 {
-
-/// A blocking TCP handle owned by the test, closed on scope exit unless released.
-class RawHandle
-{
-  public:
-    explicit RawHandle(NativeHandle handle) noexcept: _handle(handle) {}
-    RawHandle(RawHandle const&) = delete;
-    RawHandle(RawHandle&&) = delete;
-    RawHandle& operator=(RawHandle const&) = delete;
-    RawHandle& operator=(RawHandle&&) = delete;
-
-    ~RawHandle()
-    {
-        if (_handle == core::platform::InvalidHandle)
-            return;
-#ifdef _WIN32
-        ::closesocket(reinterpret_cast<SOCKET>(_handle));
-#else
-        ::close(_handle);
-#endif
-    }
-
-    /// @return The handle, still owned here.
-    [[nodiscard]] NativeHandle get() const noexcept { return _handle; }
-
-    /// @return The handle, no longer owned here.
-    [[nodiscard]] NativeHandle release() noexcept
-    {
-        auto const handle = _handle;
-        _handle = core::platform::InvalidHandle;
-        return handle;
-    }
-
-  private:
-    NativeHandle _handle;
-};
-
-#ifdef _WIN32
-using RawSocket = SOCKET;
-using SockLen = int;
-#else
-using RawSocket = int;
-using SockLen = socklen_t;
-#endif
-
-RawSocket rawOf(NativeHandle handle) noexcept
-{
-#ifdef _WIN32
-    return reinterpret_cast<SOCKET>(handle);
-#else
-    return handle;
-#endif
-}
-
-NativeHandle handleOf(RawSocket socket) noexcept
-{
-#ifdef _WIN32
-    return reinterpret_cast<NativeHandle>(socket);
-#else
-    return socket;
-#endif
-}
-
-/// Sends @p payload whole with a plain blocking call.
-/// @return Whether all of it went.
-bool rawSendAll(NativeHandle handle, std::string_view payload) noexcept
-{
-#ifdef _WIN32
-    auto const sent = ::send(rawOf(handle), payload.data(), static_cast<int>(payload.size()), 0);
-#else
-    auto const sent = ::send(handle, payload.data(), payload.size(), 0);
-#endif
-    return std::cmp_equal(sent, payload.size());
-}
-
-/// Receives up to @p size bytes with a plain blocking call.
-/// @return How many arrived; 0 or less at EOF or on an error.
-long rawReceive(NativeHandle handle, char* into, std::size_t size) noexcept
-{
-#ifdef _WIN32
-    return ::recv(rawOf(handle), into, static_cast<int>(size), 0);
-#else
-    return static_cast<long>(::recv(handle, into, size, 0));
-#endif
-}
-
-/// Both ends of one loopback connection, made with plain blocking socket calls.
-struct RawConnection
-{
-    NativeHandle client = core::platform::InvalidHandle;   ///< The dialling end.
-    NativeHandle accepted = core::platform::InvalidHandle; ///< The accepted end.
-};
-
-/// @return A loopback connection made without core-cpp, or two invalid handles.
-RawConnection rawLoopbackConnection()
-{
-#ifdef _WIN32
-    core::platform::ensureWinsockInitialized();
-#endif
-    auto const listener = RawHandle { handleOf(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) };
-    if (listener.get() == core::platform::InvalidHandle)
-        return {};
-    auto address = sockaddr_in {};
-    address.sin_family = AF_INET;
-    address.sin_port = 0;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    auto* const generic = reinterpret_cast<sockaddr*>(&address);
-    auto length = static_cast<SockLen>(sizeof(address));
-    if (::bind(rawOf(listener.get()), generic, length) != 0 || ::listen(rawOf(listener.get()), 1) != 0
-        || ::getsockname(rawOf(listener.get()), generic, &length) != 0)
-        return {};
-
-    auto client = RawHandle { handleOf(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) };
-    if (client.get() == core::platform::InvalidHandle)
-        return {};
-    if (::connect(rawOf(client.get()), generic, static_cast<SockLen>(sizeof(address))) != 0)
-        return {};
-    auto accepted = RawHandle { handleOf(::accept(rawOf(listener.get()), nullptr, nullptr)) };
-    if (accepted.get() == core::platform::InvalidHandle)
-        return {};
-    return RawConnection { .client = client.release(), .accepted = accepted.release() };
-}
 
 /// Reads exactly @p expected.size() bytes from @p socket into @p matched's verdict.
 Task<void> readExactly(ISocket* socket, std::string_view expected, bool* matched)
@@ -213,7 +82,7 @@ TEST_CASE("A socket accepted outside core-cpp reads and writes on the loop it is
             auto const connection = rawLoopbackConnection();
             REQUIRE(connection.client != core::platform::InvalidHandle);
             REQUIRE(connection.accepted != core::platform::InvalidHandle);
-            auto const client = RawHandle { connection.client };
+            auto const client = RawSocket { connection.client };
 
             auto adopted = core::net::adoptSocket(servingLoop, connection.accepted, "127.0.0.1:test");
             REQUIRE(adopted.has_value());
@@ -235,7 +104,7 @@ TEST_CASE("A socket accepted outside core-cpp reads and writes on the loop it is
             auto received = std::size_t { 0 };
             while (received < reply.size())
             {
-                auto const got = rawReceive(client.get(), reply.data() + received, reply.size() - received);
+                auto const got = rawReceive(client.get(), std::span<char> { reply }.subspan(received));
                 if (got <= 0)
                     break;
                 received += static_cast<std::size_t>(got);

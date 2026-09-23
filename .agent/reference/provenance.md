@@ -293,6 +293,11 @@ others in notes.
 | `src/core/net/detail/StreamSocketOptions.hpp` | origin: core-cpp | - | - | v0.1.1: the one helper every dial and every accept calls; before it only the dial set `TCP_NODELAY` |
 | `src/core/net/posix/StreamSocketOptions.cpp` | origin: core-cpp | - | - | v0.1.1; `armKeepAlive` and `wholeSeconds` moved here unchanged from `posix/DialPrimitives.cpp` |
 | `src/core/net/windows/StreamSocketOptions.cpp` | origin: core-cpp | - | - | v0.1.1; `armKeepAlive` moved here unchanged from `windows/DialPrimitives.cpp` |
+| `src/core/net/testing/RawSockets.hpp` | origin: core-cpp | - | - | v0.1.1: plain OS sockets for a case that must stand outside core-cpp, so the cases carry no `#ifdef`; implemented per platform like `makeSocketPair` |
+| `src/core/net/testing/posix/RawSockets.cpp` | origin: core-cpp | - | - | v0.1.1 |
+| `src/core/net/testing/windows/RawSockets.cpp` | origin: core-cpp | - | - | v0.1.1 |
+| `src/core/net/posix/PortSharing_test.cpp` | origin: core-cpp | - | - | v0.1.1: `PortSharing::Shared` binds one port from two loops, and each accepts |
+| `src/core/net/windows/PortSharing_test.cpp` | origin: core-cpp | - | - | v0.1.1: `PortSharing::Shared` is refused with `Unsupported` |
 | `src/core/net/AdoptSocket_test.cpp` | origin: core-cpp | - | - | v0.1.1: `adoptSocket` over a connection accepted with plain socket calls, on every backend |
 | `src/core/net/StreamSocketOptions_test.cpp` | origin: core-cpp | - | - | v0.1.1: reads `TCP_NODELAY` and the buffer sizes back from the kernel, for accepted and dialled sockets on every backend |
 | `src/core/net/SocketAddress.cpp` | LASTRADA-Software/fastcached | `src/FastCache/Net/SocketAddress.cpp` | `0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21` | Task B8. Only the four functions the header declares; the `addrinfo` walk is a `while` that steps to the next candidate first, as the listeners' already are. `GaiMessage` is a file-local `resolverMessage` |

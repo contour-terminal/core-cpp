@@ -18,6 +18,7 @@
 #include <core/net/ThreadedAddressResolver.hpp>
 #include <core/net/detail/StreamSocketOptions.hpp>
 #include <core/net/testing/BackendMatrix.hpp>
+#include <core/net/testing/RawSockets.hpp>
 #include <core/platform/Types.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -27,22 +28,6 @@
 #include <optional>
 #include <string>
 
-#ifdef _WIN32
-    #include <core/net/windows/IocpSocket.hpp>
-    #include <core/net/windows/WindowsSocket.hpp>
-    #include <core/platform/WinsockInit.hpp>
-
-    #include <winsock2.h>
-#else
-    #include <core/net/posix/PosixSocket.hpp>
-
-    #include <sys/socket.h>
-
-    #include <unistd.h>
-
-    #include <netinet/in.h>
-#endif
-
 using core::async::Task;
 using core::net::DialOptions;
 using core::net::EventLoop;
@@ -51,6 +36,9 @@ using core::net::ListenOptions;
 using core::net::SocketBufferSizes;
 using core::net::detail::reportStreamSocketOptions;
 using core::net::testing::BackendMatrix;
+using core::net::testing::nativeHandleOf;
+using core::net::testing::openRawTcpSocket;
+using core::net::testing::RawSocket;
 
 namespace
 {
@@ -59,64 +47,6 @@ namespace
 /// 128 KiB receive after it, Windows 64 KiB, macOS 128 KiB) and small enough to fit under Linux's
 /// default `net.core.wmem_max`/`rmem_max` of 208 KiB, which caps an unprivileged request.
 constexpr auto RequestedBuffer = std::size_t { 150'000 };
-
-/// @param socket A socket core-cpp handed out.
-/// @return Its OS handle, or @c platform::InvalidHandle for a transport that has none.
-core::platform::NativeHandle handleOf(ISocket const& socket)
-{
-#ifdef _WIN32
-    if (auto const* iocp = dynamic_cast<core::net::IocpSocket const*>(&socket))
-        return reinterpret_cast<core::platform::NativeHandle>(iocp->native());
-    if (auto const* wfmo = dynamic_cast<core::net::WindowsSocket const*>(&socket))
-        return reinterpret_cast<core::platform::NativeHandle>(wfmo->native());
-    return core::platform::InvalidHandle;
-#else
-    if (auto const* posix = dynamic_cast<core::net::PosixSocket const*>(&socket))
-        return posix->native();
-    return core::platform::InvalidHandle;
-#endif
-}
-
-/// A TCP socket nothing in core-cpp has touched, so a case can tell the kernel's default apart from
-/// what the helper set.
-class RawTcpSocket
-{
-  public:
-    RawTcpSocket(): _handle(openTcp()) {}
-
-    RawTcpSocket(RawTcpSocket const&) = delete;
-    RawTcpSocket(RawTcpSocket&&) = delete;
-    RawTcpSocket& operator=(RawTcpSocket const&) = delete;
-    RawTcpSocket& operator=(RawTcpSocket&&) = delete;
-
-    ~RawTcpSocket()
-    {
-        if (_handle == core::platform::InvalidHandle)
-            return;
-#ifdef _WIN32
-        ::closesocket(reinterpret_cast<SOCKET>(_handle));
-#else
-        ::close(_handle);
-#endif
-    }
-
-    /// @return The handle; @c platform::InvalidHandle where the OS refused one.
-    [[nodiscard]] core::platform::NativeHandle handle() const noexcept { return _handle; }
-
-  private:
-    /// @return A fresh TCP socket, or @c platform::InvalidHandle.
-    static core::platform::NativeHandle openTcp() noexcept
-    {
-#ifdef _WIN32
-        core::platform::ensureWinsockInitialized();
-        return reinterpret_cast<core::platform::NativeHandle>(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
-#else
-        return ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-#endif
-    }
-
-    core::platform::NativeHandle _handle;
-};
 
 /// Accepts one connection on @p listener into @p accepted.
 Task<void> acceptInto(core::net::IListener* listener, std::unique_ptr<ISocket>* accepted)
@@ -177,16 +107,16 @@ Connection connectOnce(EventLoop& loop, ListenOptions listenOptions, DialOptions
 TEST_CASE("The helper sets TCP_NODELAY, sizes only what it is asked to, and touches nothing else",
           "[net][socket-options]")
 {
-    auto const untouched = RawTcpSocket {};
-    auto const configured = RawTcpSocket {};
-    REQUIRE(untouched.handle() != core::platform::InvalidHandle);
-    REQUIRE(configured.handle() != core::platform::InvalidHandle);
-    auto const before = reportStreamSocketOptions(untouched.handle());
+    auto const untouched = RawSocket { openRawTcpSocket() };
+    auto const configured = RawSocket { openRawTcpSocket() };
+    REQUIRE(untouched.get() != core::platform::InvalidHandle);
+    REQUIRE(configured.get() != core::platform::InvalidHandle);
+    auto const before = reportStreamSocketOptions(untouched.get());
 
     SECTION("defaults")
     {
-        core::net::detail::applyStreamSocketOptions(untouched.handle(), {});
-        auto const after = reportStreamSocketOptions(untouched.handle());
+        core::net::detail::applyStreamSocketOptions(untouched.get(), {});
+        auto const after = reportStreamSocketOptions(untouched.get());
         CHECK(after.noDelay);
         CHECK(after.sendBuffer == before.sendBuffer);
         CHECK(after.receiveBuffer == before.receiveBuffer);
@@ -194,9 +124,9 @@ TEST_CASE("The helper sets TCP_NODELAY, sizes only what it is asked to, and touc
     SECTION("sizes")
     {
         core::net::detail::applyStreamSocketOptions(
-            configured.handle(),
+            configured.get(),
             { .buffers = SocketBufferSizes { .send = RequestedBuffer, .receive = RequestedBuffer } });
-        auto const after = reportStreamSocketOptions(configured.handle());
+        auto const after = reportStreamSocketOptions(configured.get());
         CHECK(after.noDelay);
         CHECK(after.sendBuffer >= RequestedBuffer);
         CHECK(after.receiveBuffer >= RequestedBuffer);
@@ -218,8 +148,8 @@ TEST_CASE("An accepted socket carries TCP_NODELAY, as a dialled one does", "[net
             auto loop = EventLoop { *source };
             auto const connection = connectOnce(loop, ListenOptions { .host = "127.0.0.1" }, DialOptions {});
 
-            auto const accepted = handleOf(*connection.accepted);
-            auto const dialled = handleOf(*connection.dialled);
+            auto const accepted = nativeHandleOf(*connection.accepted);
+            auto const dialled = nativeHandleOf(*connection.dialled);
             REQUIRE(accepted != core::platform::InvalidHandle);
             REQUIRE(dialled != core::platform::InvalidHandle);
             CHECK(reportStreamSocketOptions(accepted).noDelay);
@@ -245,8 +175,8 @@ TEST_CASE("Buffer sizes asked of a listener reach every socket it accepts, and a
                                                 ListenOptions { .host = "127.0.0.1", .buffers = sizes },
                                                 DialOptions { .buffers = sizes });
 
-            auto const accepted = reportStreamSocketOptions(handleOf(*connection.accepted));
-            auto const dialled = reportStreamSocketOptions(handleOf(*connection.dialled));
+            auto const accepted = reportStreamSocketOptions(nativeHandleOf(*connection.accepted));
+            auto const dialled = reportStreamSocketOptions(nativeHandleOf(*connection.dialled));
             CHECK(accepted.sendBuffer >= RequestedBuffer);
             CHECK(accepted.receiveBuffer >= RequestedBuffer);
             CHECK(dialled.sendBuffer >= RequestedBuffer);

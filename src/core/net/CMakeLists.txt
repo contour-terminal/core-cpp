@@ -160,6 +160,7 @@ core_cpp_add_module(net KIND STATIC
         testing/ManualHostScheduler.hpp
         testing/NullBackend.hpp
         testing/ParkingReadableSocket.hpp
+        testing/RawSockets.hpp
         testing/ScriptedBackend.hpp
         testing/SocketDecorator.hpp
         testing/TestLoop.hpp
@@ -214,6 +215,7 @@ core_cpp_add_module(net KIND STATIC
         posix/UnixListener.cpp
         posix/UnixListener.hpp
         testing/posix/InMemoryTransport.cpp
+        testing/posix/RawSockets.cpp
     SOURCES_LINUX
         linux/EpollBackend.cpp
         linux/EpollBackend.hpp
@@ -222,6 +224,7 @@ core_cpp_add_module(net KIND STATIC
         bsd/KqueueBackend.hpp
     SOURCES_WINDOWS
         testing/windows/InMemoryTransport.cpp
+        testing/windows/RawSockets.cpp
         windows/BlockingPrimitives.cpp
         windows/DialPrimitives.cpp
         windows/InvalidSocket.hpp
@@ -345,6 +348,7 @@ core_cpp_add_test(net
         SocketDecorator_test.cpp
         posix/AdoptListener_test.cpp
         posix/FdPassing_test.cpp
+        posix/PortSharing_test.cpp
         posix/SocketErrors_test.cpp
         posix/UnixSocket_test.cpp
     SOURCES_WINDOWS
@@ -353,6 +357,7 @@ core_cpp_add_test(net
         windows/IocpDial_test.cpp
         windows/IocpSocket_test.cpp
         windows/NetworkEvents_test.cpp
+        windows/PortSharing_test.cpp
         windows/SocketErrors_test.cpp
         windows/WfmoBackend_test.cpp
         windows/WindowsSocket_test.cpp
