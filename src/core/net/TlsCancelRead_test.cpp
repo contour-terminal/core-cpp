@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // `cancelRead` during a TLS handshake that a READ drives: the one TlsLifetime_test case that needs
-// the inner socket's own `cancelRead`, which `WindowsSocket` does not implement (the gap is stated
-// on that class, and `CancelRead_test` is POSIX-only for the same reason). Everything else about
-// cancelling a TLS read -- a read waiting on the handshake gate -- runs on every platform, in
-// TlsLifetime_test.cpp. The helpers are that file's, trimmed to what this case uses.
+// the inner socket's own `cancelRead`. It ran on POSIX only while `WindowsSocket` inherited the
+// no-op; every transport now declares it -- `tests/cmake/check-cancel-read-declared.cmake` holds
+// that -- so it runs wherever TLS does, over whatever socket the default backend hands out. The
+// helpers are TlsLifetime_test.cpp's, trimmed to what this case uses.
 #include <core/async/Cancellation.hpp>
 #include <core/async/DetachedTask.hpp>
 #include <core/async/Task.hpp>

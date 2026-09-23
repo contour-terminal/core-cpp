@@ -321,8 +321,8 @@ core_cpp_add_test(net
     # POSIX-only, each for its own reason. `ReactorSocket_test` names PosixSocket directly.
     # `SocketDecorator_test` needs a WRITE that parks, and assumes no send buffer takes 8MiB: on
     # Windows a non-blocking send takes all of it at once (measured, Task B7b), so its third
-    # section would retire nothing. `CancelRead_test` left this list with Task B7b: `IocpSocket`
-    # implements `cancelRead`, and the case SKIPs the WFMO leg, whose `WindowsSocket` does not.
+    # section would retire nothing. `CancelRead_test` left this list with Task B7b, when `IocpSocket`
+    # implemented `cancelRead`; since Task B13 `WindowsSocket` does too, and it runs on every backend.
     #
     # `posix/AdoptListener_test` is the exception to that sentence: it is NOT a POSIX-only
     # BEHAVIOUR, it is a POSIX-only way to ARRANGE one. `adoptListener` exists for a listening
@@ -363,12 +363,9 @@ core_cpp_add_test(net NAME net_tls
     SOURCES
         TlsContext_test.cpp
         TlsLifetime_test.cpp
+        TlsCancelRead_test.cpp
         TlsSocket_test.cpp
         Tls_test.cpp
-    # POSIX-only for CancelRead_test's reason: the case retires a read through the inner socket's
-    # own `cancelRead`, which WindowsSocket does not implement.
-    SOURCES_POSIX
-        posix/TlsCancelRead_test.cpp
     LABELS loopback
     TIMEOUT 120)
 
