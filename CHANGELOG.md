@@ -58,6 +58,17 @@ workflow refuses one without a section here.
 
 ### Added
 
+- **`adoptSocket(EventLoop&, platform::NativeHandle, std::string peerAddress)`**, beside
+  `adoptFd` and `adoptListener` in `<core/net/Sockets.hpp>`: a connected socket accepted or
+  dialled outside core-cpp, driven by the loop the caller chooses. It is what a Windows server
+  needs to spread connections over several loops -- one thread accepts and deals each handle out,
+  since Windows has no `SO_REUSEPORT` and a completion-port association is one socket to one port
+  -- and `adoptFd` answers `Unsupported` there. It builds the socket the loop's backend drives
+  (`IocpSocket` where the loop lends a completion port, `WindowsSocket` under WFMO, `PosixSocket`
+  on POSIX), takes ownership of the handle on every path and closes it when adoption fails (the
+  opposite of `adoptListener`, which leaves a refused handle with its caller), changes no socket
+  option beyond what the transport needs to run (non-blocking mode on POSIX), and asserts it is
+  called on the loop's thread. `adoptFd` is unchanged.
 - **`SocketBufferSizes`** (`<core/net/SocketBuffers.hpp>`), and a `buffers` field of it on both
   `ListenOptions` and `DialOptions`: the kernel send and receive buffers (`SO_SNDBUF`,
   `SO_RCVBUF`) of every socket a listener accepts, and of one dialled socket. Each size is a

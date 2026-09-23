@@ -9,6 +9,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
+#include <cassert>
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
@@ -125,6 +126,27 @@ async::Task<std::expected<std::unique_ptr<ISocket>, NetError>> connectUnix(Event
     discardSocket(loop, fd);
     co_return std::unexpected(makeNetError(
         err == ECONNREFUSED ? NetErrorCode::ConnRefused : NetErrorCode::SystemError, err, "connect"));
+}
+
+std::expected<std::unique_ptr<ISocket>, NetError> adoptSocket(EventLoop& loop,
+                                                              platform::NativeHandle handle,
+                                                              std::string peerAddress)
+{
+    assert(loop.teardownIsSerialisedWithDispatch()
+           && "adoptSocket off the loop's thread: the socket would join registrations another thread "
+              "is dispatching");
+    if (handle < 0)
+        return std::unexpected(makeNetError(NetErrorCode::BadHandle, EBADF, "adoptSocket"));
+    // Non-blocking is what the reactor needs to work at all, not an option chosen for the caller:
+    // an accepted socket inherits blocking mode, and a blocking read here would stall the loop.
+    if (auto const flags = ::fcntl(handle, F_GETFL, 0);
+        flags < 0 || ::fcntl(handle, F_SETFL, flags | O_NONBLOCK) != 0)
+    {
+        auto const error = errno;
+        ::close(handle);
+        return std::unexpected(makeNetError(NetErrorCode::SystemError, error, "adoptSocket: O_NONBLOCK"));
+    }
+    return std::unique_ptr<ISocket>(new PosixSocket(loop, handle, std::move(peerAddress)));
 }
 
 std::expected<std::unique_ptr<ISocket>, NetError> adoptFd(EventLoop& loop, int fd)

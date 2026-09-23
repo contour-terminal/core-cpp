@@ -295,6 +295,7 @@ if(NOT EMSCRIPTEN)
 core_cpp_add_test(net
     SOURCES
         AcceptedHalfClose_test.cpp
+        AdoptSocket_test.cpp
         AsyncBufferedReader_test.cpp
         BackendParity_test.cpp
         BlockingConnector_test.cpp

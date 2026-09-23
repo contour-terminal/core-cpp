@@ -181,6 +181,41 @@ struct ListenOptions
 /// @return The adopted socket; @c NetErrorCode::Unsupported on Windows.
 [[nodiscard]] std::expected<std::unique_ptr<ISocket>, NetError> adoptFd(EventLoop& loop, int fd);
 
+/// Adopts a connected stream socket that was accepted or dialled outside core-cpp, driven by
+/// @p loop -- the loop the caller chooses, which need not be the one anything was accepted on.
+///
+/// It is how a Windows server spreads connections over several loops: Windows has no
+/// `SO_REUSEPORT`, and a completion-port association is one socket to one port, so one thread
+/// accepts and hands each raw handle to a loop in turn. It works the same on POSIX.
+///
+/// The socket built is the one @p loop's backend drives -- an I/O-completion socket where the loop
+/// lends a completion port, a readiness socket otherwise -- which is the question
+/// @c listen and @c connect ask of the loop too.
+///
+/// **Ownership of @p handle transfers on EVERY path, the error path included**: a handle that could
+/// not be adopted is closed here before the error is returned, so the caller never closes it. That
+/// is the opposite of @c adoptListener, and deliberately: a server dealing accepted connections out
+/// has nothing useful to do with one a loop refused except close it, and making every caller write
+/// that is making every caller able to forget it.
+///
+/// **It changes no socket option.** Not `TCP_NODELAY`, not the buffer sizes, not keepalive, not
+/// inheritance: the socket was set up by whoever accepted it, and that caller owns those choices.
+/// It sets only what the transport needs to work at all -- non-blocking mode on POSIX, and on
+/// Windows whatever associating the socket with the loop's readiness event or completion port does.
+///
+/// Must be called on @p loop's thread, or before any thread drives it (asserted in Debug builds):
+/// the socket joins the loop's registrations, which only that thread touches.
+/// @param loop The loop to drive the socket (not owned; must outlive it).
+/// @param handle The connected socket: a descriptor on POSIX, a `SOCKET` on Windows. Owned by this
+///        call from the moment it is made.
+/// @param peerAddress What @c ISocket::peerAddress reports; the caller knows it, this call does not
+///        ask the kernel.
+/// @return The adopted socket; @c NetErrorCode::BadHandle for an invalid handle, or why the loop
+///         could not take it -- with @p handle closed either way.
+[[nodiscard]] std::expected<std::unique_ptr<ISocket>, NetError> adoptSocket(EventLoop& loop,
+                                                                            platform::NativeHandle handle,
+                                                                            std::string peerAddress);
+
 /// Appends one read chunk from @p socket to @p buffer — the accumulate step of
 /// every binary-framed decode loop.
 ///
