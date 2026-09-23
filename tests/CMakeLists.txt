@@ -409,6 +409,28 @@ set_tests_properties(core-cpp.ambient-reads core-cpp.ambient-reads-selftest PROP
     LABELS "core-cpp;hygiene;tree-level"
     TIMEOUT 60)
 
+# async-and-net.md's "an `await_ready` stays trivial", as a scan: an `await_ready` body under src/ or
+# tests/ that calls a function or constructs an object is refused by file and line
+# (fastcached#1546: MSVC 19.44 on ARM64 drops the enclosing `try` of a `co_await` on a temporary
+# awaiter whose `await_ready` makes a call). The defect itself is observable on one CI leg only;
+# the shape is refused here, on every push. tree-level: it reads the tree.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME core-cpp.await-ready
+             COMMAND "${Python3_EXECUTABLE}" "${CORE_CPP_SOURCE_DIR}/scripts/check-await-ready.py")
+    add_test(NAME core-cpp.await-ready-selftest
+             COMMAND "${Python3_EXECUTABLE}" "${CORE_CPP_SOURCE_DIR}/scripts/check-await-ready-selftest.py")
+else()
+    add_test(NAME core-cpp.await-ready COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.await-ready: SKIPPED -- no Python 3 interpreter was found at configure time")
+    add_test(NAME core-cpp.await-ready-selftest COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.await-ready-selftest: SKIPPED -- no Python 3 interpreter was found at configure time")
+    set_tests_properties(core-cpp.await-ready core-cpp.await-ready-selftest PROPERTIES
+        SKIP_REGULAR_EXPRESSION "SKIPPED")
+endif()
+set_tests_properties(core-cpp.await-ready core-cpp.await-ready-selftest PROPERTIES
+    LABELS "core-cpp;hygiene;tree-level"
+    TIMEOUT 60)
+
 # That scripts/clang-format.py and scripts/python-style.py refuse a path that is not theirs.
 #
 # Both filtered by extension only inside `sources()`, which serves `--all`, so a path a caller

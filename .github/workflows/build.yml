@@ -181,6 +181,17 @@ jobs:
       - name: Ambient-reads self-test
         run: python scripts/check-ambient-reads-selftest.py
 
+      # An `await_ready` that makes a call (fastcached#1546, async-and-net.md): the shape MSVC 19.44
+      # on ARM64 miscompiles, refused by reading the source rather than left to the one leg that
+      # can observe it.
+      # covers: core-cpp.await-ready
+      - name: await_ready stays trivial
+        run: python scripts/check-await-ready.py
+
+      # covers: core-cpp.await-ready-selftest
+      - name: await_ready self-test
+        run: python scripts/check-await-ready-selftest.py
+
       # covers: core-cpp.check-release-selftest
       - name: Release-check self-test
         run: >-
