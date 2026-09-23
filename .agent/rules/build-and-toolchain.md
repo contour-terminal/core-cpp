@@ -428,7 +428,15 @@ presets, scripts and paths.
   [core-cpp#36](https://github.com/contour-terminal/core-cpp/issues/36).)
 
   Refuse to report at all when the build tree does not exist: a configure that failed leaves no
-  `build.ninja`, and a runner that greps its absent log finds zero warnings. And note that **a
+  `build.ninja`, and a runner that greps its absent log finds zero warnings.
+
+  **The conjunction is a script now, not a paragraph: `python scripts/tidy-record.py`.** It
+  deletes the tree, configures and builds the `clang-tidy` preset, and prints one record --
+  `exit`, the analyser `build.ninja` resolved and the version it answers against the pin, the
+  statements carrying `--tidy=`, the `[k/N]` the log reached, and whether a planted violation was
+  reported -- then refuses the result unless every field vouches for it. The `clang-tidy` job
+  records its build through it (`--log`, `--exit-code`). Its first real run refused, on two
+  findings a hand-counted run would have had to spell `error:` to see (Task B13). And note that **a
   version mismatch is a `WARNING`, not a `FATAL_ERROR`** -- absence is fatal, a wrong version is
   not. That is deliberate and it does report, so it satisfies the rule, but read the warning's own
   words before dismissing it: the pin *"is what CI analyses with"*, so a local green from an

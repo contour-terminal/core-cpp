@@ -302,12 +302,23 @@ where the wrong list lived. So:
   deadline heap.
 - **A member that legitimately does not join the family says so where the reader is, and asserts
   what it is relying on.** `armHostWake` does not count `_closedParks`, because `HostDrivenBackend` refuses every handle and so can hold no closed park at all.
-  That is unreachable rather than wrong, **no case can turn it red**, and a defensive `|| ...`
+  That is unreachable rather than wrong, **no Catch case can turn it red**, and a defensive `|| ...`
   would be worse than the gap: it would let a future backend that *does* gain readiness **work**
   rather than announce itself, which is the opposite of what writing the rule down was for. The
   instrument is `assert(_closedParks.empty())` inside the host-driven branch. **An assert is not
   inert code with no case**; it is an executable statement of the invariant the comment describes,
-  and it fires exactly when the premise stops holding.
+  and it fires exactly when the premise stops holding. **Its case is a canary mode,
+  `core-cpp.hostdriven-canary.closedPark`,** which builds the host-driven backend that DOES accept
+  readiness and watches the assertion fire. "Unreachable today" is the argument for such a canary,
+  not against it: the assertion exists for the day the premise breaks, and a canary is the only
+  place that day can be rehearsed. It was declined once, priced against a whole `WILL_FAIL` process;
+  with markers it is a few lines in an existing program (Task B13).
+- **The family is a table, not a list in prose.** `HostDrivenLoop_test.cpp`'s "Every member that
+  files work asks a quiescent host-driven loop for the turn that runs it" has one row per member
+  above, with the DELAY it must ask for -- 0 for ready work, the deadline for a park -- and a row for
+  `notifyHandleClosing` asserting it asks for nothing. Dropping `resumeSoon`'s wake reds that row
+  alone; dropping `registerPark`'s arming reds it and the three that inherit it, and nothing else. A
+  member that joins the family joins the table.
 
 - **G1: exactly one thread dequeues a loop.** `run()`, `runOnce()` and `blockOn()` each claim the
   worker identity, and `runOnce` asserts that no OTHER thread already holds it. `run()` is not
@@ -355,6 +366,18 @@ where the wrong list lived. So:
   Its SIGABRT handler is load-bearing rather than tidiness: both regex properties are defeated by a
   raw signal, so a cleanup deleting "unused" abort handling would turn every canary here into a
   silent pass. The marker goes to `stderr` because `_Exit` flushes nothing.
+- **Every loop-thread-only member's assertion is watched firing, one process per member.** Twelve
+  members assert `teardownIsSerialisedWithDispatch()` -- the destructor, the turn, `cancelPending`,
+  `requestStop`, `spawn`, `addTimer`, `cancelTimer`, `resumeSoon`, `registerPark`,
+  `unregisterPark`, `wakeReasonOf`, `notifyHandleClosing` -- and `core-cpp.loop-affinity-canary.<member>`
+  drives a native loop on a worker thread and calls that member from another. Its PASS expression
+  is the **assertion's own text naming the member**, not a marker: a death on the way there prints
+  no such text, and a mode that reached a different member's guard names the other member. That is
+  fastcached's `reactor-teardown-gate` (0708dd54), which kept "died" and "the guard refused" apart
+  by the assertion's words for the same reason. Proved by mutation on `cl-debug`: removing
+  `cancelTimer`'s assertion reds its mode on `was accepted`, and rewording `spawn`'s message reds
+  its mode on `Required regular expression not found`. A member that gains the assertion gains a
+  mode (Task B13).
 
 ## Task ownership
 
@@ -480,7 +503,12 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   rather than being ignored. Origin:
   [fastcached#85](https://github.com/LASTRADA-Software/fastcached/issues/85).
 - **A platform socket error is classified in one table.** A second copy lacks a row, and a
-  firewall's `EACCES` becomes an unclassified `SystemError` no caller can match.
+  firewall's `EACCES` becomes an unclassified `SystemError` no caller can match. The table is
+  `detail::classifySocketError` (`posix/SocketErrors.cpp`, `windows/SocketErrors.cpp`), and every
+  transport and both platforms' dial read through it; on Windows `detail::fromWinsockError` adds
+  the two things a WSAE* table cannot hold. Until Task B13 `PosixSocket`, `WindowsSocket` and the
+  POSIX dial each kept a private switch -- the POSIX dial held `EPERM` and `EAFNOSUPPORT` rows the
+  shared table lacked -- and `SocketErrors_test.cpp`, one per platform, now asserts every row.
 - **EOF means "the peer has finished sending", not "the peer is gone".** A server answers what
   is already determined and abandons what is still pending, which is what a reference Redis
   was measured doing. `ISocket::shutdownWrite` exists so the question can be asked in
@@ -893,7 +921,12 @@ get right, and each one is a defect that has already happened.
   watch is not a disconnect: the cancel arrives as an error, so what silences it must be the
   retirement, never the code. On IOCP the kernel owns a retracted operation's `OVERLAPPED` until
   a later turn, so the operation node is stood down and the next read gets a fresh one; reusing
-  it turned an abort into a spurious EOF on a healthy socket. Origin:
+  it turned an abort into a spurious EOF on a healthy socket. **Every transport the library hands
+  out declares it**, because the interface's default is a no-op and a transport whose reads park
+  cannot retire them with one; `core-cpp.cancel-read-declared` refuses a class that inherits it.
+  `WindowsSocket`'s read is an ordinary coroutine parked on the loop, so its `cancelRead` takes that
+  frame back with `EventLoop::cancelPending` and resumes it inline to complete with `Cancelled` --
+  the detach-then-complete order `PosixSocket` uses. Origin:
   [fastcached#710](https://github.com/LASTRADA-Software/fastcached/issues/710),
   [fastcached#884](https://github.com/LASTRADA-Software/fastcached/issues/884).
 - **`read`'s buffer must be non-empty**, because `0` already means "the peer finished sending"
@@ -904,7 +937,10 @@ get right, and each one is a defect that has already happened.
   scan.** The slot claim is folded (every arm site must clear the slot anyway); the buffer check
   is additive, so every site can omit it independently, and fastcached needed a scan that
   derives the set of `read` definitions to hold it. Reach for the type system when the
-  obligation is *do something*, and for a scan when it is *say why*.
+  obligation is *do something*, and for a scan when it is *say why*. Both scans are core-cpp's
+  too since Task B13: `core-cpp.read-buffer-guard` (every `ISocket::read`, out of line or in a
+  class body, calls the guard before its first return or delegates to another socket's `read`)
+  and `core-cpp.cancel-read-declared`, each with a self-test whose every case a mutation kills.
 - **A wait that cannot be cancelled is a frame that cannot be freed.** `cancelPending(handle)`
   takes a parked handle back; its result is an ownership transfer, not a status: `true` means
   this call removed it and the caller alone may now destroy or resume it. It destroys rather
