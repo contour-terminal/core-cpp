@@ -61,6 +61,10 @@ namespace
 
 /// @param port A loopback port.
 /// @return Its resolved endpoint.
+///
+/// **Called into a named local before the `co_await`, never inside its full-expression**: with the
+/// call inside it, MSVC 14.51 at /O2 cannot emit the tail call a symmetric transfer requires and
+/// reports C4737, which /WX makes fatal (the same shape `ReadinessDial_test.cpp` documents).
 ResolvedEndpoint loopbackEndpoint(std::uint16_t port)
 {
     auto resolver = core::net::SystemAddressResolver {};
@@ -87,7 +91,8 @@ Task<void> dialReporting(
 {
     try
     {
-        *out = co_await dialCompletion(loop, loopbackEndpoint(port), deadline, KeepAlive::No);
+        auto const endpoint = loopbackEndpoint(port);
+        *out = co_await dialCompletion(loop, endpoint, deadline, KeepAlive::No);
     }
     catch (core::async::OperationCancelled const&)
     {
@@ -119,7 +124,8 @@ TEST_CASE("A ConnectEx dial connects, and its socket is usable for everything a 
     auto dialled = SocketResult {};
     auto served = std::string {};
     auto client = [](EventLoop* lp, std::uint16_t port, SocketResult* out) -> Task<void> {
-        *out = co_await dialCompletion(lp, loopbackEndpoint(port), SteadyTimePoint::max(), KeepAlive::Yes);
+        auto const endpoint = loopbackEndpoint(port);
+        *out = co_await dialCompletion(lp, endpoint, SteadyTimePoint::max(), KeepAlive::Yes);
         if (!out->has_value())
             co_return;
         constexpr auto Payload = std::string_view { "hello" };
