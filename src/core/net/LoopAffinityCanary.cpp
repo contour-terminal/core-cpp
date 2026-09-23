@@ -28,8 +28,10 @@
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/IoBackend.hpp>
+#include <core/platform/Clock.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -179,9 +181,22 @@ int main(int argc, char** argv)
 
     // Calling before the loop is genuinely running is the LEGITIMATE call -- nothing is driving it
     // yet -- so waiting for a turn to have happened is what makes this the violation rather than a
-    // race.
+    // race. Bounded, and says what it waited for: a `post` or wake that never reaches the worker
+    // would otherwise spin every mode into ctest's bare timeout, which names nothing. `_Exit`,
+    // because the worker is still inside `run()` and a `return` would terminate on its `std::thread`.
+    auto const clock = core::platform::SteadyClock {};
+    auto const giveUpAt = clock.now() + std::chrono::seconds { 30 };
     while (!entered.load(std::memory_order_acquire))
+    {
+        if (clock.now() >= giveUpAt)
+        {
+            std::println(stderr,
+                         "loop-affinity-canary: {}: the worker never ran a posted callback in 30 s",
+                         requested);
+            std::_Exit(1);
+        }
         std::this_thread::yield();
+    }
 
     std::println(stderr, "loop-affinity-canary: {}: about to call it from a second thread", requested);
     mode->call(loop);
