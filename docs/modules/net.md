@@ -10,18 +10,21 @@ directory `src/core/net/`. Three targets:
 | `core::net_tls` | static | `ITlsContext` and the TLS socket | with `CORE_CPP_WITH_TLS`, natively |
 
 !!! note "Status"
-    Imported from contour's `src/net` at `6777ff05`, as contour has it but for the namespaces and
-    [platform](platform.md) in place of contour's `net/platform/`, and being merged with
-    fastcached's async and networking layer by Phase B of the
-    [implementation plan](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/plans/2026-09-18-core-cpp.md).
-    Done so far: Task B2's merged error vocabulary; Task B3's `IoBackend`, which replaces
-    `EventSource` — a backend dispatches readiness to the callbacks a caller registers, instead of
-    reporting tokens for the caller to route; Task B4's `EventLoop`, `PlatformLoop` and
-    `testing::TestLoop`; Task B5's timers; and Task B7's completion port, the Windows default since
-    B7b, with the sockets, listener and `ConnectEx` dial that issue operations on it. Still to come:
-    the rest of Phase B, through Task B11. Under Emscripten `core::net_types` builds,
-    and so does the WebAssembly subset of `core::net`: `IoBackend`, `IHostScheduler`,
-    `HostDrivenBackend`, the test doubles, and — since Tasks B4 and B5 — the event loop and its
+    contour's `src/net` at `6777ff05`, merged with fastcached's async and networking layer
+    (`src/FastCache/{Async,Net}` at `0708dd54`) by Phase B of the
+    [implementation plan](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/plans/2026-09-18-core-cpp.md),
+    and complete for v0.1.0: the merged error vocabulary (B2); `IoBackend`, which replaced
+    `EventSource` -- a backend dispatches readiness to the callbacks a caller registers, instead of
+    reporting tokens for the caller to route (B3); `EventLoop`, `PlatformLoop` and
+    `testing::TestLoop` (B4); one timer mechanism (B5); one frame-free, stop-aware socket contract
+    (B6); the completion port, the Windows default since B7b, with the sockets, listener and
+    `ConnectEx` dial that issue operations on it (B7); the dial and resolution seam (B8); datagrams
+    and the blocking transports (B9); the HTTP server over the merged sockets (B10); and one TLS
+    layer (B11). The rules the merge carries, and the fastcached issue behind each, are in
+    [Coroutines and lifetimes](../design/coroutines-and-lifetimes.md).
+
+    Under Emscripten `core::net_types` builds, and so does the WebAssembly subset of `core::net`:
+    `IoBackend`, `IHostScheduler`, `HostDrivenBackend`, the test doubles, the event loop and its
     timers. The sockets do not. A loop there has no thread to block and no descriptor to poll, so
     it is PUMPED by the host and neither `run()` nor `blockOn()` may be called on it; both assert.
     `tests/wasm/HostDrivenTimer_smoke.cpp` is that path run under node.
@@ -91,9 +94,12 @@ A new code goes **above** `Last`, never below. One appended after it still satis
 `default`-less switch and still leaves `Last` looking like a count, while every check that walks
 `[0, Last)` misses it; `NetError_test.cpp`'s "No code hides above Last" is what refuses that.
 
-`AddressNotAvail`, `HostUnreach` and `PermissionDenied` have no producer in core-cpp yet. The errno
-and WSA tables that classify a socket failure gain their rows when fastcached's sockets and dialler
-are merged in (Tasks B6 to B8); until then the codes exist and nothing returns them.
+Every socket, the datagram and blocking transports and the dial classify a platform error through
+ONE table per platform (`detail::classifySocketError`, `posix/SocketErrors.cpp` and
+`windows/SocketErrors.cpp`), so a code a caller branches on -- `ConnRefused`, `HostUnreach`,
+`AddressNotAvail`, `PermissionDenied`, `Timeout` -- means the same thing whichever transport
+reported it. `EPIPE` is deliberately `SystemError`, not `ConnReset`: it is a write after this end's
+own half-close, and a caller counts a reset apart from a goodbye.
 
 `isDeadlineExpiry(code)` answers "did this operation run out of time", and it is `Timeout` **or**
 `WouldBlock`, because a deadline armed with `SO_RCVTIMEO`/`SO_SNDTIMEO` or a poll timeout expires as

@@ -116,6 +116,7 @@ nav:
     - Threading: design/threading.md
     - Portability: design/portability.md
     - Profiling: design/profiling.md
+  - Provenance: provenance.md
   - Contributing:
     - contributing/index.md
     - C++ guidelines: contributing/cpp-guidelines.md

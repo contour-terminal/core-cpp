@@ -1,9 +1,9 @@
 # Threading
 
 !!! note "Status"
-    The turn, the teardown and guarantees G1 to G3 and G5 are implemented (Task B4), and G4
-    with the IOCP backend (Task B7a), which also asserts G1 for the completion port itself. The
-    socket-side half of G5 arrives with the socket contract (Task B6). This is Part I §2 of the
+    Implemented: the turn and the teardown (Task B4), G1 to G3 and G5 on every backend, and G4
+    with the IOCP backend (Task B7), which also asserts G1 for the completion port itself; the
+    socket-side half of G5 came with the socket contract (Task B6). This is Part I §2 of the
     [design spec](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/specs/2026-09-18-core-cpp-design.md).
 
 ## One loop, one thread
@@ -42,6 +42,23 @@ anyone does, moves it from the cross-thread surface to the loop-thread-only one 
 the call announces that. It asserts on the same predicate the turn and the destructor use, so an
 acceptor thread calling it while a turn runs fails with a message rather than a torn splice. The
 setup call before `run()`, and the host-driven call between pumps, both remain legal.
+
+**Every loop-thread-only member asserts it, and each assertion is watched firing.** Twelve members
+share the predicate `teardownIsSerialisedWithDispatch()` -- the destructor, the turn, `cancelPending`,
+`requestStop`, `spawn`, `addTimer`, `cancelTimer`, `resumeSoon`, `registerPark`, `unregisterPark`,
+`wakeReasonOf` and `notifyHandleClosing` -- and `core-cpp.loop-affinity-canary` has one mode per
+member: it drives a loop on a worker thread and calls that member from another. Each mode passes
+only on its own assertion's text, so a process that died of something else, or reached a different
+member's guard, fails.
+
+**A member that files work asks for the turn that runs it.** Ready work with no time attached --
+`post`, `submit`, `schedule` from off the loop's thread, `spawn`, `stop`, `requestStop`,
+`requestCancel`, `resumeSoon` -- wakes the backend. A park filed with a time -- `registerPark`, and
+through it `addTimer`, `delay` and `sleepUntil` -- arms the host for that time instead, because a
+wake on a host-driven backend means "now" and would discard the deadline. `notifyHandleClosing` files
+work and asks for nothing, which is sound: the turn takes closed parks before its wait. One
+parameterised case holds all thirteen to this, so a member that joins the family without asking for
+its turn fails a row with its name on it.
 
 ## One turn of the loop
 
@@ -105,4 +122,7 @@ turn the loop tells the backend its next deadline, and the backend asks the host
 `run()` and `blockOn()` are **compiled** there and assert at runtime, rather than being removed: a
 consumer reaches them by mistake, not by design, and a symbol that is simply absent fails at link
 time in somebody else's build with nothing to say why. `core-cpp.hostdriven-canary` is what proves
-both refusals still fire. See [Portability](portability.md).
+both refusals still fire, and a third: `armHostWake` asserts that no closed park is pending, because
+a host-driven backend has no readiness and so no park on a handle. The canary builds a host-driven
+backend that DOES accept readiness and watches the assertion fire, which is the day that premise
+breaks. See [Portability](portability.md).
