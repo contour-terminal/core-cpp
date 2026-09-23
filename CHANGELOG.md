@@ -1473,6 +1473,12 @@ tui items; **fastcached** meets its own, and the coro, platform and tui items th
   `EACCES` and `EPERM` `PermissionDenied`, `ETIMEDOUT` `Timeout`, `EAFNOSUPPORT` and
   `EPROTONOSUPPORT` `Unsupported`, and the Winsock equivalents likewise. `EPIPE` stays
   `SystemError`. A caller that matched `SystemError` for one of those should match its category.
+  Two rows change more than a category, both as the completion-port socket already had them:
+  `ETIMEDOUT` on a `PosixSocket` read -- a connection keepalive or `TCP_USER_TIMEOUT` declared
+  dead -- is `Timeout`, so `isDeadlineExpiry()` is true for it as for `setReceiveDeadline`'s own
+  expiry, and only `systemCode` tells them apart; a caller that retries on `isDeadlineExpiry()`
+  reads a dead connection once more before its EOF. And `EINTR` (`WSAEINTR`) is `Cancelled`,
+  including from a non-blocking `connect()`, where POSIX says the connect carries on.
 
 - **`<core/net/ISocket.hpp>` no longer includes the park table**: `ParkId` has its own header,
   `<core/net/detail/ParkId.hpp>` (core-cpp#43). A translation unit that includes `ISocket.hpp`

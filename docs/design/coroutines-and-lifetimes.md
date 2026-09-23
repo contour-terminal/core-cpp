@@ -137,7 +137,9 @@ been watched refusing:
 | `cancelPending` takes a queued waiter's park with it | `TestLoop_test.cpp`, on every backend |
 
 An assertion cannot be observed from inside a Catch case, because it aborts the binary. That is why
-the first three rows are canary processes: each prints a marker to stderr immediately before the
-forbidden call, and is registered with `PASS_REGULAR_EXPRESSION` rather than `WILL_FAIL`, so a
-process that died on the way to its mechanism is a failure rather than a pass. They skip on Release
-builds, where the assertions are compiled out.
+the first three rows are canary processes, each registered with `PASS_REGULAR_EXPRESSION` rather
+than `WILL_FAIL`, so a process that died on the way to its mechanism is a failure rather than a
+pass. What must appear is the assertion's own text where the canary can name one assertion -- the
+loop-affinity modes and `hostdriven-canary.closedPark` -- and otherwise a marker printed to stderr
+immediately before the forbidden call. They skip on Release builds, where the assertions are
+compiled out.

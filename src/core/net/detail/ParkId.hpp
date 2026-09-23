@@ -7,10 +7,12 @@
 /// **A header of its own because every socket needs the name and none needs the table.** An
 /// awaitable holds the id of the park it may cancel, so `IoAwaitable.hpp` -- and through it
 /// `ISocket.hpp`, which every consumer of `core::net` includes -- needs `ParkId` complete. It used to
-/// get it from `detail/ParkTable.hpp`, which is 99.4% of what `ISocket.hpp` cost a translation unit
-/// (measured with `clang++ -H`,
-/// [core-cpp#43](https://github.com/contour-terminal/core-cpp/issues/43)): the table, the deadline
-/// heap, the backend contract and `<ranges>` came along for one strong integer.
+/// get it from `detail/ParkTable.hpp`, and the table, the deadline heap, the backend contract and
+/// `<ranges>` came along for one strong integer: 17,281 of the 130,784 preprocessed lines a
+/// translation unit including `ISocket.hpp` paid, 13%
+/// ([core-cpp#43](https://github.com/contour-terminal/core-cpp/issues/43), measured with
+/// `clang++ -E`; the issue's 99.4% from `clang++ -H` counted headers the rest of the interface
+/// includes too).
 ///
 /// **The id IS the generation check.** Ids are allocated from one never-reused 64-bit counter, so a
 /// cancel request that arrives after its park is gone finds nothing, however many parks have been

@@ -25,6 +25,9 @@ Three refusals, each naming the file and the line:
 A file with a NUL byte is binary and is not read. The scan fails CLOSED: no file read, or no
 tracked file at all, is the instrument broken rather than the tree clean.
 
+`double` is a pattern, and correct text can match it: a Latin-1 letter followed by a typographic
+quote or dash reads as a lead character and a cp1252 continuation. Such a file goes in ALLOW.
+
 ALLOW lists a file that must carry one of these for a stated reason, and a row that no longer
 matches anything is refused as stale, so the list cannot outlive what it excuses.
 """
