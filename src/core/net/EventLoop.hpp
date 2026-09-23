@@ -686,7 +686,8 @@ class EventLoop: public async::IExecutor
     /// The one place a @c ReadyEntry is made, so the flag cannot be got wrong at one site out of
     /// six.
     /// @param work The coroutine to resume, and the chain root to free if it is not.
-    void queueReady(async::ParkedWork work);
+    /// @param sourcePark The park @p work was taken from, if any; see @c ReadyEntry::sourcePark.
+    void queueReady(async::ParkedWork work, ParkId sourcePark = ParkId::invalid());
 
     /// Turn step 5: queues the waiters of every park whose deadline has been reached.
     /// @return How many were queued.
@@ -775,6 +776,15 @@ class EventLoop: public async::IExecutor
         /// Why @c callbackPark is being run, for a frameless READINESS park. Ignored for a timer,
         /// which has exactly one reason to fire and therefore needs none carried.
         ParkWake wake = ParkWake::Ready;
+
+        /// The readiness or deadline park this coroutine was queued FROM, or @c ParkId::invalid().
+        ///
+        /// Queuing a parked waiter takes the frame and leaves the park filed -- and, for a handle,
+        /// still registered with the backend -- because `await_resume` is what unregisters it. A
+        /// frame taken back by @c cancelPending never runs `await_resume`, so the entry has to
+        /// name the park for `cancelPending` to take it too. Without it the caller owned a frame the
+        /// backend still held a handler for: core-cpp#41.
+        ParkId sourcePark {};
     };
 
     /// Coroutines ready to resume now, each owning whatever chain nothing else can free.

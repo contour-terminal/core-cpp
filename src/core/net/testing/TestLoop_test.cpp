@@ -506,3 +506,76 @@ TEST_CASE("cancelPending hands the work back, on every backend", "[TestLoop][can
         }
     }
 }
+
+namespace
+{
+
+/// `cancelPending` on a waiter whose handle has ALREADY become ready: dispatched into the ready
+/// queue, its drain not yet run. That waiter is in two places at once -- the ready queue holds the
+/// frame, and the park it came from is still filed and still registered with the backend, because
+/// only `await_resume` unregisters a readiness park and a frame taken back never runs it.
+///
+/// A `true` that took the frame and left the park would hand the caller a frame the backend still
+/// holds a handler for: the caller destroys it, and the next readiness on that handle dispatches
+/// into a park naming freed storage. That was
+/// [core-cpp#41](https://github.com/contour-terminal/core-cpp/issues/41).
+/// @param loop The loop to exercise.
+/// @param pipe A pipe nothing else reads; this case writes one byte to it.
+void cancelPendingDetachesAQueuedWaiter(EventLoop& loop, core::platform::SystemPipe& pipe)
+{
+    auto counter = FrameCounter {};
+    auto handle = std::coroutine_handle<> {};
+    publishThenWaitReadable(&loop, pipe.waitHandle(), &handle, FrameSentinel { &counter });
+    REQUIRE(handle);
+    REQUIRE(loop.parkedWaiterCount() == 1);
+
+    auto const byte = std::byte { 0x2a };
+    REQUIRE(pipe.write(&byte, 1).value_or(0) == 1);
+
+    // Turns until readiness has been dispatched. Bounded, because a readiness bridge may deliver
+    // on another thread and a turn can come back before it has; the queue is what is waited for,
+    // and a timeout says so rather than hanging.
+    constexpr auto MaxTurns = 500;
+    auto turns = 0;
+    while (loop.readyCount() == 0 && turns < MaxTurns)
+    {
+        std::ignore = loop.runOnce(std::chrono::milliseconds { 10 });
+        ++turns;
+    }
+    INFO("waited " << turns << " turns for the pipe's readiness to reach the ready queue");
+    REQUIRE(loop.readyCount() == 1);
+    REQUIRE(loop.parkedWaiterCount() == 1); // queued, and its park still filed and attached
+
+    CHECK(loop.cancelPending(handle));
+    CHECK(loop.readyCount() == 0);
+    CHECK(loop.parkedWaiterCount() == 0); // the park came down with the frame
+    CHECK_FALSE(loop.cancelPending(handle));
+    CHECK(counter.destroyed == 0);
+
+    handle.destroy();
+    CHECK(counter.destroyed == 1);
+
+    // And the loop runs on without reaching it: the byte is still unread, so a registration left
+    // behind would dispatch again here.
+    std::ignore = loop.runOnce(core::platform::SteadyDuration::zero());
+    CHECK(loop.readyCount() == 0);
+}
+
+} // namespace
+
+TEST_CASE("cancelPending on a waiter queued after readiness takes its park too", "[TestLoop][cancel]")
+{
+    for (auto const& entry: core::net::testing::BackendMatrix)
+    {
+        if (!core::net::makeBackend(entry.kind))
+            continue; // not built on this platform
+
+        DYNAMIC_SECTION("backend=" << entry.name)
+        {
+            auto pipe = core::platform::createSystemPipe();
+            REQUIRE(pipe.has_value());
+            auto driver = BackendLoop { entry.kind };
+            cancelPendingDetachesAQueuedWaiter(driver.loop(), **pipe);
+        }
+    }
+}

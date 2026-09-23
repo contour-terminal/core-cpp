@@ -629,8 +629,16 @@ bool EventLoop::cancelPending(std::coroutine_handle<> handle) noexcept
         // it, so this entry must do neither on its way out. And the chain is DISARMED rather than
         // released -- releasing the last claim would free the very frame the caller has just been
         // handed, which is the opposite of an ownership transfer.
+        auto const source = found->sourcePark;
         found->parked.take().abandon.disarm();
         _ready.erase(found);
+        // **The park it was queued from comes down with it** -- the two structures answer "is it
+        // queued" and "is it parked", and a waiter dispatched by readiness is BOTH until its
+        // `await_resume` runs. This frame will never run it, so what `await_resume` would have
+        // done happens here: the park leaves the table and its handler leaves the backend.
+        // Returning without it handed the caller a frame the backend could still dispatch into
+        // (core-cpp#41). A stale or invalid id is a no-op, which is the generation check.
+        unregisterPark(source);
         return true;
     }
 
@@ -814,11 +822,12 @@ void EventLoop::resumeSoon(async::ParkedWork work)
         _backend.wake();
 }
 
-void EventLoop::queueReady(async::ParkedWork work)
+void EventLoop::queueReady(async::ParkedWork work, ParkId sourcePark)
 {
     auto const owned = static_cast<bool>(work.abandon);
-    _ready.push_back(
-        ReadyEntry { .parked = async::detail::Parked { std::move(work) }, .ownedByLoop = owned });
+    _ready.push_back(ReadyEntry { .parked = async::detail::Parked { std::move(work) },
+                                  .ownedByLoop = owned,
+                                  .sourcePark = sourcePark });
 }
 
 ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
@@ -1044,7 +1053,7 @@ void EventLoop::queueParkedWaiter(ParkId park, ParkWake wake)
         // Nothing will run await_resume for a finished frame, so nothing would ever unregister
         // this park; drop it here or the loop waits forever on a registration whose owner is gone.
         unregisterPark(park);
-    queueReady(std::move(work));
+    queueReady(std::move(work), park);
 }
 
 void EventLoop::notifyHandleClosing(platform::NativeHandle handle, FdWakePolicy policy)
