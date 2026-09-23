@@ -161,6 +161,8 @@ core_cpp_hygiene_allow(source-glob cmake/CoreCppVendor.cmake
     "enumerates a vendored copy to find the files its manifest does not list; it is not a source list")
 core_cpp_hygiene_allow(source-glob tests/cmake/check-openssl-seam.cmake
     "enumerates the tree it scans for OpenSSL includes and types; it is not a source list")
+core_cpp_hygiene_allow(source-glob tests/cmake/check-layering.cmake
+    "enumerates each module's files to read their includes; it is not a source list")
 core_cpp_hygiene_allow(source-glob tests/cmake/check-cancel-read-declared.cmake
     "derives the set of transports from the tree it scans; it is not a source list")
 core_cpp_hygiene_allow(source-glob tests/cmake/check-read-buffer-guard.cmake

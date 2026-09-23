@@ -12,6 +12,21 @@
 # rows the scenario adds to it, stand-ins for the targets it links, and one core_cpp_add_module()
 # call. A scenario either configures, or fails naming what it refused.
 #
+# And it proves the same table bounds what every module INCLUDES, which the link check cannot see:
+# every module's headers sit under one include root, so an `#include <core/tui/...>` from a file of
+# `core::log` compiles whether or not `log` may reach `tui`, and a layering violation builds clean.
+# The table is read from the real cmake/CoreCppModules.cmake -- by configuring it, not by a regex
+# that imitates it -- and a module may include itself and whatever its DEPS reach, transitively,
+# because that is exactly what its target links. Tests (`*_test.cpp`) and canaries (`*Canary.cpp`)
+# are separate executables with links of their own, and are not scanned. The scan is watched
+# refusing a planted violation, and accepting a planted compliant tree, before it is run over this
+# one -- a scan that found nothing in a tree it could not read would read exactly like a clean one.
+#
+# What the include scan does not see: a module's SUB-target (`tui_output`, `net_types`) is held to
+# its module's row rather than its own, because the files a sub-target owns are named in its
+# directory's CMakeLists.txt, not in the table; the link check above covers those rows. An include
+# spelled through a macro, or on a line carrying a `;`, is not read.
+#
 # Usage: cmake -DROOT=<source root> -DWORK_DIR=<scratch directory>
 #              [-DGENERATOR=<generator>] [-DMAKE_PROGRAM=<its build tool>]
 #              -P tests/cmake/check-layering.cmake
@@ -147,8 +162,192 @@ foreach(row IN LISTS scenarios)
     endif()
 endforeach()
 
+# ---- include edges ------------------------------------------------------------------------------
+
+# The table, as the build reads it: a project that includes the real module files and writes each
+# row's directory and DEPS out. `|` separates the fields; DEPS stays a `;` list inside its field.
+set(tableProject "${WORK_DIR}/include-edges-table")
+file(WRITE "${tableProject}/CMakeLists.txt" "${preamble}\n" [=[
+set(rows "")
+foreach(module IN LISTS CORE_CPP_MODULES)
+    string(APPEND rows "${module}|${CORE_CPP_MODULE_${module}_DIR}|${CORE_CPP_MODULE_${module}_WHEN}|${CORE_CPP_MODULE_${module}_DEPS}\n")
+endforeach()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/table.txt" "${rows}")
+]=])
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" ${generatorArguments} "-DROOT=${ROOT}" -S "${tableProject}" -B "${tableProject}/build"
+    RESULT_VARIABLE rc
+    OUTPUT_VARIABLE output
+    ERROR_VARIABLE output)
+if(NOT rc EQUAL 0 OR NOT EXISTS "${tableProject}/build/table.txt")
+    message(FATAL_ERROR "check-layering: could not read the module table by configuring it (${rc}): ${output}")
+endif()
+file(STRINGS "${tableProject}/build/table.txt" tableRows)
+
+set(modules "")
+foreach(row IN LISTS tableRows)
+    string(REPLACE "|" ";" fields "${row}")
+    list(GET fields 0 module)
+    list(GET fields 1 dir)
+    list(GET fields 2 when)
+    list(LENGTH fields fieldCount)
+    set(deps "")
+    if(fieldCount GREATER 3)
+        list(SUBLIST fields 3 -1 deps)
+    endif()
+    list(APPEND modules "${module}")
+    if(when STREQUAL "")
+        list(APPEND unconditionalByConfigure "${module}")
+    endif()
+    set(moduleDir_${module} "${dir}")
+    set(moduleDeps_${module} ${deps})
+    set(dirModule_${dir} "${module}")
+endforeach()
+list(LENGTH modules moduleCount)
+if(moduleCount LESS 2)
+    message(FATAL_ERROR "check-layering: the module table read back ${moduleCount} row(s); the scan would have nothing to hold")
+endif()
+
+# The same file read the OTHER way it is read: cmake/CoreCppVendor.cmake has no build to configure,
+# so it finds the rows with a regex and decides from the text which modules a copy must carry
+# (a row with no WHEN). The two readings must agree on the names and on which rows are
+# unconditional, or the vendoring tool refuses a copy the build would accept, or accepts one the
+# build cannot configure. The regex below is the tool's, copied deliberately (its lines 513-521):
+# change one and this check fails until the other matches. No fixture -- a fixture would pin the
+# imitation and go stale silently; this reads the real table.
+file(READ "${ROOT}/cmake/CoreCppModules.cmake" moduleTableText)
+string(REGEX REPLACE "(^|\n)[ \t]*#[^\n]*" "\\1" moduleTableText "${moduleTableText}")
+string(REGEX MATCHALL "core_cpp_module\\([^)]*\\)" moduleRowTexts "${moduleTableText}")
+set(namesByRegex "")
+set(unconditionalByRegex "")
+foreach(row IN LISTS moduleRowTexts)
+    if(NOT row MATCHES "NAME[ \t\r\n]+([A-Za-z0-9_]+)")
+        continue()
+    endif()
+    set(rowName "${CMAKE_MATCH_1}")
+    list(APPEND namesByRegex "${rowName}")
+    if(NOT row MATCHES "[ \t\r\n]WHEN[ \t\r\n]")
+        list(APPEND unconditionalByRegex "${rowName}")
+    endif()
+endforeach()
+foreach(pair IN ITEMS "modules|namesByRegex" "unconditionalByConfigure|unconditionalByRegex")
+    string(REPLACE "|" ";" pair "${pair}")
+    list(GET pair 0 left)
+    list(GET pair 1 right)
+    set(leftSorted ${${left}})
+    set(rightSorted ${${right}})
+    list(SORT leftSorted)
+    list(SORT rightSorted)
+    if(NOT "${leftSorted}" STREQUAL "${rightSorted}")
+        message(STATUS "FAIL  table-readings: ${left} is '${leftSorted}' but ${right} is '${rightSorted}'")
+        list(APPEND failures table-readings)
+    endif()
+endforeach()
+if(NOT "table-readings" IN_LIST failures)
+    list(JOIN unconditionalByConfigure ", " shownUnconditional)
+    message(STATUS "ok    table-readings: configure and the vendoring tool's regex agree on ${moduleCount} module(s), unconditional: ${shownUnconditional}")
+endif()
+
+# What each module may include: itself, and everything its DEPS reach.
+foreach(module IN LISTS modules)
+    set(reach "")
+    set(pending ${moduleDeps_${module}})
+    while(pending)
+        list(POP_FRONT pending next)
+        if(NOT next IN_LIST reach)
+            list(APPEND reach "${next}")
+            list(APPEND pending ${moduleDeps_${next}})
+        endif()
+    endwhile()
+    set(moduleReach_${module} "${module};${reach}")
+endforeach()
+
+## @brief Scans @p root's src/core/ for includes of a module its own module's row does not reach.
+## @param root        A tree laid out as this one is.
+## @param outViolations The violations, one per offending include.
+## @param outFiles    How many files were read.
+## @param outEdges    How many cross-module includes were seen, allowed or not.
+function(core_cpp_layering_scan_includes root outViolations outFiles outEdges)
+    set(violations "")
+    set(files 0)
+    set(edges 0)
+    foreach(module IN LISTS modules)
+        set(dir "${moduleDir_${module}}")
+        if(dir STREQUAL ".")
+            file(GLOB sources LIST_DIRECTORIES false "${root}/src/core/*.hpp" "${root}/src/core/*.cpp")
+        else()
+            file(GLOB_RECURSE sources LIST_DIRECTORIES false "${root}/src/core/${dir}/*.hpp" "${root}/src/core/${dir}/*.cpp")
+        endif()
+        list(FILTER sources EXCLUDE REGEX "(_test|Canary)\\.cpp$")
+        foreach(source IN LISTS sources)
+            math(EXPR files "${files} + 1")
+            file(STRINGS "${source}" includes REGEX "^[ \t]*#[ \t]*include[ \t]*[<\"]core/")
+            foreach(line IN LISTS includes)
+                if(NOT line MATCHES "core/([^>\"]+)[>\"]")
+                    continue()
+                endif()
+                set(included "${CMAKE_MATCH_1}")
+                set(targetDir ".")
+                if(included MATCHES "^([^/]+)/")
+                    set(targetDir "${CMAKE_MATCH_1}")
+                endif()
+                if(NOT DEFINED dirModule_${targetDir})
+                    continue() # not a module directory -- nothing the table speaks for
+                endif()
+                set(target "${dirModule_${targetDir}}")
+                if(target STREQUAL module)
+                    continue()
+                endif()
+                math(EXPR edges "${edges} + 1")
+                if(NOT target IN_LIST moduleReach_${module})
+                    file(RELATIVE_PATH shown "${root}" "${source}")
+                    list(APPEND violations
+                         "${shown} includes <core/${included}>, and ${module}'s row does not reach ${target}")
+                endif()
+            endforeach()
+        endforeach()
+    endforeach()
+    set(${outViolations} "${violations}" PARENT_SCOPE)
+    set(${outFiles} ${files} PARENT_SCOPE)
+    set(${outEdges} ${edges} PARENT_SCOPE)
+endfunction()
+
+# Watched refusing first, and accepting, on a planted tree: `log` reaching `net`, which its row does
+# not; `net` reaching `platform` and -- through it -- `base`, which its row does; and a test file
+# reaching `tui`, which is not scanned.
+set(fixture "${WORK_DIR}/include-edges-fixture")
+file(REMOVE_RECURSE "${fixture}")
+file(WRITE "${fixture}/src/core/log/Bad.hpp" "#pragma once\n#include <core/net/EventLoop.hpp>\n")
+file(WRITE "${fixture}/src/core/net/Good.hpp"
+     "#pragma once\n#include <core/platform/Types.hpp>\n#include <core/Utils.hpp>\n#include <core/async/Task.hpp>\n")
+file(WRITE "${fixture}/src/core/net/Good_test.cpp" "#include <core/tui/Screen.hpp>\n")
+core_cpp_layering_scan_includes("${fixture}" planted plantedFiles plantedEdges)
+list(LENGTH planted plantedCount)
+if(NOT plantedCount EQUAL 1 OR NOT planted MATCHES "src/core/log/Bad.hpp includes <core/net/EventLoop.hpp>, and log's row does not reach net")
+    message(STATUS "FAIL  include-edges-fixture: wanted exactly the planted violation, got ${plantedCount}: ${planted}")
+    list(APPEND failures include-edges-fixture)
+elseif(NOT plantedEdges EQUAL 4)
+    message(STATUS "FAIL  include-edges-fixture: counted ${plantedEdges} cross-module include(s), not 4 -- the test file was scanned, or an allowed edge was missed")
+    list(APPEND failures include-edges-fixture)
+else()
+    message(STATUS "ok    include-edges-fixture: refuses log -> net by name, allows net -> platform -> base, skips tests")
+endif()
+
+core_cpp_layering_scan_includes("${ROOT}" violations scannedFiles scannedEdges)
+if(scannedFiles EQUAL 0 OR scannedEdges EQUAL 0)
+    message(STATUS "FAIL  include-edges: read ${scannedFiles} file(s) and ${scannedEdges} cross-module include(s) under ${ROOT}/src/core -- the scan is broken, not the tree clean")
+    list(APPEND failures include-edges)
+elseif(violations)
+    foreach(violation IN LISTS violations)
+        message(STATUS "FAIL  include-edges: ${violation}")
+    endforeach()
+    list(APPEND failures include-edges)
+else()
+    message(STATUS "ok    include-edges: ${scannedEdges} cross-module include(s) in ${scannedFiles} file(s), each an edge the table allows")
+endif()
+
 if(failures)
     message(FATAL_ERROR "check-layering: failed: ${failures}")
 endif()
 list(LENGTH scenarios count)
-message(STATUS "check-layering: all ${count} scenario(s) configure or are refused as they should")
+message(STATUS "check-layering: all ${count} scenario(s) configure or are refused as they should, and every include is an edge of the table")
