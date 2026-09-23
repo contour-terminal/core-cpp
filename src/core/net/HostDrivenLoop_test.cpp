@@ -22,7 +22,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <chrono>
+#include <cstddef>
+#include <string_view>
 #include <tuple>
 
 using core::async::Task;
@@ -386,4 +389,169 @@ TEST_CASE("run and blockOn are declared and compiled on every platform, host-dri
     auto const blockOnVoid =
         static_cast<void (EventLoop::*)(core::async::Task<void>)>(&EventLoop::blockOn<void>);
     CHECK(blockOnVoid != nullptr);
+}
+
+namespace
+{
+
+/// A flow that does nothing, for `spawn`: what is spawned does not matter, only that it is filed.
+/// @return A task that completes at once.
+Task<void> doNothing()
+{
+    co_return;
+}
+
+/// Parks on an absolute deadline from a flow nobody owns, inline at the call.
+/// @param loop The loop to park on.
+/// @param deadline When to resume.
+core::async::DetachedTask sleepUntilDetached(EventLoop* loop, core::platform::SteadyTimePoint deadline)
+{
+    co_await loop->sleepUntil(deadline);
+}
+
+/// One quiescent host-driven loop, and what a member of the family needs to file work on it.
+///
+/// Member order is load-bearing: the loop BORROWS @c flow, so @c flow is declared before the loop
+/// and outlives it, and the counters a loop-owned flow writes are declared before it for the same
+/// reason.
+struct WakeFixture
+{
+    bool ran = false;                          ///< Set by @c flow, if it ever runs.
+    bool fired = false;                        ///< Set by a detached delay, if it ever resumes.
+    std::size_t calls = 0;                     ///< Counted by a timer callback.
+    Task<void> flow = markRan(&ran);           ///< A lazy frame for the members that take a handle.
+    ManualClock clock {};                      ///< The loop's time.
+    ManualHostScheduler host {};               ///< Records what the backend asks for.
+    HostDrivenBackend backend { host, clock }; ///< The backend under the loop.
+    EventLoop loop { backend, clock };         ///< The loop under test.
+    core::net::ParkId park {};                 ///< What a setup step filed, for `requestCancel`.
+};
+
+/// A member of the family "files work that only a turn can reach", and what it must ask for.
+struct FilesWorkRow
+{
+    std::string_view member;               ///< The member under test, for the section name.
+    void (*setup)(WakeFixture&) = nullptr; ///< Anything the member needs filed first, or null.
+    void (*act)(WakeFixture&) = nullptr;   ///< Calls the member once, off-turn.
+    long long expectedDelayMs = 0;         ///< The delay it must ask the host for; -1 for nothing.
+};
+
+/// Files a deadline park by hand, the way an awaitable outside this module does.
+/// @param f The fixture whose flow to park.
+/// @param after How far past now its deadline is.
+void parkFlowFor(WakeFixture& f, core::platform::SteadyDuration after)
+{
+    f.park = f.loop.registerPark(core::net::ParkEntry::onDeadline(
+        core::async::ParkedWork { .resume = f.flow.handle() }, f.clock.now() + after));
+}
+
+/// The family, derived from `EventLoop.cpp` rather than from any list in prose -- four copies of
+/// such a list were wrong before this table existed. Two idioms and one exception:
+///
+/// - **Ready work that carries no time WAKES**, which on this backend is `scheduleAt(now)`: a
+///   delay of 0. `schedule` from off the loop's thread belongs here rather than with the arming
+///   members: what it files is an INBOUND entry, and the turn draining it is ready now.
+/// - **A park filed with a time ARMS** for that time, through the `armHostWake()` in
+///   `registerPark`, and every deadline member inherits it from that one primitive.
+/// - **`notifyHandleClosing` files work and asks for nothing**, soundly: the turn exchanges
+///   `_closedParks` before its wait, and on this backend no park can be on a handle at all, which
+///   `armHostWake` asserts. It is a row so that the exception is asserted rather than omitted.
+///
+/// `spawn` is called off-turn but UNOPPOSED -- nothing is driving -- because it is loop-thread-only
+/// and asserts `teardownIsSerialisedWithDispatch()`. What the family shares is "the loop is asked
+/// for a turn", not "safe from any thread".
+constexpr auto FilesWorkRows = std::array {
+    FilesWorkRow {
+        .member = "post", .act = [](WakeFixture& f) { f.loop.post([] {}); }, .expectedDelayMs = 0 },
+    FilesWorkRow { .member = "submit",
+                   .act = [](WakeFixture& f) { f.loop.submit(f.flow.handle()); },
+                   .expectedDelayMs = 0 },
+    FilesWorkRow { .member = "schedule",
+                   .act = [](WakeFixture& f) { f.loop.schedule(f.clock.now() + 50ms, f.flow.handle()); },
+                   .expectedDelayMs = 0 },
+    FilesWorkRow {
+        .member = "spawn", .act = [](WakeFixture& f) { f.loop.spawn(doNothing()); }, .expectedDelayMs = 0 },
+    FilesWorkRow { .member = "stop", .act = [](WakeFixture& f) { f.loop.stop(); }, .expectedDelayMs = 0 },
+    FilesWorkRow {
+        .member = "requestStop", .act = [](WakeFixture& f) { f.loop.requestStop(); }, .expectedDelayMs = 0 },
+    FilesWorkRow { .member = "requestCancel",
+                   .setup = [](WakeFixture& f) { parkFlowFor(f, 1000ms); },
+                   .act = [](WakeFixture& f) { f.loop.requestCancel(f.park); },
+                   .expectedDelayMs = 0 },
+    FilesWorkRow {
+        .member = "resumeSoon",
+        .act =
+            [](WakeFixture& f) { f.loop.resumeSoon(core::async::ParkedWork { .resume = f.flow.handle() }); },
+        .expectedDelayMs = 0 },
+    FilesWorkRow { .member = "registerPark",
+                   .act = [](WakeFixture& f) { parkFlowFor(f, 50ms); },
+                   .expectedDelayMs = 50 },
+    FilesWorkRow {
+        .member = "addTimer",
+        .act =
+            [](WakeFixture& f) { std::ignore = f.loop.addTimer(f.clock.now() + 50ms, &countCall, &f.calls); },
+        .expectedDelayMs = 50 },
+    FilesWorkRow { .member = "delay",
+                   .act = [](WakeFixture& f) { delayThenFlagDetached(&f.loop, 50ms, &f.fired); },
+                   .expectedDelayMs = 50 },
+    FilesWorkRow { .member = "sleepUntil",
+                   .act = [](WakeFixture& f) { sleepUntilDetached(&f.loop, f.clock.now() + 50ms); },
+                   .expectedDelayMs = 50 },
+    // A value-initialised handle is not `InvalidHandle`, so the call reaches its walk over the
+    // parks; nothing is parked on it, and the OS is never asked about it.
+    FilesWorkRow { .member = "notifyHandleClosing",
+                   .act =
+                       [](WakeFixture& f) {
+                           f.loop.notifyHandleClosing(core::platform::NativeHandle {},
+                                                      core::net::FdWakePolicy::Cancel);
+                       },
+                   .expectedDelayMs = -1 },
+};
+
+} // namespace
+
+TEST_CASE("Every member that files work asks a quiescent host-driven loop for the turn that runs it",
+          "[EventLoop][hostdriven]")
+{
+    // **When a function joins a family that all do X, "why does this one not do X" has to be
+    // answered out loud -- and where the family is enumerable, by a table rather than a comment.**
+    // A member that files work without asking the host for a turn leaves that work filed, correct
+    // and never run: `armHostWake()` runs only at the END of a turn, and a quiescent host-driven
+    // loop has none coming. `addTimer` shipped that way, and so did `registerPark`, `resumeSoon`
+    // and `requestStop`, after a list claiming the family was complete.
+    for (auto const& row: FilesWorkRows)
+    {
+        DYNAMIC_SECTION("member=" << row.member)
+        {
+            auto f = WakeFixture {};
+            if (row.setup != nullptr)
+            {
+                row.setup(f);
+                // Isolated by PUMPING, not by `host.clear()`: clearing leaves the backend believing
+                // a pump is outstanding, and its coalescing would swallow the request under test.
+                f.host.pump();
+            }
+            // Quiescent apart from what the setup itself armed, measured rather than assumed: a
+            // pump pending from anything else buys the turn that would mask the member.
+            auto const before = f.host.pendingCount();
+            auto const armedBefore = soonestDelayMs(f.host);
+            REQUIRE(armedBefore != 0);
+
+            row.act(f);
+
+            if (row.expectedDelayMs < 0)
+            {
+                CHECK(f.host.pendingCount() == before);
+                CHECK(soonestDelayMs(f.host) == armedBefore);
+            }
+            else
+            {
+                // THE assertion, and the delay rather than merely "something was asked": a
+                // deadline member that woke would spin the host for fifty milliseconds, and a
+                // ready-work member that armed would leave its work waiting on an unrelated one.
+                REQUIRE(f.host.pendingCount() >= 1);
+                CHECK(soonestDelayMs(f.host) == row.expectedDelayMs);
+            }
+        }
+    }
 }
