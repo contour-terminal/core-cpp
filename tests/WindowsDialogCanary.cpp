@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Fails in one way that can raise a Windows dialog, chosen by its argument, and must be seen to EXIT
-// rather than wait for a click. tests/CMakeLists.txt registers one run per way as a WILL_FAIL test with
-// a timeout: a run still waiting when the timeout expires is waiting on a dialog nobody will click.
+// rather than wait for a click. tests/CMakeLists.txt registers one run per way, judged by the marker
+// each prints before it fails (PASS_REGULAR_EXPRESSION), with a timeout: a run still waiting when the
+// timeout expires is waiting on a dialog nobody will click.
 //
 // It calls nothing to suppress anything. What it proves is that linking core::testing_dialogs installs
 // the suppression in an executable whose main() never asked for it.
 //
 // Imported from endo (src/testing/WindowsDialogCanary.cpp at f774a210), without two modes. `probe` served
 // endo's product-executable variant. `access-violation` ends in an exception status, which ctest reports
-// as a failure however WILL_FAIL is set, and ctest's children inherit SEM_NOGPFAULTERRORBOX anyway (endo
-// measured it), so under ctest it proved nothing about this suppression.
+// as a failure however the test is registered, and ctest's children inherit SEM_NOGPFAULTERRORBOX anyway
+// (endo measured it), so under ctest it proved nothing about this suppression.
 
 #include <cassert>
 #include <cstdio>

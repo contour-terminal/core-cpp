@@ -17,12 +17,13 @@
 ///
 /// Both are assertions, and an assertion cannot be asserted from inside a Catch case:
 /// it aborts the process, which ends the binary rather than the case. So each is its
-/// own process, registered `WILL_FAIL`, and a run that exits 0 is the regression.
+/// own process, judged by the marker it prints to stderr immediately before the
+/// forbidden call (`PASS_REGULAR_EXPRESSION`), and failed by the text it prints if the
+/// call returned (`FAIL_REGULAR_EXPRESSION`) -- see `src/core/net/CMakeLists.txt`.
 ///
 /// Skips (exit 77) where assertions are compiled out: with `NDEBUG` the refusal is not
-/// there to observe, and a `WILL_FAIL` run that exits 0 for that reason would report a
-/// defect that is not one. `SKIP_RETURN_CODE` takes precedence over `WILL_FAIL`, so
-/// ctest reads it as a skip.
+/// there to observe, and `SKIP_RETURN_CODE` takes precedence over both regular
+/// expressions, so ctest reads it as a skip.
 
 // clang-format off
 #include <winsock2.h>
@@ -55,15 +56,14 @@ namespace
 /// What this process exits with once the refusal has fired.
 ///
 /// **An `abort()` is not a failed exit code, and ctest tells them apart.** A signal is
-/// an "exception" there, and `WILL_FAIL` inverts a return code and not an exception --
-/// so an assertion left to abort on its own reports as a failure however it is
-/// registered. Converting it here keeps the assertion real (it still had to fire to get
-/// here) and keeps a genuine crash distinguishable: SIGSEGV is not handled, so it still
-/// arrives as the exception it is.
+/// an "exception" there, which no regular expression overrides -- so an assertion left
+/// to abort on its own reports as a failure however it is registered. Converting it here keeps the assertion
+/// real (it still had to fire to get here) and keeps a genuine crash distinguishable: SIGSEGV is not handled,
+/// so it still arrives as the exception it is.
 constexpr int RefusedExitCode = 1;
 
-/// **Load-bearing for the ctest registration, not tidiness.** `WILL_FAIL`,
-/// `PASS_REGULAR_EXPRESSION` and `FAIL_REGULAR_EXPRESSION` are each documented as unable to
+/// **Load-bearing for the ctest registration, not tidiness.** `PASS_REGULAR_EXPRESSION` and
+/// `FAIL_REGULAR_EXPRESSION` -- and `WILL_FAIL` before them -- are each documented as unable to
 /// override a system-level failure, and a raw `SIGABRT` is one -- so without this handler the
 /// assertion arrives as a signal and every regex scheme here is defeated. A future cleanup
 /// deleting "unused" abort handling would convert every canary in this binary into a false pass

@@ -21,8 +21,8 @@
 ///
 /// The two refusals — a second thread dequeuing the port (G1), and a handle associated
 /// with the port twice (G4) — are assertions, and an assertion cannot be asserted from
-/// inside a Catch case: it aborts the process. They are `core-cpp.iocp-canary`, a
-/// program per refusal, each registered `WILL_FAIL`.
+/// inside a Catch case: it aborts the process. They are `core-cpp.iocp-canary`, one
+/// process per refusal, each judged by the marker it prints before the forbidden call.
 
 // clang-format off
 #include <winsock2.h>
