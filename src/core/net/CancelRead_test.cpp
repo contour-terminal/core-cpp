@@ -399,3 +399,34 @@ TEST_CASE("A read retired while its own stop is pending leaves the next read unt
         }
     }
 }
+
+TEST_CASE("A read on a flow already stopped unwinds inside that flow, never past its handler",
+          "[net][socket][cancelread]")
+{
+    // Nothing is armed: the operation sees the stop before it asks the owner for anything, and
+    // resumes the flow at once to throw `OperationCancelled` -- the resume-at-once-then-throw shape
+    // in which MSVC 19.44's ARM64 code generator lost the awaiting coroutine's handler for a `Task`
+    // owning no frame (fastcached#1546, on the `windows (cl-release-arm64)` leg). The handler is
+    // `readUnderToken`'s own `catch`; a throw that passed it would reach `blockOn` instead.
+    for (auto const& backend: BackendMatrix)
+    {
+        auto source = core::net::makeBackend(backend.kind);
+        if (!source)
+            continue;
+        DYNAMIC_SECTION("backend=" << backend.name)
+        {
+            auto loop = EventLoop { *source };
+            auto pair = core::net::testing::makeSocketPair(loop);
+            REQUIRE(pair.has_value());
+
+            auto stop = StopSource {};
+            stop.request_stop();
+            auto outcome = WatchOutcome {};
+            loop.blockOn(readUnderToken(stop.get_token(), pair->first.get(), &outcome));
+
+            REQUIRE(outcome.resolved);
+            CHECK(outcome.threw);
+            CHECK(loop.parkedWaiterCount() == 0);
+        }
+    }
+}
