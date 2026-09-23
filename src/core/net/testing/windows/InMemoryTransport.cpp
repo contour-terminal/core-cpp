@@ -8,12 +8,12 @@
 
 #include <core/net/testing/InMemoryTransport.hpp>
 
-#include <core/net/windows/IocpSocket.hpp>
+#include <core/net/Sockets.hpp>
 #include <core/net/windows/WindowsLoopback.hpp>
-#include <core/net/windows/WindowsSocket.hpp>
 #include <core/platform/WinsockInit.hpp>
 
 #include <array>
+#include <utility>
 
 namespace core::net::testing
 {
@@ -27,16 +27,18 @@ std::expected<SocketPair, NetError> makeSocketPair(EventLoop& loop)
 
     // The socket the loop's backend drives, which is the one production would hand out: an
     // IocpSocket over a completion port, a WindowsSocket over WFMO -- so every case that runs over
-    // BackendMatrix exercises both Windows sockets rather than whichever this file named.
-    if (loop.completionPort() != nullptr)
-        return SocketPair {
-            .first = std::unique_ptr<ISocket>(new IocpSocket(loop, pair[0])),
-            .second = std::unique_ptr<ISocket>(new IocpSocket(loop, pair[1])),
-        };
-    return SocketPair {
-        .first = std::unique_ptr<ISocket>(new WindowsSocket(loop, pair[0])),
-        .second = std::unique_ptr<ISocket>(new WindowsSocket(loop, pair[1])),
-    };
+    // BackendMatrix exercises both Windows sockets rather than whichever this file named. Which one
+    // that is, is `adoptSocket`'s question, so this file does not ask it a second time.
+    auto first = adoptSocket(loop, reinterpret_cast<platform::NativeHandle>(pair[0]), {});
+    if (!first)
+    {
+        ::closesocket(pair[1]); // adoptSocket closed pair[0]; this one was never handed over
+        return std::unexpected(std::move(first.error()));
+    }
+    auto second = adoptSocket(loop, reinterpret_cast<platform::NativeHandle>(pair[1]), {});
+    if (!second)
+        return std::unexpected(std::move(second.error()));
+    return SocketPair { .first = std::move(*first), .second = std::move(*second) };
 }
 
 } // namespace core::net::testing
