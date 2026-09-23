@@ -7,7 +7,8 @@
 #                       [SOURCES <source or private header>...]
 #                       [SOURCES_POSIX ...] [SOURCES_LINUX ...] [SOURCES_BSD ...] [SOURCES_WINDOWS ...]
 #                       [SOURCES_EMSCRIPTEN ...]
-#                       [PUBLIC_LIBS <lib>...] [PRIVATE_LIBS <lib>...])
+#                       [PUBLIC_LIBS <lib>...] [PRIVATE_LIBS <lib>...]
+#                       [NO_STATIC_RUNTIME_TWIN])
 #
 #   core_cpp_add_test(<module> [NAME <name>]
 #                     [SOURCES ...] [SOURCES_POSIX ...] [SOURCES_LINUX ...]
