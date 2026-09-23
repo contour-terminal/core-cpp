@@ -7,11 +7,12 @@ release may break the API; every break is listed under **Breaking** with a migra
 release tag `vX.Y.Z` equals the version in `project(core-cpp VERSION X.Y.Z)`, and the release
 workflow refuses one without a section here.
 
+## [Unreleased]
+
 ## [0.1.0] - 2026-09-23
 
 The first release: the shared C++23 foundation of the Contour Terminal projects, in namespace
 `core`, replacing the copies of the same code that contour, endo, fastcached and tuidu each carry.
-The date is stamped when the release is cut.
 
 **What it is made of.** Imported, and recorded file by file in
 [`.agent/reference/provenance.md`](https://github.com/contour-terminal/core-cpp/blob/master/.agent/reference/provenance.md) (see *Imported* below for each
