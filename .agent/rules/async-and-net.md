@@ -606,8 +606,14 @@ get right, and each one is a defect that has already happened.
     returns -- never from inside the backend's walk, where enqueueing is all Rule 1 allows.
   - **A readable report wakes the writer too.** A backend services one callback per registration
     per wait and prefers readability, so on one registration shared by a reader and a writer, a
-    socket that stayed readable would never report its writability. Waking the writer costs one
-    `send` that may answer `EAGAIN`, which its retry loop already treats as "stay parked".
+    socket that stayed readable would never report its writability: the writer starves behind its
+    own socket's reads. Waking it is **never wrong, only sometimes unnecessary**, because a parked
+    writer is a retry loop, not a promise that the socket is writable -- it calls `send`, and a
+    socket with no room answers `EAGAIN`, which the loop already treats as "stay parked", exactly as
+    it treats a level-triggered report whose `send` finds nothing to do. The cost is that one
+    syscall, and only while both directions are parked at once. `SocketRegistration_test.cpp`
+    scripts a socket that is readable AND writable on every wait, and a parked write finishes only
+    because of this; without it the write never moves.
 
   **The turn did not change, and it was measured before deciding so.** Readiness dispatched in step
   4 is still resumed in the next turn's step 2. On the same echo a sampled profile puts about 9% of

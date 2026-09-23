@@ -182,6 +182,16 @@ class ScriptedBackend: public IoBackend
     /// @param id A registration previously handed out by @c attach.
     void pushWritable(HandlerId id) { _script.push_back(Step { .id = id, .observed = Readiness::Writable }); }
 
+    /// Appends a step reporting @p observed on @p id -- several conditions at once, as one kernel
+    /// answer carries them (`EPOLLIN|EPOLLOUT`). What a case needs to reach the choice a backend
+    /// makes between two watched directions reported in the same wait.
+    /// @param id A registration previously handed out by @c attach.
+    /// @param observed What the kernel would report; filtered by the registration's interest.
+    void pushReadiness(HandlerId id, Readiness observed)
+    {
+        _script.push_back(Step { .id = id, .observed = observed });
+    }
+
     /// Appends a step reporting a failure on @p id — the hangup or error a kernel
     /// volunteers, which reaches @c ReadinessHandler::onError or, failing that, the
     /// direction the registration watches.

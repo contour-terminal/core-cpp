@@ -110,6 +110,9 @@ workflow refuses one without a section here.
   `UntilClosed` shares one registration per handle among every park on it that asks, kept until
   `EventLoop::notifyHandleClosing` names the handle -- so a caller that asks for it promises to
   announce every close, which is what `PosixSocket` does and what it now asks for.
+- **`testing::ScriptedBackend::pushReadiness(HandlerId, Readiness)`**: a scripted wait that reports
+  several conditions at once, as one kernel answer does (`EPOLLIN|EPOLLOUT`), so a case can reach
+  the choice a backend makes between two watched directions reported in the same wait.
 - **`adoptSocket(EventLoop&, platform::NativeHandle, std::string peerAddress)`**, beside
   `adoptFd` and `adoptListener` in `<core/net/Sockets.hpp>`: a connected socket accepted or
   dialled outside core-cpp, driven by the loop the caller chooses. It is what a Windows server
