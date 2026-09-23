@@ -54,46 +54,36 @@ TuiRuntime::~TuiRuntime()
     // The source flows. Each frame names THIS object, and the loop is holding it, so a resumption
     // after this object is gone reaches freed storage. `cancelPending` is the retrieval, and its
     // answer is an ownership transfer rather than a status: true means the loop no longer has it
-    // and this call may resume or destroy it.
+    // -- nothing of it is left queued, parked or registered with the backend -- and this call may
+    // destroy it.
     //
-    // **A flow is in one of THREE states here, and `cancelPending` answers true for all three.**
-    // They are enumerated rather than tested, because an earlier version of this comment named two
-    // and the missing one was the state every flow passes through first:
+    // **A flow is in one of FOUR states here**, enumerated rather than tested because earlier
+    // versions of this comment named two and then three, and each missing one was a real state:
     //
     //   1. SUBMITTED, NEVER STARTED. `async::Task` is lazy, so between the constructor and the
-    //      first turn the frame sits at its initial suspend point in the inbound queue, body not
-    //      entered. Resuming it runs that body FROM THE TOP.
-    //   2. PARKED on a handle. `cancelPending` takes the park and detaches the registration, so
-    //      nothing of it is left with the backend.
-    //   3. QUEUED after readiness. The waiter was taken, but `await_resume` has not run, so the
-    //      park is still filed AND still attached -- only `await_resume` unregisters it. That is
-    //      [core-cpp#41](https://github.com/contour-terminal/core-cpp/issues/41), and the resume
-    //      below is a WORKAROUND for it: when `cancelPending` learns to unregister the park on a
-    //      ready-queue hit, state 3 stops needing a resume and this loop should be revisited.
+    //      first turn the frame sits at its initial suspend point in the inbound queue.
+    //   2. PARKED on a handle. `cancelPending` takes the park and detaches the registration.
+    //   3. QUEUED after readiness: the waiter was dispatched into the ready queue, `await_resume`
+    //      has not run, and so its park is still filed and attached. `cancelPending` takes the
+    //      park with the frame -- it did not until
+    //      [core-cpp#41](https://github.com/contour-terminal/core-cpp/issues/41) was fixed, and
+    //      this loop resumed every flow once so that `await_resume` would do it instead.
     //   4. RUNNING: this destructor was reached from inside a callout of that very flow -- the
     //      interrupt handler, or an `InputSource` member. `cancelPending` correctly answers false,
-    //      the loop is not holding a running frame, and `~Task` would then destroy a frame whose
+    //      the loop is not holding a running frame, and destroying it would free a frame whose
     //      body resumes the moment the callout returns. It has no right answer, so it is refused
-    //      by the assertion above rather than handled here. An earlier version of this comment
-    //      called the three states above exhaustive, which is the same mistake as the one before.
+    //      by the assertion above rather than handled here.
     //
-    // One action serves the three, and it works because of the flows' SHAPE rather than because of
-    // a test on the state -- which is what makes it survive a fourth state being added. Resume
-    // once, and let `_stopping` end the body at its first statement: state 1 enters its loop,
-    // finds `_stopping` and returns without ever awaiting; state 3 runs `await_resume`, which
-    // unregisters the park, then finds `_stopping`; state 2 runs `await_resume` against an id
-    // already taken -- both calls are no-ops -- then finds `_stopping`.
-    //
-    // The shape that makes that true is `while (!_stopping)` in each flow, and it is load-bearing
-    // for state 1 alone: the guard must precede the first `co_await`, because `EventLoop`'s
-    // awaiter knows nothing about this runtime and parks a flow that starts during teardown. That
-    // park would name a frame `_sources` is about to destroy, and `~EventLoop` would resume it.
+    // For the first three, one action: destroy the frame NOW, while every member it names is still
+    // alive, rather than leave it to `_sources`' own destructor after some of them have gone. A
+    // suspended frame's destruction runs no body code -- only the awaiter's destructor, which
+    // drops its stop registration.
     for (auto& source: _sources)
     {
         if (source.done())
             continue;
-        if (_loop.cancelPending(source.handle()) && !source.done())
-            source.handle().resume();
+        if (_loop.cancelPending(source.handle()))
+            source = {};
     }
 }
 
@@ -167,9 +157,8 @@ void TuiRuntime::startSourceFlow(async::Task<void> flow)
 
 async::Task<void> TuiRuntime::inputFlow()
 {
-    // `!_stopping` rather than `true`, and it is checked BEFORE the first `co_await`: the
-    // destructor resumes a flow that may never have started, and this is what stops that
-    // resumption from parking on the loop. See ~TuiRuntime.
+    // `!_stopping` rather than `true`, checked BEFORE the first `co_await`: a flow must never park
+    // on the loop once teardown has begun, whatever resumed it. See ~TuiRuntime.
     while (!_stopping)
     {
         try
@@ -204,9 +193,8 @@ async::Task<void> TuiRuntime::inputFlow()
 
 async::Task<void> TuiRuntime::resizeFlow()
 {
-    // `!_stopping` rather than `true`, and it is checked BEFORE the first `co_await`: the
-    // destructor resumes a flow that may never have started, and this is what stops that
-    // resumption from parking on the loop. See ~TuiRuntime.
+    // `!_stopping` rather than `true`, checked BEFORE the first `co_await`: a flow must never park
+    // on the loop once teardown has begun, whatever resumed it. See ~TuiRuntime.
     while (!_stopping)
     {
         try
@@ -235,9 +223,8 @@ async::Task<void> TuiRuntime::resizeFlow()
 
 async::Task<void> TuiRuntime::interruptFlow()
 {
-    // `!_stopping` rather than `true`, and it is checked BEFORE the first `co_await`: the
-    // destructor resumes a flow that may never have started, and this is what stops that
-    // resumption from parking on the loop. See ~TuiRuntime.
+    // `!_stopping` rather than `true`, checked BEFORE the first `co_await`: a flow must never park
+    // on the loop once teardown has begun, whatever resumed it. See ~TuiRuntime.
     while (!_stopping)
     {
         try
@@ -268,9 +255,8 @@ async::Task<void> TuiRuntime::interruptFlow()
 
 async::Task<void> TuiRuntime::signalFlow()
 {
-    // `!_stopping` rather than `true`, and it is checked BEFORE the first `co_await`: the
-    // destructor resumes a flow that may never have started, and this is what stops that
-    // resumption from parking on the loop. See ~TuiRuntime.
+    // `!_stopping` rather than `true`, checked BEFORE the first `co_await`: a flow must never park
+    // on the loop once teardown has begun, whatever resumed it. See ~TuiRuntime.
     while (!_stopping)
     {
         try

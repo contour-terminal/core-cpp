@@ -854,17 +854,16 @@ get right, and each one is a defect that has already happened.
   ready. So the flow's frame belongs to the object -- `submit`, which BORROWS, not `spawn`, which
   hands it over and offers nothing that gives it back -- and the destructor calls `cancelPending`
   on each one. `cancelPending`'s answer is an ownership transfer: true means the loop no longer
-  has it. **Then resume it once more rather than dropping it**, because the two states it covers
-  are not the same underneath. A PARKED flow comes back with its backend registration already
-  detached; a QUEUED one -- readiness dispatched, not yet drained -- does not, since only
-  `await_resume` unregisters a park, and a frame destroyed mid-await leaves the loop watching a
-  handle for an object that is gone -- which is
-  [core-cpp#41](https://github.com/contour-terminal/core-cpp/issues/41): the ready-queue branch of
-  `cancelPending` returns before the branch that detaches. **When that is fixed, the extra resume
-  prescribed here for a QUEUED waiter stops being needed, and its owner should delete it rather
-  than leave a workaround asserting what the primitive now guarantees.** The last resumption runs
-  `await_resume` and then finds a flag the destructor set, so it returns instead of re-entering a
-  body whose object is going away.
+  has it -- nothing of it queued, parked, or registered with the backend -- **and the destructor
+  destroys the frame then**, while every member it names is alive, rather than leaving it to a
+  member destructor that runs after some of them are gone. The flow's loop must test the flag
+  the destructor sets BEFORE its first `co_await`, so that nothing resumed during teardown parks
+  again. Until [core-cpp#41](https://github.com/contour-terminal/core-cpp/issues/41) was fixed,
+  a waiter QUEUED after readiness came back with its park still filed and attached -- the
+  ready-queue branch of `cancelPending` returned before the branch that detaches -- and the
+  owner had to resume it once so that `await_resume` would unregister it. The fix is in the
+  primitive, and the resume was deleted from `~TuiRuntime` with it; the regression case is
+  `TestLoop_test.cpp`'s "cancelPending on a waiter queued after readiness takes its park too".
   `core::tui::runtime::TuiRuntime` is the first such object; its four source flows are one per
   handle. Origin: Task B12.
 - **A derived interface that re-declares one overload hides every other overload of that name.**

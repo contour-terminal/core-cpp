@@ -1099,6 +1099,48 @@ TEST_CASE("A runtime destroyed before its first turn leaves the loop holding not
     REQUIRE(loop.pendingTimerCount() == 0);
 }
 
+TEST_CASE("A runtime destroyed while a source flow is queued after readiness leaves nothing behind",
+          "[TuiRuntime][teardown]")
+{
+    // The third teardown state, and the one core-cpp#41 was about: the input handle has become
+    // readable and the loop has queued the flow, but no turn has drained it, so `await_resume` --
+    // which unregisters the park -- has not run. The destructor takes the flow back with
+    // `cancelPending` and destroys it WITHOUT resuming it, so nothing but `cancelPending` itself
+    // can have brought the park down.
+    auto const pipes = openPipes(1);
+    REQUIRE(pipes.size() == 1);
+    auto const backend = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *backend };
+    auto source = ScriptedInputSource { pipes[0].get() };
+    {
+        auto runtime = TuiRuntime { loop, source };
+        std::ignore = loop.runOnce(core::platform::SteadyDuration::zero());
+        REQUIRE(loop.parkedWaiterCount() == 1);
+
+        source.pushEvents({ InputEvent { keyOf(U'q') } });
+        // Bounded: the readiness may be delivered from another thread on some backends, so a turn
+        // can come back before it has arrived. The ready queue is what is waited for.
+        constexpr auto MaxTurns = 500;
+        auto turns = 0;
+        while (loop.readyCount() == 0 && turns < MaxTurns)
+        {
+            std::ignore = loop.runOnce(std::chrono::milliseconds { 10 });
+            ++turns;
+        }
+        INFO("waited " << turns << " turns for the input's readiness to reach the ready queue");
+        REQUIRE(loop.readyCount() == 1);
+        REQUIRE(loop.parkedWaiterCount() == 1); // queued, and its park still filed and attached
+    }
+
+    REQUIRE(loop.parkedWaiterCount() == 0);
+    REQUIRE(loop.readyCount() == 0);
+
+    // The input is still readable. A registration left behind would dispatch into the destroyed
+    // frame here, which is what AddressSanitizer is for.
+    std::ignore = loop.runOnce(core::platform::SteadyDuration::zero());
+    CHECK(loop.readyCount() == 0);
+}
+
 TEST_CASE("Destroying the runtime leaves the loop holding nothing of it", "[TuiRuntime][teardown]")
 {
     auto const pipes = openPipes(1);
