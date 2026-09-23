@@ -33,6 +33,13 @@ BOTH DIRECTIONS ARE REFUSED, and the second is the one that rots quietly:
     a step covering an unknown test     the test was renamed or lost its label, and the step is
                                         now covering nothing while looking like it covers something
 
+AND THE STYLE JOB ITSELF MUST GATE (core-cpp#39). Every tree-level check runs there and nowhere
+else, so if `style` is dropped from `ci-ok`'s `needs:` -- or `ci-ok` is renamed -- all of them stop
+gating and `ci-ok`, the one required check, still goes green. An absent required check is
+indistinguishable from a passing one at the branch-protection layer, so this refuses a workflow
+whose `ci-ok` job does not exist or does not need `style`. It runs IN the style job, which makes
+it self-referential in the right direction: the job proves it is still wired in.
+
 Exit status: 0 when the two sets agree, 1 when they do not, naming every difference and what to do
 about it.
 """
@@ -105,6 +112,34 @@ def style_job(workflow: str) -> str:
     return workflow[start : start + 1 + following.start()] if following else workflow[start:]
 
 
+# The one required check, and the job whose gating the tree-level checks depend on.
+GATE_JOB = "ci-ok"
+STYLE_JOB = "style"
+
+
+def gate_needs(workflow: str) -> list[str] | None:
+    """The jobs the `ci-ok` job needs, or None when there is no `ci-ok` job.
+
+    Reads both spellings YAML allows for `needs:` -- the inline list this workflow uses and a block
+    list -- because a reformat from one to the other must not read as the job needing nothing.
+    """
+    start = re.search(rf"\n  {re.escape(GATE_JOB)}:\n", workflow)
+    if start is None:
+        return None
+    following = re.search(r"\n  [a-z][a-z0-9-]*:\n", workflow[start.end() :])
+    job = workflow[start.end() : start.end() + following.start()] if following else workflow[start.end() :]
+    inline = re.search(r"^    needs:[ \t]*\[([^\]]*)\]", job, re.M)
+    if inline:
+        return [name.strip() for name in inline.group(1).split(",") if name.strip()]
+    single = re.search(r"^    needs:[ \t]*([A-Za-z0-9_-]+)[ \t]*$", job, re.M)
+    if single:
+        return [single.group(1)]
+    block = re.search(r"^    needs:[ \t]*\n((?:      - [^\n]*\n)+)", job, re.M)
+    if block:
+        return [line.strip()[2:].strip() for line in block.group(1).splitlines()]
+    return []
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tests", type=Path, default=REPOSITORY_ROOT / "tests" / "CMakeLists.txt")
@@ -118,6 +153,8 @@ def main() -> int:
 
     uncovered = sorted(labelled - covered)
     dangling = sorted(covered - labelled)
+    needs = gate_needs(arguments.workflow.read_text(encoding="utf-8"))
+    ungated = needs is None or STYLE_JOB not in needs
 
     for name in uncovered:
         print(
@@ -133,14 +170,29 @@ def main() -> int:
             f"looking like it covers something."
         )
 
-    if uncovered or dangling:
+    if needs is None:
         print(
-            f"\n{len(uncovered) + len(dangling)} mismatch(es) between the {TREE_LEVEL} label and "
-            f"the style job (Ruling R96)."
+            f"NO GATE        the workflow has no '{GATE_JOB}' job, so nothing requires the "
+            f"{STYLE_JOB} job -- and with it every {TREE_LEVEL} check -- to pass (core-cpp#39)."
+        )
+    elif ungated:
+        print(
+            f"NOT GATING     '{GATE_JOB}' needs {needs} and not '{STYLE_JOB}', so every "
+            f"{TREE_LEVEL} check runs and nothing requires it to pass (core-cpp#39).\n"
+            f"               Put '{STYLE_JOB}' back in {GATE_JOB}'s needs:."
+        )
+
+    if uncovered or dangling or ungated:
+        print(
+            f"\n{len(uncovered) + len(dangling) + int(ungated)} mismatch(es) between the "
+            f"{TREE_LEVEL} label, the style job and the required check (Ruling R96, core-cpp#39)."
         )
         return 1
 
-    print(f"{len(labelled)} {TREE_LEVEL} check(s), each covered by a style job step.")
+    print(
+        f"{len(labelled)} {TREE_LEVEL} check(s), each covered by a style job step, and "
+        f"'{GATE_JOB}' needs '{STYLE_JOB}'."
+    )
     return 0
 
 

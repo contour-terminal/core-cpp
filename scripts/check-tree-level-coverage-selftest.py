@@ -50,16 +50,22 @@ def tests_cmake(*labelled: str, unlabelled: tuple[str, ...] = ()) -> str:
     return text
 
 
-def workflow(*covered: str) -> str:
-    """A build.yml whose style job covers @p covered, followed by another job."""
+def workflow(*covered: str, gate: str | None = "    needs: [style, linux]\n") -> str:
+    """A build.yml whose style job covers @p covered, followed by another job and the gate.
+
+    @p gate is the `ci-ok` job's `needs:` line(s), or None for a workflow with no `ci-ok` job.
+    """
     steps = ""
     for name in covered:
         steps += f"      # covers: {name}\n      - name: step for {name}\n        run: true\n\n"
-    return (
+    text = (
         "jobs:\n  style:\n    runs-on: ubuntu-24.04\n    steps:\n"
         + steps
         + "  linux:\n    runs-on: ubuntu-24.04\n"
     )
+    if gate is not None:
+        text += "  ci-ok:\n    name: ci-ok\n" + gate + "    runs-on: ubuntu-24.04\n"
+    return text
 
 
 class CoverageCase(unittest.TestCase):
@@ -116,6 +122,7 @@ class TestMarkerSyntax(CoverageCase):
             "      # covers: core-cpp.alpha\n"
             "      - name: step for alpha\n        run: true\n\n"
             "  linux:\n    runs-on: ubuntu-24.04\n"
+            "  ci-ok:\n    needs: [style, linux]\n    runs-on: ubuntu-24.04\n"
         )
 
         result = self.run_checker(tests_cmake("core-cpp.alpha"), prose)
@@ -159,6 +166,33 @@ class TestCoveredButUnlabelled(CoverageCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("COVERS NOTHING", result.stdout)
         self.assertIn("core-cpp.beta", result.stdout)
+
+
+class TestTheStyleJobGates(CoverageCase):
+    """core-cpp#39: every tree-level check runs in `style`, so `style` must be what `ci-ok` needs."""
+
+    def test_a_gate_that_does_not_need_style_is_refused(self) -> None:
+        result = self.run_checker(
+            tests_cmake("core-cpp.alpha"), workflow("core-cpp.alpha", gate="    needs: [linux]\n")
+        )
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("NOT GATING", result.stdout)
+
+    def test_a_workflow_with_no_gate_is_refused(self) -> None:
+        result = self.run_checker(tests_cmake("core-cpp.alpha"), workflow("core-cpp.alpha", gate=None))
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("NO GATE", result.stdout)
+
+    def test_a_block_list_needs_is_read_as_well_as_an_inline_one(self) -> None:
+        """A reformat from `[a, b]` to a block list must not read as the gate needing nothing."""
+        result = self.run_checker(
+            tests_cmake("core-cpp.alpha"),
+            workflow("core-cpp.alpha", gate="    needs:\n      - linux\n      - style\n"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 class TestParseControl(CoverageCase):
