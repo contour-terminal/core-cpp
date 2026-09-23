@@ -9,6 +9,47 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **An `OperationCancelled` thrown out of a `co_await` on `delay` or `sleepUntil`, and on eleven
+  other awaiters, is caught again under MSVC 19.44 on ARM64**
+  ([fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546)). That compiler's
+  ARM64 code generator drops the enclosing `try` of a `co_await` on a temporary awaiter whose
+  `await_ready` makes a call, so the exception passed a typed `catch` and `catch (...)` alike and
+  reached whatever awaited the flow. `core::net::DelayAwaiter::await_ready` read the clock through
+  the virtual `IClock::now()`. The 0.1.0 notes say this awaiter carried fastcached's fix when
+  `TuiRuntime` moved onto it; it did not, and every `delay` and `sleepUntil` had the shape. Every
+  `await_ready` in `src/core` now reads a member or answers a constant, and the decision it made is
+  `await_suspend`'s, asked before the flow's stop token is read, so what a caller observes is
+  unchanged: an elapsed deadline, a null loop, a finished task, an empty `whenAll`, a queued item,
+  a free TLS gate, a finished lookup and a buffered input event or agent message all resume without
+  parking, and a flow that is already stopped still resumes normally on each of them. The awaiters:
+  `DelayAwaiter`, `interruptibleSleepUntil`'s, `Task<T>::Awaiter` and `Task<void>::Awaiter`,
+  `whenAll`'s and `whenAny`'s, `AsyncQueue::PopAwaiter`, `ResultAwaitable`, the threaded resolver's
+  and the TLS serial gate's, and `TuiRuntime`'s `NextInputEventAwaiter`, `NextEventForAwaiter`,
+  `NextActivityAwaiter` and `NextAgentReadyAwaiter`.
+
+### Changed
+
+- **The `await_ready` of nine public awaiters is `static constexpr` and answers `false`**:
+  `core::net::DelayAwaiter`, `core::async::Task<T>::Awaiter`, `Task<void>::Awaiter`, the awaiter
+  `whenAll` and `whenAny` return, `AsyncQueue<T>::PopAwaiter`, and the four `TuiRuntime` awaiters
+  (which also became `noexcept`). A `co_await` behaves as before. Code that called `await_ready()`
+  directly to learn whether an await would park gets `false` where it got `true`, for instance
+  `sleepUntil(nullptr, t).await_ready()`; `await_suspend(std::noop_coroutine())` answering `false`
+  is the question now. `ResultAwaitable::await_ready` still answers whether the operation settled
+  inline.
+
+### Added
+
+- **`core-cpp.await-ready`**, a `tree-level` check with a self-test (`scripts/check-await-ready.py`,
+  run by the `style` job), refusing an `await_ready` body under `src/` or `tests/` that calls a
+  function or constructs an object. It cannot see an overloaded operator; the fixed awaiters also
+  carry a `static_assert` that their `await_ready` is a constant, so a call there fails to compile.
+- **The `cl-release-arm64` preset and the `windows (cl-release-arm64)` CI leg**, on
+  `windows-11-arm`: MSVC's ARM64 code generator is the only one that miscompiles the shape above,
+  and no other leg can observe it. The preset expects an arm64 developer shell.
+
 ## [0.1.0] - 2026-09-23
 
 The first release: the shared C++23 foundation of the Contour Terminal projects, in namespace

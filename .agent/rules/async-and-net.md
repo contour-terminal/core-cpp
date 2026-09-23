@@ -471,6 +471,31 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   leaks every job in it along with whatever it holds — a socket, a temporary directory, a slot in
   somebody's counter. `ThreadPoolExecutor` therefore has nothing for `ParkedWork::abandon` to
   answer, and says so where it ignores it.
+- **An `await_ready` stays trivial -- a member read, a comparison of members, or a constant -- and
+  a decision that needs a call moves into `await_suspend`, which may decline to park.** MSVC 19.44
+  targeting ARM64 (cl 19.44.35228, `cl-release`, fastcached's `windows-11-arm` leg) dropped the
+  enclosing `try` of a `co_await` on a TEMPORARY awaiter whose `await_ready` made a virtual call:
+  the resume function's exception table declared the coroutine's own catch-all and no try block
+  for the handler the source wrote, so the `OperationCancelled` that `await_resume` threw passed a
+  typed `catch` and `catch (...)` alike. It was caught when `await_ready` made no call, when the
+  value was read in the constructor, and when the awaiter was a named local. `EventLoop`'s
+  `DelayAwaiter` had exactly that shape -- `_loop->clock().now()` -- and so every `delay` and
+  `sleepUntil` in the tree, because Task B12 moved `TuiRuntime` onto it after fastcached had fixed
+  the runtime's own copy. The same release made eleven more trivial: `TokenDelayAwaiter` (a clock
+  read), `Task`'s two awaiters and `ResultAwaitable` (`handle.done()`, and a nested
+  `await_ready`), `JoinAwaiter` and `AsyncQueue`'s `PopAwaiter` (a container's `empty()`, a lock),
+  `SlotPark` and `SerialGate::Awaiter` (a lock), and `TuiRuntime`'s four input and agent awaiters
+  (`hasBufferedInput()`, `agentPending()`). **Move the question, not only the call:** ask it in
+  `await_suspend` BEFORE the flow's stop token is read or a callback registered, or a flow that is
+  already stopped starts throwing where `await_ready`'s answer used to resume it normally --
+  `SleepUntil_test.cpp`'s stopped-flow case is the one that notices. What guards it, stated as
+  small as it is: a `static_assert` that each of those `await_ready`s but `ResultAwaitable`'s (a
+  member read) is a constant -- in the module's test, or beside the type where it has no name
+  outside its file -- which makes a call there fail to COMPILE everywhere; `scripts/check-await-ready.py`, which refuses a call or a
+  construction in any `await_ready` body under `src/` and `tests/` but cannot see an overloaded
+  operator; and the `windows (cl-release-arm64)` leg, the only one on which the miscompile itself
+  is observable. None of the C++ is wrong, so no x64 leg and no sanitizer can fail for it. Origin:
+  [fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546).
 
 ## Sockets
 
