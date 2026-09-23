@@ -772,7 +772,7 @@ TEST_CASE("a second listener on a bound port is refused by default", "[net][list
     CHECK(second.error().code == core::net::NetErrorCode::AddressInUse);
 }
 
-#if !defined(_WIN32)
+#ifndef _WIN32
 TEST_CASE("PortSharing::Shared lets a listener per loop bind one port, and each accepts", "[net][listen]")
 {
     // A daemon binds one listener per loop on the same port and lets the kernel spread the
