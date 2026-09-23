@@ -44,19 +44,6 @@ using core::net::testing::BackendMatrix;
 namespace
 {
 
-/// SKIPs the backend whose sockets do not implement `cancelRead`: WFMO's `WindowsSocket`, whose
-/// parked read is an ordinary coroutine awaiting the loop and so has nothing to retire (its own
-/// header says so). Said out loud rather than `continue`d past, because a section that ran nothing
-/// must not read as a pass. It goes with WFMO, one release after IOCP became the Windows default
-/// ([core-cpp#6](https://github.com/contour-terminal/core-cpp/issues/6)).
-/// @param kind The backend the section is about to run over.
-void skipWhereCancelReadIsNotImplemented(core::net::BackendKind kind)
-{
-    if (kind == core::net::BackendKind::Wfmo)
-        SKIP(
-            "WindowsSocket (the WFMO backend's socket) does not implement cancelRead; see WindowsSocket.hpp");
-}
-
 /// How a watch ended.
 struct WatchOutcome
 {
@@ -154,7 +141,6 @@ TEST_CASE("cancelRead retrieves a parked read and leaves the socket usable", "[n
             continue;
         DYNAMIC_SECTION("backend=" << backend.name)
         {
-            skipWhereCancelReadIsNotImplemented(backend.kind);
             auto loop = EventLoop { *source };
             auto pair = core::net::testing::makeSocketPair(loop);
             REQUIRE(pair.has_value());
@@ -193,7 +179,6 @@ TEST_CASE("cancelRead with nothing parked disturbs nothing", "[net][socket][canc
             continue;
         DYNAMIC_SECTION("backend=" << backend.name)
         {
-            skipWhereCancelReadIsNotImplemented(backend.kind);
             auto loop = EventLoop { *source };
             auto pair = core::net::testing::makeSocketPair(loop);
             REQUIRE(pair.has_value());
@@ -239,7 +224,6 @@ TEST_CASE("A second cancelRead takes the watch the first one's resumption armed"
             continue;
         DYNAMIC_SECTION("backend=" << backend.name)
         {
-            skipWhereCancelReadIsNotImplemented(backend.kind);
             auto loop = EventLoop { *source };
             auto pair = core::net::testing::makeSocketPair(loop);
             REQUIRE(pair.has_value());

@@ -2,9 +2,12 @@
 #include <core/net/windows/WindowsSocket.hpp>
 
 #include <core/net/SocketContract.hpp>
+#include <core/net/detail/ScopeGuard.hpp>
 #include <core/net/windows/NetworkEvents.hpp>
 
 #include <array>
+#include <coroutine>
+#include <tuple>
 #include <utility>
 
 namespace core::net
@@ -26,6 +29,27 @@ namespace
         }
         return makeNetError(code, err, std::move(context));
     }
+
+    /// Records the awaiting coroutine's handle and carries on without suspending: how a coroutine
+    /// learns its own handle, for a caller that has to find it again in the loop's park table.
+    struct PublishSelf
+    {
+        std::coroutine_handle<>* out; ///< Where to record the handle.
+
+        /// @return False: record the handle in @c await_suspend, which is the only place it is
+        ///         offered.
+        [[nodiscard]] bool await_ready() const noexcept { return false; }
+
+        /// @param self The awaiting coroutine.
+        /// @return False: resume it at once.
+        [[nodiscard]] bool await_suspend(std::coroutine_handle<> self) const noexcept
+        {
+            *out = self;
+            return false;
+        }
+
+        void await_resume() const noexcept {}
+    };
 } // namespace
 
 WindowsSocket::WindowsSocket(EventLoop& loop, SOCKET socket, std::string peerAddress) noexcept:
@@ -89,7 +113,23 @@ void WindowsSocket::latchNetworkEvents() noexcept
         _writeReady = true;
 }
 
-async::Task<void> WindowsSocket::parkUntilReady(Ready kind)
+void WindowsSocket::cancelRead() noexcept
+{
+    if (_closed || !_readWaiter)
+        return;
+    // Taken back first, so the park -- and its registration on the event -- is gone before the
+    // frame runs again; `true` means this call now owns the resumption. `false` means the loop no
+    // longer holds the waiter, so there is nothing parked here to retire.
+    auto const waiter = std::exchange(_readWaiter, {});
+    if (!_loop.cancelPending(waiter))
+        return;
+    _readRetired = true;
+    // INLINE, as `PosixSocket` settles a retired read: the flow is resumed before this returns, so
+    // a flow that arms its next read there leaves a NEW waiter, and a second call retires that one.
+    waiter.resume();
+}
+
+async::Task<WindowsSocket::ParkEnd> WindowsSocket::parkUntilReady(Ready kind)
 {
     auto& latch = kind == Ready::Read ? _readReady : _writeReady;
     // The close() guard is the loop's exit, not an optimization: close() invalidates the event, and
@@ -103,21 +143,31 @@ async::Task<void> WindowsSocket::parkUntilReady(Ready kind)
         // waiter has no way to re-check its latch — it is already suspended. Reading the latch is
         // the only safe thing to do before parking.
         if (std::exchange(latch, false))
-            co_return;
+            co_return ParkEnd::Ready;
 
         // Nothing latched: park. An indication raised between the syscall that returned
         // WSAEWOULDBLOCK and this point has left the event SIGNALLED, so the wait resolves on the
         // next pump rather than being lost — which is why the event is never reset before a park.
         if (kind == Ready::Read)
-            co_await _loop.waitReadable(static_cast<HANDLE>(_event));
+        {
+            // Published for `cancelRead` for exactly as long as this frame is parked, and cleared
+            // on EVERY way out of the park -- including an `OperationCancelled` unwinding it -- so
+            // it can never name a frame that has gone.
+            co_await PublishSelf { &_readWaiter };
+            auto const unpublish = detail::ScopeGuard { [this]() noexcept { _readWaiter = {}; } };
+            co_await _loop.waitReadable(_event);
+            if (std::exchange(_readRetired, false))
+                co_return ParkEnd::Retired;
+        }
         else
-            co_await _loop.waitWritable(static_cast<HANDLE>(_event));
+            co_await _loop.waitWritable(_event);
 
         // Woken. Both directions wake together (they share the event), so read-and-clear it into
         // the per-direction latches: whichever gets there first RECORDS the other's indication for
         // it instead of destroying it. Then loop, to consume our own if it is among them.
         latchNetworkEvents();
     }
+    co_return ParkEnd::Ready;
 }
 
 IoAwaitable WindowsSocket::read(std::span<std::byte> buffer)
@@ -156,7 +206,10 @@ async::Task<IoResult> WindowsSocket::readTask(std::span<std::byte> buffer)
         auto const err = WSAGetLastError();
         if (err == WSAEWOULDBLOCK)
         {
-            co_await parkUntilReady(Ready::Read);
+            auto const parked = co_await parkUntilReady(Ready::Read);
+            if (parked == ParkEnd::Retired)
+                co_return std::unexpected(
+                    makeNetError(NetErrorCode::Cancelled, 0, "the read was retired by cancelRead"));
             continue;
         }
         co_return std::unexpected(fromWsa(err, "recv"));
@@ -200,7 +253,10 @@ async::Task<IoResult> WindowsSocket::waitReadableTask()
         auto const err = WSAGetLastError();
         if (err == WSAEWOULDBLOCK)
         {
-            co_await parkUntilReady(Ready::Read);
+            auto const parked = co_await parkUntilReady(Ready::Read);
+            if (parked == ParkEnd::Retired)
+                co_return std::unexpected(
+                    makeNetError(NetErrorCode::Cancelled, 0, "the watch was retired by cancelRead"));
             continue;
         }
         // Anything but "nothing yet" is the peer GONE -- a reset above all -- and answering "one
@@ -234,7 +290,7 @@ async::Task<IoResult> WindowsSocket::writeTask(std::span<std::byte const> buffer
         auto const err = WSAGetLastError();
         if (err == WSAEWOULDBLOCK)
         {
-            co_await parkUntilReady(Ready::Write);
+            std::ignore = co_await parkUntilReady(Ready::Write);
             continue;
         }
         co_return std::unexpected(fromWsa(err, "send"));

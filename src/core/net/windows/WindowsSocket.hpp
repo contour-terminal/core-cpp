@@ -12,7 +12,9 @@
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
 
+#include <coroutine>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
@@ -80,15 +82,16 @@ class WindowsSocket final: public ISocket
     /// inheriting it.
     [[nodiscard]] ResultAwaitable<void> shutdownWrite() override;
 
-    // cancelRead is deliberately NOT overridden here, and it is the one place this class knowingly
-    // falls short of the contract. `ISocket::cancelRead`'s own documentation says the inherited
-    // no-op is unsafe for a transport whose reads park, and this one's do -- on the WSAEventSelect
-    // event, through `parkUntilReady`. Retiring that park needs a handle on it, which a socket whose
-    // read is an ordinary coroutine awaiting the loop does not have; giving it one is a redesign of
-    // this class, and Task B7b's `IocpSocket` -- the Windows default's socket -- owns its
-    // operations the way PosixSocket does. So the gap is named here rather than papered over with an
-    // override that does not retire anything. No caller in this library calls cancelRead on Windows
-    // today; `CancelRead_test` SKIPs this socket's backend out loud, and runs over `IocpSocket`.
+    /// @copydoc ISocket::cancelRead
+    ///
+    /// A parked read here -- or a parked @c waitReadable, which parks the same way -- is a
+    /// coroutine awaiting the loop on this socket's event, so it is retired the way any borrowed
+    /// waiter is: taken back with @c EventLoop::cancelPending, which detaches its park, then resumed
+    /// INLINE to find it was retired and complete with @c NetErrorCode::Cancelled. That is
+    /// `PosixSocket`'s detach-then-complete order, and like it this transport consumes nothing a
+    /// retired read could lose: the bytes stay in the socket for the next read. A call with nothing
+    /// parked is a no-op.
+    void cancelRead() noexcept override;
 
     [[nodiscard]] std::string peerAddress() const override { return _peerAddress; }
 
@@ -125,10 +128,17 @@ class WindowsSocket final: public ISocket
     void close(FdWakePolicy policy) noexcept;
 
     /// Which readiness a park waits for.
-    enum class Ready
+    enum class Ready : std::uint8_t
     {
         Read,
         Write
+    };
+
+    /// How a park on the event ended.
+    enum class ParkEnd : std::uint8_t
+    {
+        Ready,   ///< Latched readiness for the direction asked about, or the socket closed.
+        Retired, ///< @c cancelRead took the read back; the caller completes with `Cancelled`.
     };
 
     /// @return A BadHandle error described by @p op when the socket is closed,
@@ -154,7 +164,8 @@ class WindowsSocket final: public ISocket
     /// may be suspended on, and a suspended waiter cannot re-check its latch; the event is
     /// therefore never reset ahead of a park, which is also what makes an indication raised
     /// between the failing syscall and the park resolve the wait instead of being lost.
-    [[nodiscard]] async::Task<void> parkUntilReady(Ready kind);
+    /// @return @c ParkEnd::Retired when @c cancelRead retired a READ park, else @c ParkEnd::Ready.
+    [[nodiscard]] async::Task<ParkEnd> parkUntilReady(Ready kind);
 
     EventLoop& _loop;
     SOCKET _socket;
@@ -170,6 +181,12 @@ class WindowsSocket final: public ISocket
     /// longer be destroyed by the other's wait.
     bool _readReady = false;
     bool _writeReady = false;
+    /// The frame of @ref parkUntilReady while it is parked for a READ, else empty: what
+    /// @c cancelRead hands to @c EventLoop::cancelPending. Cleared on every way out of the park,
+    /// so it can never name a frame that has gone -- a stale address could match a newer frame.
+    std::coroutine_handle<> _readWaiter;
+    /// Set by @c cancelRead immediately before it resumes @c _readWaiter, and consumed by it.
+    bool _readRetired = false;
 };
 
 } // namespace core::net
