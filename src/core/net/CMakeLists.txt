@@ -349,6 +349,7 @@ core_cpp_add_test(net
         windows/NetworkEvents_test.cpp
         windows/SocketErrors_test.cpp
         windows/WfmoBackend_test.cpp
+        windows/WindowsSocket_test.cpp
     LABELS loopback
     # A reactor defect does not fail a case here, it HANGS it: a lost readiness wake-up parks a
     # flow with nothing left to resume it. Each such case bounds its own wait and says what it
