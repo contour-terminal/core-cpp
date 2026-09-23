@@ -8,7 +8,6 @@
 
 #include <core/async/Task.hpp>
 #include <core/net/IListener.hpp>
-#include <core/net/detail/StreamSocketOptions.hpp>
 
 namespace core::net
 {
@@ -26,12 +25,6 @@ class EventLoop;
 /// @param fd The listening fd (already non-blocking); read live so the owner's
 ///        close() (which drops it below 0) is observed between turns.
 /// @param closed The owning listener's closed flag, read live.
-/// @param options What every accepted socket is given through
-///        @c detail::applyStreamSocketOptions -- the listener's buffer sizes. By value, for the
-///        coroutine reason above.
-[[nodiscard]] async::Task<AcceptResult> acceptOne(EventLoop* loop,
-                                                  int const* fd,
-                                                  bool const* closed,
-                                                  detail::StreamSocketOptions options);
+[[nodiscard]] async::Task<AcceptResult> acceptOne(EventLoop* loop, int const* fd, bool const* closed);
 
 } // namespace core::net

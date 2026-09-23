@@ -9,6 +9,26 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Breaking
+
+- **The `await_ready` of nine public awaiters answers a `constexpr` constant `false`**:
+  `core::net::DelayAwaiter`, `core::async::Task<T>::Awaiter`, `Task<void>::Awaiter`, the awaiter
+  `whenAll` and `whenAny` return, `AsyncQueue<T>::PopAwaiter`, and the four `TuiRuntime` awaiters
+  (which also became `noexcept`). It is the fix for fastcached#1546 under *Fixed*: the decision it
+  made is `await_suspend`'s now. A `co_await` behaves as before; code that called `await_ready()`
+  directly to learn whether an await would park gets `false` where it got `true` -- for instance
+  `sleepUntil(nullptr, t).await_ready()` -- and core-cpp's own `SleepUntil_test.cpp` and
+  `AsyncQueue_test.cpp` asserted exactly that. It stays a `const` member rather than a `static`
+  one, which clang-tidy's `readability-static-accessed-through-instance` would report at every
+  `co_await` in a caller's code. `ResultAwaitable::await_ready` still answers whether the operation
+  settled inline.
+
+  Migration: `co_await` the awaiter, and never call `await_ready()` on it directly; it is the
+  compiler's half of the protocol, not a question a caller can ask. A test that asserted an await
+  resolves without parking asserts it through the flow instead: that it has finished after one
+  turn of the loop, or that its continuation ran exactly once. fastcached's `SleepUntil_test.cpp`
+  asserts `true` on its own copy, and changes with the migration.
+
 ### Fixed
 
 - **`EventLoop::runUntilIdle` and `testing::TestLoop::drain` no longer return while the waiters of
@@ -22,7 +42,7 @@ workflow refuses one without a section here.
   every step that queues work rather than the four that had a counter. `ClosedParkIdle_test.cpp`
   closes a listener under a parked accept and asks one `runUntilIdle` to finish it.
 
-- **An `OperationCancelled` thrown out of a `co_await` on `delay` or `sleepUntil`, and on eleven
+- **An `OperationCancelled` thrown out of a `co_await` on `delay` or `sleepUntil`, and on twelve
   other awaiters, is caught again under MSVC 19.44 on ARM64**
   ([fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546)). That compiler's
   ARM64 code generator drops the enclosing `try` of a `co_await` on a temporary awaiter whose
@@ -31,8 +51,8 @@ workflow refuses one without a section here.
   the virtual `IClock::now()`. The 0.1.0 notes say this awaiter carried fastcached's fix when
   `TuiRuntime` moved onto it; it did not, and every `delay` and `sleepUntil` had the shape. Every
   `await_ready` in `src/core` now reads a member or answers a constant, and the decision it made is
-  `await_suspend`'s, asked before the flow's stop token is read, so what a caller observes is
-  unchanged: an elapsed deadline, a null loop, a finished task, an empty `whenAll`, a queued item,
+  `await_suspend`'s, asked before the flow's stop token is read, so what a `co_await` observes is
+  unchanged (a direct call of `await_ready()` is not; see *Breaking*): an elapsed deadline, a null loop, a finished task, an empty `whenAll`, a queued item,
   a free TLS gate, a finished lookup and a buffered input event or agent message all resume without
   parking, and a flow that is already stopped still resumes normally on each of them. The awaiters:
   `DelayAwaiter`, `interruptibleSleepUntil`'s, `Task<T>::Awaiter` and `Task<void>::Awaiter`,
@@ -45,8 +65,8 @@ workflow refuses one without a section here.
   listener's `AcceptEx` handed out sockets with close-on-exec and nothing else, so a server's small
   replies waited on Nagle for the client's delayed ACK. Every dial and every accept on every
   platform now goes through one helper, `detail::applyStreamSocketOptions`, which sets close-on-exec
-  (a non-inheritable handle on Windows), `TCP_NODELAY`, the buffer sizes below when asked, and
-  keepalive when a dial asks for it. `WindowsSocket::native()` joins `PosixSocket::native()` and
+  (a non-inheritable handle on Windows), `TCP_NODELAY`, and keepalive when a dial asks for it; the
+  buffer sizes below are `detail::applySocketBufferSizes`'s, before the connection exists. `WindowsSocket::native()` joins `PosixSocket::native()` and
   `IocpSocket::native()`, for diagnostics and tests.
 - **The WFMO backend's TCP listener claims its port exclusively.** It bound with `SO_REUSEADDR`,
   which on Windows lets a second socket bind a port a live listener serves and take its
@@ -80,21 +100,12 @@ workflow refuses one without a section here.
   requests a second at 16, 64 and 256 connections; a raw epoll echo, the floor, is 4.2 us. The
   turn is unchanged. `SocketRegistration_test.cpp` counts the backend calls, and fails with the
   per-park registration.
-- **The `await_ready` of nine public awaiters is a `constexpr` constant `false`**:
-  `core::net::DelayAwaiter`, `core::async::Task<T>::Awaiter`, `Task<void>::Awaiter`, the awaiter
-  `whenAll` and `whenAny` return, `AsyncQueue<T>::PopAwaiter`, and the four `TuiRuntime` awaiters
-  (which also became `noexcept`). It stays a `const` member rather than a `static` one, which
-  clang-tidy's `readability-static-accessed-through-instance` would report at every `co_await` in
-  a caller's code. A `co_await` behaves as before. Code that called `await_ready()`
-  directly to learn whether an await would park gets `false` where it got `true`, for instance
-  `sleepUntil(nullptr, t).await_ready()`; `await_suspend(std::noop_coroutine())` answering `false`
-  is the question now. `ResultAwaitable::await_ready` still answers whether the operation settled
-  inline.
 
 ### Added
 
 - **`CORE_CPP_MSVC_STATIC_RUNTIME_VARIANTS`** (OFF): with an MSVC-ABI compiler, every compiled module
-  also gets a static-CRT twin, `core::<name>_mt` (target `core-cpp-<name>-mt`), built `/MT` or
+  but `core::testing_main` (whose Catch2 and dialog suppression are built `/MD`, and whose target
+  is edited after it is declared) also gets a static-CRT twin, `core::<name>_mt` (target `core-cpp-<name>-mt`), built `/MT` or
   `/MTd` and linking the twins of the modules it links (header-only modules are shared as they
   are). The MSVC linker refuses to mix C runtimes (`LNK2038 ... 'RuntimeLibrary'`, or lld-link's
   `/failifmismatch`), so one build of core-cpp could not serve both fastcached's `/MD` daemon and
@@ -120,25 +131,37 @@ workflow refuses one without a section here.
   since Windows has no `SO_REUSEPORT` and a completion-port association is one socket to one port
   -- and `adoptFd` answers `Unsupported` there. It builds the socket the loop's backend drives
   (`IocpSocket` where the loop lends a completion port, `WindowsSocket` under WFMO, `PosixSocket`
-  on POSIX), takes ownership of the handle on every path and closes it when adoption fails (the
-  opposite of `adoptListener`, which leaves a refused handle with its caller), changes no socket
+  on POSIX), takes ownership of the handle on every path and closes it when adoption fails --
+  allocating the wrapper throwing included (the opposite of `adoptListener`, which leaves a refused
+  handle with its caller), changes no socket
   option beyond what the transport needs to run (non-blocking mode on POSIX), and asserts it is
-  called on the loop's thread. `adoptFd` is unchanged.
+  called on the loop's thread. `adoptFd` is unchanged. Under WFMO, a readiness event that cannot
+  be created or associated is an error value, through the new `WindowsSocket::adopt`; the
+  `WindowsSocket` constructor, which `connect` and the WFMO listener still use, can only carry on
+  with a socket that never becomes ready.
 - **`SocketBufferSizes`** (`<core/net/SocketBuffers.hpp>`), and a `buffers` field of it on both
   `ListenOptions` and `DialOptions`: the kernel send and receive buffers (`SO_SNDBUF`,
   `SO_RCVBUF`) of every socket a listener accepts, and of one dialled socket. Each size is a
   `std::optional<std::size_t>`, and an unset one leaves the kernel's value untouched, which is the
-  default. fastcached sizes both to 1 MiB so that a large reply leaves in one `sendmsg`. A size is a
-  request: Linux reports twice what was set and caps an unprivileged request at
-  `net.core.wmem_max`/`rmem_max`. `PosixListener::bind`, `WindowsListener::bind` and
-  `IocpListener::bind` take the sizes as a new trailing parameter with a default; the internal
+  default. fastcached sizes both to 1 MiB so that a large reply leaves in one `sendmsg`. The sizes
+  are asked for before the connection exists -- of the listening socket before `listen`, which its
+  accepted sockets inherit (an `AcceptEx` socket included), and of a dialled socket before
+  `connect` -- because the TCP window scale is announced in the handshake and tcp(7) asks for them
+  first. A size is a request: Linux reports twice what was set and caps an
+  unprivileged request at `net.core.wmem_max`/`rmem_max`. `PosixListener::bind` takes two new
+  trailing parameters with defaults, `PortSharing sharing` (below) and then the sizes;
+  `WindowsListener::bind` and `IocpListener::bind` take the sizes; and `PosixListener`,
+  `WindowsListener` and `IocpListener` gain `native()`, as the sockets have. The internal
   `detail::DialStep`, `detail::dialReadiness` and `detail::dialCompletion` take a
   `detail::StreamSocketOptions` where they took a `KeepAlive`.
 - **`ListenOptions::sharing`**, a `PortSharing` defaulting to `PortSharing::Exclusive`. With
-  `PortSharing::Shared`, `listen()` sets `SO_REUSEPORT` on Linux, the BSDs and macOS, so a server
-  can bind one listener per loop on the same port and let the kernel spread the connections;
-  fastcached's daemon does this by default, and without it the second loop's bind failed with
-  `AddressInUse`. On Windows a shared listener is refused with `NetErrorCode::Unsupported` rather
+  `PortSharing::Shared`, several listeners may bind one port; fastcached's daemon binds one per loop
+  by default, and without it the second loop's bind failed with `AddressInUse`. Whether the
+  connections are spread across them is the platform's: Linux spreads them (`SO_REUSEPORT`), and
+  FreeBSD does with `SO_REUSEPORT_LB`, which `listen()` uses wherever the constant is defined. On
+  macOS and the other BSDs the binds coexist and the newest listener gets every connection
+  (`SO_REUSEPORT`), so one listener per loop leaves all but one loop idle there; accepting on one
+  and handing sockets out with `adoptSocket` is what spreads them. On Windows a shared listener is refused with `NetErrorCode::Unsupported` rather
   than mapped to `SO_REUSEADDR`, which there lets a later socket take a held port over. It is the
   UDP sockets' existing enum, so `<core/net/Sockets.hpp>` now includes `<core/net/UdpSocket.hpp>`.
   `tools/migrate/renames.json`'s `core::net::ReusePort` row points at it.

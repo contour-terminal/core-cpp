@@ -43,7 +43,8 @@ class WindowsListener final: public IListener
     /// @param host The bind address.
     /// @param port The bind port; 0 requests an ephemeral port.
     /// @param backlog The listen backlog.
-    /// @param acceptedBuffers The kernel buffer sizes every accepted socket asks for.
+    /// @param acceptedBuffers The kernel buffer sizes, asked of the listening socket before it
+    ///        listens; every socket it accepts inherits them.
     /// @return The bound listener, or a @c NetError on failure.
     [[nodiscard]] static std::expected<std::unique_ptr<WindowsListener>, NetError> bind(
         EventLoop& loop,
@@ -79,6 +80,9 @@ class WindowsListener final: public IListener
 
     void close() noexcept override;
 
+    /// @return The listening socket, or `INVALID_SOCKET` once closed; for diagnostics and tests.
+    [[nodiscard]] SOCKET native() const noexcept { return _socket; }
+
   private:
     WindowsListener(
         EventLoop& loop, SOCKET socket, WSAEVENT event, std::uint16_t boundPort, std::string path) noexcept;
@@ -99,7 +103,6 @@ class WindowsListener final: public IListener
     /// listener, which owns no path.
     std::string _path;
     bool _closed = false;
-    SocketBufferSizes _acceptedBuffers {}; ///< Given to every accepted socket.
 };
 
 } // namespace core::net

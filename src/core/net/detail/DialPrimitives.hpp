@@ -128,8 +128,8 @@ namespace detail
     /// @param loop The loop whose port completes the dial; not owned.
     /// @param endpoint The candidate; by value, for the coroutine-frame reason.
     /// @param deadline When to give up on this candidate; `SteadyTimePoint::max()` for never.
-    /// @param options Keepalive and buffer sizes for the connected socket
-    ///        (@c applyStreamSocketOptions).
+    /// @param options The buffer sizes, asked for before the connect (@c applySocketBufferSizes),
+    ///        and keepalive, armed after it (@c applyStreamSocketOptions).
     /// @return The connected socket, or why this candidate did not produce one.
     /// @throws async::OperationCancelled when the awaiting flow's own token stops the dial.
     [[nodiscard]] async::Task<SocketResult> dialCompletion(EventLoop* loop,

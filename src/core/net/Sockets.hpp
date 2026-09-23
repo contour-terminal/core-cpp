@@ -50,17 +50,26 @@ struct ListenOptions
 
     /// Whether other listeners may bind the same address and port at the same time.
     ///
-    /// @c PortSharing::Shared is what a server with one listener per loop asks for: each loop binds
-    /// the port and the kernel spreads incoming connections across them (`SO_REUSEPORT` on Linux,
-    /// the BSDs and macOS; which listener a connection reaches is the kernel's choice). On Windows
-    /// it is refused with @c NetErrorCode::Unsupported, never mapped: Windows has no load-balancing
-    /// option, and its `SO_REUSEADDR` lets a later socket take over a port another one holds, which
-    /// is a hijack rather than a share. The default is exclusive, so a second bind of a held port
-    /// fails with @c NetErrorCode::AddressInUse.
+    /// @c PortSharing::Shared lets several listeners bind the same address and port at once. Whether
+    /// the kernel also spreads the connections across them depends on the platform:
+    ///
+    /// - **Linux** spreads them (`SO_REUSEPORT`, by a hash of each connection's addresses), which is
+    ///   what a server with one listener per loop asks for.
+    /// - **FreeBSD** spreads them (`SO_REUSEPORT_LB`, used wherever the constant is defined).
+    /// - **macOS and the other BSDs** bind, and spread nothing: the newest listener gets every
+    ///   connection (`SO_REUSEPORT`). A server there that binds one listener per loop leaves all
+    ///   but one loop idle; accepting on one loop and handing each socket to another with
+    ///   @c adoptSocket is what spreads the work.
+    ///
+    /// On Windows it is refused with @c NetErrorCode::Unsupported, never mapped: Windows has no
+    /// such option, and its `SO_REUSEADDR` lets a later socket take over a port another one holds,
+    /// which is a hijack rather than a share. The default is exclusive, so a second bind of a held
+    /// port fails with @c NetErrorCode::AddressInUse.
     PortSharing sharing = PortSharing::Exclusive;
 
     /// The kernel send and receive buffers of every socket this listener accepts; unset ones keep
-    /// the kernel's value. See @c SocketBufferSizes for what a size does and does not promise.
+    /// the kernel's value. They are asked of the listening socket before it listens, and what it
+    /// accepts inherits them. See @c SocketBufferSizes for what a size does and does not promise.
     SocketBufferSizes buffers {};
 };
 

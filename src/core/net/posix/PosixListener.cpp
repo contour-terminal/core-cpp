@@ -2,6 +2,7 @@
 #include <core/net/posix/PosixListener.hpp>
 
 #include <core/net/SocketAddress.hpp>
+#include <core/net/detail/StreamSocketOptions.hpp>
 #include <core/net/posix/AcceptLoop.hpp>
 #include <core/net/posix/FdUtils.hpp>
 
@@ -24,19 +25,38 @@ namespace core::net
 
 namespace
 {
-    /// Lets other listeners bind the port @p fd is about to bind, and the kernel spread incoming
-    /// connections across them.
+    /// The socket option that lets several listeners bind one port, and the one that also spreads
+    /// the connections across them where the platform has one.
     ///
-    /// `SO_REUSEPORT`, which Linux, the BSDs and macOS all spell the same way. Not `SO_REUSEADDR`:
-    /// that is set on every listener already, and on none of these does it let two sockets LISTEN
-    /// on one port. Not behind `#ifdef SO_REUSEPORT` either: a POSIX platform without it has no
-    /// way to honour the request, and a build error says so where a silent fallback would not.
+    /// - Linux: `SO_REUSEPORT`, which spreads connections by a hash of their addresses.
+    /// - FreeBSD: `SO_REUSEPORT_LB`, which spreads them. Its plain `SO_REUSEPORT` lets the binds
+    ///   coexist and spreads nothing, which is why the constant is chosen where it is defined.
+    /// - macOS and the other BSDs: `SO_REUSEPORT`. The binds coexist, and the newest listener gets
+    ///   every connection; nothing is spread.
+    ///
+    /// An `#if` on a constant an SDK may lack, within the POSIX family (the platform rule's
+    /// exception), rather than a platform test: a FreeBSD too old for it falls back to the option
+    /// that at least binds.
+#ifdef SO_REUSEPORT_LB
+    constexpr int PortSharingOption = SO_REUSEPORT_LB;
+    constexpr auto const* PortSharingOptionCall = "setsockopt(SO_REUSEPORT_LB)";
+#else
+    constexpr int PortSharingOption = SO_REUSEPORT;
+    constexpr auto const* PortSharingOptionCall = "setsockopt(SO_REUSEPORT)";
+#endif
+
+    /// Lets other listeners bind the port @p fd is about to bind, with @c PortSharingOption.
+    ///
+    /// Not `SO_REUSEADDR`: that is set on every listener already, and on none of these platforms
+    /// does it let two sockets LISTEN on one port. Not behind `#ifdef SO_REUSEPORT` either: a POSIX
+    /// platform without it has no way to honour the request, and a build error says so where a
+    /// silent fallback would not.
     /// @param fd The unbound descriptor.
     /// @return Whether the option was set; errno says why not.
     [[nodiscard]] bool enablePortSharing(int fd) noexcept
     {
         int const one = 1;
-        return ::setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) == 0;
+        return ::setsockopt(fd, SOL_SOCKET, PortSharingOption, &one, sizeof(one)) == 0;
     }
 } // namespace
 
@@ -121,11 +141,15 @@ std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::bind(Even
         // port and silently got an exclusive one finds out as EADDRINUSE on its second loop.
         if (sharing == PortSharing::Shared && !enablePortSharing(fd))
         {
-            lastError = makeNetError(NetErrorCode::SystemError, errno, "setsockopt(SO_REUSEPORT)");
+            lastError = makeNetError(NetErrorCode::SystemError, errno, PortSharingOptionCall);
             ::close(fd);
             fd = -1;
             continue;
         }
+
+        // Before listen, so the window scale of every connection it accepts can count the receive
+        // buffer; an accepted socket inherits both sizes from its listener.
+        detail::applySocketBufferSizes(fd, acceptedBuffers);
 
         // makeNonBlockingCloexec stays: on a platform without the atomic socket() flags
         // makeStreamSocket sets them best-effort and ignores a failure, while a listener must
@@ -157,9 +181,7 @@ std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::bind(Even
             actualPort = ntohs(reinterpret_cast<sockaddr_in6 const*>(&bound)->sin6_port);
     }
 
-    auto listener = std::unique_ptr<PosixListener>(new PosixListener(loop, fd, actualPort));
-    listener->_acceptedBuffers = acceptedBuffers;
-    return listener;
+    return std::unique_ptr<PosixListener>(new PosixListener(loop, fd, actualPort));
 }
 
 std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::adopt(EventLoop& loop, int fd)
@@ -186,7 +208,7 @@ std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::adopt(Eve
 async::Task<AcceptResult> PosixListener::accept()
 {
     // The shared loop records the TCP peer's printable host via formatPeer.
-    return acceptOne(&_loop, &_fd, &_closed, detail::StreamSocketOptions { .buffers = _acceptedBuffers });
+    return acceptOne(&_loop, &_fd, &_closed);
 }
 
 } // namespace core::net

@@ -4,6 +4,7 @@
 #include <core/async/Cancellation.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/detail/PeerAddress.hpp>
+#include <core/net/detail/StreamSocketOptions.hpp>
 #include <core/net/detail/WouldBlock.hpp>
 #include <core/net/posix/PosixSocket.hpp>
 
@@ -17,10 +18,7 @@
 namespace core::net
 {
 
-async::Task<AcceptResult> acceptOne(EventLoop* loop,
-                                    int const* fd,
-                                    bool const* closed,
-                                    detail::StreamSocketOptions options)
+async::Task<AcceptResult> acceptOne(EventLoop* loop, int const* fd, bool const* closed)
 {
     while (true)
     {
@@ -43,8 +41,10 @@ async::Task<AcceptResult> acceptOne(EventLoop* loop,
                 ::fcntl(conn, F_SETFL, flags | O_NONBLOCK);
 #endif
             // What a dialled socket is given too -- TCP_NODELAY above all, which only the dial
-            // used to set, so a server's replies waited on Nagle while its client's did not.
-            detail::applyStreamSocketOptions(conn, options);
+            // used to set, so a server's replies waited on Nagle while its client's did not. The
+            // buffer sizes are not asked for here: the socket inherited them from the listener,
+            // which asked before it listened.
+            detail::applyStreamSocketOptions(conn, KeepAlive::No);
             co_return std::unique_ptr<ISocket>(new PosixSocket(*loop, conn, formatPeer(peer)));
         }
 

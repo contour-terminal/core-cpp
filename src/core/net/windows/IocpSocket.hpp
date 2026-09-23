@@ -315,7 +315,8 @@ class IocpListener final: public IListener
     /// @param host The bind address; empty is the wildcard.
     /// @param port The bind port; 0 requests an ephemeral one.
     /// @param backlog The listen backlog.
-    /// @param acceptedBuffers The kernel buffer sizes every accepted socket asks for.
+    /// @param acceptedBuffers The kernel buffer sizes, asked of the listening socket before it
+    ///        listens; every socket it accepts takes them from it.
     /// @return The listener, or why it could not be bound.
     [[nodiscard]] static std::expected<std::unique_ptr<IocpListener>, NetError> bind(
         EventLoop& loop,
@@ -343,6 +344,9 @@ class IocpListener final: public IListener
     /// @c NetErrorCode::Cancelled when its completion arrives.
     void close() noexcept override;
 
+    /// @return The listening socket, or `INVALID_SOCKET` once closed; for diagnostics and tests.
+    [[nodiscard]] SOCKET native() const noexcept;
+
     /// What a parked accept reads after it resumes; defined in the implementation.
     struct Shared;
 
@@ -367,7 +371,6 @@ class IocpListener final: public IListener
     void* _acceptEx;
     void* _acceptAddresses;
     bool _closed = false;
-    SocketBufferSizes _acceptedBuffers {}; ///< Given to every accepted socket.
 };
 
 } // namespace core::net

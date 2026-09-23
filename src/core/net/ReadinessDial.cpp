@@ -213,6 +213,8 @@ async::Task<SocketResult> dialReadiness(EventLoop* loop,
     // close rather than by a flag somebody can forget to set.
     auto const discard = ScopeGuard { [&]() noexcept { closeDialSocket(loop, handles); } };
 
+    // Before the connect, while the window scale can still take the receive buffer into account.
+    applySocketBufferSizes(handles.socket, options.buffers);
     auto const started = beginConnect(handles, endpoint);
     if (!started.has_value())
         co_return std::unexpected(started.error());
@@ -248,7 +250,7 @@ async::Task<SocketResult> dialReadiness(EventLoop* loop,
     if (auto const settled = pendingSocketError(handles); !settled.has_value())
         co_return std::unexpected(settled.error());
 
-    applyStreamSocketOptions(handles.socket, options);
+    applyStreamSocketOptions(handles.socket, options.keepAlive);
 
     // The peer string is the ADDRESS rather than the requested host: it feeds a connection's log
     // prefix, which records the address, and that is how the accept path already formats it.

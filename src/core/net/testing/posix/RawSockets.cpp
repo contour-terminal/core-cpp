@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/testing/RawSockets.hpp>
 
+#include <core/net/posix/PosixListener.hpp>
 #include <core/net/posix/PosixSocket.hpp>
 
 #include <sys/socket.h>
@@ -63,6 +64,13 @@ std::ptrdiff_t rawReceive(platform::NativeHandle handle, std::span<char> into) n
 platform::NativeHandle nativeHandleOf(ISocket const& socket) noexcept
 {
     if (auto const* posix = dynamic_cast<PosixSocket const*>(&socket))
+        return posix->native();
+    return platform::InvalidHandle;
+}
+
+platform::NativeHandle nativeHandleOf(IListener const& listener) noexcept
+{
+    if (auto const* posix = dynamic_cast<PosixListener const*>(&listener))
         return posix->native();
     return platform::InvalidHandle;
 }

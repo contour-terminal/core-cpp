@@ -176,6 +176,10 @@ std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bind(
             continue;
         }
 
+        // Before listen, so the window scale of every connection it accepts can count the receive
+        // buffer; an accepted socket inherits both sizes from its listener.
+        detail::applySocketBufferSizes(reinterpret_cast<platform::NativeHandle>(sock), acceptedBuffers);
+
         // Exclusive, as the IOCP listener binds, and a failure to make it so fails the candidate:
         // this is a security property, not a tuning one (`.agent/rules/async-and-net.md`, "A
         // listening socket claims its address exclusively"). It was SO_REUSEADDR here, which on
@@ -225,9 +229,7 @@ std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bind(
     }
 
     // A TCP listener owns no socket file, hence the empty path.
-    auto listener = std::unique_ptr<WindowsListener>(new WindowsListener(loop, sock, event, actualPort, {}));
-    listener->_acceptedBuffers = acceptedBuffers;
-    return listener;
+    return std::unique_ptr<WindowsListener>(new WindowsListener(loop, sock, event, actualPort, {}));
 }
 
 std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::adopt(EventLoop& loop,
@@ -322,9 +324,8 @@ async::Task<AcceptResult> WindowsListener::accept()
         if (conn != detail::InvalidSocket)
         {
             // What a dialled socket is given too -- TCP_NODELAY above all, which only the dial
-            // used to set.
-            detail::applyStreamSocketOptions(reinterpret_cast<platform::NativeHandle>(conn),
-                                             detail::StreamSocketOptions { .buffers = _acceptedBuffers });
+            // used to set. The buffer sizes it inherited from the listener.
+            detail::applyStreamSocketOptions(reinterpret_cast<platform::NativeHandle>(conn), KeepAlive::No);
             co_return std::unique_ptr<ISocket>(new WindowsSocket(_loop, conn, formatPeer(peer)));
         }
 

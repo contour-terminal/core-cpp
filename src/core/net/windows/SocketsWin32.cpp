@@ -129,7 +129,9 @@ std::expected<std::unique_ptr<ISocket>, NetError> adoptSocket(EventLoop& loop,
     // The same question `listen` and the connector ask of the loop: a completion port, or readiness.
     auto* const port = loop.completionPort();
     if (port == nullptr)
-        return std::unique_ptr<ISocket>(new WindowsSocket(loop, socket, std::move(peerAddress)));
+        return WindowsSocket::adopt(loop, socket, std::move(peerAddress))
+            .transform(
+                [](std::unique_ptr<WindowsSocket> adopted) -> std::unique_ptr<ISocket> { return adopted; });
 
     // Associated HERE rather than by the constructor, so a refusal is this call's error value and
     // the socket is closed with it -- the constructor can only record the failure for a first read.
@@ -138,8 +140,18 @@ std::expected<std::unique_ptr<ISocket>, NetError> adoptSocket(EventLoop& loop,
         ::closesocket(socket);
         return std::unexpected(std::move(associated.error()));
     }
-    return std::unique_ptr<ISocket>(
-        new IocpSocket(loop, socket, std::move(peerAddress), IocpAssociation::AlreadyAssociated));
+    try
+    {
+        return std::unique_ptr<ISocket>(
+            new IocpSocket(loop, socket, std::move(peerAddress), IocpAssociation::AlreadyAssociated));
+    }
+    catch (...)
+    {
+        // Allocating the wrapper threw: nothing owns the socket, and this call promised to close it.
+        port->forget(handle);
+        ::closesocket(socket);
+        throw;
+    }
 }
 
 std::expected<std::unique_ptr<ISocket>, NetError> adoptFd(EventLoop& /*loop*/, int /*fd*/)

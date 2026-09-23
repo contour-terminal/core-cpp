@@ -48,7 +48,10 @@ enum class PortSharing : std::uint8_t
     /// This socket alone holds the address it bound.
     Exclusive,
 
-    /// Several sockets may hold it, and each hears what is broadcast to it.
+    /// Several sockets may hold it. For a datagram socket, each hears what is broadcast to it; for
+    /// a TCP listener (@c ListenOptions::sharing), each may accept, and which one a connection
+    /// reaches is the platform's choice -- @c ListenOptions::sharing says which platforms spread
+    /// the connections and which give them all to one listener.
     Shared,
 };
 

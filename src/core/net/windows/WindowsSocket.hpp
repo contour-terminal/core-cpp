@@ -15,6 +15,7 @@
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <memory>
 #include <optional>
 #include <span>
@@ -42,6 +43,19 @@ class WindowsSocket final: public ISocket
     /// @param peerAddress Printable peer address, or "" if unknown.
     WindowsSocket(EventLoop& loop, SOCKET socket, std::string peerAddress = {}) noexcept;
     ~WindowsSocket() override;
+
+    /// Wraps @p socket as the constructor does, and answers why not where the constructor can only
+    /// carry on: a readiness event that could not be created or associated leaves a socket that
+    /// never becomes ready, which a caller told "adopted" would wait on for ever.
+    ///
+    /// Ownership of @p socket transfers on every path: it is closed when the wrapping fails, and
+    /// when allocating the wrapper throws.
+    /// @param loop The loop whose reactor drives readiness (not owned).
+    /// @param socket The connected SOCKET.
+    /// @param peerAddress Printable peer address, or "" if unknown.
+    /// @return The socket, or why its readiness event could not be set up.
+    [[nodiscard]] static std::expected<std::unique_ptr<WindowsSocket>, NetError> adopt(
+        EventLoop& loop, SOCKET socket, std::string peerAddress);
 
     WindowsSocket(WindowsSocket const&) = delete;
     WindowsSocket& operator=(WindowsSocket const&) = delete;
@@ -174,6 +188,10 @@ class WindowsSocket final: public ISocket
     EventLoop& _loop;
     SOCKET _socket;
     WSAEVENT _event;
+    /// The Winsock error that kept the constructor from setting up @c _event, and the call that
+    /// failed; 0 and null when it was set up. Read by @c adopt.
+    int _setupError = 0;
+    char const* _setupCall = nullptr;
     std::string _peerAddress;
     bool _closed = false;
     /// Latched by a read that observed the peer's EOF. SEPARATE from @c _closed on purpose:

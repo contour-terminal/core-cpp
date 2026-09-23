@@ -6,6 +6,11 @@
 // TCP_NODELAY: a server's replies waited on Nagle for the client's ACK, and only the client's
 // requests did not. `detail::applyStreamSocketOptions` is now the one place both paths go through,
 // and these cases read the answer back from the kernel rather than trusting the call was made.
+//
+// The buffer sizes are asked for before the connection exists -- of the listening socket, and of
+// a dialled one before its connect -- because the TCP window scale is announced in the handshake.
+// The listener's own sizes are read back below, which is what tells that order from asking each
+// accepted socket afterwards: both leave an accepted socket with the sizes.
 
 #include <core/async/Task.hpp>
 #include <core/async/WhenAll.hpp>
@@ -32,6 +37,7 @@ using core::async::Task;
 using core::net::DialOptions;
 using core::net::EventLoop;
 using core::net::ISocket;
+using core::net::KeepAlive;
 using core::net::ListenOptions;
 using core::net::SocketBufferSizes;
 using core::net::detail::reportStreamSocketOptions;
@@ -104,7 +110,7 @@ Connection connectOnce(EventLoop& loop, ListenOptions listenOptions, DialOptions
 
 } // namespace
 
-TEST_CASE("The helper sets TCP_NODELAY, sizes only what it is asked to, and touches nothing else",
+TEST_CASE("The helpers set TCP_NODELAY, size only what they are asked to, and touch nothing else",
           "[net][socket-options]")
 {
     auto const untouched = RawSocket { openRawTcpSocket() };
@@ -115,7 +121,8 @@ TEST_CASE("The helper sets TCP_NODELAY, sizes only what it is asked to, and touc
 
     SECTION("defaults")
     {
-        core::net::detail::applyStreamSocketOptions(untouched.get(), {});
+        core::net::detail::applyStreamSocketOptions(untouched.get(), KeepAlive::No);
+        core::net::detail::applySocketBufferSizes(untouched.get(), SocketBufferSizes {});
         auto const after = reportStreamSocketOptions(untouched.get());
         CHECK(after.noDelay);
         CHECK(after.sendBuffer == before.sendBuffer);
@@ -123,11 +130,9 @@ TEST_CASE("The helper sets TCP_NODELAY, sizes only what it is asked to, and touc
     }
     SECTION("sizes")
     {
-        core::net::detail::applyStreamSocketOptions(
-            configured.get(),
-            { .buffers = SocketBufferSizes { .send = RequestedBuffer, .receive = RequestedBuffer } });
+        core::net::detail::applySocketBufferSizes(
+            configured.get(), SocketBufferSizes { .send = RequestedBuffer, .receive = RequestedBuffer });
         auto const after = reportStreamSocketOptions(configured.get());
-        CHECK(after.noDelay);
         CHECK(after.sendBuffer >= RequestedBuffer);
         CHECK(after.receiveBuffer >= RequestedBuffer);
         CHECK(after.sendBuffer != before.sendBuffer);
@@ -181,6 +186,34 @@ TEST_CASE("Buffer sizes asked of a listener reach every socket it accepts, and a
             CHECK(accepted.receiveBuffer >= RequestedBuffer);
             CHECK(dialled.sendBuffer >= RequestedBuffer);
             CHECK(dialled.receiveBuffer >= RequestedBuffer);
+        }
+    }
+}
+
+TEST_CASE("Buffer sizes asked of a listener are on the listening socket, before any connection",
+          "[net][socket-options]")
+{
+    for (auto const& backend: BackendMatrix)
+    {
+        auto source = core::net::makeBackend(backend.kind);
+        if (!source)
+            continue; // not available on this platform
+
+        DYNAMIC_SECTION("backend=" << backend.name)
+        {
+            auto loop = EventLoop { *source };
+            auto const listener = core::net::listen(
+                loop,
+                ListenOptions {
+                    .host = "127.0.0.1",
+                    .buffers = SocketBufferSizes { .send = RequestedBuffer, .receive = RequestedBuffer } });
+            REQUIRE(listener.has_value());
+
+            auto const listening = nativeHandleOf(**listener);
+            REQUIRE(listening != core::platform::InvalidHandle);
+            auto const report = reportStreamSocketOptions(listening);
+            CHECK(report.sendBuffer >= RequestedBuffer);
+            CHECK(report.receiveBuffer >= RequestedBuffer);
         }
     }
 }

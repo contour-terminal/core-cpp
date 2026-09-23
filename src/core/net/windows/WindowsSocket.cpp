@@ -44,8 +44,38 @@ WindowsSocket::WindowsSocket(EventLoop& loop, SOCKET socket, std::string peerAdd
 {
     // Associate the socket's read/write/close readiness with the event so the
     // loop can wait on it. WSAEventSelect also sets the socket non-blocking.
-    if (_event != WSA_INVALID_EVENT && _socket != detail::InvalidSocket)
-        WSAEventSelect(_socket, _event, FD_READ | FD_WRITE | FD_CLOSE);
+    if (_event == WSA_INVALID_EVENT)
+    {
+        _setupError = WSAGetLastError();
+        _setupCall = "WSACreateEvent";
+    }
+    else if (_socket != detail::InvalidSocket
+             && WSAEventSelect(_socket, _event, FD_READ | FD_WRITE | FD_CLOSE) == SOCKET_ERROR)
+    {
+        _setupError = WSAGetLastError();
+        _setupCall = "WSAEventSelect";
+    }
+}
+
+std::expected<std::unique_ptr<WindowsSocket>, NetError> WindowsSocket::adopt(EventLoop& loop,
+                                                                             SOCKET socket,
+                                                                             std::string peerAddress)
+{
+    auto adopted = std::unique_ptr<WindowsSocket> {};
+    try
+    {
+        adopted.reset(new WindowsSocket(loop, socket, std::move(peerAddress)));
+    }
+    catch (...)
+    {
+        // Nothing owns the socket yet; the promise is that it is closed on every path.
+        ::closesocket(socket);
+        throw;
+    }
+    if (adopted->_setupCall != nullptr)
+        // The wrapper's destructor closes the socket and whatever event there is.
+        return std::unexpected(detail::fromWinsockError(adopted->_setupError, adopted->_setupCall));
+    return adopted;
 }
 
 WindowsSocket::~WindowsSocket()

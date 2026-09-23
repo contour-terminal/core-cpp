@@ -46,8 +46,8 @@ namespace detail
     /// @param endpoint The candidate to dial. **By value**: this is a coroutine, so a reference
     ///        parameter could dangle at the first suspend.
     /// @param deadline When to give up on THIS candidate; `SteadyTimePoint::max()` for never.
-    /// @param options Keepalive and buffer sizes for the connected socket
-    ///        (@c applyStreamSocketOptions).
+    /// @param options The buffer sizes, asked for before the connect (@c applySocketBufferSizes),
+    ///        and keepalive, armed after it (@c applyStreamSocketOptions).
     /// @return The connected socket, or why this candidate did not produce one.
     /// @throws async::OperationCancelled if the awaiting flow's own stop token is stopped while
     ///         the dial is outstanding. A cancel from the FLOW unwinds; the socket is closed on

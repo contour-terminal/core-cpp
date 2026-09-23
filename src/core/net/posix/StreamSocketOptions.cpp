@@ -96,7 +96,7 @@ namespace
     }
 } // namespace
 
-void applyStreamSocketOptions(platform::NativeHandle socket, StreamSocketOptions const& options) noexcept
+void applyStreamSocketOptions(platform::NativeHandle socket, KeepAlive keepAlive) noexcept
 {
     // Close-on-exec. Already set where the descriptor was made -- `accept4` and `makeStreamSocket`
     // ask for it atomically where they can -- and set again here because not every platform
@@ -109,11 +109,14 @@ void applyStreamSocketOptions(platform::NativeHandle socket, StreamSocketOptions
     int const one = 1;
     std::ignore = ::setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 
-    requestBuffer(socket, SO_SNDBUF, options.buffers.send);
-    requestBuffer(socket, SO_RCVBUF, options.buffers.receive);
-
-    if (options.keepAlive == KeepAlive::Yes)
+    if (keepAlive == KeepAlive::Yes)
         std::ignore = armKeepAlive(socket, KeepAliveSettings {});
+}
+
+void applySocketBufferSizes(platform::NativeHandle socket, SocketBufferSizes const& sizes) noexcept
+{
+    requestBuffer(socket, SO_SNDBUF, sizes.send);
+    requestBuffer(socket, SO_RCVBUF, sizes.receive);
 }
 
 StreamSocketReport reportStreamSocketOptions(platform::NativeHandle socket) noexcept

@@ -1116,6 +1116,11 @@ void IocpListener::close() noexcept
         wait->close();
 }
 
+SOCKET IocpListener::native() const noexcept
+{
+    return _shared->socket;
+}
+
 namespace
 {
     /// Prepares a listening socket for this listener: associates it with the port and fetches the
@@ -1205,6 +1210,11 @@ std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::bind(EventL
             lastError = detail::fromWinsockError(::WSAGetLastError(), "socket");
             continue;
         }
+        // Before listen, so the window scale of every connection it accepts can count the receive
+        // buffer. The listener's, not the AcceptEx socket's: an accepted socket ends up with the
+        // listener's sizes, whatever its AcceptEx socket was created with -- measured, with the
+        // sizes asked of the AcceptEx socket alone an accepted one read back 65536.
+        detail::applySocketBufferSizes(reinterpret_cast<platform::NativeHandle>(socket), acceptedBuffers);
         // Exclusive, and a failure to make it so fails the bind rather than being ignored: this
         // option is a security property, not a tuning one.
         auto const exclusive = BOOL { TRUE };
@@ -1231,15 +1241,12 @@ std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::bind(EventL
         return std::unexpected(std::move(prepared.error()));
 
     auto const [family, boundPort] = boundEndpointOf(socket);
-    auto listener =
-        std::unique_ptr<IocpListener> { new IocpListener(loop,
-                                                         socket,
-                                                         family,
-                                                         boundPort,
-                                                         reinterpret_cast<void*>(acceptEx),
-                                                         reinterpret_cast<void*>(acceptAddresses)) };
-    listener->_acceptedBuffers = acceptedBuffers;
-    return listener;
+    return std::unique_ptr<IocpListener> { new IocpListener(loop,
+                                                            socket,
+                                                            family,
+                                                            boundPort,
+                                                            reinterpret_cast<void*>(acceptEx),
+                                                            reinterpret_cast<void*>(acceptAddresses)) };
 }
 
 std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::adopt(EventLoop& loop, SOCKET socket)
@@ -1276,7 +1283,6 @@ async::Task<AcceptResult> IocpListener::accept()
     auto* const port = loop->completionPort();
     auto* const acceptEx = reinterpret_cast<LPFN_ACCEPTEX>(_acceptEx);
     auto* const acceptAddresses = reinterpret_cast<LPFN_GETACCEPTEXSOCKADDRS>(_acceptAddresses);
-    auto const acceptedOptions = detail::StreamSocketOptions { .buffers = _acceptedBuffers };
 
     auto accepted = ::WSASocketW(
         _family, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
@@ -1352,7 +1358,7 @@ async::Task<AcceptResult> IocpListener::accept()
 
     // What a dialled socket is given too -- TCP_NODELAY above all, which only the dial used to set.
     // After the context update, which is what makes the socket answer as a connected TCP socket.
-    detail::applyStreamSocketOptions(reinterpret_cast<platform::NativeHandle>(accepted), acceptedOptions);
+    detail::applyStreamSocketOptions(reinterpret_cast<platform::NativeHandle>(accepted), KeepAlive::No);
 
     // AcceptEx wrote both endpoints into the block; this parses the peer out with no syscall.
     auto peer = std::string {};

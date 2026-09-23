@@ -30,6 +30,8 @@ using core::async::Task;
 using core::net::EventLoop;
 using core::net::ISocket;
 using core::net::testing::BackendMatrix;
+using core::net::testing::closeRawSocket;
+using core::net::testing::openRawTcpSocket;
 using core::net::testing::rawLoopbackConnection;
 using core::net::testing::rawReceive;
 using core::net::testing::rawSendAll;
@@ -128,6 +130,32 @@ TEST_CASE("Adopting an invalid handle is an error value, not an exception or a c
             auto const refused = core::net::adoptSocket(loop, core::platform::InvalidHandle, {});
             REQUIRE_FALSE(refused.has_value());
             CHECK(refused.error().code == core::net::NetErrorCode::BadHandle);
+        }
+    }
+}
+
+TEST_CASE("Adopting a handle that is no longer a socket is refused on every backend", "[net][adopt]")
+{
+    // A handle value that passes the invalid-handle check and names nothing: each backend's first
+    // use of it fails -- `fcntl` on POSIX, the completion-port association under IOCP, and
+    // `WSAEventSelect` under WFMO, whose socket used to record that failure and adopt anyway, so the
+    // caller got a socket that would never become ready.
+    for (auto const& backend: BackendMatrix)
+    {
+        auto source = core::net::makeBackend(backend.kind);
+        if (!source)
+            continue; // not available on this platform
+
+        DYNAMIC_SECTION("backend=" << backend.name)
+        {
+            // The loop first, so nothing it opens can take the number the closed handle frees.
+            auto loop = EventLoop { *source };
+            auto const stale = openRawTcpSocket();
+            REQUIRE(stale != core::platform::InvalidHandle);
+            closeRawSocket(stale);
+
+            auto const refused = core::net::adoptSocket(loop, stale, {});
+            CHECK_FALSE(refused.has_value());
         }
     }
 }

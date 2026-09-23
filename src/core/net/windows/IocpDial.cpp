@@ -133,6 +133,8 @@ async::Task<SocketResult> dialCompletion(EventLoop* loop,
         ::closesocket(socket);
     } };
 
+    // Before the connect, while the window scale can still take the receive buffer into account.
+    applySocketBufferSizes(reinterpret_cast<platform::NativeHandle>(socket), options.buffers);
     if (auto bound = bindWildcard(socket, endpoint.family); !bound)
         co_return std::unexpected(std::move(bound.error()));
     auto* const connectEx = connectExFor(socket);
@@ -199,7 +201,7 @@ async::Task<SocketResult> dialCompletion(EventLoop* loop,
         co_return std::unexpected(
             fromWinsockError(::WSAGetLastError(), "setsockopt(SO_UPDATE_CONNECT_CONTEXT)"));
 
-    applyStreamSocketOptions(reinterpret_cast<platform::NativeHandle>(socket), options);
+    applyStreamSocketOptions(reinterpret_cast<platform::NativeHandle>(socket), options.keepAlive);
 
     auto const connected = std::exchange(socket, detail::InvalidSocket);
     co_return std::unique_ptr<ISocket> { new IocpSocket(

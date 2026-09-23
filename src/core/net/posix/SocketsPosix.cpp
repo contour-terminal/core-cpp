@@ -146,7 +146,17 @@ std::expected<std::unique_ptr<ISocket>, NetError> adoptSocket(EventLoop& loop,
         ::close(handle);
         return std::unexpected(makeNetError(NetErrorCode::SystemError, error, "adoptSocket: O_NONBLOCK"));
     }
-    return std::unique_ptr<ISocket>(new PosixSocket(loop, handle, std::move(peerAddress)));
+    try
+    {
+        return std::unique_ptr<ISocket>(new PosixSocket(loop, handle, std::move(peerAddress)));
+    }
+    catch (...)
+    {
+        // Allocating the wrapper threw: nothing owns the descriptor, and this call promised to
+        // close it.
+        ::close(handle);
+        throw;
+    }
 }
 
 std::expected<std::unique_ptr<ISocket>, NetError> adoptFd(EventLoop& loop, int fd)

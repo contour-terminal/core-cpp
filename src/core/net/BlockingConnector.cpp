@@ -61,6 +61,8 @@ namespace
         auto const discard =
             detail::ScopeGuard { [&handles]() noexcept { detail::closeDialSocket(nullptr, handles); } };
 
+        // Before the connect, while the window scale can still take the receive buffer into account.
+        detail::applySocketBufferSizes(handles.socket, options.buffers);
         auto const started = detail::beginConnect(handles, endpoint);
         if (!started.has_value())
             return std::unexpected(started.error());
@@ -76,7 +78,7 @@ namespace
                 return std::unexpected(settled.error());
         }
 
-        detail::applyStreamSocketOptions(handles.socket, options);
+        detail::applyStreamSocketOptions(handles.socket, options.keepAlive);
         auto released = detail::releaseBlocking(handles);
         if (!released.has_value())
             return std::unexpected(std::move(released.error()));

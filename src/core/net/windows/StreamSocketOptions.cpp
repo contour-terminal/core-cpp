@@ -88,7 +88,7 @@ namespace
     }
 } // namespace
 
-void applyStreamSocketOptions(platform::NativeHandle handle, StreamSocketOptions const& options) noexcept
+void applyStreamSocketOptions(platform::NativeHandle handle, KeepAlive keepAlive) noexcept
 {
     auto const socket = reinterpret_cast<SOCKET>(handle);
 
@@ -102,11 +102,15 @@ void applyStreamSocketOptions(platform::NativeHandle handle, StreamSocketOptions
     std::ignore =
         ::setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<char const*>(&one), sizeof(one));
 
-    requestBuffer(socket, SO_SNDBUF, options.buffers.send);
-    requestBuffer(socket, SO_RCVBUF, options.buffers.receive);
-
-    if (options.keepAlive == KeepAlive::Yes)
+    if (keepAlive == KeepAlive::Yes)
         std::ignore = armKeepAlive(socket, KeepAliveSettings {});
+}
+
+void applySocketBufferSizes(platform::NativeHandle handle, SocketBufferSizes const& sizes) noexcept
+{
+    auto const socket = reinterpret_cast<SOCKET>(handle);
+    requestBuffer(socket, SO_SNDBUF, sizes.send);
+    requestBuffer(socket, SO_RCVBUF, sizes.receive);
 }
 
 StreamSocketReport reportStreamSocketOptions(platform::NativeHandle handle) noexcept

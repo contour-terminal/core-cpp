@@ -4,12 +4,13 @@
 /// @file
 /// Plain OS sockets for a test that must stand outside core-cpp: a connection accepted with the
 /// platform's own calls, a blocking send and receive on its peer end, and the OS handle of a socket
-/// core-cpp built, so a case can ask the kernel what it was given.
+/// or listener core-cpp built, so a case can ask the kernel what it was given.
 ///
 /// One declaration, and an implementation per platform in `testing/posix/RawSockets.cpp` and
 /// `testing/windows/RawSockets.cpp` -- the same split as @c makeSocketPair -- so the cases that
 /// use it carry no `#ifdef` of their own.
 
+#include <core/net/IListener.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/platform/Types.hpp>
 
@@ -82,5 +83,9 @@ struct RawConnection
 /// @return Its OS handle, or @c platform::InvalidHandle for a transport that has none (an
 ///         in-memory one).
 [[nodiscard]] platform::NativeHandle nativeHandleOf(ISocket const& socket) noexcept;
+
+/// @param listener A TCP listener core-cpp built.
+/// @return Its listening OS handle, or @c platform::InvalidHandle for one that has none.
+[[nodiscard]] platform::NativeHandle nativeHandleOf(IListener const& listener) noexcept;
 
 } // namespace core::net::testing

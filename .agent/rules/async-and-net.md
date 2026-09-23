@@ -481,7 +481,7 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   value was read in the constructor, and when the awaiter was a named local. `EventLoop`'s
   `DelayAwaiter` had exactly that shape -- `_loop->clock().now()` -- and so every `delay` and
   `sleepUntil` in the tree, because Task B12 moved `TuiRuntime` onto it after fastcached had fixed
-  the runtime's own copy. The same release made eleven more trivial: `TokenDelayAwaiter` (a clock
+  the runtime's own copy. The same release made twelve more trivial: `TokenDelayAwaiter` (a clock
   read), `Task`'s two awaiters and `ResultAwaitable` (`handle.done()`, and a nested
   `await_ready`), `JoinAwaiter` and `AsyncQueue`'s `PopAwaiter` (a container's `empty()`, a lock),
   `SlotPark` and `SerialGate::Awaiter` (a lock), and `TuiRuntime`'s four input and agent awaiters
@@ -505,13 +505,18 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
 ## Sockets
 
 - **Every connected stream socket gets its options in one place, dialled or accepted.**
-  `detail::applyStreamSocketOptions` sets close-on-exec, `TCP_NODELAY`, the buffer sizes a
-  `ListenOptions` or `DialOptions` names, and keepalive when a dial asks for it, and every dial and
-  every accept path on every platform calls it. Before it, the option list lived in the two
-  `DialPrimitives.cpp` files and no accept path called it, so for the whole of 0.1.0 a server's
-  replies waited on Nagle while its clients' requests did not. A new transport's accept or dial
-  calls the helper; it does not set an option of its own. `StreamSocketOptions_test.cpp` reads the
-  answer back from the kernel on every backend.
+  `detail::applyStreamSocketOptions` sets close-on-exec, `TCP_NODELAY`, and keepalive when a dial
+  asks for it, and every dial and every accept path on every platform calls it. Before it, the
+  option list lived in the two `DialPrimitives.cpp` files and no accept path called it, so for the
+  whole of 0.1.0 a server's replies waited on Nagle while its clients' requests did not. A new
+  transport's accept or dial calls the helper; it does not set an option of its own.
+  `StreamSocketOptions_test.cpp` reads the answer back from the kernel on every backend.
+- **Buffer sizes go on before the connection exists.** `detail::applySocketBufferSizes` is called
+  on a dialled socket before its `connect` and on a listening socket before its `listen`, whose
+  accepted sockets inherit them (an `AcceptEx` socket too: sizes asked of it alone were measured
+  not to survive the accept) -- never after a handshake, because the TCP window scale is announced in the SYN and tcp(7) asks for the
+  sizes to be set first. `StreamSocketOptions_test.cpp` reads them back off the listening socket,
+  which is what tells this order from sizing each accepted socket afterwards.
 - **There is one TCP client, `TcpClient`. Do not write a second.** fastcached had three, and
   the rot was in the one no job built: it resolved no hostnames, had no bounds, no SIGPIPE
   protection, and did not compile on POSIX at all. Origin:

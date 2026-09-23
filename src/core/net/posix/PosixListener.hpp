@@ -32,8 +32,11 @@ class PosixListener final: public IListener
     /// @param host The bind address (e.g. "127.0.0.1", "0.0.0.0", "::").
     /// @param port The bind port; 0 asks the OS for an ephemeral port.
     /// @param backlog The listen backlog.
-    /// @param sharing Whether other listeners may bind the same port (`SO_REUSEPORT`).
-    /// @param acceptedBuffers The kernel buffer sizes every accepted socket asks for.
+    /// @param sharing Whether other listeners may bind the same port (`SO_REUSEPORT_LB` where it is
+    ///        defined, which is FreeBSD's, and `SO_REUSEPORT` elsewhere); see
+    ///        @c ListenOptions::sharing for which platforms spread the connections.
+    /// @param acceptedBuffers The kernel buffer sizes, asked of the listening socket before it
+    ///        listens; every socket it accepts inherits them.
     /// @return The bound listener, or a @c NetError on failure.
     [[nodiscard]] static std::expected<std::unique_ptr<PosixListener>, NetError> bind(
         EventLoop& loop,
@@ -60,6 +63,9 @@ class PosixListener final: public IListener
 
     void close() noexcept override;
 
+    /// @return The listening descriptor, or -1 once closed; for diagnostics and tests.
+    [[nodiscard]] int native() const noexcept { return _fd; }
+
   private:
     PosixListener(EventLoop& loop, int fd, std::uint16_t boundPort) noexcept;
 
@@ -76,7 +82,6 @@ class PosixListener final: public IListener
     int _fd;
     std::uint16_t _boundPort;
     bool _closed = false;
-    SocketBufferSizes _acceptedBuffers {}; ///< Given to every accepted socket.
 };
 
 } // namespace core::net
