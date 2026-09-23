@@ -269,22 +269,23 @@ class AsyncQueue final
         PopAwaiter& operator=(PopAwaiter&&) = delete;
         ~PopAwaiter() = default;
 
-        /// @return True where an item is already available, or the queue is closed, so no
-        ///         suspension is needed.
-        [[nodiscard]] bool await_ready() const noexcept
-        {
-            auto const guard = std::scoped_lock { _queue->_mutex };
-            return !_queue->_items.empty() || _queue->_closed.load(std::memory_order_relaxed);
-        }
+        /// @return False. Whether an item or a close is already there is @c await_suspend's
+        ///         question, asked under the mutex: taking a lock is a call, and MSVC 19.44's ARM64
+        ///         code generator drops the enclosing `try` of a `co_await` on a temporary awaiter
+        ///         whose `await_ready` makes one
+        ///         ([fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546)).
+        [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
 
         /// Registers @p awaiting as this queue's single waiter, and its stop token as what can
         /// take the park back.
         ///
-        /// Returns `bool` rather than `void` because `await_ready` and `await_suspend` are two
-        /// separate acquisitions of the mutex, so a push can land between them. Re-checking under
-        /// the lock and answering false resumes through the normal path instead of parking on an
-        /// item that is already there — a park nothing would ever wake, because the push that
-        /// would have woken it has already happened.
+        /// The first block is what `await_ready` used to ask: an item or a close already there
+        /// resumes at once, before the token is read or a callback registered, so a stopped flow
+        /// still takes an item that was waiting for it. Returns `bool` rather than `void` because
+        /// that check and the park are two separate acquisitions of the mutex, so a push can land
+        /// between them. Re-checking under the lock and answering false resumes through the normal
+        /// path instead of parking on an item that is already there — a park nothing would ever
+        /// wake, because the push that would have woken it has already happened.
         ///
         /// The stop callback is registered BEFORE the park is published, and outside the queue's
         /// mutex. A token that is already stopped runs the callback in its constructor, on this

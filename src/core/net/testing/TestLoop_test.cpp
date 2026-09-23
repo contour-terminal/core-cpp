@@ -72,11 +72,19 @@ struct SleepOnLoop
     EventLoop* loop {};                          ///< The loop whose clock and heap this uses.
     core::platform::SteadyTimePoint deadline {}; ///< When to resume.
 
-    /// @return True when the deadline has already passed.
-    [[nodiscard]] bool await_ready() const noexcept { return loop->clock().now() >= deadline; }
+    /// @return False: reading the clock is a call, so a deadline already passed is
+    ///         @c await_suspend's to answer (fastcached#1546, `.agent/rules/async-and-net.md`).
+    [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
 
     /// @param handle The coroutine to resume at the deadline.
-    void await_suspend(std::coroutine_handle<> handle) const { loop->schedule(deadline, handle); }
+    /// @return False, resuming at once, when the deadline has already passed; true once scheduled.
+    [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) const
+    {
+        if (loop->clock().now() >= deadline)
+            return false;
+        loop->schedule(deadline, handle);
+        return true;
+    }
 
     void await_resume() const noexcept {}
 };

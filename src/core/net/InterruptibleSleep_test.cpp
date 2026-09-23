@@ -165,6 +165,23 @@ TEST_CASE("The deadline arriving reports Deadline", "[InterruptibleSleep]")
     CHECK(loop.pendingTimerCount() == 0);
 }
 
+TEST_CASE("A deadline already gone reports Deadline without parking", "[InterruptibleSleep]")
+{
+    // Decided in the awaiter's `await_suspend`, which declines to park, and no longer in its
+    // `await_ready`, which is a constant (fastcached#1546). The answer and the empty park table
+    // are what that move must not change.
+    auto outcome = Outcome::Pending;
+    auto clock = ManualClock {};
+    auto source = StopSource {};
+    auto loop = TestLoop { clock };
+
+    loop.spawn(sleepAndRecord(&loop, source.get_token(), clock.now() - 1ms, &outcome));
+    std::ignore = loop.drain();
+
+    CHECK(outcome == Outcome::Deadline);
+    CHECK(loop.pendingTimerCount() == 0);
+}
+
 TEST_CASE("A cancel of the awaiting flow's own token unwinds instead of reporting", "[InterruptibleSleep]")
 {
     // Two cancellations reach this wait and they mean different things. The token the CALLER

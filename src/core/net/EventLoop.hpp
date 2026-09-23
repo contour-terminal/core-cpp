@@ -837,9 +837,18 @@ class EventLoop: public async::IExecutor
 ///
 /// **The loop is nullable**, which is what the free @c sleepUntil(EventLoop*, tp) needs: a caller
 /// with no loop behind it — an in-memory transport, a test double with no deadline mechanism —
-/// passes null and the awaitable resolves inline without ever suspending. It is a pointer rather
+/// passes null and the awaitable resolves inline without ever parking. It is a pointer rather
 /// than two types because the alternative is a second awaitable with the same three members and
 /// one fewer reason to exist.
+///
+/// **Both inline resolutions are decided in @c await_suspend, and @c await_ready is a constant.**
+/// MSVC 19.44's ARM64 code generator drops the enclosing `try` of a `co_await` on a temporary
+/// awaiter whose `await_ready` makes a call
+/// ([fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546)): this one read
+/// the clock through the virtual @c IClock::now(), and the @c async::OperationCancelled its
+/// @c await_resume threw passed a typed `catch` and `catch (...)` alike. Declining to park from
+/// @c await_suspend costs nothing a caller can observe: nothing is filed with the loop, and the
+/// flow resumes before `co_await` returns.
 class DelayAwaiter
 {
   public:
@@ -857,25 +866,25 @@ class DelayAwaiter
     {
     }
 
-    /// @return True when there is no loop, or the deadline has already passed — either way the
-    ///         flow never suspends.
-    [[nodiscard]] bool await_ready() const noexcept
-    {
-        return _loop == nullptr || _deadline <= _loop->clock().now();
-    }
+    /// @return False: a null loop and an elapsed deadline are answered by @c await_suspend, for
+    ///         the reason the class comment gives.
+    [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
 
-    /// Parks the awaiting coroutine on the deadline, unless it is already cancelled.
+    /// Parks the awaiting coroutine on the deadline, unless there is no loop, the deadline has
+    /// already passed, or the flow is already cancelled.
+    ///
+    /// The first two are asked BEFORE the token is read, which is what keeps the answer the one
+    /// `await_ready` used to give: an elapsed deadline resolves as elapsed even for a flow that has
+    /// been stopped, because @c await_resume finds no token to throw on.
     /// @tparam Promise The awaiting coroutine's promise type.
     /// @param awaiting The coroutine performing the `co_await`.
-    /// @return False (resume now) if already cancelled; true to park.
-    /// @pre There is a loop, which @c await_ready has already established (it answers true for a
-    ///      null one, so this is never reached with one).
+    /// @return False (resume now) where there is no loop, the deadline has passed or the flow is
+    ///         already cancelled; true to park.
     template <typename Promise>
     [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting)
     {
-        assert(_loop != nullptr
-               && "DelayAwaiter::await_suspend with no loop: await_ready answers "
-                  "true for a null loop, so this is unreachable");
+        if (_loop == nullptr || _deadline <= _loop->clock().now())
+            return false;
         if constexpr (requires { awaiting.promise().stopToken(); })
             _token = awaiting.promise().stopToken();
         if (_token.stop_requested())

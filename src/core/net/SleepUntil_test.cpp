@@ -3,10 +3,14 @@
 // The free `sleepUntil(EventLoop*, tp)` and `nextWakeStep`.
 //
 // Ported from fastcached's `Async/SleepUntil_test.cpp` at `0708dd54`. Its subject is the two
-// resolutions that must NOT suspend — a null loop and a deadline already gone — and the cases
-// below assert that by asking `await_ready()` directly and by resuming a flow exactly once. A
-// case that only checked the flow finished "promptly" would pass on an implementation that
-// parked and was resumed a turn later, which is the difference this file exists to hold.
+// resolutions that must NOT park — a null loop and a deadline already gone — and the cases below
+// assert that by asking `await_suspend()` directly and by resuming a flow exactly once. A case
+// that only checked the flow finished "promptly" would pass on an implementation that parked and
+// was resumed a turn later, which is the difference this file exists to hold.
+//
+// `await_suspend`, not `await_ready`: the awaiter's `await_ready` is a constant `false`, and both
+// resolutions are its `await_suspend` declining to park (fastcached#1546, pinned in
+// EventLoop_test.cpp).
 
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
@@ -17,8 +21,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <coroutine>
 #include <tuple>
 
+using core::async::StopSource;
 using core::async::Task;
 using core::net::EventLoop;
 using core::net::nextWakeStep;
@@ -66,11 +72,11 @@ TEST_CASE("sleepUntil with no loop never suspends", "[SleepUntil]")
 {
     auto const clock = ManualClock {};
 
-    // Asked of the awaitable itself: `await_ready() == true` is what "never suspends" MEANS --
-    // the compiler does not emit a suspension at all. A case that only observed a prompt return
-    // could not tell this from a park resumed in the same turn.
-    auto const awaiter = sleepUntil(nullptr, clock.now() + 1h);
-    REQUIRE(awaiter.await_ready());
+    // Asked of the awaitable itself: `await_suspend() == false` is what "never parks" MEANS --
+    // the flow resumes before `co_await` returns, with nothing filed anywhere. A case that only
+    // observed a prompt return could not tell this from a park resumed in the same turn.
+    auto awaiter = sleepUntil(nullptr, clock.now() + 1h);
+    REQUIRE_FALSE(awaiter.await_suspend(std::noop_coroutine()));
 
     // And from the flow's side: one resume, and it is done. A suspension would leave it pending
     // with nothing in the world able to resume it, since there is no loop.
@@ -86,8 +92,9 @@ TEST_CASE("sleepUntil with a deadline already gone never suspends", "[SleepUntil
     auto loop = TestLoop { clock };
     auto const elapsed = clock.now() - 1ms;
 
-    auto const awaiter = sleepUntil(&loop, elapsed);
-    REQUIRE(awaiter.await_ready());
+    auto awaiter = sleepUntil(&loop, elapsed);
+    REQUIRE_FALSE(awaiter.await_suspend(std::noop_coroutine()));
+    REQUIRE(loop.pendingTimerCount() == 0);
 
     auto task = awaitSleepUntil(&loop, elapsed);
     task.handle().resume();
@@ -97,6 +104,26 @@ TEST_CASE("sleepUntil with a deadline already gone never suspends", "[SleepUntil
     // Nothing was filed with the loop, so nothing has to be taken back out of it.
     CHECK(loop.pendingTimerCount() == 0);
     CHECK(loop.readyCount() == 0);
+}
+
+TEST_CASE("sleepUntil with a deadline already gone resolves even for a flow already stopped", "[SleepUntil]")
+{
+    // What the move into `await_suspend` must not change. The elapsed deadline used to be
+    // `await_ready`'s answer, so the flow's token was never read and a stopped flow resumed
+    // normally. `await_suspend` asks the clock BEFORE it reads the token, which keeps that: a
+    // token read first would make `await_resume` throw here.
+    auto clock = ManualClock {};
+    auto loop = TestLoop { clock };
+    auto source = StopSource {};
+    source.request_stop();
+
+    auto task = awaitSleepUntil(&loop, clock.now() - 1ms);
+    task.handle().promise().setStopToken(source.get_token());
+    task.handle().resume();
+
+    REQUIRE(task.done());
+    CHECK(task.result() == 7);
+    CHECK(loop.pendingTimerCount() == 0);
 }
 
 TEST_CASE("sleepUntil with a deadline ahead parks until the clock reaches it", "[SleepUntil]")

@@ -7,6 +7,7 @@
 
 #include <coroutine>
 #include <stdexcept>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -40,6 +41,13 @@ class Measurement
 
 static_assert(!std::is_default_constructible_v<Measurement>,
               "the point of this type is that Task must not need to default-construct its result");
+
+// fastcached#1546: MSVC 19.44's ARM64 code generator drops the enclosing `try` of a `co_await` on
+// a temporary awaiter whose `await_ready` makes a call, so an `OperationCancelled` from
+// `await_resume` passes every handler. An `await_ready` here answers a constant and the decision
+// is `await_suspend`'s (.agent/rules/async-and-net.md); putting a call back cannot compile.
+static_assert(!Task<int>::Awaiter::await_ready());
+static_assert(!Task<void>::Awaiter::await_ready());
 
 /// A computational task that completes synchronously when first resumed.
 Task<int> answer()
@@ -226,6 +234,27 @@ Task<void> awaitEmptyWhenAll(bool* reached)
     *reached = true;
 }
 
+/// Awaits a task owning no frame, of each kind, and counts the awaits that refused it by name.
+Task<void> awaitEmptyTasks(int* refused)
+{
+    try
+    {
+        std::ignore = co_await Task<int> {};
+    }
+    catch (std::logic_error const&)
+    {
+        ++*refused;
+    }
+    try
+    {
+        co_await Task<void> {};
+    }
+    catch (std::logic_error const&)
+    {
+        ++*refused;
+    }
+}
+
 } // namespace
 
 TEST_CASE("Task produces a value when driven to completion", "[Task]")
@@ -295,6 +324,43 @@ TEST_CASE("Awaiting a task takes its frame, leaving the name that held it empty"
     }
     // Freed exactly once: the local going out of scope here added nothing.
     CHECK(destroyed == 1);
+}
+
+TEST_CASE("Awaiting a task that already finished takes its value without resuming it again", "[Task]")
+{
+    // Once `await_ready`'s answer, now `await_suspend`'s, which transfers straight back to the
+    // awaiting coroutine (fastcached#1546). A finished frame resumed a second time is undefined
+    // behaviour, so what this holds is that the child is never resumed, only read.
+    auto destroyed = 0;
+    auto value = 0;
+    auto stillOwnsAfter = true;
+    {
+        auto named = answerWithSentinel(FrameSentinel { &destroyed });
+        named.handle().resume();
+        REQUIRE(named.done());
+
+        auto root = awaitNamedLocal(&named, &value, &stillOwnsAfter);
+        root.handle().resume();
+
+        REQUIRE(root.done());
+        CHECK(value == 42);
+        CHECK_FALSE(stillOwnsAfter);
+    }
+    CHECK(destroyed == 1);
+}
+
+TEST_CASE("Awaiting a task owning no frame is refused by name, inside the awaiting coroutine", "[Task]")
+{
+    // The other half of what `await_ready` used to answer true for. `await_suspend` now transfers
+    // back without touching the missing frame, and `await_resume` refuses it -- caught here by the
+    // awaiting coroutine's own `try`, which is the handler fastcached#1546 lost.
+    auto refused = 0;
+    auto root = awaitEmptyTasks(&refused);
+
+    root.handle().resume();
+
+    REQUIRE(root.done());
+    CHECK(refused == 2);
 }
 
 TEST_CASE("A task owning no frame has no result to give", "[Task]")

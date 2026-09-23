@@ -34,6 +34,12 @@ using core::net::testing::HandlerId;
 using core::net::testing::ScriptedBackend;
 using core::platform::ManualClock;
 
+// fastcached#1546: MSVC 19.44's ARM64 code generator drops the enclosing `try` of a `co_await` on
+// a temporary awaiter whose `await_ready` makes a call, so an `OperationCancelled` from
+// `await_resume` passes every handler. An `await_ready` here answers a constant and the decision
+// is `await_suspend`'s (.agent/rules/async-and-net.md); putting a call back cannot compile.
+static_assert(!core::net::DelayAwaiter::await_ready());
+
 // Note on scripted registration ids: the loop no longer attaches a wakeup channel of
 // its own — that belongs to the backend now, and ScriptedBackend has none — so the
 // first coroutine fd waiter receives HandlerId{1}.

@@ -45,19 +45,24 @@ namespace
         TokenDelayAwaiter& operator=(TokenDelayAwaiter&&) = delete;
         ~TokenDelayAwaiter() = default;
 
-        /// @return True when the deadline has already passed, so the flow never suspends. The
-        ///         token is not consulted here: the coroutine below has already asked, and asking
-        ///         again would report `Deadline` for a stop that arrived in between rather than
-        ///         the `Cancelled` await_resume would give.
-        [[nodiscard]] bool await_ready() const noexcept { return _deadline <= _loop.clock().now(); }
+        /// @return False: an elapsed deadline is answered by @c await_suspend, never here, as for
+        ///         @c DelayAwaiter (fastcached#1546, `.agent/rules/async-and-net.md`).
+        [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
 
         /// Parks the awaiting coroutine on the deadline and arms both stop callbacks.
+        ///
+        /// An elapsed deadline declines to park BEFORE the flow's token is read, so the answer is
+        /// the one `await_ready` gave when it held this check: @c await_resume then consults only
+        /// the supplied token, reporting `Cancelled` if a stop reached it and `Deadline` otherwise.
         /// @tparam Promise The awaiting coroutine's promise type.
         /// @param awaiting The coroutine performing the `co_await`.
-        /// @return False (resume now) if either token is already stopped; true to park.
+        /// @return False (resume now) if the deadline has passed or either token is already
+        ///         stopped; true to park.
         template <typename Promise>
         [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting)
         {
+            if (_deadline <= _loop.clock().now())
+                return false;
             if constexpr (requires { awaiting.promise().stopToken(); })
                 _flowToken = awaiting.promise().stopToken();
             if (_token.stop_requested() || _flowToken.stop_requested())
@@ -119,6 +124,10 @@ namespace
         async::StopToken _flowToken;
         ParkId _park {};
     };
+
+    // The pin for fastcached#1546, here because the type has no name outside this file: reading
+    // the clock in `await_ready` again cannot compile.
+    static_assert(!TokenDelayAwaiter::await_ready());
 
 } // namespace
 

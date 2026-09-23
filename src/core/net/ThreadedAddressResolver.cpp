@@ -130,17 +130,21 @@ namespace
         EventLoop* loop = nullptr;
         std::optional<async::StopCallback<CancelLookup>> cancelReg {};
 
-        [[nodiscard]] bool await_ready() const noexcept
-        {
-            auto const guard = std::scoped_lock { slot->mutex };
-            return slot->done;
-        }
+        /// @return False. Whether the answer is already there is @c await_suspend's first question,
+        ///         asked under the slot's mutex: taking a lock is a call, and MSVC 19.44's ARM64
+        ///         code generator drops the enclosing `try` of a `co_await` on a temporary awaiter
+        ///         whose `await_ready` makes one (fastcached#1546, `.agent/rules/async-and-net.md`).
+        [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
 
         /// Templated on the promise so `parkedWorkFor` can ask the PARKING coroutine's own
         /// promise whether anything else owns its chain: @c settle hands this chain to a loop
         /// that may be destroyed before it runs it, and by then the handle is erased, so this is
         /// the last place the question can be asked. The same promise is where the flow's stop
         /// token is read.
+        ///
+        /// **An answer already there resumes at once, before the stop callback exists**, which is
+        /// what `await_ready` answered when it held that check: a stop that has already fired
+        /// cannot then turn a finished lookup into a cancellation.
         ///
         /// **The stop callback is registered BEFORE the waiter is published.** A stop landing in
         /// between then finds no waiter, records @c ResolveSlot::cancelled, and the check below
@@ -153,6 +157,11 @@ namespace
         template <typename Promise>
         [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> handle)
         {
+            {
+                auto const guard = std::scoped_lock { slot->mutex };
+                if (slot->done)
+                    return false;
+            }
             if constexpr (async::HasStopToken<Promise>)
                 cancelReg.emplace(handle.promise().stopToken(),
                                   CancelLookup { .slot = slot.get(), .loop = loop });
@@ -177,6 +186,10 @@ namespace
             return slot->result;
         }
     };
+
+    // The pin for fastcached#1546, here because the type has no name outside this file: taking the
+    // lock in `await_ready` again cannot compile.
+    static_assert(!SlotPark::await_ready());
 
 } // namespace
 

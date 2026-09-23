@@ -47,6 +47,15 @@ using core::tui::runtime::TuiRuntimeOptions;
 using core::tui::runtime::testing::HandleFor;
 using core::tui::runtime::testing::ScriptedInputSource;
 
+// fastcached#1546: MSVC 19.44's ARM64 code generator drops the enclosing `try` of a `co_await` on
+// a temporary awaiter whose `await_ready` makes a call, so an `OperationCancelled` from
+// `await_resume` passes every handler. An `await_ready` here answers a constant and the decision
+// is `await_suspend`'s (.agent/rules/async-and-net.md); putting a call back cannot compile.
+static_assert(!core::tui::runtime::NextInputEventAwaiter::await_ready());
+static_assert(!core::tui::runtime::NextEventForAwaiter::await_ready());
+static_assert(!core::tui::runtime::NextActivityAwaiter::await_ready());
+static_assert(!core::tui::runtime::NextAgentReadyAwaiter::await_ready());
+
 // On registration ids: the runtime's input flow is the first thing to park, and a source with no
 // resize channel starts no second flow, so the input registration is HandlerId{1}. It re-registers
 // on every re-park, so the SECOND read of a scripted case is HandlerId{2}.

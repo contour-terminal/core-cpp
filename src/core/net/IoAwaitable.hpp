@@ -183,10 +183,15 @@ class ResultAwaitable
     }
 
     /// @return True when the operation already has its answer, so no suspension is needed.
-    [[nodiscard]] bool await_ready() const noexcept
-    {
-        return _task.has_value() ? _task->await_ready() : _settled;
-    }
+    ///
+    /// **A member read and nothing more**, because MSVC 19.44's ARM64 code generator drops the
+    /// enclosing `try` of a `co_await` on a temporary awaiter whose `await_ready` makes a call
+    /// ([fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546)), and every
+    /// `co_await sock->read(...)` is that shape. It asked the optional and then `Task`'s awaiter;
+    /// neither is needed. A coroutine-backed operation is never settled (only @c complete and the
+    /// value constructor set the flag, and neither is its path), and whether its task has already
+    /// finished is `Task`'s own @c await_suspend's question, which @c await_suspend below reaches.
+    [[nodiscard]] bool await_ready() const noexcept { return _settled; }
 
     /// Captures the awaiting flow's stop token, arms the operation, and parks unless the owner
     /// answered inline.

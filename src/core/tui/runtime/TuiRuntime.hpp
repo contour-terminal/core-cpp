@@ -502,17 +502,26 @@ class NextInputEventAwaiter
     /// @param runtime The runtime whose input this reads.
     explicit NextInputEventAwaiter(TuiRuntime& runtime) noexcept: _runtime(runtime) {}
 
-    /// @return Whether an event is already buffered, so the flow never suspends. Not `noexcept`:
-    ///         asking is what takes the events a terminal query handed back, and taking them
-    ///         allocates.
-    [[nodiscard]] bool await_ready() const { return _runtime.hasBufferedInput(); }
+    /// @return False. Whether an event is already buffered is @c await_suspend's question: the
+    ///         answer is a call, and MSVC 19.44's ARM64 code generator drops the enclosing `try` of
+    ///         a `co_await` on a temporary awaiter whose `await_ready` makes one
+    ///         ([fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546)).
+    ///         The three awaiters below answer the same, for the same reason.
+    [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
 
+    /// Asks for a buffered event BEFORE reading the token, which keeps the answer the one
+    /// `await_ready` gave when it held the question: a buffered event is delivered even to a
+    /// stopped flow. Not `noexcept`: asking is what takes the events a terminal query handed back,
+    /// and taking them allocates.
     /// @tparam Promise The awaiting coroutine's promise type.
     /// @param awaiting The coroutine performing the `co_await`.
-    /// @return False (resume now) if already cancelled, true to park as the input waiter.
+    /// @return False (resume now) if an event is buffered or the flow is already cancelled, true
+    ///         to park as the input waiter.
     template <typename Promise>
     [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting)
     {
+        if (_runtime.hasBufferedInput())
+            return false;
         if constexpr (requires { awaiting.promise().stopToken(); })
             _token = awaiting.promise().stopToken();
         if (_token.stop_requested() || _runtime.isStopping())
@@ -573,16 +582,19 @@ class NextEventForAwaiter
     {
     }
 
-    /// @return Whether an event is already buffered, so the flow never suspends. Not `noexcept`,
-    ///         for @c NextInputEventAwaiter::await_ready's reason.
-    [[nodiscard]] bool await_ready() const { return _runtime.hasBufferedInput(); }
+    /// @return False, for @c NextInputEventAwaiter::await_ready's reason.
+    [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
 
+    /// Asks for a buffered event before reading the token, as @c NextInputEventAwaiter does.
     /// @tparam Promise The awaiting coroutine's promise type.
     /// @param awaiting The coroutine performing the `co_await`.
-    /// @return False (resume now) if already cancelled, true to park with a deadline.
+    /// @return False (resume now) if an event is buffered or the flow is already cancelled, true
+    ///         to park with a deadline.
     template <typename Promise>
     [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting)
     {
+        if (_runtime.hasBufferedInput())
+            return false;
         if constexpr (requires { awaiting.promise().stopToken(); })
             _token = awaiting.promise().stopToken();
         if (_token.stop_requested() || _runtime.isStopping())
@@ -626,16 +638,20 @@ class NextActivityAwaiter
     {
     }
 
-    /// @return Whether an event or an agent message is already there, so the flow never suspends.
-    ///         Not `noexcept`, for @c NextInputEventAwaiter::await_ready's reason.
-    [[nodiscard]] bool await_ready() const { return _runtime.hasBufferedInput() || _runtime.agentPending(); }
+    /// @return False, for @c NextInputEventAwaiter::await_ready's reason.
+    [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
 
+    /// Asks for a buffered event or a pending agent message before reading the token, as
+    /// @c NextInputEventAwaiter does.
     /// @tparam Promise The awaiting coroutine's promise type.
     /// @param awaiting The coroutine performing the `co_await`.
-    /// @return False (resume now) if already cancelled, true to park (input + agent + deadline).
+    /// @return False (resume now) if an event or an agent message is already there or the flow is
+    ///         already cancelled, true to park (input + agent + deadline).
     template <typename Promise>
     [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting)
     {
+        if (_runtime.hasBufferedInput() || _runtime.agentPending())
+            return false;
         if constexpr (requires { awaiting.promise().stopToken(); })
             _token = awaiting.promise().stopToken();
         if (_token.stop_requested() || _runtime.isStopping())
@@ -681,15 +697,19 @@ class NextAgentReadyAwaiter
     /// @param runtime The runtime whose agent channel this waits on.
     explicit NextAgentReadyAwaiter(TuiRuntime& runtime) noexcept: _runtime(runtime) {}
 
-    /// @return Whether a message is already pending, so the flow never suspends.
-    [[nodiscard]] bool await_ready() const noexcept { return _runtime.agentPending(); }
+    /// @return False, for @c NextInputEventAwaiter::await_ready's reason.
+    [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
 
+    /// Asks for a pending message before reading the token, as @c NextInputEventAwaiter does.
     /// @tparam Promise The awaiting coroutine's promise type.
     /// @param awaiting The coroutine performing the `co_await`.
-    /// @return False (resume now) if already cancelled, true to park as the agent waiter.
+    /// @return False (resume now) if a message is already pending or the flow is already
+    ///         cancelled, true to park as the agent waiter.
     template <typename Promise>
     [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting)
     {
+        if (_runtime.agentPending())
+            return false;
         if constexpr (requires { awaiting.promise().stopToken(); })
             _token = awaiting.promise().stopToken();
         if (_token.stop_requested() || _runtime.isStopping())

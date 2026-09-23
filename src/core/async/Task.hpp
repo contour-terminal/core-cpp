@@ -194,17 +194,25 @@ class [[nodiscard]] Task
         Awaiter& operator=(Awaiter&&) = delete;
         ~Awaiter() = default;
 
-        /// @return True if there is nothing to suspend for (no child, or already done).
-        [[nodiscard]] bool await_ready() const noexcept { return !_child || _child.get().done(); }
+        /// @return False. Whether there is anything to suspend for -- a child, not yet done -- is
+        ///         @c await_suspend's question, because asking it is a call: MSVC 19.44's ARM64 code
+        ///         generator drops the enclosing `try` of a `co_await` on a temporary awaiter whose
+        ///         `await_ready` makes one
+        ///         ([fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546)),
+        ///         and every `co_await task()` is that shape.
+        [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
 
         /// Records the awaiting coroutine as the child's continuation, propagates the
         /// cancellation token and the chain's ownership down, and starts the child via
         /// symmetric transfer.
         /// @param awaiting The coroutine performing the `co_await`.
-        /// @return The child handle to resume.
+        /// @return The child handle to resume; @p awaiting itself, resuming it at once, where
+        ///         there is no child or it has already finished.
         template <typename Promise>
         [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> awaiting) noexcept
         {
+            if (!_child || _child.get().done())
+                return awaiting;
             auto& promise = _child.get().promise();
             promise.continuation = awaiting;
             promise.unownedRoot = detail::unownedRootOf(awaiting);
@@ -315,11 +323,17 @@ class [[nodiscard]] Task<void>
         Awaiter& operator=(Awaiter&&) = delete;
         ~Awaiter() = default;
 
-        [[nodiscard]] bool await_ready() const noexcept { return !_child || _child.get().done(); }
+        /// @return False, for the reason @c Task<T>::Awaiter::await_ready gives.
+        [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
 
+        /// @param awaiting The coroutine performing the `co_await`.
+        /// @return The child handle to resume; @p awaiting itself, resuming it at once, where
+        ///         there is no child or it has already finished.
         template <typename Promise>
         [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> awaiting) noexcept
         {
+            if (!_child || _child.get().done())
+                return awaiting;
             auto& promise = _child.get().promise();
             promise.continuation = awaiting;
             promise.unownedRoot = detail::unownedRootOf(awaiting);

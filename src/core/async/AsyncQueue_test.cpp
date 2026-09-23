@@ -35,6 +35,12 @@ namespace
 
 using Queue = AsyncQueue<int>;
 
+// fastcached#1546: MSVC 19.44's ARM64 code generator drops the enclosing `try` of a `co_await` on
+// a temporary awaiter whose `await_ready` makes a call, so an `OperationCancelled` from
+// `await_resume` passes every handler. An `await_ready` here answers a constant and the decision
+// is `await_suspend`'s (.agent/rules/async-and-net.md); putting a call back cannot compile.
+static_assert(!Queue::PopAwaiter::await_ready());
+
 /// An executor that queues and never runs anything by itself, so a case decides when — and
 /// whether — parked work is resumed. `ParkedWork_test.cpp` has the same double for the same
 /// reason; `core::async` has no shared one, and the loop that will be it (`core::net`'s
@@ -288,17 +294,17 @@ TEST_CASE("DropNewest refuses the push instead", "[AsyncQueue]")
     std::ignore = executor.drain();
 }
 
-TEST_CASE("A push landing between await_ready and await_suspend does not park", "[AsyncQueue]")
+TEST_CASE("A push landing after the awaiter is made and before it suspends does not park", "[AsyncQueue]")
 {
-    // `await_ready` and `await_suspend` are two separate acquisitions of the mutex, so a producer
-    // can slip in between them. Parking then would be a park nothing ever wakes: the push that
-    // would have woken it has already happened and already found no waiter. The awaiter is driven
-    // directly here because there is no other way to be inside that window.
+    // A producer can slip in between the moment a `pop()` awaiter exists and the moment it asks
+    // whether to park. Parking then would be a park nothing ever wakes: the push that would have
+    // woken it has already happened and already found no waiter. The awaiter is driven directly
+    // here because there is no other way to be inside that window. `await_ready` is not asked: it
+    // is a constant `false` (fastcached#1546), and the question is `await_suspend`'s.
     auto executor = QueuedExecutor {};
     auto queue = Queue { executor, AsyncQueueOptions {} };
 
     auto awaiter = queue.pop();
-    REQUIRE_FALSE(awaiter.await_ready());
 
     std::ignore = queue.push(42);
 

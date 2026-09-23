@@ -259,14 +259,16 @@ namespace
             std::erase(_gate->_waiters, &_waiter);
         }
 
-        [[nodiscard]] bool await_ready() const
-        {
-            auto const guard = std::scoped_lock { _gate->_mutex };
-            return !_gate->_busy || _gate->_abandoned;
-        }
+        /// @return False. Whether the gate is free is @c await_suspend's first question, asked
+        ///         under the gate's mutex: taking a lock is a call, and MSVC 19.44's ARM64 code
+        ///         generator drops the enclosing `try` of a `co_await` on a temporary awaiter whose
+        ///         `await_ready` makes one (fastcached#1546, `.agent/rules/async-and-net.md`).
+        [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
 
-        /// Registers the stop callback BEFORE publishing the park, as `AsyncQueue` does: a token
-        /// already stopped runs the callback here, which finds nothing parked and only records the
+        /// A free or abandoned gate resumes at once, before the token is read or a callback
+        /// registered -- what `await_ready` answered when it held that check. Otherwise registers
+        /// the stop callback BEFORE publishing the park, as `AsyncQueue` does: a token already
+        /// stopped runs the callback here, which finds nothing parked and only records the
         /// cancellation for the re-check below.
         /// @tparam Promise The awaiting coroutine's promise type.
         /// @param awaiting The coroutine to park.
@@ -274,6 +276,11 @@ namespace
         template <typename Promise>
         [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting)
         {
+            {
+                auto const guard = std::scoped_lock { _gate->_mutex };
+                if (!_gate->_busy || _gate->_abandoned)
+                    return false;
+            }
             if constexpr (async::HasStopToken<Promise>)
                 _token = awaiting.promise().stopToken();
             if (_token.stop_possible())
@@ -337,6 +344,10 @@ namespace
         /// another thread, and that callback reads the members above.
         std::optional<async::StopCallback<CancelWait>> _stopRegistration;
     };
+
+    // The pin for fastcached#1546, here because the type has no name outside this file: taking the
+    // lock in `await_ready` again cannot compile.
+    static_assert(!SerialGate::Awaiter::await_ready());
 
     SerialGate::Awaiter SerialGate::wait(std::shared_ptr<SerialGate> gate, Direction direction) noexcept
     {

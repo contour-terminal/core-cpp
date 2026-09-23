@@ -260,18 +260,26 @@ class JoinAwaiter
     JoinAwaiter& operator=(JoinAwaiter const&) = delete;
     ~JoinAwaiter() = default;
 
-    /// @return True where there is nothing to wait for.
-    [[nodiscard]] bool await_ready() const noexcept { return _tasks.empty(); }
+    /// @return False. Whether there is anything to wait for is @c await_suspend's question:
+    ///         asking a container is a call, and MSVC 19.44's ARM64 code generator drops the
+    ///         enclosing `try` of a `co_await` on a temporary awaiter whose `await_ready` makes one
+    ///         ([fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546)).
+    [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
 
     /// Builds and starts a runner per task, keeping the awaiting coroutine suspended unless the
     /// join completed during the start phase.
+    ///
+    /// No tasks declines to park before anything else is touched -- no continuation, no parent
+    /// bridge, no token read -- which is exactly what `await_ready` answering true used to skip.
     /// @tparam Promise The awaiting coroutine's promise type.
     /// @param awaiting The coroutine performing the `co_await`.
-    /// @return False where every child finished synchronously, so the awaiting coroutine resumes
-    ///         through the normal path.
+    /// @return False where there are no tasks or every child finished synchronously, so the
+    ///         awaiting coroutine resumes through the normal path.
     template <typename Promise>
     [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting)
     {
+        if (_tasks.empty())
+            return false;
         _state->continuation = awaiting;
         // Relaxed: no child has started, so no other thread can see this yet, and the guard's own
         // release below is what publishes it.

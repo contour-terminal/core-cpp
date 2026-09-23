@@ -40,6 +40,12 @@ static_assert(std::is_move_constructible_v<decltype(whenAll(std::vector<Task<voi
 static_assert(!std::is_copy_constructible_v<decltype(whenAll(std::vector<Task<void>> {}))>,
               "and not copyable: the join state and the runners' frames have one owner");
 
+// fastcached#1546: MSVC 19.44's ARM64 code generator drops the enclosing `try` of a `co_await` on
+// a temporary awaiter whose `await_ready` makes a call, so an `OperationCancelled` from
+// `await_resume` passes every handler. An `await_ready` here answers a constant and the decision
+// is `await_suspend`'s (.agent/rules/async-and-net.md); putting a call back cannot compile.
+static_assert(!decltype(whenAll(std::vector<Task<void>> {}))::await_ready());
+
 namespace
 {
 
