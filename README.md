@@ -88,7 +88,7 @@ cmake --workflow --preset ci-gcc-release      # configure, build and test in one
 |---|---|
 | Linux | `clang-debug`, `clang-release`, `gcc-debug`, `gcc-release`, `clang-asan-ubsan`, `clang-tsan`, `clang-tidy`, `clang-coverage`, `clang-tracy` |
 | macOS | `appleclang-debug`, `appleclang-release`, and the `clang-*` presets with Homebrew LLVM |
-| Windows (from a Visual Studio developer shell) | `cl-debug`, `cl-release`, `clangcl-debug`, `clangcl-release`, `cl-release-tls` |
+| Windows (from a Visual Studio developer shell) | `cl-debug`, `cl-release`, `clangcl-debug`, `clangcl-release`, `cl-release-tls`; `cl-release-arm64` from an arm64 one |
 | Any, with emsdk (`EMSDK` set) | `emscripten`: single-threaded WebAssembly, tests run under node |
 
 The build goes through fastcache-cc when a fastcached daemon answers, otherwise ccache; see

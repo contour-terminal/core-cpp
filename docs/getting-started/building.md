@@ -47,6 +47,7 @@ cmake --workflow --preset ci-clang-debug     # the same three steps in one comma
 | `cl-debug`, `cl-release` | Windows | MSVC | `cl-debug` runs the tests under the Debug CRT's iterator checks |
 | `clangcl-debug`, `clangcl-release` | Windows | clang-cl | |
 | `cl-release-tls` | Windows | MSVC | with `core::net_tls` (OpenSSL) |
+| `cl-release-arm64` | Windows on ARM64 | MSVC | the ARM64 code generator, from an arm64 developer shell; CI runs it on `windows-11-arm` for [fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546) |
 | `emscripten` | any | emcc | single-threaded WebAssembly; tests run under node |
 
 Every preset has a `ci-<name>` workflow preset. Presets that do not apply to the host are

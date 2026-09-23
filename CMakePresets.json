@@ -206,6 +206,15 @@
       }
     },
     {
+      "name": "cl-release-arm64",
+      "displayName": "MSVC, Release, ARM64 (from an arm64 developer shell)",
+      "inherits": "cl-release",
+      "architecture": {
+        "value": "arm64",
+        "strategy": "external"
+      }
+    },
+    {
       "name": "cl-release-tls",
       "displayName": "MSVC, Release, with core::net_tls (OpenSSL)",
       "inherits": "windows",
@@ -344,6 +353,11 @@
       "inherits": "windows"
     },
     {
+      "name": "cl-release-arm64",
+      "configurePreset": "cl-release-arm64",
+      "inherits": "windows"
+    },
+    {
       "name": "cl-release-tls",
       "configurePreset": "cl-release-tls",
       "inherits": "windows"
@@ -479,6 +493,11 @@
     {
       "name": "clangcl-release",
       "configurePreset": "clangcl-release",
+      "inherits": "windows"
+    },
+    {
+      "name": "cl-release-arm64",
+      "configurePreset": "cl-release-arm64",
       "inherits": "windows"
     },
     {
@@ -766,6 +785,24 @@
         {
           "type": "test",
           "name": "clangcl-release"
+        }
+      ]
+    },
+    {
+      "name": "ci-cl-release-arm64",
+      "displayName": "CI: MSVC, Release, ARM64 (from an arm64 developer shell)",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "cl-release-arm64"
+        },
+        {
+          "type": "build",
+          "name": "cl-release-arm64"
+        },
+        {
+          "type": "test",
+          "name": "cl-release-arm64"
         }
       ]
     },

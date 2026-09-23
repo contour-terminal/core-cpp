@@ -500,7 +500,7 @@ jobs:
   # ---------------------------------------------------------------------------------------------
   windows:
     name: windows (${{ matrix.preset }})
-    runs-on: windows-2025
+    runs-on: ${{ matrix.runner || 'windows-2025' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -514,6 +514,18 @@ jobs:
         # fastcached#1531 breaks. An assertion reachable only under clang-cl's codegen was
         # compiled out of clangcl-release and never compiled by cl-debug.
         preset: [cl-release, clangcl-release, cl-debug, clangcl-debug, cl-release-tls]
+        # cl-release-arm64 is here because it is the only place one miscompile can be seen
+        # (fastcached#1546): MSVC 19.44's ARM64 code generator drops the enclosing `try` of a
+        # `co_await` on a temporary awaiter whose `await_ready` makes a call, so an
+        # `OperationCancelled` escapes every handler. The same C++ passes on the x64 MSVC, clang-cl,
+        # gcc and clang legs and on Linux ARM64, and under every sanitizer, because it is correct;
+        # `scripts/check-await-ready.py` refuses the known shape, and this leg's ctest is what
+        # sees the next one. `msvc_arch` is what the developer shell targets; the x64 legs leave it
+        # unset and get the action's own default.
+        include:
+          - preset: cl-release-arm64
+            runner: windows-11-arm
+            msvc_arch: arm64
     env:
       VCPKG_COMMIT: e6f9e70a29a3e80a1fc510d8503304315447112f
       VCPKG_ARCHIVES: ${{ github.workspace }}/.cache/vcpkg-archives
@@ -522,12 +534,16 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
+      # The key names the architecture: an entry is found by key AND by a version hashed from the
+      # expanded path and the compression, and both differ on the arm64 image (fastcached's
+      # build.yml measured the workspace on drive C against drive D, and gzip against zstd), so
+      # the two architectures could never share an entry whatever the key said.
       - name: Cache CPM sources
         uses: actions/cache@v4
         with:
           path: .cache/cpm
-          key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
-          restore-keys: cpm-${{ runner.os }}-
+          key: cpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
+          restore-keys: cpm-${{ runner.os }}-${{ runner.arch }}-
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2
@@ -586,6 +602,15 @@ jobs:
 
       - name: MSVC developer environment
         uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc_arch || 'x64' }}
+
+      # Which cl this leg measured, in its own log: the ARM64 miscompile is a fact about one
+      # compiler version for one target, and a leg that moved to another version silently would
+      # read as the defect having gone.
+      - name: Compiler identity
+        if: startsWith(matrix.preset, 'cl-')
+        run: cl 2>&1 | head -n 1
 
       - name: Configure
         run: >-

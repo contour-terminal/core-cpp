@@ -118,7 +118,7 @@ a bug; Doxygen `///` on public API; zero warnings. The canonical text:
 |---|---|---|---|
 | Linux | `clang-debug`, `gcc-debug` | `clang-release`, `gcc-release` | `clang-asan-ubsan`, `clang-tsan`, `clang-tidy`, `clang-coverage`, `clang-tracy` |
 | macOS | `appleclang-debug` | `appleclang-release` | the `clang-*` presets with Homebrew LLVM |
-| Windows (VS dev shell) | `cl-debug`, `clangcl-debug` | `cl-release`, `clangcl-release` | `cl-release-tls` |
+| Windows (VS dev shell) | `cl-debug`, `clangcl-debug` | `cl-release`, `clangcl-release` | `cl-release-tls`; `cl-release-arm64` from an arm64 shell |
 | any, with `EMSDK` set | | `emscripten` | tests run under node |
 
 `cmake --preset <p> && cmake --build --preset <p> && ctest --preset <p>`, or
