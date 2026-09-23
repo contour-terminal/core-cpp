@@ -168,6 +168,19 @@ jobs:
       - name: Text-encoding self-test
         run: python scripts/check-text-encoding-selftest.py
 
+      # covers: core-cpp.tidy-record-selftest
+      - name: Tidy-record self-test
+        run: python scripts/tidy-record-selftest.py
+
+      # A direct clock or environment read outside the seam that owns it (design-principles.md).
+      # covers: core-cpp.ambient-reads
+      - name: Ambient resources through their seams
+        run: python scripts/check-ambient-reads.py
+
+      # covers: core-cpp.ambient-reads-selftest
+      - name: Ambient-reads self-test
+        run: python scripts/check-ambient-reads-selftest.py
+
       # covers: core-cpp.check-release-selftest
       - name: Release-check self-test
         run: >-
@@ -733,10 +746,18 @@ jobs:
           echo "$n compile rule(s) run clang-tidy"
           [ "$n" -gt 0 ] || { echo "::error::no compile runs clang-tidy"; exit 1; }
 
-      - name: Build with clang-tidy
+      # The result is recorded rather than trusted: scripts/tidy-record.py refuses it unless the
+      # build passed, the analyser the build resolved is the pin, statements carry it, the log ran
+      # to [N/N], and a planted violation is reported -- the conjunction
+      # .agent/rules/build-and-toolchain.md states, as a step rather than a paragraph.
+      - name: Build with clang-tidy, and record what the result vouches for
         run: |
           echo "::add-matcher::.github/clang-tidy-matcher.json"
-          cmake --build --preset clang-tidy -- -k 0
+          set +e
+          cmake --build --preset clang-tidy -- -k 0 2>&1 | tee "$RUNNER_TEMP/tidy-build.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          python3 scripts/tidy-record.py --log "$RUNNER_TEMP/tidy-build.log" --exit-code "$status"
 
   # ---------------------------------------------------------------------------------------------
   emscripten:

@@ -41,7 +41,11 @@ given, never through a concrete type, a singleton, or a free function with hidde
 - **Define the interface first, then inject it**, by constructor, as a reference or a
   `std::unique_ptr`. If you want a global, a mutable `static`, or a direct `::read()`,
   `std::getenv()` or `std::chrono::steady_clock::now()` in logic, that is the signal to
-  introduce or reuse a seam. *(endo, fastcached)*
+  introduce or reuse a seam. *(endo, fastcached)* **The clock and the environment are held by a
+  check**, `scripts/check-ambient-reads.py` (`core-cpp.ambient-reads`): a direct read under
+  `src/core/` outside the seam that owns it is refused by file and line, and every read it
+  excuses -- the seams themselves, and the clock reads the tui widgets brought from endo -- is
+  named in its allow list with the reason, so the debt is visible rather than absorbed.
 - **Each module's test doubles live in its `testing/` subdirectory, are public, and are
   compiled into the module**, so a consumer's tests use the same doubles core-cpp's do.
   *(core-cpp; the design spec, Part I §1)*

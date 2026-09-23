@@ -76,6 +76,38 @@ grammar is fastcached's, where a ctest reads and resolves it
 has that check ([core-cpp#12](https://github.com/contour-terminal/core-cpp/issues/12)),
 keeping entries true is a review question here.
 
+## Every principle names the step that carries it
+
+**A rule that states a principle with no executable step is a sentence people agree with and do
+not carry out.** `build-and-toolchain.md`'s "a gate that does not report reads as a gate that
+passed" was correct, precise and already written when four silent gates happened in one hour
+beside it. So each principle here names what carries it: a check that refuses the violation, a
+procedure with a step a reader performs, or -- where neither exists -- a statement that no
+mechanical step does, so the principle is known to rest on review. The audit below was made for
+v0.1.0 (Task B13); a new principle joins it in the same change.
+
+| Principle | File | Carried by |
+|---|---|---|
+| Anything that touches an ambient resource is reached through a seam | `design-principles.md` | **check**: `core-cpp.ambient-reads` refuses a direct clock or environment read outside its seam (added by this audit); the filesystem, sockets and the terminal have no textual check |
+| Configuration is fixed at construction | `design-principles.md` | **review**: a setter that reconfigures is not textually distinct from one that is state |
+| Behaviour is a table | `design-principles.md` | **review**, with the golden tables where a table exists (`GenericSyntaxHighlighter_test.cpp`, `NetError_test.cpp`, the socket-error tables) |
+| A recoverable error is `std::expected` | `design-principles.md` | **review**: an error signalled by `bool` or a sentinel has no spelling to find |
+| No `bool` in an API where an `enum class` says what it means | `design-principles.md` | **procedure**: a pull request lists every `bool` parameter it adds to a public header, with the reason it is not an `enum class`; a scan would flag every predicate |
+| RAII for every handle | `design-principles.md` | **check**: clang-tidy (`cppcoreguidelines-owning-memory`), fatal |
+| Namespace is directory; no global CMake state; every name prefixed; no NOLINT, no diagnostic pragma, no C-style `for` | `library-hygiene.md`, `cpp-guidelines.md` | **check**: `core-cpp.cmake-hygiene`, with its self-test |
+| An include across modules is an edge of the module table | `library-hygiene.md` | **check**: `core-cpp.layering`, links and (since Task B13) includes |
+| Every file has a provenance row | `library-hygiene.md` | **check**: `core-cpp.cmake-hygiene`'s `provenance` rule; drift by `core-cpp.upstream-drift` |
+| An OS difference is an implementation, never an `#ifdef` in logic | `platform.md` | **check** for source selection (`core-cpp.platform-sources`); **review** for an `#ifdef` inside a function body |
+| A test asserts what distinguishes | `testing.md` | **procedure**: predict the RED, neuter the fix, run, and see exactly the predicted failures -- stated there as "prove the test can fail"; no mechanical step can tell a distinguishing assertion from a vacuous one |
+| Every wait is bounded and says what it waited for | `testing.md` | **check** for the bound only: every registration carries a `TIMEOUT` (`core_cpp_add_test`); the message is **review** |
+| `SKIP`, never `SUCCEED`, where a case could not run | `testing.md` | **check**: `core_cpp_add_test`'s exit-code contract (77 all skipped, `core-cpp.exit-codes`); a `SUCCEED` in a skipped path is **review** |
+| A gate that does not report reads as passed | `build-and-toolchain.md` | **check**: `core-cpp.preset-coverage`, `core-cpp.tree-level-coverage` (which also holds `style` in `ci-ok`'s needs), and `scripts/tidy-record.py`, which refuses a clang-tidy result that carries no instrument record |
+| Every tracked text file is clean UTF-8 | `build-and-toolchain.md` | **check**: `core-cpp.text-encoding` |
+| Every transport declares `cancelRead`; every `read` guards its buffer; every loop-thread-only member refuses a second thread | `async-and-net.md` | **check**: `core-cpp.cancel-read-declared`, `core-cpp.read-buffer-guard`, `core-cpp.loop-affinity-canary.*` |
+| A member that files work asks for the turn that runs it | `async-and-net.md` | **check**: the parameterised case in `HostDrivenLoop_test.cpp` |
+| A platform socket error is classified in one table | `async-and-net.md` | **check** for the table's rows (`SocketErrors_test.cpp`); a second private switch is **review** |
+| A public header change is a CHANGELOG entry | `library-hygiene.md` | **review**: the release checklist in `.agent/guides/releasing.md` |
+
 ## Do not `@`-import these
 
 `CLAUDE.md` imports `AGENT.md`, and Claude Code resolves `@` imports recursively. An

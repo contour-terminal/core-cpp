@@ -369,6 +369,44 @@ set_tests_properties(core-cpp.text-encoding core-cpp.text-encoding-selftest PROP
     LABELS "core-cpp;hygiene;tree-level"
     TIMEOUT 60)
 
+# scripts/tidy-record.py refuses a clang-tidy result that carries no instrument record: the build's
+# exit, the analyser the build resolved against the pin, the statements that carry it, the steps
+# the log reached, and a planted violation reported. The script itself reads a build tree, so it is
+# the clang-tidy job's last step rather than a test here; its self-test reads nothing but fixtures,
+# so it is tree-level.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME core-cpp.tidy-record-selftest
+             COMMAND "${Python3_EXECUTABLE}" "${CORE_CPP_SOURCE_DIR}/scripts/tidy-record-selftest.py")
+else()
+    add_test(NAME core-cpp.tidy-record-selftest COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.tidy-record-selftest: SKIPPED -- no Python 3 interpreter was found at configure time")
+    set_tests_properties(core-cpp.tidy-record-selftest PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED")
+endif()
+set_tests_properties(core-cpp.tidy-record-selftest PROPERTIES
+    LABELS "core-cpp;hygiene;tree-level"
+    TIMEOUT 60)
+
+# design-principles.md's "anything that touches an ambient resource is reached through an interface
+# the object is given", as a scan rather than a sentence: a direct clock or environment read in
+# src/core/ outside the seam that owns it is refused, and every excused read is named with its
+# reason. tree-level: it reads the tree.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME core-cpp.ambient-reads
+             COMMAND "${Python3_EXECUTABLE}" "${CORE_CPP_SOURCE_DIR}/scripts/check-ambient-reads.py")
+    add_test(NAME core-cpp.ambient-reads-selftest
+             COMMAND "${Python3_EXECUTABLE}" "${CORE_CPP_SOURCE_DIR}/scripts/check-ambient-reads-selftest.py")
+else()
+    add_test(NAME core-cpp.ambient-reads COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.ambient-reads: SKIPPED -- no Python 3 interpreter was found at configure time")
+    add_test(NAME core-cpp.ambient-reads-selftest COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.ambient-reads-selftest: SKIPPED -- no Python 3 interpreter was found at configure time")
+    set_tests_properties(core-cpp.ambient-reads core-cpp.ambient-reads-selftest PROPERTIES
+        SKIP_REGULAR_EXPRESSION "SKIPPED")
+endif()
+set_tests_properties(core-cpp.ambient-reads core-cpp.ambient-reads-selftest PROPERTIES
+    LABELS "core-cpp;hygiene;tree-level"
+    TIMEOUT 60)
+
 # That scripts/clang-format.py and scripts/python-style.py refuse a path that is not theirs.
 #
 # Both filtered by extension only inside `sources()`, which serves `--all`, so a path a caller
