@@ -104,7 +104,7 @@ namespace
 async::Task<SocketResult> dialCompletion(EventLoop* loop,
                                          ResolvedEndpoint endpoint,
                                          platform::SteadyTimePoint deadline,
-                                         KeepAlive keepAlive)
+                                         StreamSocketOptions options)
 {
     platform::ensureWinsockInitialized();
     auto* const port = loop->completionPort();
@@ -199,10 +199,7 @@ async::Task<SocketResult> dialCompletion(EventLoop* loop,
         co_return std::unexpected(
             fromWinsockError(::WSAGetLastError(), "setsockopt(SO_UPDATE_CONNECT_CONTEXT)"));
 
-    applyDialledSocketOptions(DialHandles { .socket = reinterpret_cast<platform::NativeHandle>(socket),
-                                            .readiness = platform::InvalidHandle,
-                                            .kind = HandleKind::Socket },
-                              keepAlive);
+    applyStreamSocketOptions(reinterpret_cast<platform::NativeHandle>(socket), options);
 
     auto const connected = std::exchange(socket, detail::InvalidSocket);
     co_return std::unique_ptr<ISocket> { new IocpSocket(

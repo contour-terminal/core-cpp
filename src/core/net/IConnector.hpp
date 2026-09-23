@@ -37,6 +37,7 @@
 #include <core/net/ISocket.hpp>
 #include <core/net/KeepAlive.hpp>
 #include <core/net/NetError.hpp>
+#include <core/net/SocketBuffers.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -74,6 +75,10 @@ struct DialOptions
     /// in this library had before the option existed. See @c KeepAlive for what it does and does
     /// not detect.
     KeepAlive keepAlive { KeepAlive::No };
+
+    /// The connected socket's kernel send and receive buffers; unset ones keep the kernel's
+    /// value. See @c SocketBufferSizes for what a size does and does not promise.
+    SocketBufferSizes buffers {};
 };
 
 /// How a component opens an outbound connection.

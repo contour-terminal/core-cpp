@@ -47,6 +47,7 @@
 #include <core/net/IListener.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/IoAwaitable.hpp>
+#include <core/net/SocketBuffers.hpp>
 
 // clang-format off
 #include <winsock2.h>
@@ -314,11 +315,14 @@ class IocpListener final: public IListener
     /// @param host The bind address; empty is the wildcard.
     /// @param port The bind port; 0 requests an ephemeral one.
     /// @param backlog The listen backlog.
+    /// @param acceptedBuffers The kernel buffer sizes every accepted socket asks for.
     /// @return The listener, or why it could not be bound.
-    [[nodiscard]] static std::expected<std::unique_ptr<IocpListener>, NetError> bind(EventLoop& loop,
-                                                                                     std::string_view host,
-                                                                                     std::uint16_t port,
-                                                                                     int backlog = 128);
+    [[nodiscard]] static std::expected<std::unique_ptr<IocpListener>, NetError> bind(
+        EventLoop& loop,
+        std::string_view host,
+        std::uint16_t port,
+        int backlog = 128,
+        SocketBufferSizes acceptedBuffers = {});
 
     /// Adopts an already-bound, already-listening socket; @see core::net::adoptListener.
     /// @param loop The loop whose backend's port completes the accepts (not owned).
@@ -363,6 +367,7 @@ class IocpListener final: public IListener
     void* _acceptEx;
     void* _acceptAddresses;
     bool _closed = false;
+    SocketBufferSizes _acceptedBuffers {}; ///< Given to every accepted socket.
 };
 
 } // namespace core::net

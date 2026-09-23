@@ -2,6 +2,7 @@
 #pragma once
 
 #include <core/net/IListener.hpp>
+#include <core/net/SocketBuffers.hpp>
 
 // clang-format off
 #include <winsock2.h>
@@ -42,11 +43,14 @@ class WindowsListener final: public IListener
     /// @param host The bind address.
     /// @param port The bind port; 0 requests an ephemeral port.
     /// @param backlog The listen backlog.
+    /// @param acceptedBuffers The kernel buffer sizes every accepted socket asks for.
     /// @return The bound listener, or a @c NetError on failure.
-    [[nodiscard]] static std::expected<std::unique_ptr<WindowsListener>, NetError> bind(EventLoop& loop,
-                                                                                        std::string_view host,
-                                                                                        std::uint16_t port,
-                                                                                        int backlog = 128);
+    [[nodiscard]] static std::expected<std::unique_ptr<WindowsListener>, NetError> bind(
+        EventLoop& loop,
+        std::string_view host,
+        std::uint16_t port,
+        int backlog = 128,
+        SocketBufferSizes acceptedBuffers = {});
 
     /// Binds and listens on the AF_UNIX socket file @p path (Windows 10
     /// 1803+, afunix.h). A stale socket file is removed first. POSIX-style
@@ -95,6 +99,7 @@ class WindowsListener final: public IListener
     /// listener, which owns no path.
     std::string _path;
     bool _closed = false;
+    SocketBufferSizes _acceptedBuffers {}; ///< Given to every accepted socket.
 };
 
 } // namespace core::net

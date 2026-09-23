@@ -9,7 +9,6 @@
 #include <sys/socket.h>
 
 #include <cerrno>
-#include <chrono>
 #include <memory>
 #include <string>
 #include <tuple>
@@ -22,56 +21,6 @@
 
 namespace core::net::detail
 {
-
-namespace
-{
-    /// Whole seconds, and never zero.
-    ///
-    /// The keepalive options take seconds, and a zero is not "immediately" — it is rejected, or
-    /// read as "keep the default", depending on the option and the platform. Rounding a
-    /// sub-second request down to nothing would leave the two-hour system default in place while
-    /// reporting success, which is exactly the silently-unarmed state @c KeepAliveSettings says
-    /// is worth nothing.
-    /// @param value The requested interval.
-    /// @return At least one second.
-    [[nodiscard]] int wholeSeconds(std::chrono::milliseconds value) noexcept
-    {
-        auto const whole = std::chrono::ceil<std::chrono::seconds>(value);
-        return whole.count() > 0 ? static_cast<int>(whole.count()) : 1;
-    }
-
-    /// Arms TCP keepalive with @p settings. Best-effort by contract; see the header.
-    /// @param fd The connected socket.
-    /// @param settings The intervals to apply.
-    /// @return True when the flag AND the intervals were all applied.
-    [[nodiscard]] bool armKeepAlive(int fd, KeepAliveSettings const& settings) noexcept
-    {
-        // macOS spells the idle time `TCP_KEEPALIVE`; it is `TCP_KEEPIDLE` everywhere else.
-#ifdef __APPLE__
-        constexpr int IdleOption = TCP_KEEPALIVE;
-#else
-        constexpr int IdleOption = TCP_KEEPIDLE;
-#endif
-        auto const idle = wholeSeconds(settings.idle);
-        auto const interval = wholeSeconds(settings.interval);
-        auto const count = static_cast<int>(settings.count);
-
-        // **The INTERVALS FIRST, and the flag last.** Reversed, a socket whose intervals could
-        // not be applied would be left probing on the system default — two hours on Linux —
-        // which is indistinguishable from no keepalive at all for every deadline this protects,
-        // while reading back as armed to anything that checks the flag.
-        if (::setsockopt(fd, IPPROTO_TCP, IdleOption, &idle, sizeof(idle)) != 0)
-            return false;
-        if (::setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval)) != 0)
-            return false;
-        if (::setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count)) != 0)
-            return false;
-
-        int const on = 1;
-        return ::setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on)) == 0;
-    }
-
-} // namespace
 
 std::expected<DialHandles, NetError> openDialSocket(ResolvedEndpoint const& endpoint)
 {
@@ -121,17 +70,6 @@ std::expected<void, NetError> pendingSocketError(DialHandles const& handles)
     return {};
 }
 
-void applyDialledSocketOptions(DialHandles const& handles, KeepAlive keepAlive) noexcept
-{
-    // TCP_NODELAY so a small request is not held back waiting for the peer's ACK of a previous
-    // segment. Best-effort: an AF_UNIX or otherwise non-TCP socket simply refuses it.
-    int const one = 1;
-    std::ignore = ::setsockopt(handles.socket, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-
-    if (keepAlive == KeepAlive::Yes)
-        std::ignore = armKeepAlive(handles.socket, KeepAliveSettings {});
-}
-
 std::unique_ptr<ISocket> adoptDialled(EventLoop& loop, DialHandles& handles, std::string peer)
 {
     auto const fd = std::exchange(handles.socket, platform::InvalidHandle);
@@ -142,7 +80,7 @@ std::unique_ptr<ISocket> adoptDialled(EventLoop& loop, DialHandles& handles, std
 async::Task<SocketResult> dialCompletion(EventLoop* /*loop*/,
                                          ResolvedEndpoint /*endpoint*/,
                                          platform::SteadyTimePoint /*deadline*/,
-                                         KeepAlive /*keepAlive*/)
+                                         StreamSocketOptions /*options*/)
 {
     // No loop here lends a completion port, so no connector asks for this; the answer is still a
     // true one rather than an unresolved symbol, because the declaration is portable.

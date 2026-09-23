@@ -17,7 +17,10 @@
 namespace core::net
 {
 
-async::Task<AcceptResult> acceptOne(EventLoop* loop, int const* fd, bool const* closed)
+async::Task<AcceptResult> acceptOne(EventLoop* loop,
+                                    int const* fd,
+                                    bool const* closed,
+                                    detail::StreamSocketOptions options)
 {
     while (true)
     {
@@ -35,12 +38,13 @@ async::Task<AcceptResult> acceptOne(EventLoop* loop, int const* fd, bool const* 
         if (conn >= 0)
         {
 #ifndef __linux__
-            // Portable fallback: set non-blocking + cloexec explicitly.
+            // Portable fallback: non-blocking explicitly; close-on-exec is the helper's below.
             if (auto const flags = ::fcntl(conn, F_GETFL, 0); flags >= 0)
                 ::fcntl(conn, F_SETFL, flags | O_NONBLOCK);
-            if (auto const fdFlags = ::fcntl(conn, F_GETFD, 0); fdFlags >= 0)
-                ::fcntl(conn, F_SETFD, fdFlags | FD_CLOEXEC);
 #endif
+            // What a dialled socket is given too -- TCP_NODELAY above all, which only the dial
+            // used to set, so a server's replies waited on Nagle while its client's did not.
+            detail::applyStreamSocketOptions(conn, options);
             co_return std::unique_ptr<ISocket>(new PosixSocket(*loop, conn, formatPeer(peer)));
         }
 

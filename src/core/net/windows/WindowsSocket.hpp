@@ -96,6 +96,9 @@ class WindowsSocket final: public ISocket
 
     [[nodiscard]] std::string peerAddress() const override { return _peerAddress; }
 
+    /// @return The SOCKET, or `INVALID_SOCKET` once closed (for diagnostics and tests).
+    [[nodiscard]] SOCKET native() const noexcept { return _socket; }
+
     void close() noexcept override;
 
     /// @return True once @c close() was called, or a read observed the peer's EOF.

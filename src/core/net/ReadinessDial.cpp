@@ -200,7 +200,7 @@ namespace
 async::Task<SocketResult> dialReadiness(EventLoop* loop,
                                         ResolvedEndpoint endpoint,
                                         platform::SteadyTimePoint deadline,
-                                        KeepAlive keepAlive)
+                                        StreamSocketOptions options)
 {
     auto opened = openDialSocket(endpoint);
     if (!opened.has_value())
@@ -248,7 +248,7 @@ async::Task<SocketResult> dialReadiness(EventLoop* loop,
     if (auto const settled = pendingSocketError(handles); !settled.has_value())
         co_return std::unexpected(settled.error());
 
-    applyDialledSocketOptions(handles, keepAlive);
+    applyStreamSocketOptions(handles.socket, options);
 
     // The peer string is the ADDRESS rather than the requested host: it feeds a connection's log
     // prefix, which records the address, and that is how the accept path already formats it.

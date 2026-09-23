@@ -37,11 +37,11 @@ std::expected<std::unique_ptr<IListener>, NetError> listen(EventLoop& loop, List
     // AcceptEx, and a readiness backend is told FD_ACCEPT. Both are built on Windows, and
     // `BackendKind::Wfmo` stays reachable by name for a release after IOCP became the default.
     if (loop.completionPort() != nullptr)
-        return IocpListener::bind(loop, options.host, options.port, options.backlog)
+        return IocpListener::bind(loop, options.host, options.port, options.backlog, options.buffers)
             .transform([](std::unique_ptr<IocpListener> listener) -> std::unique_ptr<IListener> {
                 return listener;
             });
-    return WindowsListener::bind(loop, options.host, options.port, options.backlog)
+    return WindowsListener::bind(loop, options.host, options.port, options.backlog, options.buffers)
         .transform(
             [](std::unique_ptr<WindowsListener> listener) -> std::unique_ptr<IListener> { return listener; });
 }

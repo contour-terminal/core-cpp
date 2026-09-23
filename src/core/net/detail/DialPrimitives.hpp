@@ -16,6 +16,7 @@
 #include <core/net/KeepAlive.hpp>
 #include <core/net/NetError.hpp>
 #include <core/net/SocketAddress.hpp>
+#include <core/net/detail/StreamSocketOptions.hpp>
 #include <core/platform/Clock.hpp>
 #include <core/platform/Types.hpp>
 
@@ -96,17 +97,6 @@ namespace detail
     /// @return Nothing when the connection is up, or the classified failure.
     [[nodiscard]] std::expected<void, NetError> pendingSocketError(DialHandles const& handles);
 
-    /// Applies the options a connected socket is expected to carry, and — only if asked —
-    /// keepalive.
-    ///
-    /// Keepalive is applied AFTER and separately from the rest, which is the point: the others
-    /// are what every socket this library hands out carries, and this one is asked for by ONE
-    /// dial. Best-effort by contract, so a socket that would not take it is still handed over
-    /// rather than failing a connection over a tuning option.
-    /// @param handles The connected socket.
-    /// @param keepAlive Whether to arm probes.
-    void applyDialledSocketOptions(DialHandles const& handles, KeepAlive keepAlive) noexcept;
-
     /// Wraps the connected handle as the platform's @c ISocket, transferring ownership.
     /// @param loop The loop the socket is pinned to.
     /// @param handles The connected handles; left invalid, because the socket owns them now.
@@ -138,13 +128,14 @@ namespace detail
     /// @param loop The loop whose port completes the dial; not owned.
     /// @param endpoint The candidate; by value, for the coroutine-frame reason.
     /// @param deadline When to give up on this candidate; `SteadyTimePoint::max()` for never.
-    /// @param keepAlive Whether the connected socket probes a silent peer.
+    /// @param options Keepalive and buffer sizes for the connected socket
+    ///        (@c applyStreamSocketOptions).
     /// @return The connected socket, or why this candidate did not produce one.
     /// @throws async::OperationCancelled when the awaiting flow's own token stops the dial.
     [[nodiscard]] async::Task<SocketResult> dialCompletion(EventLoop* loop,
                                                            ResolvedEndpoint endpoint,
                                                            platform::SteadyTimePoint deadline,
-                                                           KeepAlive keepAlive);
+                                                           StreamSocketOptions options);
 
 } // namespace detail
 

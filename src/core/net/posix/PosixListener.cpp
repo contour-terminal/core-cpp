@@ -74,8 +74,12 @@ void PosixListener::close(FdWakePolicy policy) noexcept
     }
 }
 
-std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::bind(
-    EventLoop& loop, std::string_view host, std::uint16_t port, int backlog, PortSharing sharing)
+std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::bind(EventLoop& loop,
+                                                                            std::string_view host,
+                                                                            std::uint16_t port,
+                                                                            int backlog,
+                                                                            PortSharing sharing,
+                                                                            SocketBufferSizes acceptedBuffers)
 {
     auto hints = addrinfo {};
     hints.ai_family = AF_UNSPEC;
@@ -153,7 +157,9 @@ std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::bind(
             actualPort = ntohs(reinterpret_cast<sockaddr_in6 const*>(&bound)->sin6_port);
     }
 
-    return std::unique_ptr<PosixListener>(new PosixListener(loop, fd, actualPort));
+    auto listener = std::unique_ptr<PosixListener>(new PosixListener(loop, fd, actualPort));
+    listener->_acceptedBuffers = acceptedBuffers;
+    return listener;
 }
 
 std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::adopt(EventLoop& loop, int fd)
@@ -180,7 +186,7 @@ std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::adopt(Eve
 async::Task<AcceptResult> PosixListener::accept()
 {
     // The shared loop records the TCP peer's printable host via formatPeer.
-    return acceptOne(&_loop, &_fd, &_closed);
+    return acceptOne(&_loop, &_fd, &_closed, detail::StreamSocketOptions { .buffers = _acceptedBuffers });
 }
 
 } // namespace core::net

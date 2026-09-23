@@ -54,6 +54,7 @@ using core::net::NetErrorCode;
 using core::net::ResolvedEndpoint;
 using core::net::SocketResult;
 using core::net::detail::dialCompletion;
+using core::net::detail::StreamSocketOptions;
 using core::platform::SteadyTimePoint;
 
 namespace
@@ -92,7 +93,7 @@ Task<void> dialReporting(
     try
     {
         auto const endpoint = loopbackEndpoint(port);
-        *out = co_await dialCompletion(loop, endpoint, deadline, KeepAlive::No);
+        *out = co_await dialCompletion(loop, endpoint, deadline, StreamSocketOptions {});
     }
     catch (core::async::OperationCancelled const&)
     {
@@ -125,7 +126,8 @@ TEST_CASE("A ConnectEx dial connects, and its socket is usable for everything a 
     auto served = std::string {};
     auto client = [](EventLoop* lp, std::uint16_t port, SocketResult* out) -> Task<void> {
         auto const endpoint = loopbackEndpoint(port);
-        *out = co_await dialCompletion(lp, endpoint, SteadyTimePoint::max(), KeepAlive::Yes);
+        *out = co_await dialCompletion(
+            lp, endpoint, SteadyTimePoint::max(), StreamSocketOptions { .keepAlive = KeepAlive::Yes });
         if (!out->has_value())
             co_return;
         constexpr auto Payload = std::string_view { "hello" };

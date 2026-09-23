@@ -6,6 +6,8 @@
 #include <core/net/IAsyncAddressResolver.hpp>
 #include <core/net/IConnector.hpp>
 #include <core/net/SocketAddress.hpp>
+#include <core/net/SocketBuffers.hpp>
+#include <core/net/detail/StreamSocketOptions.hpp>
 #include <core/net/testing/InMemoryTransport.hpp>
 #include <core/net/testing/TestLoop.hpp>
 #include <core/platform/Clock.hpp>
@@ -18,6 +20,7 @@
 #include <expected>
 #include <format>
 #include <memory>
+#include <optional>
 #include <ranges>
 #include <string>
 #include <utility>
@@ -120,17 +123,19 @@ struct DialScript
     std::vector<std::pair<int, SteadyTimePoint>> attempts {};
 
     KeepAlive sawKeepAlive = KeepAlive::No;
+    core::net::SocketBufferSizes sawBuffers {};
 };
 
 /// The @c detail::DialStep every case here uses.
 Task<SocketResult> scriptedDial(void* state,
                                 ResolvedEndpoint endpoint,
                                 SteadyTimePoint deadline,
-                                KeepAlive keepAlive)
+                                core::net::detail::StreamSocketOptions options)
 {
     auto& script = *static_cast<DialScript*>(state);
     script.attempts.emplace_back(endpoint.protocol, deadline);
-    script.sawKeepAlive = keepAlive;
+    script.sawKeepAlive = options.keepAlive;
+    script.sawBuffers = options.buffers;
     script.clock->advance(script.cost);
 
     if (endpoint.protocol == script.succeedAt)
@@ -395,18 +400,22 @@ TEST_CASE("a resolver failure is reported as itself, not as a dial failure", "[n
     CHECK(script.attempts.empty());
 }
 
-TEST_CASE("keepalive travels per call rather than per connector", "[net]")
+TEST_CASE("keepalive and buffer sizes travel per call rather than per connector", "[net]")
 {
-    // Folding it into the connector's own state is how a per-call option quietly becomes a
+    // Folding them into the connector's own state is how a per-call option quietly becomes a
     // per-connector one, which is the design `DialOptions` exists to rule out.
     auto clock = core::platform::ManualClock {};
     auto loop = core::net::testing::TestLoop { clock };
     auto resolver = ScriptedAsyncResolver { &clock, 1 };
     auto script = DialScript { .clock = &clock, .loop = &loop };
+    auto const options =
+        DialOptions { .keepAlive = KeepAlive::Yes,
+                      .buffers = core::net::SocketBufferSizes { .send = 4096, .receive = 8192 } };
 
     auto answer = SocketResult {};
-    loop.blockOn(runFlow(
-        &resolver, &loop, &clock, "one.test", DialOptions { .keepAlive = KeepAlive::Yes }, &script, &answer));
+    loop.blockOn(runFlow(&resolver, &loop, &clock, "one.test", options, &script, &answer));
 
     CHECK(script.sawKeepAlive == KeepAlive::Yes);
+    CHECK(script.sawBuffers.send == std::optional<std::size_t> { 4096 });
+    CHECK(script.sawBuffers.receive == std::optional<std::size_t> { 8192 });
 }

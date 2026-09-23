@@ -18,7 +18,6 @@
 #include <core/net/windows/WinsockError.hpp>
 #include <core/platform/WinsockInit.hpp>
 
-#include <chrono>
 #include <memory>
 #include <string>
 #include <tuple>
@@ -26,42 +25,6 @@
 
 namespace core::net::detail
 {
-
-namespace
-{
-    /// Arms TCP keepalive with @p settings. Best-effort by contract; see the header.
-    ///
-    /// One ioctl sets the flag and both intervals together, so there is no partially-armed state
-    /// to unwind. The probe COUNT is absent on purpose: Windows fixes it at 10 and offers no way
-    /// to set it — @c KeepAliveSettings states what that does to the detection time rather than
-    /// pretending the parameter was applied.
-    /// @param socket The connected socket.
-    /// @param settings The intervals to apply.
-    /// @return True when the ioctl succeeded.
-    [[nodiscard]] bool armKeepAlive(SOCKET socket, KeepAliveSettings const& settings) noexcept
-    {
-        std::ignore = settings.count;
-
-        auto request = tcp_keepalive {};
-        request.onoff = 1;
-        // Milliseconds here, unlike every other platform.
-        request.keepalivetime = static_cast<ULONG>(settings.idle.count());
-        request.keepaliveinterval = static_cast<ULONG>(settings.interval.count());
-
-        DWORD returned = 0;
-        return ::WSAIoctl(socket,
-                          SIO_KEEPALIVE_VALS,
-                          &request,
-                          sizeof(request),
-                          nullptr,
-                          0,
-                          &returned,
-                          nullptr,
-                          nullptr)
-               == 0;
-    }
-
-} // namespace
 
 NetError fromWinsockError(int error, std::string context)
 {
@@ -153,18 +116,6 @@ std::expected<void, NetError> pendingSocketError(DialHandles const& handles)
     if (pending != 0)
         return std::unexpected(fromWinsockError(pending, "connect"));
     return {};
-}
-
-void applyDialledSocketOptions(DialHandles const& handles, KeepAlive keepAlive) noexcept
-{
-    auto const socket = reinterpret_cast<SOCKET>(handles.socket);
-
-    int const one = 1;
-    std::ignore =
-        ::setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<char const*>(&one), sizeof(one));
-
-    if (keepAlive == KeepAlive::Yes)
-        std::ignore = armKeepAlive(socket, KeepAliveSettings {});
 }
 
 std::unique_ptr<ISocket> adoptDialled(EventLoop& loop, DialHandles& handles, std::string peer)

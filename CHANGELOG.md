@@ -28,6 +28,15 @@ workflow refuses one without a section here.
   `whenAll`'s and `whenAny`'s, `AsyncQueue::PopAwaiter`, `ResultAwaitable`, the threaded resolver's
   and the TLS serial gate's, and `TuiRuntime`'s `NextInputEventAwaiter`, `NextEventForAwaiter`,
   `NextActivityAwaiter` and `NextAgentReadyAwaiter`.
+- **A socket a listener accepts carries `TCP_NODELAY`, as a dialled one always did.** Only the
+  dial paths set it (`posix/DialPrimitives.cpp`, `windows/DialPrimitives.cpp`, and through them the
+  completion-port dial); `accept4`/`accept` on POSIX, the WFMO listener's `accept` and the IOCP
+  listener's `AcceptEx` handed out sockets with close-on-exec and nothing else, so a server's small
+  replies waited on Nagle for the client's delayed ACK. Every dial and every accept on every
+  platform now goes through one helper, `detail::applyStreamSocketOptions`, which sets close-on-exec
+  (a non-inheritable handle on Windows), `TCP_NODELAY`, the buffer sizes below when asked, and
+  keepalive when a dial asks for it. `WindowsSocket::native()` joins `PosixSocket::native()` and
+  `IocpSocket::native()`, for diagnostics and tests.
 
 ### Changed
 
@@ -44,6 +53,16 @@ workflow refuses one without a section here.
 
 ### Added
 
+- **`SocketBufferSizes`** (`<core/net/SocketBuffers.hpp>`), and a `buffers` field of it on both
+  `ListenOptions` and `DialOptions`: the kernel send and receive buffers (`SO_SNDBUF`,
+  `SO_RCVBUF`) of every socket a listener accepts, and of one dialled socket. Each size is a
+  `std::optional<std::size_t>`, and an unset one leaves the kernel's value untouched, which is the
+  default. fastcached sizes both to 1 MiB so that a large reply leaves in one `sendmsg`. A size is a
+  request: Linux reports twice what was set and caps an unprivileged request at
+  `net.core.wmem_max`/`rmem_max`. `PosixListener::bind`, `WindowsListener::bind` and
+  `IocpListener::bind` take the sizes as a new trailing parameter with a default; the internal
+  `detail::DialStep`, `detail::dialReadiness` and `detail::dialCompletion` take a
+  `detail::StreamSocketOptions` where they took a `KeepAlive`.
 - **`ListenOptions::sharing`**, a `PortSharing` defaulting to `PortSharing::Exclusive`. With
   `PortSharing::Shared`, `listen()` sets `SO_REUSEPORT` on Linux, the BSDs and macOS, so a server
   can bind one listener per loop on the same port and let the kernel spread the connections;

@@ -6,12 +6,12 @@
 #include <core/net/IListener.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/IoBackend.hpp>
-#include <core/net/KeepAlive.hpp>
 #include <core/net/ReadinessDial.hpp>
 #include <core/net/SocketAddress.hpp>
 #include <core/net/Sockets.hpp>
 #include <core/net/detail/DialPrimitives.hpp>
 #include <core/net/detail/ScopeGuard.hpp>
+#include <core/net/detail/StreamSocketOptions.hpp>
 #include <core/net/testing/BackendMatrix.hpp>
 #include <core/net/testing/CoroTestSupport.hpp>
 #include <core/platform/Clock.hpp>
@@ -42,11 +42,11 @@
 using core::async::Task;
 using core::net::EventLoop;
 using core::net::ISocket;
-using core::net::KeepAlive;
 using core::net::NetErrorCode;
 using core::net::ResolvedEndpoint;
 using core::net::SocketResult;
 using core::net::detail::dialReadiness;
+using core::net::detail::StreamSocketOptions;
 using core::net::testing::BackendMatrix;
 using core::platform::SteadyTimePoint;
 
@@ -144,7 +144,8 @@ Task<void> saturate(EventLoop* loop, SaturatedListener* out)
     auto const endpoint = loopbackEndpoint(out->port);
     for ([[maybe_unused]] auto const attempt: std::views::iota(0, Fill))
     {
-        auto dialled = co_await dialReadiness(loop, endpoint, loop->clock().now() + PerDial, KeepAlive::No);
+        auto dialled =
+            co_await dialReadiness(loop, endpoint, loop->clock().now() + PerDial, StreamSocketOptions {});
         if (!dialled.has_value())
         {
             // A timeout means the backlog no longer takes a connection. Anything else — a
@@ -163,7 +164,7 @@ Task<void> dialOnce(EventLoop* loop, std::uint16_t port, std::chrono::millisecon
     auto const deadline =
         budget > std::chrono::milliseconds::zero() ? loop->clock().now() + budget : SteadyTimePoint::max();
     auto const endpoint = loopbackEndpoint(port);
-    *out = co_await dialReadiness(loop, endpoint, deadline, KeepAlive::No);
+    *out = co_await dialReadiness(loop, endpoint, deadline, StreamSocketOptions {});
 }
 
 /// Accepts one connection and reads @p expected.size() bytes from it.
@@ -182,7 +183,7 @@ Task<void> acceptAndRead(core::net::IListener* listener, std::string_view expect
 Task<void> dialAndWrite(EventLoop* loop, std::uint16_t port, std::string_view payload, bool* ok)
 {
     auto const endpoint = loopbackEndpoint(port);
-    auto dialled = co_await dialReadiness(loop, endpoint, SteadyTimePoint::max(), KeepAlive::No);
+    auto dialled = co_await dialReadiness(loop, endpoint, SteadyTimePoint::max(), StreamSocketOptions {});
     if (!dialled.has_value())
         co_return;
     auto const bytes =
@@ -323,7 +324,7 @@ TEST_CASE("the flow's stop token cancels a dial in flight", "[net]")
         auto const endpoint = loopbackEndpoint(port);
         try
         {
-            *out = co_await dialReadiness(lp, endpoint, SteadyTimePoint::max(), KeepAlive::No);
+            *out = co_await dialReadiness(lp, endpoint, SteadyTimePoint::max(), StreamSocketOptions {});
         }
         catch (core::async::OperationCancelled const&)
         {
@@ -377,7 +378,7 @@ TEST_CASE("a whenAny loser's stop cancels a parked dial through the dial's own c
         auto const endpoint = loopbackEndpoint(port);
         try
         {
-            *out = co_await dialReadiness(lp, endpoint, SteadyTimePoint::max(), KeepAlive::No);
+            *out = co_await dialReadiness(lp, endpoint, SteadyTimePoint::max(), StreamSocketOptions {});
         }
         catch (core::async::OperationCancelled const&)
         {
@@ -446,7 +447,7 @@ TEST_CASE("a stop from ANOTHER thread cancels a dial in flight", "[net]")
         auto const endpoint = loopbackEndpoint(port);
         try
         {
-            *out = co_await dialReadiness(lp, endpoint, SteadyTimePoint::max(), KeepAlive::No);
+            *out = co_await dialReadiness(lp, endpoint, SteadyTimePoint::max(), StreamSocketOptions {});
         }
         catch (core::async::OperationCancelled const&)
         {

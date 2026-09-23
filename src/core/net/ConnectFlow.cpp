@@ -150,6 +150,8 @@ async::Task<SocketResult> runConnectFlow(IAsyncAddressResolver* resolver,
         makeNetError(NetErrorCode::AddressError, 0, std::format("no usable address for {}:{}", host, port));
 
     auto remainingCandidates = resolved->size();
+    auto const socketOptions =
+        StreamSocketOptions { .keepAlive = options.keepAlive, .buffers = options.buffers };
     for (auto const& candidate: *resolved)
     {
         // Checked PER CANDIDATE rather than once, which is what makes the budget a total:
@@ -188,7 +190,7 @@ async::Task<SocketResult> runConnectFlow(IAsyncAddressResolver* resolver,
         }
         --remainingCandidates;
 
-        auto attempt = co_await dial(dialState, candidate, candidateDeadline, options.keepAlive);
+        auto attempt = co_await dial(dialState, candidate, candidateDeadline, socketOptions);
         if (attempt.has_value())
             co_return std::move(*attempt);
 

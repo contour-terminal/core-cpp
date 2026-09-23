@@ -14,6 +14,7 @@
 #include <core/net/IListener.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/IoResult.hpp>
+#include <core/net/SocketBuffers.hpp>
 #include <core/net/UdpSocket.hpp>
 #include <core/platform/Types.hpp>
 
@@ -57,6 +58,10 @@ struct ListenOptions
     /// is a hijack rather than a share. The default is exclusive, so a second bind of a held port
     /// fails with @c NetErrorCode::AddressInUse.
     PortSharing sharing = PortSharing::Exclusive;
+
+    /// The kernel send and receive buffers of every socket this listener accepts; unset ones keep
+    /// the kernel's value. See @c SocketBufferSizes for what a size does and does not promise.
+    SocketBufferSizes buffers {};
 };
 
 /// Binds a TCP listener as @p options asks, driven by @p loop's backend.

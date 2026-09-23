@@ -22,6 +22,7 @@
 #include <core/net/ISocket.hpp>
 #include <core/net/KeepAlive.hpp>
 #include <core/net/SocketAddress.hpp>
+#include <core/net/detail/StreamSocketOptions.hpp>
 #include <core/platform/Clock.hpp>
 
 namespace core::net
@@ -45,7 +46,8 @@ namespace detail
     /// @param endpoint The candidate to dial. **By value**: this is a coroutine, so a reference
     ///        parameter could dangle at the first suspend.
     /// @param deadline When to give up on THIS candidate; `SteadyTimePoint::max()` for never.
-    /// @param keepAlive Whether the connected socket probes a silent peer.
+    /// @param options Keepalive and buffer sizes for the connected socket
+    ///        (@c applyStreamSocketOptions).
     /// @return The connected socket, or why this candidate did not produce one.
     /// @throws async::OperationCancelled if the awaiting flow's own stop token is stopped while
     ///         the dial is outstanding. A cancel from the FLOW unwinds; the socket is closed on
@@ -53,7 +55,7 @@ namespace detail
     [[nodiscard]] async::Task<SocketResult> dialReadiness(EventLoop* loop,
                                                           ResolvedEndpoint endpoint,
                                                           platform::SteadyTimePoint deadline,
-                                                          KeepAlive keepAlive);
+                                                          StreamSocketOptions options);
 
 } // namespace detail
 

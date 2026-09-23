@@ -50,7 +50,7 @@ namespace
     [[nodiscard]] SocketResult dialOne(BlockingDialState const& dial,
                                        ResolvedEndpoint const& endpoint,
                                        platform::SteadyTimePoint deadline,
-                                       KeepAlive keepAlive)
+                                       detail::StreamSocketOptions const& options)
     {
         auto opened = detail::openDialSocket(endpoint);
         if (!opened.has_value())
@@ -76,7 +76,7 @@ namespace
                 return std::unexpected(settled.error());
         }
 
-        detail::applyDialledSocketOptions(handles, keepAlive);
+        detail::applyStreamSocketOptions(handles.socket, options);
         auto released = detail::releaseBlocking(handles);
         if (!released.has_value())
             return std::unexpected(std::move(released.error()));
@@ -93,9 +93,9 @@ namespace
     async::Task<SocketResult> blockingDial(void* state,
                                            ResolvedEndpoint endpoint,
                                            platform::SteadyTimePoint deadline,
-                                           KeepAlive keepAlive)
+                                           detail::StreamSocketOptions options)
     {
-        co_return dialOne(*static_cast<BlockingDialState const*>(state), endpoint, deadline, keepAlive);
+        co_return dialOne(*static_cast<BlockingDialState const*>(state), endpoint, deadline, options);
     }
 } // namespace
 

@@ -135,6 +135,7 @@ core_cpp_add_module(net KIND STATIC
         ReadinessDial.hpp
         SharedPortDatagram.hpp
         SocketAddress.hpp
+        SocketBuffers.hpp
         SocketContract.hpp
         SocketDeadline.hpp
         SleepUntil.hpp
@@ -148,6 +149,7 @@ core_cpp_add_module(net KIND STATIC
         detail/ParkId.hpp
         detail/ParkTable.hpp
         detail/ReadinessSlot.hpp
+        detail/StreamSocketOptions.hpp
         detail/WorkerIdentity.hpp
         testing/BackendMatrix.hpp
         testing/CoroTestSupport.hpp
@@ -207,6 +209,7 @@ core_cpp_add_module(net KIND STATIC
         posix/PosixSocket.hpp
         posix/SocketErrors.cpp
         posix/SocketsPosix.cpp
+        posix/StreamSocketOptions.cpp
         posix/UdpSocket.cpp
         posix/UnixListener.cpp
         posix/UnixListener.hpp
@@ -232,6 +235,7 @@ core_cpp_add_module(net KIND STATIC
         windows/NetworkEvents.hpp
         windows/SocketErrors.cpp
         windows/SocketsWin32.cpp
+        windows/StreamSocketOptions.cpp
         windows/UdpSocket.cpp
         windows/WaitCompletionPacket.cpp
         windows/WaitCompletionPacket.hpp
@@ -311,6 +315,7 @@ core_cpp_add_test(net
         SocketClosedStates_test.cpp
         SocketDeadline_test.cpp
         Socket_test.cpp
+        StreamSocketOptions_test.cpp
         TcpClient_test.cpp
         ThreadedAddressResolver_test.cpp
         UdpSocket_test.cpp

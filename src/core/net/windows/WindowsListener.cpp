@@ -12,6 +12,7 @@
 
 #include <core/net/SocketAddress.hpp>
 #include <core/net/detail/PeerAddress.hpp>
+#include <core/net/detail/StreamSocketOptions.hpp>
 #include <core/net/windows/InvalidSocket.hpp>
 #include <core/net/windows/NetworkEvents.hpp>
 #include <core/net/windows/WindowsSocket.hpp>
@@ -140,10 +141,12 @@ void WindowsListener::close(FdWakePolicy policy) noexcept
         ::DeleteFileA(_path.c_str());
 }
 
-std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bind(EventLoop& loop,
-                                                                                std::string_view host,
-                                                                                std::uint16_t port,
-                                                                                int backlog)
+std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bind(
+    EventLoop& loop,
+    std::string_view host,
+    std::uint16_t port,
+    int backlog,
+    SocketBufferSizes acceptedBuffers)
 {
     auto hints = addrinfo {};
     hints.ai_family = AF_UNSPEC;
@@ -212,7 +215,9 @@ std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bind(
     }
 
     // A TCP listener owns no socket file, hence the empty path.
-    return std::unique_ptr<WindowsListener>(new WindowsListener(loop, sock, event, actualPort, {}));
+    auto listener = std::unique_ptr<WindowsListener>(new WindowsListener(loop, sock, event, actualPort, {}));
+    listener->_acceptedBuffers = acceptedBuffers;
+    return listener;
 }
 
 std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::adopt(EventLoop& loop,
@@ -305,7 +310,13 @@ async::Task<AcceptResult> WindowsListener::accept()
         auto peerLen = int { sizeof(peer) };
         auto const conn = ::accept(_socket, reinterpret_cast<sockaddr*>(&peer), &peerLen);
         if (conn != detail::InvalidSocket)
+        {
+            // What a dialled socket is given too -- TCP_NODELAY above all, which only the dial
+            // used to set.
+            detail::applyStreamSocketOptions(reinterpret_cast<platform::NativeHandle>(conn),
+                                             detail::StreamSocketOptions { .buffers = _acceptedBuffers });
             co_return std::unique_ptr<ISocket>(new WindowsSocket(_loop, conn, formatPeer(peer)));
+        }
 
         auto const err = WSAGetLastError();
         if (err == WSAEWOULDBLOCK)

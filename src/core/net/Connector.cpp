@@ -60,17 +60,17 @@ namespace
         /// @param state The loop, as a `void*`.
         /// @param endpoint The candidate to dial.
         /// @param deadline When to give up on it.
-        /// @param keepAlive Whether the connected socket probes a silent peer.
+        /// @param options Keepalive and buffer sizes for the connected socket.
         /// @return The connected socket, or why this candidate did not produce one.
         static async::Task<SocketResult> dialStep(void* state,
                                                   ResolvedEndpoint endpoint,
                                                   platform::SteadyTimePoint deadline,
-                                                  KeepAlive keepAlive)
+                                                  detail::StreamSocketOptions options)
         {
             auto* const loop = static_cast<EventLoop*>(state);
             if (loop->completionPort() != nullptr)
-                co_return co_await detail::dialCompletion(loop, endpoint, deadline, keepAlive);
-            co_return co_await detail::dialReadiness(loop, endpoint, deadline, keepAlive);
+                co_return co_await detail::dialCompletion(loop, endpoint, deadline, options);
+            co_return co_await detail::dialReadiness(loop, endpoint, deadline, options);
         }
 
         EventLoop& _loop;

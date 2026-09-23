@@ -13,6 +13,7 @@
 #include <core/net/ISocket.hpp>
 #include <core/net/KeepAlive.hpp>
 #include <core/net/SocketAddress.hpp>
+#include <core/net/detail/StreamSocketOptions.hpp>
 #include <core/platform/Clock.hpp>
 
 #include <cstdint>
@@ -36,13 +37,13 @@ namespace detail
     /// @c ReadinessHandler and @c ResultAwaitable's arm callback — the house shape, and no
     /// allocation on a path that runs per dial.
     ///
-    /// @c keepAlive travels as a parameter rather than inside @p state: the state is the
+    /// The socket options travel as a parameter rather than inside @p state: the state is the
     /// connector's own, built once, and folding a per-call answer into it is how a per-call
     /// option quietly becomes a per-connector one — the design @c DialOptions exists to rule out.
     using DialStep = async::Task<SocketResult> (*)(void* state,
                                                    ResolvedEndpoint endpoint,
                                                    platform::SteadyTimePoint deadline,
-                                                   KeepAlive keepAlive);
+                                                   StreamSocketOptions options);
 
     /// Guards the host, budgets the whole call, resolves, tries every candidate in preference
     /// order, and reports the LAST failure.
