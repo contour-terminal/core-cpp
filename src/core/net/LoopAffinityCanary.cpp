@@ -33,6 +33,7 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <print>
 #include <string_view>
 #include <thread>
 #include <tuple>
@@ -182,13 +183,13 @@ int main(int argc, char** argv)
     while (!entered.load(std::memory_order_acquire))
         std::this_thread::yield();
 
-    std::fprintf(stderr, "loop-affinity-canary: %s: about to call it from a second thread\n", argv[1]);
+    std::println(stderr, "loop-affinity-canary: {}: about to call it from a second thread", requested);
     mode->call(loop);
 
     // Unreachable where assertions are on. Reaching it means the predicate answered true from a
     // second thread while another was driving, which is the defect. The loop may already be gone
     // (the `destroy` mode), so nothing below touches it except through `driven` while it exists.
-    std::fprintf(stderr, "loop-affinity-canary: %s from a second thread was accepted\n", argv[1]);
+    std::println(stderr, "loop-affinity-canary: {} from a second thread was accepted", requested);
     if (loop)
         loop->stop();
     worker.join();

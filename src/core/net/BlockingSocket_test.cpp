@@ -189,7 +189,7 @@ namespace
 /// What this process was HANDED, read before any case runs. The case asserts a DELTA against it:
 /// an ignored disposition is inherited across fork and exec, so the absolute `SIG_DFL` is a claim
 /// about the whole process ancestry rather than about this library (fastcached#1229).
-auto const inheritedSigPipeDisposition = readSigPipeDisposition();
+auto const InheritedSigPipeDisposition = readSigPipeDisposition();
 } // namespace
 #endif
 
@@ -210,8 +210,8 @@ TEST_CASE("Using a blocking socket leaves the process SIGPIPE disposition alone"
 
     auto const after = readSigPipeDisposition();
     CHECK(after == before);
-    CHECK(after == inheritedSigPipeDisposition);
-    if (inheritedSigPipeDisposition != SIG_DFL)
+    CHECK(after == InheritedSigPipeDisposition);
+    if (InheritedSigPipeDisposition != SIG_DFL)
         WARN("this process was handed a non-default SIGPIPE disposition, so this case could only assert that "
              "nothing changed it, not that it is SIG_DFL");
 #endif
