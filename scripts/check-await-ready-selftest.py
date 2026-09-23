@@ -147,6 +147,67 @@ class AwaitReadyTest(unittest.TestCase):
         self.assertIn("src/core/J.hpp:3: [call] await_ready calls `clock`", problems[1])
         self.assertIn("src/core/J.hpp:4: [call] await_ready calls `ready`", problems[3])
 
+    def run_self_transfers(
+        self, files: dict[str, str], self_transfers: dict[tuple[str, str], str]
+    ) -> tuple[list[str], int, int]:
+        """Writes @p files under a scratch root and scans it with @p self_transfers excused."""
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            for path, text in files.items():
+                (root / path).parent.mkdir(parents=True, exist_ok=True)
+                (root / path).write_bytes(text.encode("utf-8"))
+            return CHECK.scan(root, {}, self_transfers)
+
+    def test_a_transfer_back_to_the_awaiting_coroutine_is_refused(self):
+        # The shape the windows (cl-release-arm64) leg caught in `Task`'s awaiter: `await_suspend`
+        # hands back the coroutine it was given, and the `await_resume` after it threw past the
+        # awaiting coroutine's handler.
+        problems, _, _ = self.run_on(
+            {
+                "src/core/K.hpp": "struct K {\n"
+                "    bool await_ready() const noexcept { return _ready; }\n"
+                "    template <typename P>\n"
+                "    std::coroutine_handle<> await_suspend(std::coroutine_handle<P> awaiting) noexcept\n"
+                "    {\n"
+                "        if (_empty)\n"
+                "            return awaiting;\n"
+                "        return _child;\n"
+                "    }\n"
+                "};\n"
+            }
+        )
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("src/core/K.hpp:7: [self-transfer] await_suspend returns `awaiting`", problems[0])
+
+    def test_a_decline_a_transfer_elsewhere_and_a_park_are_not_refused(self):
+        problems, _, _ = self.run_on(
+            {
+                "src/core/L.hpp": "struct L {\n"
+                "    bool await_ready() const noexcept { return false; }\n"
+                "    bool await_suspend(std::coroutine_handle<> awaiting) { return !park(awaiting); }\n"
+                "    std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> awaiting) noexcept\n"
+                "    {\n"
+                "        _child.promise().continuation = awaiting;\n"
+                "        return _child;\n"
+                "    }\n"
+                "    std::coroutine_handle<> await_suspend(std::coroutine_handle<> h) { return std::noop_coroutine(); }\n"
+                "};\n"
+            }
+        )
+        self.assertEqual(problems, [])
+
+    def test_an_excused_self_transfer_is_excused_and_a_stale_row_is_not(self):
+        files = {
+            "src/core/M.hpp": "std::coroutine_handle<> await_suspend(std::coroutine_handle<> self) { return self; }\n"
+            "bool await_ready() const noexcept { return false; }\n",
+            "src/core/N.hpp": "bool await_ready() const noexcept { return false; }\n",
+        }
+        problems, _, _ = self.run_self_transfers(
+            files, {("src/core/M.hpp", "self"): "a reason", ("src/core/N.hpp", "awaiting"): "gone"}
+        )
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("src/core/N.hpp: [stale-self-transfer] `awaiting`", problems[0])
+
     def test_a_tree_with_no_definition_is_a_broken_scan_not_a_clean_one(self):
         _, read, definitions = self.run_on({"src/core/I.hpp": "int i;\n"})
         self.assertEqual((read, definitions), (1, 0))

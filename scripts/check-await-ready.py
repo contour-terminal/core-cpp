@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Refuses an `await_ready` whose body makes a call.
+"""Refuses an `await_ready` whose body makes a call, and an `await_suspend` that transfers back.
 
     python scripts/check-await-ready.py
 
@@ -32,9 +32,30 @@ through a `shared_ptr` and `a == b` on a class type are calls the text does not 
 the awaiters fixed for #1546 answer a constant and carry a `static_assert` that says so: a constant
 cannot hide an operator. This scan is the net under the rest.
 
+**The second shape: a transfer back.** The `windows (cl-release-arm64)` leg then lost the handler
+with `await_ready` a constant `false`: `Task`'s awaiter answered an empty task in `await_suspend` by
+returning the awaiting coroutine's own handle, and the `std::logic_error` its `await_resume` threw
+passed that coroutine's `catch` all the same. A `bool` `await_suspend` answering `false` before a
+throwing `await_resume` kept its handler on the same leg (`AsyncQueue`'s cancelled pop,
+`interruptibleSleep` on a stopped token) -- and so did `ResultAwaitable`'s transfer back into an
+`OperationCancelled` for a flow already stopped (`CancelRead_test.cpp`, run 35908850909). What
+separates the two transfers back is not known. The rule: **neither `await_ready` nor a transfer
+back may lead into a throwing `await_resume` unless the ARM64 leg has run it.** So an
+`await_suspend` returning `std::coroutine_handle<>` whose body returns the handle it was given is
+refused as
+
+    self-transfer `return awaiting;` in an `await_suspend` that returns a coroutine handle
+
+What the scan cannot see is whether the `await_resume` after it throws: that depends on state
+the text does not show. So every transfer back is refused, and one that stays -- a handle-returning
+`await_suspend` has no other way to resume at once -- is listed in SELF_TRANSFERS under its path and
+the returned name, naming the test that runs its throwing path on the ARM64 leg, or arguing that
+the `await_resume` it leads into cannot throw. Decide in the constructor where `await_ready` can read the answer, throw from
+`await_suspend` where the throw is known there, and decline with a `bool` `await_suspend` otherwise.
+
 An `await_ready` that must make a call anyway is listed in ALLOWED under its path and the called
 name, with the reason; a row that no longer matches is refused as stale, so the list cannot outlive
-what it excuses. A scan that read no file, or found no definition, fails: that is a broken scan,
+what it excuses. SELF_TRANSFERS is checked for staleness the same way. A scan that read no file, or found no definition, fails: that is a broken scan,
 not a clean tree.
 
 Exit status: 0 when every `await_ready` is trivial or excused; 1 otherwise, naming each by file
@@ -109,6 +130,22 @@ NOT_CALLS = {
 # A row here is for the case that genuinely cannot move, and its reason must say why not.
 ALLOWED: dict[tuple[str, str], str] = {}
 
+# A handle-returning `await_suspend`: its return type, its one parameter, and the `{` of its body.
+SUSPEND = re.compile(
+    r"std::coroutine_handle<\s*>\s*await_suspend\s*\(\s*std::coroutine_handle<[^<>()]*>\s+(\w+)\s*\)"
+    r"[^{};]*\{"
+)
+
+# (path, returned name) -> why the `await_resume` it leads into cannot throw.
+SELF_TRANSFERS: dict[tuple[str, str], str] = {
+    ("src/core/net/IoAwaitable.hpp", "awaiting"): (
+        "ResultAwaitable's frame-free path resumes at once for a flow already stopped, with nothing "
+        "to arm, or with an answer settled inline; the first throws OperationCancelled from "
+        "await_resume, and CancelRead_test.cpp's 'A read on a flow already stopped' runs it on the "
+        "windows (cl-release-arm64) leg, where it kept its handler (run 35908850909)"
+    ),
+}
+
 
 def blank_comments_and_strings(text: str) -> str:
     """:return: @p text with comments and string and character literals blanked, lines kept."""
@@ -141,15 +178,22 @@ def calls_in(body: str) -> list[tuple[str, str, int]]:
     return found
 
 
-def scan(root: Path, allowed: dict[tuple[str, str], str]) -> tuple[list[str], int, int]:
+def scan(
+    root: Path,
+    allowed: dict[tuple[str, str], str],
+    self_transfers: dict[tuple[str, str], str] | None = None,
+) -> tuple[list[str], int, int]:
     """Scans @p root/src and @p root/tests.
 
+    :param self_transfers: the transfers back excused, as SELF_TRANSFERS; none when omitted.
     :return: (problems, files read, `await_ready` definitions read).
     """
+    self_transfers = self_transfers or {}
     problems = []
     read = 0
     definitions = 0
     matched = set()
+    transfers_matched = set()
     paths = [path for top in ("src", "tests") for path in sorted((root / top).rglob("*"))]
     for path in paths:
         if path.suffix not in SUFFIXES or not path.is_file():
@@ -174,6 +218,26 @@ def scan(root: Path, allowed: dict[tuple[str, str], str]) -> tuple[list[str], in
                     f"{relative}:{line}: [{kind}] await_ready {verb} `{name}`; answer a member or a "
                     f"constant and decide in await_suspend (fastcached#1546, .agent/rules/async-and-net.md)"
                 )
+        for suspend in SUSPEND.finditer(code):
+            body = body_at(code, suspend.end() - 1)
+            if body is None:
+                continue
+            name = suspend.group(1)
+            for back in re.finditer(r"\breturn\s+" + re.escape(name) + r"\s*;", body):
+                if (relative, name) in self_transfers:
+                    transfers_matched.add((relative, name))
+                    continue
+                line = code.count("\n", 0, suspend.end() + back.start()) + 1
+                problems.append(
+                    f"{relative}:{line}: [self-transfer] await_suspend returns `{name}`, the coroutine "
+                    f"awaiting it; decide in the constructor, throw from await_suspend, or decline with "
+                    f"a bool await_suspend (fastcached#1546, .agent/rules/async-and-net.md)"
+                )
+    for relative, name in sorted(set(self_transfers) - transfers_matched):
+        problems.append(
+            f"{relative}: [stale-self-transfer] `{name}` is excused ({self_transfers[(relative, name)]}), "
+            f"but no await_suspend there transfers back through it; drop the row"
+        )
     for relative, name in sorted(set(allowed) - matched):
         problems.append(
             f"{relative}: [stale-allow] `{name}` is allowed ({allowed[(relative, name)]}), "
@@ -184,7 +248,7 @@ def scan(root: Path, allowed: dict[tuple[str, str], str]) -> tuple[list[str], in
 
 def main(root: Path = REPOSITORY_ROOT) -> int:
     """:return: the exit status for a scan of @p root; the self-test passes a scratch tree."""
-    problems, read, definitions = scan(root, ALLOWED)
+    problems, read, definitions = scan(root, ALLOWED, SELF_TRANSFERS if root == REPOSITORY_ROOT else {})
     if read == 0 or definitions == 0:
         print(
             f"check-await-ready: read {read} file(s) and {definitions} await_ready definition(s) "
@@ -196,7 +260,10 @@ def main(root: Path = REPOSITORY_ROOT) -> int:
     if problems:
         print(f"check-await-ready: {len(problems)} problem(s) in {definitions} await_ready definition(s)")
         return 1
-    print(f"check-await-ready: {definitions} await_ready definition(s) in {read} file(s); none makes a call")
+    print(
+        f"check-await-ready: {definitions} await_ready definition(s) in {read} file(s); none makes a call, "
+        f"and no await_suspend transfers back but the {len(SELF_TRANSFERS)} excused"
+    )
     return 0
 
 

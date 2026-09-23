@@ -471,14 +471,31 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   leaks every job in it along with whatever it holds — a socket, a temporary directory, a slot in
   somebody's counter. `ThreadPoolExecutor` therefore has nothing for `ParkedWork::abandon` to
   answer, and says so where it ignores it.
-- **An `await_ready` stays trivial -- a member read, a comparison of members, or a constant -- and
-  a decision that needs a call moves into `await_suspend`, which may decline to park.** MSVC 19.44
+- **Neither `await_ready` nor a transfer back may lead into a throwing `await_resume` that the
+  ARM64 leg has not run.** An `await_ready` stays trivial -- a member read, a comparison of
+  members, or a constant -- and a decision that needs a call moves into the constructor, where
+  `await_ready` can read it, or into a `bool` `await_suspend`, which may decline to park; a
+  handle-returning `await_suspend` does not return the handle it was given where the
+  `await_resume` after it can throw, unless a test runs that throw on the
+  `windows (cl-release-arm64)` leg -- or it throws itself instead ([expr.await] rethrows that at
+  the `co_await`). MSVC 19.44
   targeting ARM64 (cl 19.44.35228, `cl-release`, fastcached's `windows-11-arm` leg) dropped the
   enclosing `try` of a `co_await` on a TEMPORARY awaiter whose `await_ready` made a virtual call:
   the resume function's exception table declared the coroutine's own catch-all and no try block
   for the handler the source wrote, so the `OperationCancelled` that `await_resume` threw passed a
   typed `catch` and `catch (...)` alike. It was caught when `await_ready` made no call, when the
-  value was read in the constructor, and when the awaiter was a named local. `EventLoop`'s
+  value was read in the constructor, and when the awaiter was a named local. The
+  `windows (cl-release-arm64)` leg then lost it with `await_ready` a constant `false`: `Task`'s
+  awaiter answered a task owning no frame by returning the awaiting handle from `await_suspend`,
+  and the `std::logic_error` its `await_resume` threw passed the awaiting coroutine's `catch`
+  (`Task_test.cpp`, `refused == 2` read 0). On the same leg a `bool` `await_suspend` answering
+  `false` before a throwing `await_resume` kept its handler (`AsyncQueue`'s cancelled pop,
+  `interruptibleSleep` on a stopped token), a transfer back into an `await_resume` that
+  returned a value was harmless, and -- the case that keeps this rule from being a mechanism --
+  `ResultAwaitable`'s transfer back into an `OperationCancelled` for a flow already stopped kept
+  its handler (`CancelRead_test.cpp`, run 35908850909). What separates it from `Task`'s is not
+  known, which is why the rule is a measurement per shape rather than a line through all of them.
+  `Task`'s two awaiters decide in their constructor. `EventLoop`'s
   `DelayAwaiter` had exactly that shape -- `_loop->clock().now()` -- and so every `delay` and
   `sleepUntil` in the tree, because Task B12 moved `TuiRuntime` onto it after fastcached had fixed
   the runtime's own copy. The same release made twelve more trivial: `TokenDelayAwaiter` (a clock
@@ -490,7 +507,8 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   already stopped starts throwing where `await_ready`'s answer used to resume it normally --
   `SleepUntil_test.cpp`'s stopped-flow case is the one that notices. What guards it, stated as
   small as it is: `static_assert(core::async::awaitReadyIsConstantFalse<A>())` for each of those
-  with a name outside its file but `ResultAwaitable` (a member read), in the module's test -- the
+  with a name outside its file but `ResultAwaitable` and `Task`'s two (a member read), in the
+  module's test -- the
   helper cannot name a type with internal linkage, so `TokenDelayAwaiter`, `SlotPark` and
   `SerialGate::Awaiter` have the scan below and nothing else -- which makes a call there fail to COMPILE on GCC 14, Clang 20 and
   MSVC 19.51 or newer, and asserts nothing on the compilers that predate P2280 (MSVC 19.44 among
@@ -498,7 +516,10 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   `readability-static-accessed-through-instance` reports a static one at every `co_await` in every
   caller (391 findings here when it was tried); `scripts/check-await-ready.py`, which refuses a call or a
   construction in any `await_ready` body under `src/` and `tests/` but cannot see an overloaded
-  operator; and the `windows (cl-release-arm64)` leg, the only one on which the miscompile itself
+  operator, and refuses every `return <parameter>;` in an `await_suspend` returning a coroutine
+  handle -- it cannot see whether the `await_resume` after it throws, so each transfer back that
+  stays is a row in its `SELF_TRANSFERS` naming the test that runs it on the ARM64 leg, checked
+  for staleness; and the `windows (cl-release-arm64)` leg, the only one on which the miscompile itself
   is observable. None of the C++ is wrong, so no x64 leg and no sanitizer can fail for it. Origin:
   [fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546).
 
