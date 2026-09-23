@@ -11,11 +11,12 @@ workflow refuses one without a section here.
 
 ### Breaking
 
-- **The `await_ready` of nine public awaiters answers a `constexpr` constant `false`**:
-  `core::net::DelayAwaiter`, `core::async::Task<T>::Awaiter`, `Task<void>::Awaiter`, the awaiter
-  `whenAll` and `whenAny` return, `AsyncQueue<T>::PopAwaiter`, and the four `TuiRuntime` awaiters
-  (which also became `noexcept`). It is the fix for fastcached#1546 under *Fixed*: the decision it
-  made is `await_suspend`'s now. A `co_await` behaves as before; code that called `await_ready()`
+- **The `await_ready` of seven public awaiters answers a `constexpr` constant `false`**:
+  `core::net::DelayAwaiter`, the awaiter `whenAll` and `whenAny` return, `AsyncQueue<T>::PopAwaiter`,
+  and the four `TuiRuntime` awaiters (which also became `noexcept`). It is the fix for
+  fastcached#1546 under *Fixed*: the decision it made is `await_suspend`'s now. (`Task`'s two
+  awaiters answer as before -- true for a task owning no frame or already finished -- but from a
+  member their constructor sets, and are not on this list.) A `co_await` behaves as before; code that called `await_ready()`
   directly to learn whether an await would park gets `false` where it got `true` -- for instance
   `sleepUntil(nullptr, t).await_ready()` -- and core-cpp's own `SleepUntil_test.cpp` and
   `AsyncQueue_test.cpp` asserted exactly that. It stays a `const` member rather than a `static`
@@ -47,11 +48,18 @@ workflow refuses one without a section here.
   ([fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546)). That compiler's
   ARM64 code generator drops the enclosing `try` of a `co_await` on a temporary awaiter whose
   `await_ready` makes a call, so the exception passed a typed `catch` and `catch (...)` alike and
-  reached whatever awaited the flow. `core::net::DelayAwaiter::await_ready` read the clock through
+  reached whatever awaited the flow. The new `windows (cl-release-arm64)` leg then found the same
+  loss with no call at all: an `await_suspend` that returned the awaiting coroutine's own handle,
+  followed by an `await_resume` that threw -- `Task`'s awaiter over a task owning no frame, whose
+  `std::logic_error` passed the awaiting coroutine's `catch`. So `Task`'s two awaiters decide in
+  their constructor, where the awaiter is made by the `co_await`, and `await_ready` reads the
+  answer. `ResultAwaitable`, every socket operation's awaitable, transfers back into an
+  `OperationCancelled` for a flow already stopped too; on the same leg it keeps its handler, which
+  `CancelRead_test.cpp` now holds. `core::net::DelayAwaiter::await_ready` read the clock through
   the virtual `IClock::now()`. The 0.1.0 notes say this awaiter carried fastcached's fix when
   `TuiRuntime` moved onto it; it did not, and every `delay` and `sleepUntil` had the shape. Every
   `await_ready` in `src/core` now reads a member or answers a constant, and the decision it made is
-  `await_suspend`'s, asked before the flow's stop token is read, so what a `co_await` observes is
+  the constructor's or `await_suspend`'s, asked before the flow's stop token is read, so what a `co_await` observes is
   unchanged (a direct call of `await_ready()` is not; see *Breaking*): an elapsed deadline, a null loop, a finished task, an empty `whenAll`, a queued item,
   a free TLS gate, a finished lookup and a buffered input event or agent message all resume without
   parking, and a flow that is already stopped still resumes normally on each of them. The awaiters:
@@ -167,7 +175,8 @@ workflow refuses one without a section here.
   `tools/migrate/renames.json`'s `core::net::ReusePort` row points at it.
 - **`core-cpp.await-ready`**, a `tree-level` check with a self-test (`scripts/check-await-ready.py`,
   run by the `style` job), refusing an `await_ready` body under `src/` or `tests/` that calls a
-  function or constructs an object. It cannot see an overloaded operator; the fixed public awaiters
+  function or constructs an object, and an `await_suspend` returning a coroutine handle that
+  returns the handle it was given, unless its row names the test that runs it on the ARM64 leg. It cannot see an overloaded operator; the fixed public awaiters
   also carry a `static_assert(core::async::awaitReadyIsConstantFalse<A>())`, new in
   `<core/async/Awaitable.hpp>`, which asks the question at compile time without constructing an
   awaiter (P2280), so a call there fails to compile on GCC 14, Clang 20 and MSVC 19.51 or newer;

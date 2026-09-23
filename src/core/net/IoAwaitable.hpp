@@ -135,7 +135,10 @@ class ResultAwaitable
     /// through its own `co_await`s instead of through a retire hook.
     /// @param task The operation. Consumed; its frame is owned by this awaitable and destroyed with
     ///        it, so it is safe for the caller to drop the awaitable unawaited.
-    explicit ResultAwaitable(async::Task<Result> task) noexcept: _task(std::move(task).operator co_await()) {}
+    explicit ResultAwaitable(async::Task<Result> task) noexcept:
+        _task(std::move(task).operator co_await()), _taskReady(_task->await_ready())
+    {
+    }
 
     ResultAwaitable(ResultAwaitable const&) = delete;
     ResultAwaitable& operator=(ResultAwaitable const&) = delete;
@@ -161,6 +164,7 @@ class ResultAwaitable
         _retire(std::exchange(other._retire, nullptr)),
         _owner(std::exchange(other._owner, nullptr)),
         _settled(other._settled),
+        _taskReady(other._taskReady),
         _abandoned(other._abandoned)
     {
         assert(!other._waiter && !other._cancelReg.has_value() && !other._park
@@ -189,9 +193,10 @@ class ResultAwaitable
     /// ([fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546)), and every
     /// `co_await sock->read(...)` is that shape. It asked the optional and then `Task`'s awaiter;
     /// neither is needed. A coroutine-backed operation is never settled (only @c complete and the
-    /// value constructor set the flag, and neither is its path), and whether its task has already
-    /// finished is `Task`'s own @c await_suspend's question, which @c await_suspend below reaches.
-    [[nodiscard]] bool await_ready() const noexcept { return _settled; }
+    /// value constructor set the flag, and neither is its path); whether its task has nothing to
+    /// suspend for is `Task`'s awaiter's answer, which that awaiter decides in its constructor and
+    /// the constructor here copies into @c _taskReady.
+    [[nodiscard]] bool await_ready() const noexcept { return _settled || _taskReady; }
 
     /// Captures the awaiting flow's stop token, arms the operation, and parks unless the owner
     /// answered inline.
@@ -415,6 +420,11 @@ class ResultAwaitable
     EventLoop* _loop = nullptr;
     ParkId _park {};
     bool _settled = false;
+
+    /// A coroutine-backed operation whose task has nothing to suspend for -- it owns no frame -- as
+    /// `Task`'s awaiter found it when this was made. `Task`'s @c await_suspend is reached only where
+    /// its @c await_ready answered false, so this must be asked first.
+    bool _taskReady = false;
 
     /// Set by @c abandon: the owner is being destroyed, so `await_resume` unwinds rather than
     /// reporting a value the flow would act on.

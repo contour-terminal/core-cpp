@@ -186,7 +186,10 @@ class [[nodiscard]] Task
     {
       public:
         /// @param child The frame this awaiter takes over; may be empty.
-        explicit Awaiter(HandleType child) noexcept: _child(child) {}
+        ///
+        /// Whether there is anything to suspend for is decided HERE, and @c await_ready reads the
+        /// answer: see @c await_ready for why neither of the other two places will do.
+        explicit Awaiter(HandleType child) noexcept: _child(child), _ready(!child || child.done()) {}
 
         Awaiter(Awaiter&&) noexcept = default;
         Awaiter(Awaiter const&) = delete;
@@ -194,25 +197,33 @@ class [[nodiscard]] Task
         Awaiter& operator=(Awaiter&&) = delete;
         ~Awaiter() = default;
 
-        /// @return False. Whether there is anything to suspend for -- a child, not yet done -- is
-        ///         @c await_suspend's question, because asking it is a call: MSVC 19.44's ARM64 code
-        ///         generator drops the enclosing `try` of a `co_await` on a temporary awaiter whose
-        ///         `await_ready` makes one
-        ///         ([fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546)),
-        ///         and every `co_await task()` is that shape.
-        [[nodiscard]] constexpr bool await_ready() const noexcept { return false; }
+        /// @return Whether there is nothing to suspend for -- no child, or one already finished --
+        ///         as the constructor found it.
+        ///
+        /// **A member read, decided in the constructor**, because MSVC 19.44's ARM64 code generator
+        /// loses the awaiting coroutine's handler in both of the other places
+        /// ([fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546)). Asked
+        /// here -- a call in `await_ready` -- it dropped the enclosing `try` of a `co_await` on a
+        /// temporary awaiter, and every `co_await task()` is that shape. Asked in @c await_suspend,
+        /// which then transferred straight back to the awaiting coroutine, the `std::logic_error`
+        /// @c await_resume throws for a task owning no frame passed that coroutine's `catch` all the
+        /// same: the `windows (cl-release-arm64)` leg's `Task_test.cpp` case, with `await_ready` a
+        /// constant `false`. Decided in the constructor, the awaiting coroutine never suspends,
+        /// and @c await_resume throws inline, which is the shape fastcached measured keeping its
+        /// handler. Nothing runs between the two: the awaiter is made by the `co_await` itself.
+        [[nodiscard]] bool await_ready() const noexcept { return _ready; }
 
         /// Records the awaiting coroutine as the child's continuation, propagates the
         /// cancellation token and the chain's ownership down, and starts the child via
         /// symmetric transfer.
+        ///
+        /// Reached only where @c await_ready answered false, so there is a child and it has not
+        /// finished; it never transfers back to @p awaiting.
         /// @param awaiting The coroutine performing the `co_await`.
-        /// @return The child handle to resume; @p awaiting itself, resuming it at once, where
-        ///         there is no child or it has already finished.
+        /// @return The child handle to resume.
         template <typename Promise>
         [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> awaiting) noexcept
         {
-            if (!_child || _child.get().done())
-                return awaiting;
             auto& promise = _child.get().promise();
             promise.continuation = awaiting;
             promise.unownedRoot = detail::unownedRootOf(awaiting);
@@ -236,6 +247,7 @@ class [[nodiscard]] Task
 
       private:
         detail::UniqueCoroHandle<PromiseType> _child; ///< Owned: taken from the awaited rvalue Task.
+        bool _ready; ///< No child, or one already finished, when the `co_await` began.
     };
 
     Task() noexcept = default;
@@ -315,7 +327,7 @@ class [[nodiscard]] Task<void>
     {
       public:
         /// @param child The frame this awaiter takes over; may be empty.
-        explicit Awaiter(HandleType child) noexcept: _child(child) {}
+        explicit Awaiter(HandleType child) noexcept: _child(child), _ready(!child || child.done()) {}
 
         Awaiter(Awaiter&&) noexcept = default;
         Awaiter(Awaiter const&) = delete;
@@ -323,17 +335,16 @@ class [[nodiscard]] Task<void>
         Awaiter& operator=(Awaiter&&) = delete;
         ~Awaiter() = default;
 
-        /// @return False, for the reason @c Task<T>::Awaiter::await_ready gives.
-        [[nodiscard]] constexpr bool await_ready() const noexcept { return false; }
+        /// @return Whether there is nothing to suspend for, as the constructor found it -- for the
+        ///         reason @c Task<T>::Awaiter::await_ready gives.
+        [[nodiscard]] bool await_ready() const noexcept { return _ready; }
 
+        /// Reached only where @c await_ready answered false; it never transfers back to @p awaiting.
         /// @param awaiting The coroutine performing the `co_await`.
-        /// @return The child handle to resume; @p awaiting itself, resuming it at once, where
-        ///         there is no child or it has already finished.
+        /// @return The child handle to resume.
         template <typename Promise>
         [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> awaiting) noexcept
         {
-            if (!_child || _child.get().done())
-                return awaiting;
             auto& promise = _child.get().promise();
             promise.continuation = awaiting;
             promise.unownedRoot = detail::unownedRootOf(awaiting);
@@ -355,6 +366,7 @@ class [[nodiscard]] Task<void>
 
       private:
         detail::UniqueCoroHandle<PromiseType> _child; ///< Owned: taken from the awaited rvalue Task.
+        bool _ready; ///< No child, or one already finished, when the `co_await` began.
     };
 
     Task() noexcept = default;

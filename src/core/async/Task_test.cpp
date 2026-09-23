@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-#include <core/async/Awaitable.hpp>
 #include <core/async/SyncRun.hpp>
 #include <core/async/Task.hpp>
 #include <core/async/WhenAll.hpp>
@@ -42,14 +41,6 @@ class Measurement
 
 static_assert(!std::is_default_constructible_v<Measurement>,
               "the point of this type is that Task must not need to default-construct its result");
-
-// fastcached#1546: MSVC 19.44's ARM64 code generator drops the enclosing `try` of a `co_await` on
-// a temporary awaiter whose `await_ready` makes a call, so an `OperationCancelled` from
-// `await_resume` passes every handler. An `await_ready` here answers a constant and the decision
-// is `await_suspend`'s (.agent/rules/async-and-net.md); a call put back fails to compile wherever
-// the question can be asked at compile time (core::async::awaitReadyIsConstantFalse).
-static_assert(core::async::awaitReadyIsConstantFalse<Task<int>::Awaiter>());
-static_assert(core::async::awaitReadyIsConstantFalse<Task<void>::Awaiter>());
 
 /// A computational task that completes synchronously when first resumed.
 Task<int> answer()
@@ -330,9 +321,9 @@ TEST_CASE("Awaiting a task takes its frame, leaving the name that held it empty"
 
 TEST_CASE("Awaiting a task that already finished takes its value without resuming it again", "[Task]")
 {
-    // Once `await_ready`'s answer, now `await_suspend`'s, which transfers straight back to the
-    // awaiting coroutine (fastcached#1546). A finished frame resumed a second time is undefined
-    // behaviour, so what this holds is that the child is never resumed, only read.
+    // Decided when the `co_await` makes its awaiter, and read by `await_ready`, so the awaiting
+    // coroutine never suspends (fastcached#1546). A finished frame resumed a second time is
+    // undefined behaviour, so what this holds is that the child is never resumed, only read.
     auto destroyed = 0;
     auto value = 0;
     auto stillOwnsAfter = true;
@@ -353,9 +344,11 @@ TEST_CASE("Awaiting a task that already finished takes its value without resumin
 
 TEST_CASE("Awaiting a task owning no frame is refused by name, inside the awaiting coroutine", "[Task]")
 {
-    // The other half of what `await_ready` used to answer true for. `await_suspend` now transfers
-    // back without touching the missing frame, and `await_resume` refuses it -- caught here by the
-    // awaiting coroutine's own `try`, which is the handler fastcached#1546 lost.
+    // The other half of what the awaiter's constructor decides. `await_resume` refuses the missing
+    // frame, and the refusal is caught here by the awaiting coroutine's own `try` -- the handler
+    // fastcached#1546 lost, twice: first with the decision in `await_ready` as a call, then, on the
+    // `windows (cl-release-arm64)` leg, with it in an `await_suspend` that transferred straight back
+    // to the awaiting coroutine (refused == 0: neither refusal was caught).
     auto refused = 0;
     auto root = awaitEmptyTasks(&refused);
 
