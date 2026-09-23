@@ -11,6 +11,13 @@
 //
 // Each case parks an operation, closes what it is parked on, and asks ONE `runUntilIdle` to finish
 // the job: the operation must have resolved by the time it returns.
+//
+// **Only a park that goes through the closed-park queue can fail here**, and on POSIX the socket
+// case does not: `PosixSocket::close()` settles its parked read inline, before the drain even
+// starts, so that case is a CONTROL there -- it would pass on the unfixed loop. It still
+// distinguishes where a socket parks through the loop's coroutine awaiter (the WFMO backend's
+// `WindowsSocket`). The listener case distinguishes everywhere, and on POSIX
+// `posix/WaitReadableClose_test.cpp` parks a raw descriptor through `waitReadable`, which does.
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/IListener.hpp>

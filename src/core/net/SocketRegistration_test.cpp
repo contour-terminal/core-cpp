@@ -76,6 +76,8 @@ class CountingBackend final: public core::net::IoBackend
                                                                        Interest interest) override
     {
         ++interestChanges;
+        if (core::net::hasInterest(interest, Interest::Write))
+            ++writeArmings;
         auto result = _inner->setInterest(handler, interest);
         if (result)
             armed[&handler] = interest;
@@ -100,6 +102,7 @@ class CountingBackend final: public core::net::IoBackend
 
     std::size_t attaches = 0;        ///< Calls to @c attach.
     std::size_t interestChanges = 0; ///< Calls to @c setInterest.
+    std::size_t writeArmings = 0;    ///< Calls to @c setInterest whose mask includes writability.
     std::size_t detaches = 0;        ///< Calls to @c detach.
     std::size_t dispatched = 0;      ///< Readiness callbacks the inner backend ran.
 
@@ -260,7 +263,7 @@ TEST_CASE("a socket's registration is not left armed for writing once its write 
                     return core::net::hasInterest(entry.second, Interest::Write);
                 });
             };
-            REQUIRE(counting.interestChanges > 2);
+            REQUIRE(counting.writeArmings > 0);
             CHECK(armedForWriting() == 0);
 
             pair->first->close();

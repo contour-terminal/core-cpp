@@ -138,7 +138,9 @@ struct EventLoopOptions
     ///
     /// A turn is BOUNDED so that work which re-queues itself — a flow yielding in a loop, a
     /// queue whose consumer immediately waits again — cannot starve the readiness and deadline
-    /// steps. The remainder stays queued and the next turn takes it; nothing is dropped.
+    /// steps. The remainder stays queued and the next turn takes it; nothing is dropped. At least
+    /// 1: the constructor asserts it, because a turn that may resume nothing never empties the
+    /// ready queue and so is never idle.
     std::size_t dispatchBatch = 64;
 
     /// A label for diagnostics and for a profiler's thread name. Borrowed: it must outlive the
@@ -764,7 +766,9 @@ class EventLoop: public async::IExecutor
     /// registration a reader and a writer share, a socket that stays readable would never have its
     /// writability reported at all: the writer would starve behind its own socket's reads. Queuing
     /// it costs one `send` that may answer `EAGAIN`, which its owner's retry loop already treats
-    /// as "stay parked" -- and only ever while both directions are parked at once.
+    /// as "stay parked" -- and only while a writer is parked and readability is armed: beside a
+    /// parked reader, or for the one report a readability kept armed after its read draws before
+    /// the loop narrows it away.
     /// @param handler The watch's handler, whose `owner` is its @c detail::HandleWatch.
     static void onWatchReadable(ReadinessHandler& handler) noexcept;
 

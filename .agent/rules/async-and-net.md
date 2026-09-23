@@ -611,7 +611,9 @@ get right, and each one is a defect that has already happened.
     writer is a retry loop, not a promise that the socket is writable -- it calls `send`, and a
     socket with no room answers `EAGAIN`, which the loop already treats as "stay parked", exactly as
     it treats a level-triggered report whose `send` finds nothing to do. The cost is that one
-    syscall, and only while both directions are parked at once. `SocketRegistration_test.cpp`
+    syscall, and only while a writer is parked and readability is armed: beside a parked reader, or
+    for the one report that readability kept armed after its read draws before the loop narrows it
+    away. `SocketRegistration_test.cpp`
     scripts a socket that is readable AND writable on every wait, and a parked write finishes only
     because of this; without it the write never moves.
 

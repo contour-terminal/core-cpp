@@ -35,6 +35,12 @@ namespace
 EventLoop::EventLoop(IoBackend& backend, platform::IClock& clock, EventLoopOptions options):
     _backend(backend), _clock(clock), _options(options)
 {
+    // A zero batch drains nothing, so queued work would stay queued for ever -- and since an idle
+    // turn is one that leaves the ready queue empty, `runUntilIdle` would never return. Refused
+    // here, where the configuration is fixed, rather than discovered as a hang.
+    assert(options.dispatchBatch > 0
+           && "EventLoopOptions::dispatchBatch must be at least 1: a turn that may resume nothing "
+              "never empties the ready queue, and runUntilIdle never returns");
     // A host-driven backend has no wait of its own: the HOST is what waits, and what it calls
     // when that wait ends is one turn of this loop. Registered once, here, because the backend
     // needs a pointer to a loop that does not exist until this constructor runs — and cleared in

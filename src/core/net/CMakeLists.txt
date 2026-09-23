@@ -354,6 +354,7 @@ core_cpp_add_test(net
         posix/PortSharing_test.cpp
         posix/SocketErrors_test.cpp
         posix/UnixSocket_test.cpp
+        posix/WaitReadableClose_test.cpp
     SOURCES_WINDOWS
         windows/AdoptListener_test.cpp
         windows/IocpBackend_test.cpp
