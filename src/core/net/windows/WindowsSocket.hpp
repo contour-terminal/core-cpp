@@ -15,6 +15,7 @@
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -187,6 +188,10 @@ class WindowsSocket final: public ISocket
     std::coroutine_handle<> _readWaiter;
     /// Set by @c cancelRead immediately before it resumes @c _readWaiter, and consumed by it.
     bool _readRetired = false;
+    /// Expires with this socket. A parked read unwinding through `OperationCancelled` may run after
+    /// the destructor (which closes with @c FdWakePolicy::Cancel), and asks this -- never `this` --
+    /// whether there is still a socket to tidy.
+    std::shared_ptr<void const> _lifetime = std::make_shared<char const>('\0');
 };
 
 } // namespace core::net

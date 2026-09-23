@@ -2,13 +2,13 @@
 #include <core/net/windows/WindowsSocket.hpp>
 
 #include <core/net/SocketContract.hpp>
-#include <core/net/detail/ScopeGuard.hpp>
 #include <core/net/windows/InvalidSocket.hpp>
 #include <core/net/windows/NetworkEvents.hpp>
 #include <core/net/windows/WinsockError.hpp>
 
 #include <array>
 #include <coroutine>
+#include <memory>
 #include <tuple>
 #include <utility>
 
@@ -137,12 +137,30 @@ async::Task<WindowsSocket::ParkEnd> WindowsSocket::parkUntilReady(Ready kind)
         // next pump rather than being lost — which is why the event is never reset before a park.
         if (kind == Ready::Read)
         {
-            // Published for `cancelRead` for exactly as long as this frame is parked, and cleared
-            // on EVERY way out of the park -- including an `OperationCancelled` unwinding it -- so
-            // it can never name a frame that has gone.
+            // Published for `cancelRead` for exactly as long as this frame is parked, and cleared on
+            // EVERY way out of the park, so it can never name a frame that has gone.
+            //
+            // **The unwinding path must not touch `this` unless the socket still exists.** The
+            // destructor closes with `FdWakePolicy::Cancel`, and the `OperationCancelled` that
+            // unwinds this frame arrives a TURN LATER, after the socket is freed -- the class
+            // comment's "unwinding never re-enters the body" is what makes that safe, and a scope
+            // guard writing `_readWaiter` would break it. A flow cancelled by its own token unwinds
+            // the same way with the socket alive, and there the handle must be cleared, or a later
+            // `cancelRead` could hand `cancelPending` an address a newer frame now occupies. The
+            // lifetime token tells the two apart without reading freed storage.
             co_await PublishSelf { &_readWaiter };
-            auto const unpublish = detail::ScopeGuard { [this]() noexcept { _readWaiter = {}; } };
-            co_await _loop.waitReadable(_event);
+            auto const lifetime = std::weak_ptr<void const> { _lifetime };
+            try
+            {
+                co_await _loop.waitReadable(_event);
+            }
+            catch (...)
+            {
+                if (!lifetime.expired())
+                    _readWaiter = {};
+                throw;
+            }
+            _readWaiter = {};
             if (std::exchange(_readRetired, false))
                 co_return ParkEnd::Retired;
         }
