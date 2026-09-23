@@ -176,10 +176,20 @@ std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bind(
             continue;
         }
 
-        BOOL const one = TRUE;
-        ::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<char const*>(&one), sizeof(one));
-
-        if (::bind(sock, ai->ai_addr, static_cast<int>(ai->ai_addrlen)) == 0 && ::listen(sock, backlog) == 0)
+        // Exclusive, as the IOCP listener binds, and a failure to make it so fails the candidate:
+        // this is a security property, not a tuning one (`.agent/rules/async-and-net.md`, "A
+        // listening socket claims its address exclusively"). It was SO_REUSEADDR here, which on
+        // Windows lets a second socket bind a port this one is listening on and take its
+        // connections -- the default the WFMO backend handed every caller.
+        BOOL const exclusive = TRUE;
+        if (::setsockopt(sock,
+                         SOL_SOCKET,
+                         SO_EXCLUSIVEADDRUSE,
+                         reinterpret_cast<char const*>(&exclusive),
+                         static_cast<int>(sizeof(exclusive)))
+                == 0
+            && ::bind(sock, ai->ai_addr, static_cast<int>(ai->ai_addrlen)) == 0
+            && ::listen(sock, backlog) == 0)
             break; // success
 
         lastError = makeNetError(WSAGetLastError() == WSAEADDRINUSE ? NetErrorCode::AddressInUse

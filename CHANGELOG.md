@@ -37,6 +37,11 @@ workflow refuses one without a section here.
   (a non-inheritable handle on Windows), `TCP_NODELAY`, the buffer sizes below when asked, and
   keepalive when a dial asks for it. `WindowsSocket::native()` joins `PosixSocket::native()` and
   `IocpSocket::native()`, for diagnostics and tests.
+- **The WFMO backend's TCP listener claims its port exclusively.** It bound with `SO_REUSEADDR`,
+  which on Windows lets a second socket bind a port a live listener serves and take its
+  connections, where the IOCP listener has always used `SO_EXCLUSIVEADDRUSE`. It uses that too
+  now, and fails the bind if the option is refused. `BackendKind::Wfmo` is not the Windows
+  default, so only a caller that asked for it by name was exposed.
 
 ### Changed
 

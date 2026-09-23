@@ -756,20 +756,30 @@ bool echoWithin(EventLoop& loop, core::net::IListener* listener)
 TEST_CASE("a second listener on a bound port is refused by default", "[net][listen]")
 {
     // The default is exclusive, and it has to stay so: a port a second process can bind is a port
-    // whose connections it can take.
-    auto firstBackend = core::net::makeDefaultBackend();
-    auto secondBackend = core::net::makeDefaultBackend();
-    auto firstLoop = EventLoop { *firstBackend };
-    auto secondLoop = EventLoop { *secondBackend };
+    // whose connections it can take. Every backend, because each builds its own listener: the WFMO
+    // one bound with SO_REUSEADDR until this case asked it.
+    for (auto const& backend: BackendMatrix)
+    {
+        auto firstBackend = core::net::makeBackend(backend.kind);
+        auto secondBackend = core::net::makeBackend(backend.kind);
+        if (!firstBackend || !secondBackend)
+            continue; // not available on this platform
 
-    auto first = core::net::listen(firstLoop, core::net::ListenOptions { .host = "127.0.0.1" });
-    REQUIRE(first.has_value());
-    auto const port = (*first)->boundPort();
+        DYNAMIC_SECTION("backend=" << backend.name)
+        {
+            auto firstLoop = EventLoop { *firstBackend };
+            auto secondLoop = EventLoop { *secondBackend };
 
-    auto second =
-        core::net::listen(secondLoop, core::net::ListenOptions { .host = "127.0.0.1", .port = port });
-    REQUIRE_FALSE(second.has_value());
-    CHECK(second.error().code == core::net::NetErrorCode::AddressInUse);
+            auto first = core::net::listen(firstLoop, core::net::ListenOptions { .host = "127.0.0.1" });
+            REQUIRE(first.has_value());
+            auto const port = (*first)->boundPort();
+
+            auto second =
+                core::net::listen(secondLoop, core::net::ListenOptions { .host = "127.0.0.1", .port = port });
+            REQUIRE_FALSE(second.has_value());
+            CHECK(second.error().code == core::net::NetErrorCode::AddressInUse);
+        }
+    }
 }
 
 #ifndef _WIN32

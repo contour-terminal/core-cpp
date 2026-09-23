@@ -538,7 +538,10 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   unprivileged process bind a port a live socket already serves, with which one answers
   undefined; the spelling there is `SO_EXCLUSIVEADDRUSE`. Sharing a port is an explicit option
   (`SO_REUSEPORT`, POSIX). A `setsockopt` that carries a security property fails the bind
-  rather than being ignored. Origin:
+  rather than being ignored. **Every listener, not one**: the IOCP listener followed this and the
+  WFMO listener bound with `SO_REUSEADDR` through 0.1.0, which nothing noticed because the
+  refusal case ran on the default backend alone; `Socket_test.cpp` now asks every backend in
+  `BackendMatrix`. Sharing a port is `ListenOptions::sharing`, refused on Windows. Origin:
   [fastcached#85](https://github.com/LASTRADA-Software/fastcached/issues/85).
 - **A platform socket error is classified in one table.** A second copy lacks a row, and a
   firewall's `EACCES` becomes an unclassified `SystemError` no caller can match. The table is
