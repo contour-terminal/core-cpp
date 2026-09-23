@@ -11,6 +11,17 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- **`EventLoop::runUntilIdle` and `testing::TestLoop::drain` no longer return while the waiters of
+  a closed handle are still queued.** `notifyHandleClosing` records the parks on a closing handle
+  and the next turn queues their waiters after its wait; that turn still reported itself idle,
+  because none of its counters counted them, so a drain returned with a closed listener's pending
+  `accept` -- or any flow parked through `waitReadable`/`waitWritable` -- woken and not yet run. A
+  caller that tore its objects down next left `~EventLoop` to resume or free those frames after
+  their owners were gone: fastcached's server teardown reported it as a heap-use-after-free under
+  ASan and TSan. A turn is now idle only if it also leaves the ready queue empty, which covers
+  every step that queues work rather than the four that had a counter. `ClosedParkIdle_test.cpp`
+  closes a listener under a parked accept and asks one `runUntilIdle` to finish it.
+
 - **An `OperationCancelled` thrown out of a `co_await` on `delay` or `sleepUntil`, and on eleven
   other awaiters, is caught again under MSVC 19.44 on ARM64**
   ([fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546)). That compiler's

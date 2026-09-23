@@ -160,8 +160,11 @@ struct RunOnceResult
 
     std::size_t dispatched = 0; ///< Readiness reports the backend delivered in step 4.
 
-    /// Whether this turn found nothing at all to do: nothing posted, nothing ready, nothing
-    /// parked. What @c runUntilIdle and @c testing::TestLoop::drain stop on.
+    /// Whether this turn found nothing at all to do and left nothing for the next one: nothing
+    /// posted, nothing drained, nothing dispatched, nothing due, and the ready queue empty when it
+    /// returned. What @c runUntilIdle and @c testing::TestLoop::drain stop on. Work still PARKED
+    /// does not count: a flow waiting on a handle that never becomes ready would otherwise keep a
+    /// drain from ever returning.
     bool idle = false;
 };
 

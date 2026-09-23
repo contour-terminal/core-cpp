@@ -326,12 +326,23 @@ RunOnceResult EventLoop::turn(std::optional<platform::SteadyDuration> maxWait, s
 
     auto const fired = fireExpiredTimers();
 
-    // Nothing posted, nothing resumed, nothing dispatched, nothing due: this turn did nothing,
-    // which is what runUntilIdle and TestLoop::drain stop on. It deliberately says nothing about
-    // whether work is still PARKED -- a flow waiting on a socket that never becomes readable
-    // leaves a loop idle turn after turn, and a drain that waited for the park to go would never
-    // return.
-    result.idle = !hadInbound && result.drained == 0 && result.dispatched == 0 && fired == 0;
+    // Nothing posted, nothing resumed, nothing dispatched, nothing due, and NOTHING LEFT QUEUED:
+    // this turn did nothing and the next one has nothing to do, which is what runUntilIdle and
+    // TestLoop::drain stop on. It deliberately says nothing about whether work is still PARKED --
+    // a flow waiting on a socket that never becomes readable leaves a loop idle turn after turn,
+    // and a drain that waited for the park to go would never return.
+    //
+    // **The ready queue is part of the answer, and the counters alone were not.** Each counter
+    // names one way work reaches `_ready` during a turn -- step 1's submissions and resolved
+    // cancels, whatever step 2's resumed code queues, step 4's dispatch, step 5's due deadlines --
+    // and the closed handles above were a fifth that fed none of them: a turn that queued the
+    // waiters of a closed listener reported itself idle, `runUntilIdle` returned with them still
+    // queued, and `~EventLoop` later resumed or freed their frames after their owners were gone
+    // (fastcached's server teardown, a heap-use-after-free under ASan and TSan). Asking the queue
+    // itself closes that hole for every path at once, including the next one somebody adds: a
+    // turn that leaves work for the next turn is not idle, whichever step put it there.
+    result.idle =
+        !hadInbound && result.drained == 0 && result.dispatched == 0 && fired == 0 && _ready.empty();
 
     // A host-driven backend has no wait of its own, so the loop's next deadline reaches the host
     // instead. After every turn, because the turn is what changed the answer.
