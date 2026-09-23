@@ -57,6 +57,11 @@ namespace
 ///
 /// A literal, so nothing here depends on a name server; `SystemAddressResolver` is still the
 /// thing that fills the sockaddr, so a case dials exactly the bytes production would.
+///
+/// **Called into a named local before the `co_await`, never inside its full-expression.** With
+/// the call inside it, MSVC 14.51 at /O2 cannot emit the tail call a symmetric transfer requires
+/// and reports C4737, which /WX makes fatal. A plain `ResolvedEndpoint {}` in the same place does
+/// not trigger it; the call does.
 [[nodiscard]] ResolvedEndpoint loopbackEndpoint(std::uint16_t port)
 {
     auto resolver = core::net::SystemAddressResolver {};
@@ -136,10 +141,10 @@ Task<void> saturate(EventLoop* loop, SaturatedListener* out)
     // would hang the case that wanted it.
     constexpr auto Fill = 32;
     constexpr auto PerDial = std::chrono::milliseconds { 300 };
+    auto const endpoint = loopbackEndpoint(out->port);
     for ([[maybe_unused]] auto const attempt: std::views::iota(0, Fill))
     {
-        auto dialled = co_await dialReadiness(
-            loop, loopbackEndpoint(out->port), loop->clock().now() + PerDial, KeepAlive::No);
+        auto dialled = co_await dialReadiness(loop, endpoint, loop->clock().now() + PerDial, KeepAlive::No);
         if (!dialled.has_value())
         {
             // A timeout means the backlog no longer takes a connection. Anything else — a
@@ -157,7 +162,8 @@ Task<void> dialOnce(EventLoop* loop, std::uint16_t port, std::chrono::millisecon
 {
     auto const deadline =
         budget > std::chrono::milliseconds::zero() ? loop->clock().now() + budget : SteadyTimePoint::max();
-    *out = co_await dialReadiness(loop, loopbackEndpoint(port), deadline, KeepAlive::No);
+    auto const endpoint = loopbackEndpoint(port);
+    *out = co_await dialReadiness(loop, endpoint, deadline, KeepAlive::No);
 }
 
 /// Accepts one connection and reads @p expected.size() bytes from it.
@@ -175,8 +181,8 @@ Task<void> acceptAndRead(core::net::IListener* listener, std::string_view expect
 /// Dials @p port, writes @p payload and reports whether every byte went.
 Task<void> dialAndWrite(EventLoop* loop, std::uint16_t port, std::string_view payload, bool* ok)
 {
-    auto dialled =
-        co_await dialReadiness(loop, loopbackEndpoint(port), SteadyTimePoint::max(), KeepAlive::No);
+    auto const endpoint = loopbackEndpoint(port);
+    auto dialled = co_await dialReadiness(loop, endpoint, SteadyTimePoint::max(), KeepAlive::No);
     if (!dialled.has_value())
         co_return;
     auto const bytes =
@@ -314,9 +320,10 @@ TEST_CASE("the flow's stop token cancels a dial in flight", "[net]")
     auto answer = SocketResult {};
     auto cancelled = false;
     auto dial = [](EventLoop* lp, std::uint16_t port, SocketResult* out, bool* threw) -> Task<void> {
+        auto const endpoint = loopbackEndpoint(port);
         try
         {
-            *out = co_await dialReadiness(lp, loopbackEndpoint(port), SteadyTimePoint::max(), KeepAlive::No);
+            *out = co_await dialReadiness(lp, endpoint, SteadyTimePoint::max(), KeepAlive::No);
         }
         catch (core::async::OperationCancelled const&)
         {
@@ -367,9 +374,10 @@ TEST_CASE("a whenAny loser's stop cancels a parked dial through the dial's own c
     auto winner = std::optional<std::size_t> {};
 
     auto dial = [](EventLoop* lp, std::uint16_t port, SocketResult* out, bool* cancelled) -> Task<void> {
+        auto const endpoint = loopbackEndpoint(port);
         try
         {
-            *out = co_await dialReadiness(lp, loopbackEndpoint(port), SteadyTimePoint::max(), KeepAlive::No);
+            *out = co_await dialReadiness(lp, endpoint, SteadyTimePoint::max(), KeepAlive::No);
         }
         catch (core::async::OperationCancelled const&)
         {
@@ -435,9 +443,10 @@ TEST_CASE("a stop from ANOTHER thread cancels a dial in flight", "[net]")
                    SocketResult* out,
                    bool* threw) -> Task<void> {
         started->store(true, std::memory_order_release);
+        auto const endpoint = loopbackEndpoint(port);
         try
         {
-            *out = co_await dialReadiness(lp, loopbackEndpoint(port), SteadyTimePoint::max(), KeepAlive::No);
+            *out = co_await dialReadiness(lp, endpoint, SteadyTimePoint::max(), KeepAlive::No);
         }
         catch (core::async::OperationCancelled const&)
         {

@@ -125,7 +125,7 @@ inline core::async::Task<void> loopbackEcho(core::net::EventLoop* loop,
                                             bool* matched)
 {
     co_await core::async::whenAll(echoServer(listener, greeting.size(), served),
-                                  echoClient(loop, listener->localPort(), greeting, matched));
+                                  echoClient(loop, listener->boundPort(), greeting, matched));
 }
 
 /// core::net and core::async: a real loopback socket, driven by two coroutine flows.
