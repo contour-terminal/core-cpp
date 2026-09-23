@@ -142,6 +142,14 @@ EventLoop::~EventLoop()
     _rootByHandle.clear();
     _roots.clear();
 
+    // And the registrations kept for a handle's life. After the roots, because a socket destroyed
+    // with its flow announces its own close and takes its watch with it, while the handle is still
+    // open; what is left here is a handle whose owner never announced one, and the backend holds
+    // its handler by address, so it is detached before the map frees it.
+    for (auto const& [handle, watch]: _watches)
+        _backend.detach(watch->handler);
+    _watches.clear();
+
     // ---- 6. Unregister the wake. ----------------------------------------------------------
     // A host-driven backend holds a pointer to this loop and an armed host timer; either one
     // outliving the loop is a call into freed storage on the host's next turn. Every other
@@ -305,6 +313,13 @@ RunOnceResult EventLoop::turn(std::optional<platform::SteadyDuration> maxWait, s
     auto const driven = !until || !until.done();
     if (driven && (_parks.size() != 0 || !closed.empty() || !_ready.empty() || idleWait))
         result.dispatched = _backend.wait(timeout).dispatched;
+
+    // A registration kept for a handle's life may be armed for more than anybody parked on it
+    // wants -- readability is kept on purpose, see `detail::HandleWatch` -- and a report nobody took
+    // is the signal to narrow it. HERE, after the wait, because the callback that saw the report
+    // was inside the backend's walk, where enqueueing is all Rule 1 allows.
+    if (!_watchesToNarrow.empty())
+        narrowReportedWatches();
 
     // ---- 5. Refresh the clock, then fire expired deadlines, FIFO by sequence. --------------
     // And after the wait too, so the deadlines fired here see the instant the wait ENDED at
@@ -664,6 +679,7 @@ bool EventLoop::cancelPending(std::coroutine_handle<> handle) noexcept
         {
             if (park->attached)
                 _backend.detach(park->handler);
+            std::ignore = releaseWatchSlot(*park);
             park->parked.take().abandon.disarm();
             return true;
         }
@@ -865,7 +881,25 @@ ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
     park->ownedByLoop = static_cast<bool>(entry.work.abandon);
     park->parked = async::detail::Parked { std::move(entry.work) };
 
-    if (entry.handle != platform::InvalidHandle)
+    detail::HandleWatch* watch = nullptr;
+    if (entry.handle != platform::InvalidHandle && entry.lifetime == RegistrationLifetime::UntilClosed)
+    {
+        // One registration for the handle's life, shared by its reader and its writer: this park
+        // takes a slot on it, and the backend is asked for nothing unless the registration is not
+        // yet armed for what this park watches. See `detail::HandleWatch`.
+        auto watched = watchHandle(entry.handle, entry.kind, entry.interest);
+        if (!watched)
+        {
+            // Refused as the per-park path below refuses, and for its reasons.
+            if (refusal != nullptr)
+                *refusal = std::move(watched.error());
+            park->parked.take().abandon.disarm();
+            return ParkId::invalid();
+        }
+        watch = *watched;
+        park->watched = true;
+    }
+    else if (entry.handle != platform::InvalidHandle)
     {
         // Both directions point at the same callback, and there is deliberately no onError: a
         // failure then reaches whichever direction this park watches, which is what a parked read
@@ -902,6 +936,23 @@ ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
     }
 
     auto const id = _parks.add(std::move(park));
+
+    // The slot is taken once the park has its id. One read operation and one write operation per
+    // socket: a slot that still names a live park is a second operation armed over the first, which
+    // the socket contract forbids and `contract::claimReadSlot` catches one level up. The
+    // registration would stay sound; the park it overwrote would never be woken again.
+    if (watch != nullptr && hasInterest(entry.interest, Interest::Read))
+    {
+        assert(_parks.find(watch->reader) == nullptr
+               && "a second read park on one handle: one read operation per socket");
+        watch->reader = id;
+    }
+    if (watch != nullptr && hasInterest(entry.interest, Interest::Write))
+    {
+        assert(_parks.find(watch->writer) == nullptr
+               && "a second write park on one handle: one write operation per socket");
+        watch->writer = id;
+    }
 
     // **A park filed outside a turn has to ask for the turn that will reach it**, and on a
     // host-driven backend nothing else ever will: `armHostWake` runs at the END of a turn, and a
@@ -959,6 +1010,12 @@ void EventLoop::unregisterPark(ParkId park) noexcept
         return;
     if (entry->attached)
         _backend.detach(entry->handler);
+    // A watched park gives its slot back and leaves the registration where it is. Writability is
+    // narrowed away NOW rather than when a wait next reports it, because it would be reported on
+    // the very next wait: a socket with room in its send buffer is writable on every one of them.
+    if (hasInterest(releaseWatchSlot(*entry), Interest::Write))
+        if (auto const watch = _watches.find(entry->handle); watch != _watches.end())
+            narrowWatch(*watch->second, Interest::Read);
     // Whatever is still here is a frame that is resuming right now -- await_resume is what calls
     // this -- so the chain belongs to it again rather than to the loop.
     if (entry->parked)
@@ -1024,6 +1081,9 @@ void EventLoop::resolveCancel(ParkId park)
         _backend.detach(entry->handler);
         entry->attached = false;
     }
+    // A watched park's registration outlives it by design, so what stops it firing again is the
+    // slot: a report that finds the slot empty queues nothing, and narrows instead.
+    std::ignore = releaseWatchSlot(*entry);
     queueParkedWaiter(park, entry->onReady != nullptr ? ParkWake::Cancelled : ParkWake::Ready);
 }
 
@@ -1031,6 +1091,142 @@ void EventLoop::onParkReady(ReadinessHandler& handler) noexcept
 {
     auto* const park = static_cast<detail::Park*>(handler.owner);
     park->loop->queueParkedWaiter(park->id);
+}
+
+void EventLoop::onWatchReadable(ReadinessHandler& handler) noexcept
+{
+    auto* const watch = static_cast<detail::HandleWatch*>(handler.owner);
+    auto* const loop = watch->loop;
+    if (watch->reader)
+        loop->queueParkedWaiter(watch->reader);
+    // The writer too, for the starvation reason the declaration gives.
+    if (watch->writer)
+        loop->queueParkedWaiter(watch->writer);
+    if (!watch->reader && !watch->narrowQueued)
+    {
+        watch->narrowQueued = true;
+        loop->_watchesToNarrow.push_back(handler.handle);
+    }
+}
+
+void EventLoop::onWatchWritable(ReadinessHandler& handler) noexcept
+{
+    auto* const watch = static_cast<detail::HandleWatch*>(handler.owner);
+    auto* const loop = watch->loop;
+    if (watch->writer)
+        loop->queueParkedWaiter(watch->writer);
+    else if (!watch->narrowQueued)
+    {
+        watch->narrowQueued = true;
+        loop->_watchesToNarrow.push_back(handler.handle);
+    }
+}
+
+std::expected<detail::HandleWatch*, NetError> EventLoop::watchHandle(platform::NativeHandle handle,
+                                                                     HandleKind kind,
+                                                                     Interest interest)
+{
+    auto const [found, created] = _watches.try_emplace(handle);
+    if (created)
+    {
+        found->second = std::make_unique<detail::HandleWatch>();
+        auto& fresh = *found->second;
+        fresh.loop = this;
+        // No onError, for the reason a park has none: a failure reaches the readable callback, and
+        // that one wakes both directions, which is exactly who has a syscall to learn it through.
+        fresh.handler = ReadinessHandler { .handle = handle,
+                                           .kind = kind,
+                                           .owner = &fresh,
+                                           .onReadable = &EventLoop::onWatchReadable,
+                                           .onWritable = &EventLoop::onWatchWritable,
+                                           .onError = nullptr };
+        if (auto attached = _backend.attach(fresh.handler); !attached)
+        {
+            _watches.erase(found);
+            return std::unexpected { std::move(attached.error()) };
+        }
+    }
+
+    auto& watch = *found->second;
+    auto const wanted = watch.armed | interest;
+    if (wanted == watch.armed)
+        return &watch;
+    if (auto armed = _backend.setInterest(watch.handler, wanted); !armed)
+    {
+        // A watch this call made and could not arm is taken down again, so a refusal leaves
+        // nothing behind. One that already existed keeps its arming: it is still right for the
+        // parks it has.
+        if (created)
+        {
+            _backend.detach(watch.handler);
+            _watches.erase(found);
+        }
+        return std::unexpected { std::move(armed.error()) };
+    }
+    watch.armed = wanted;
+    return &watch;
+}
+
+Interest EventLoop::releaseWatchSlot(detail::Park& park) noexcept
+{
+    if (!park.watched)
+        return Interest::None;
+    park.watched = false;
+    auto const found = _watches.find(park.handle);
+    if (found == _watches.end())
+        return Interest::None; // closed already: the watch went with the announcement
+    // Compared by id, never assumed: a descriptor number reused since this park was filed has a new
+    // watch, whose slots name parks this one is not.
+    auto& watch = *found->second;
+    auto released = Interest::None;
+    if (watch.reader == park.id)
+    {
+        watch.reader = ParkId::invalid();
+        released = released | Interest::Read;
+    }
+    if (watch.writer == park.id)
+    {
+        watch.writer = ParkId::invalid();
+        released = released | Interest::Write;
+    }
+    return released;
+}
+
+void EventLoop::narrowWatch(detail::HandleWatch& watch, Interest keep) noexcept
+{
+    auto wanted = Interest::None;
+    if (watch.reader || (hasInterest(keep, Interest::Read) && hasInterest(watch.armed, Interest::Read)))
+        wanted = wanted | Interest::Read;
+    if (watch.writer || (hasInterest(keep, Interest::Write) && hasInterest(watch.armed, Interest::Write)))
+        wanted = wanted | Interest::Write;
+    if (wanted == watch.armed)
+        return;
+    // Muting through `Interest::None` keeps the registration attached, and is silent on every
+    // backend: a watch with nothing parked on it hears nothing until a park re-arms it.
+    if (_backend.setInterest(watch.handler, wanted))
+        watch.armed = wanted;
+}
+
+void EventLoop::narrowReportedWatches() noexcept
+{
+    for (auto const handle: _watchesToNarrow)
+    {
+        auto const found = _watches.find(handle);
+        if (found == _watches.end())
+            continue; // closed between the report and here
+        found->second->narrowQueued = false;
+        narrowWatch(*found->second, Interest::None);
+    }
+    _watchesToNarrow.clear();
+}
+
+void EventLoop::dropWatch(platform::NativeHandle handle) noexcept
+{
+    auto const found = _watches.find(handle);
+    if (found == _watches.end())
+        return;
+    _backend.detach(found->second->handler);
+    _watches.erase(found);
 }
 
 void EventLoop::queueParkedWaiter(ParkId park)
@@ -1093,6 +1289,12 @@ void EventLoop::notifyHandleClosing(platform::NativeHandle handle, FdWakePolicy 
     if (handle == platform::InvalidHandle)
         return;
 
+    // The registration kept for the handle's life ends HERE, which is the promise
+    // `RegistrationLifetime::UntilClosed` asked of the caller: while the descriptor is still open,
+    // for the reason the loop below gives, and out of any batch a wait in flight is walking, which
+    // `detach` does and which is what keeps a closed descriptor from ever being dispatched.
+    dropWatch(handle);
+
     for (auto const park: _parks.parksOn(handle))
     {
         auto* const entry = _parks.find(park);
@@ -1145,6 +1347,7 @@ void EventLoop::unparkEverything()
             _backend.detach(entry->handler);
             entry->attached = false;
         }
+        std::ignore = releaseWatchSlot(*entry);
         queueParkedWaiter(park);
     }
 }

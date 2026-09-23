@@ -331,7 +331,8 @@ core_cpp_add_test(net
         testing/InMemorySocket_test.cpp
         testing/ParkingReadableSocket_test.cpp
         testing/TestLoop_test.cpp
-    # POSIX-only, each for its own reason. `ReactorSocket_test` names PosixSocket directly.
+    # POSIX-only, each for its own reason. `ReactorSocket_test` names PosixSocket directly, and
+    # `SocketRegistration_test` counts what PosixSocket's kept registration costs the backend.
     # `SocketDecorator_test` needs a WRITE that parks, and assumes no send buffer takes 8MiB: on
     # Windows a non-blocking send takes all of it at once (measured, Task B7b), so its third
     # section would retire nothing. `CancelRead_test` left this list with Task B7b, when `IocpSocket`
@@ -347,6 +348,7 @@ core_cpp_add_test(net
     SOURCES_POSIX
         ReactorSocket_test.cpp
         SocketDecorator_test.cpp
+        SocketRegistration_test.cpp
         posix/AdoptListener_test.cpp
         posix/FdPassing_test.cpp
         posix/PortSharing_test.cpp

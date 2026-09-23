@@ -117,6 +117,36 @@ struct TimerId
     [[nodiscard]] static constexpr TimerId invalid() noexcept { return TimerId {}; }
 };
 
+/// How long the backend registration behind a readiness park lives.
+///
+/// **A registration per park is two kernel calls per park**, and on a socket that parks once per
+/// request that is the difference between a loop and a reactor. epoll pays an `EPOLL_CTL_ADD` to
+/// file a park and an `EPOLL_CTL_DEL` to take it -- the expensive pair, which allocates and frees
+/// the kernel's own entry and hooks and unhooks the socket's wait queue each time.
+///
+/// So a caller that OWNS a handle for its whole life, and parks on it over and over, may ask for
+/// one registration for that life instead. The loop then attaches the handle once, the first time
+/// it is parked on, and a park only ever changes what the registration is armed for -- which in
+/// the steady state of a request/response socket is nothing at all.
+enum class RegistrationLifetime : std::uint8_t
+{
+    /// Attached when the park is filed and detached when it is taken. The default, because it asks
+    /// nothing of the caller: the registration cannot outlive the park that made it.
+    PerPark,
+
+    /// Kept by the loop from the first park on the handle until @c EventLoop::notifyHandleClosing
+    /// names it, and shared by every park on the handle that asks for it: a reader and a writer
+    /// are two slots on one registration, not two registrations.
+    ///
+    /// **The caller promises to announce the close.** Nothing else can end the registration,
+    /// because nothing else can tell the loop that a descriptor number is about to mean something
+    /// else: epoll forgets a closed descriptor silently, and a registration the loop still believed
+    /// in would then be "armed" for a socket the kernel has never heard of -- a park on the next
+    /// socket to get that number would wait for ever. Every @c PosixSocket close announces it
+    /// already, which is why that is the caller this exists for.
+    UntilClosed,
+};
+
 /// What a flow hands @c EventLoop::registerPark to park itself.
 ///
 /// One shape for every kind of park, because the cancellation path is one path: a readiness park
@@ -151,6 +181,11 @@ struct ParkEntry
     /// park, which for a socket operation means the socket outlives its own registration.
     void* callbackState = nullptr;
 
+    /// How long the backend registration behind a readiness park lives; ignored when there is no
+    /// handle. See @c RegistrationLifetime for the promise @c RegistrationLifetime::UntilClosed
+    /// asks of the caller.
+    RegistrationLifetime lifetime = RegistrationLifetime::PerPark;
+
     /// @param work The coroutine to resume, and what to free if it is never resumed.
     /// @param deadline When to resume it.
     /// @return A park waiting on a deadline and nothing else.
@@ -163,7 +198,8 @@ struct ParkEntry
                            .deadline = deadline,
                            .onExpired = nullptr,
                            .onReady = nullptr,
-                           .callbackState = nullptr };
+                           .callbackState = nullptr,
+                           .lifetime = RegistrationLifetime::PerPark };
     }
 
     /// @param onExpired What to call when @p deadline arrives; must not be null.
@@ -181,7 +217,8 @@ struct ParkEntry
                            .deadline = deadline,
                            .onExpired = onExpired,
                            .onReady = nullptr,
-                           .callbackState = state };
+                           .callbackState = state,
+                           .lifetime = RegistrationLifetime::PerPark };
     }
 
     /// @param work The coroutine to resume, and what to free if it is never resumed.
@@ -201,7 +238,8 @@ struct ParkEntry
                            .deadline = std::nullopt,
                            .onExpired = nullptr,
                            .onReady = nullptr,
-                           .callbackState = nullptr };
+                           .callbackState = nullptr,
+                           .lifetime = RegistrationLifetime::PerPark };
     }
 
     /// @param onReady What to call each time @p handle wakes; must not be null.
@@ -209,9 +247,15 @@ struct ParkEntry
     /// @param handle The handle to watch.
     /// @param kind What @p handle is.
     /// @param interest Which readiness to watch for.
+    /// @param lifetime How long the registration behind it lives; see @c RegistrationLifetime.
     /// @return A park waiting on handle readiness with no coroutine behind it.
     [[nodiscard]] static ParkEntry onReadyCallback(
-        ReadyCallback onReady, void* state, platform::NativeHandle handle, HandleKind kind, Interest interest)
+        ReadyCallback onReady,
+        void* state,
+        platform::NativeHandle handle,
+        HandleKind kind,
+        Interest interest,
+        RegistrationLifetime lifetime = RegistrationLifetime::PerPark)
     {
         return ParkEntry { .work = {},
                            .handle = handle,
@@ -220,7 +264,8 @@ struct ParkEntry
                            .deadline = std::nullopt,
                            .onExpired = nullptr,
                            .onReady = onReady,
-                           .callbackState = state };
+                           .callbackState = state,
+                           .lifetime = lifetime };
     }
 };
 
@@ -245,6 +290,11 @@ namespace detail
         void* waiterKey = nullptr;
 
         bool attached = false; ///< Whether @c handler is registered with the backend.
+
+        /// Whether this park holds a slot on its handle's @c HandleWatch rather than a registration
+        /// of its own (@c RegistrationLifetime::UntilClosed). Such a park never sets @c attached:
+        /// the registration is the watch's, and taking the park only frees the slot.
+        bool watched = false;
 
         /// What to call when this park's deadline arrives, for a callback timer; null for a park
         /// with a coroutine behind it. **This is the whole of how a frameless timer joins the
@@ -272,6 +322,32 @@ namespace detail
 
         std::optional<platform::SteadyTimePoint> deadline; ///< Set while this park waits on one.
         std::uint64_t sequence = 0;                        ///< Tie-break so equal deadlines fire FIFO.
+    };
+
+    /// The one backend registration a loop keeps for a handle parked on with
+    /// @c RegistrationLifetime::UntilClosed, from the first such park until the handle is announced
+    /// closing.
+    ///
+    /// **It holds ids, never parks.** A park comes and goes once per operation while this stays, so
+    /// the slots name parks the way every other long-lived reference into the table does: an id
+    /// that resolves to nothing once its park is gone. One slot per direction, which is the socket
+    /// contract's own shape -- one read operation and one write operation per socket.
+    ///
+    /// **What it is armed for may be MORE than its slots ask for, and only in one direction.**
+    /// Readability stays armed after the read that wanted it completes, because the next thing a
+    /// request/response socket does is read again, and re-arming it would be the very kernel call
+    /// this type exists to save. A report that arrives with no park to take it is then not lost
+    /// work but a registration to narrow, and the loop narrows it once that wait returns.
+    /// Writability is dropped the moment its write is taken instead: a socket with room in its send
+    /// buffer is writable on every wait, so leaving it armed would buy a spurious report per turn.
+    struct HandleWatch
+    {
+        ReadinessHandler handler {};     ///< The registration; its address is its identity.
+        EventLoop* loop = nullptr;       ///< The loop to enqueue onto, reached from the handler.
+        Interest armed = Interest::None; ///< What the backend is armed for right now.
+        ParkId reader {};                ///< The park waiting to read, or none.
+        ParkId writer {};                ///< The park waiting to write, or none.
+        bool narrowQueued = false;       ///< Whether a wait has already asked for it to be narrowed.
     };
 
     /// The parks one loop holds, by id, with the reverse indices every resolution path needs.

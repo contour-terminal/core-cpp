@@ -99,7 +99,9 @@ void PosixSocket::close(FdWakePolicy policy) noexcept
     {
         // Before the close, while the descriptor is still valid: epoll and kqueue cannot report a
         // closed descriptor, so without this a flow parked on it would never be resumed. It also
-        // releases the private dup() a duplicate registration holds.
+        // releases the private dup() a duplicate registration holds, and ends the registration this
+        // socket keeps for its life -- which is the promise `RegistrationLifetime::UntilClosed`
+        // asks of whoever parks with it, and the reason this socket may.
         _loop.notifyHandleClosing(_fd, policy);
         ::close(_fd);
         _fd = -1;
@@ -422,8 +424,8 @@ IoAwaitable PosixSocket::waitReadable()
 
 bool PosixSocket::armRead(Interest interest)
 {
-    _read.park = _loop.registerPark(
-        ParkEntry::onReadyCallback(&PosixSocket::onReadWake, this, _fd, DefaultHandleKind, interest));
+    _read.park = _loop.registerPark(ParkEntry::onReadyCallback(
+        &PosixSocket::onReadWake, this, _fd, DefaultHandleKind, interest, RegistrationLifetime::UntilClosed));
     if (!_read.park)
         return false;
 
@@ -706,28 +708,24 @@ IoAwaitable PosixSocket::write(std::span<std::byte const> buffer)
         return IoAwaitable { *done };
 
     _write = std::move(pending);
-    return IoAwaitable {
-        [](void* owner, IoAwaitable& self) {
-            auto* const socket = static_cast<PosixSocket*>(owner);
-            // **The claim is HERE, because this is where the slot is actually taken.** The verb's
-            // guard above is the early, friendlier diagnostic; it cannot see two operations created
-            // through `core::async::asTask` and awaited afterwards, because neither has armed when
-            // the second verb runs.
-            contract::claimWriteSlot(socket->_write.awaitable);
-            socket->_write.awaitable = &self;
-            socket->_write.park = socket->_loop.registerPark(ParkEntry::onReadyCallback(
-                &PosixSocket::onWriteWake, socket, socket->_fd, DefaultHandleKind, Interest::Write));
-            if (!socket->_write.park)
-            {
-                socket->_write = {};
-                self.complete(std::unexpected(registrationRefused()));
-                return;
-            }
-            self.cancelThrough(socket->_loop, socket->_write.park);
-        },
-        &PosixSocket::retireWrite,
-        this
-    };
+    return IoAwaitable { [](void* owner, IoAwaitable& self) {
+                            auto* const socket = static_cast<PosixSocket*>(owner);
+                            // **The claim is HERE, because this is where the slot is actually taken.** The
+                            // verb's guard above is the early, friendlier diagnostic; it cannot see two
+                            // operations created through `core::async::asTask` and awaited afterwards,
+                            // because neither has armed when the second verb runs.
+                            contract::claimWriteSlot(socket->_write.awaitable);
+                            socket->_write.awaitable = &self;
+                            if (!socket->armWrite())
+                            {
+                                socket->_write = {};
+                                self.complete(std::unexpected(registrationRefused()));
+                                return;
+                            }
+                            self.cancelThrough(socket->_loop, socket->_write.park);
+                        },
+                         &PosixSocket::retireWrite,
+                         this };
 }
 
 IoAwaitable PosixSocket::writeVectored(std::span<std::span<std::byte const> const> segments,
@@ -746,24 +744,31 @@ IoAwaitable PosixSocket::writeVectored(std::span<std::span<std::byte const> cons
         return IoAwaitable { *done };
 
     _write = std::move(pending);
-    return IoAwaitable {
-        [](void* owner, IoAwaitable& self) {
-            auto* const socket = static_cast<PosixSocket*>(owner);
-            contract::claimWriteSlot(socket->_write.awaitable);
-            socket->_write.awaitable = &self;
-            socket->_write.park = socket->_loop.registerPark(ParkEntry::onReadyCallback(
-                &PosixSocket::onWriteWake, socket, socket->_fd, DefaultHandleKind, Interest::Write));
-            if (!socket->_write.park)
-            {
-                socket->_write = {};
-                self.complete(std::unexpected(registrationRefused()));
-                return;
-            }
-            self.cancelThrough(socket->_loop, socket->_write.park);
-        },
-        &PosixSocket::retireWrite,
-        this
-    };
+    return IoAwaitable { [](void* owner, IoAwaitable& self) {
+                            auto* const socket = static_cast<PosixSocket*>(owner);
+                            contract::claimWriteSlot(socket->_write.awaitable);
+                            socket->_write.awaitable = &self;
+                            if (!socket->armWrite())
+                            {
+                                socket->_write = {};
+                                self.complete(std::unexpected(registrationRefused()));
+                                return;
+                            }
+                            self.cancelThrough(socket->_loop, socket->_write.park);
+                        },
+                         &PosixSocket::retireWrite,
+                         this };
+}
+
+bool PosixSocket::armWrite()
+{
+    _write.park = _loop.registerPark(ParkEntry::onReadyCallback(&PosixSocket::onWriteWake,
+                                                                this,
+                                                                _fd,
+                                                                DefaultHandleKind,
+                                                                Interest::Write,
+                                                                RegistrationLifetime::UntilClosed));
+    return static_cast<bool>(_write.park);
 }
 
 void PosixSocket::pumpWrite()

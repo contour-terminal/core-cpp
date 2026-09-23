@@ -161,6 +161,12 @@ From contour's `src/net/README.md` at `6777ff05`, as far as they hold here:
   "register with no filters" operation and so cannot answer more than that.
 - **Readiness is level-triggered.** The sockets and the accept loop assume a descriptor that
   stays ready is reported again.
+- **A socket registers once, not once per operation.** `PosixSocket` parks with
+  `RegistrationLifetime::UntilClosed`: the loop registers its descriptor the first time it is parked
+  on and keeps that registration until `close()` announces the close, so a parked read changes the
+  kernel's registration only when it is not already armed for reading -- which, for a connection
+  that reads again after every reply, is never. `PerPark`, the default, registers and removes the
+  handle with each park, for a caller that cannot promise to announce its close.
 - **Time is the injected `core::platform::IClock`,** which the loop refreshes before it computes
   a wait's timeout and after the wait returns, so a `CachedClock` serves each turn the instant its
   wait ended at. (contour's loop did not refresh; its clock had no `refresh()`.)

@@ -65,6 +65,21 @@ workflow refuses one without a section here.
 
 ### Changed
 
+- **A `PosixSocket` keeps one backend registration for its life, not one per parked operation.**
+  Every read or write that parked attached a registration, armed it and detached it again -- on
+  epoll an `EPOLL_CTL_ADD` and an `EPOLL_CTL_DEL` per request -- and fastcached's GET benchmark ran
+  6.8% slower on `EventLoop` than on its own epoll reactor (geomean of 24 scenarios, -22% at the
+  worst). The socket's parks now ask for `RegistrationLifetime::UntilClosed`: the loop registers the
+  descriptor the first time it is parked on, a park takes a slot on that registration and changes
+  what it is armed for only when it must, and `close()` ends it by announcing the close, as it
+  already did. Readability stays armed after a read completes, so the steady state of a
+  request/response connection costs no `epoll_ctl` at all; writability is dropped as soon as the
+  write is taken, and a readiness report nobody is parked to take narrows the registration after
+  that wait. On a loopback echo over epoll (WSL2, clang-22 Release, median of 5) the server's CPU
+  per request fell from 9.3-10.5 us to 5.1 us, and its throughput rose from 96-106k to 193-195k
+  requests a second at 16, 64 and 256 connections; a raw epoll echo, the floor, is 4.2 us. The
+  turn is unchanged. `SocketRegistration_test.cpp` counts the backend calls, and fails with the
+  per-park registration.
 - **The `await_ready` of nine public awaiters is a `constexpr` constant `false`**:
   `core::net::DelayAwaiter`, `core::async::Task<T>::Awaiter`, `Task<void>::Awaiter`, the awaiter
   `whenAll` and `whenAny` return, `AsyncQueue<T>::PopAwaiter`, and the four `TuiRuntime` awaiters
@@ -89,6 +104,12 @@ workflow refuses one without a section here.
   option with one status line. Two tests pin it on Windows: a `/MT` program linking `core::net`
   and `core::log` fails to link, naming `RuntimeLibrary`, and the same program linking
   `core::net_mt` and `core::log_mt` links and runs a loopback echo.
+- **`RegistrationLifetime`** (`<core/net/detail/ParkTable.hpp>`, through `<core/net/EventLoop.hpp>`),
+  and a `lifetime` field of it on `ParkEntry`, which `ParkEntry::onReadyCallback` takes as a new
+  trailing parameter with a default. `PerPark`, the default, is the registration every park had.
+  `UntilClosed` shares one registration per handle among every park on it that asks, kept until
+  `EventLoop::notifyHandleClosing` names the handle -- so a caller that asks for it promises to
+  announce every close, which is what `PosixSocket` does and what it now asks for.
 - **`adoptSocket(EventLoop&, platform::NativeHandle, std::string peerAddress)`**, beside
   `adoptFd` and `adoptListener` in `<core/net/Sockets.hpp>`: a connected socket accepted or
   dialled outside core-cpp, driven by the loop the caller chooses. It is what a Windows server

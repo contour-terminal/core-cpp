@@ -15,6 +15,12 @@
 /// on `EAGAIN`, park a frameless readiness callback on the loop; the retry loop runs in that
 /// callback and completes the @c ResultAwaitable the caller is suspended on. See
 /// `<core/net/IoAwaitable.hpp>` for why the retry cannot live in the awaiting coroutine.
+///
+/// **Nor does it register with the backend per operation.** Its parks ask the loop for one
+/// registration for the socket's life (@c RegistrationLifetime::UntilClosed), shared by the read
+/// side and the write side, so the steady state of a request/response connection -- read parks,
+/// wakes, completes, and the next read parks again -- costs the kernel nothing beyond the wait
+/// itself. `close()` ends that registration, by announcing the close before it happens.
 
 #include <core/net/EventLoop.hpp>
 #include <core/net/ISocket.hpp>
@@ -123,6 +129,11 @@ class PosixSocket final: public ISocket
     /// @param interest Always @c Interest::Read; named for symmetry with the write side.
     /// @return Whether the loop accepted the registration.
     [[nodiscard]] bool armRead(Interest interest);
+
+    /// Arms the write slot's park. Called from the awaitable's `await_suspend`, by `write` and
+    /// `writeVectored` alike.
+    /// @return Whether the loop accepted the registration.
+    [[nodiscard]] bool armWrite();
 
     /// Retries the read slot's syscall, completing it if it answers.
     void pumpRead();

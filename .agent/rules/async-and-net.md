@@ -583,6 +583,38 @@ get right, and each one is a defect that has already happened.
   awaitable when the operation finally answers. Anything that needs to STORE an operation pays the
   frame explicitly through `core::async::asTask`.
 
+- **A socket registers with the backend once, for its life -- never once per operation.** A
+  registration per park is two kernel calls per park, and a request/response socket parks once per
+  request: on epoll that was an `EPOLL_CTL_ADD` and an `EPOLL_CTL_DEL` per request, the expensive
+  pair, and it made fastcached's GET benchmark 6.8% slower on `EventLoop` than on its own reactor.
+  Keeping the registration cut the server's CPU per request on a loopback echo by 45-51%. Every case in
+  the suite stayed green throughout, because a registration per park is exactly as correct as one
+  per socket; `SocketRegistration_test.cpp` COUNTS the backend calls, which is the only thing that
+  can see it. The mechanism is `RegistrationLifetime::UntilClosed`, a loop-owned registration per
+  handle with one slot per direction (`detail::HandleWatch`), so backends still dispatch and the
+  loop still resumes. Three rules hold it up:
+  - **The owner announces the close, or the registration outlives the descriptor.** Nothing else can
+    end it: epoll forgets a closed descriptor silently, and a registration the loop still believed
+    armed would never fire for the next socket to get that number. `notifyHandleClosing` detaches
+    it, while the descriptor is still open and out of any batch in flight (#475). A transport that
+    cannot promise the announcement keeps `PerPark`.
+  - **Readability stays armed after its read; writability does not.** The next thing a
+    request/response socket does is read again, so re-arming readability would be the very call
+    this saves. A socket with room in its send buffer is writable on every wait, so writability left
+    armed would be a report per turn for the life of the connection: it is narrowed away when the
+    write is taken. A report that finds no park to take it narrows the registration once the wait
+    returns -- never from inside the backend's walk, where enqueueing is all Rule 1 allows.
+  - **A readable report wakes the writer too.** A backend services one callback per registration
+    per wait and prefers readability, so on one registration shared by a reader and a writer, a
+    socket that stayed readable would never report its writability. Waking the writer costs one
+    `send` that may answer `EAGAIN`, which its retry loop already treats as "stay parked".
+
+  **The turn did not change, and it was measured before deciding so.** Readiness dispatched in step
+  4 is still resumed in the next turn's step 2. On the same echo a sampled profile puts about 9% of
+  the server thread's CPU in user space, the turn included; the rest is the three syscalls a request costs (`recv`,
+  `send`, and the `recv` that answers `EAGAIN` before a read parks). Draining in the same turn would
+  save none of them.
+
 - **A cancel from the FLOW throws; a cancel from the RESOURCE is a value.** `close()`,
   `cancelRead()` and a closed listener answer `NetErrorCode::Cancelled` as a
   `std::expected` value, because the flow is alive and asked a question about a socket that has

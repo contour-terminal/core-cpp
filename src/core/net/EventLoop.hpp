@@ -59,6 +59,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <expected>
 #include <functional>
 #include <list>
 #include <memory>
@@ -529,6 +530,10 @@ class EventLoop: public async::IExecutor
     /// second time and the turn would then resume a frame the first resume had already destroyed.
     /// Not @c noexcept, though every caller is: recording a wake appends to a vector, so
     /// allocation failure propagates as termination from a `close()` that cannot report it.
+    ///
+    /// **It is also what ends a registration kept for the handle's life**
+    /// (@c RegistrationLifetime::UntilClosed): the loop detaches it here, while the descriptor
+    /// still names this handle, and nothing else ever does.
     /// @param handle The handle about to be closed.
     /// @param policy How a flow parked on @p handle should observe the close.
     void notifyHandleClosing(platform::NativeHandle handle, FdWakePolicy policy);
@@ -590,6 +595,11 @@ class EventLoop: public async::IExecutor
 
     /// Parks @p entry: registers its handle with the backend if it names one, arms its deadline if
     /// it has one, and files it so a cancel can find it by id.
+    ///
+    /// A handle parked on with @c RegistrationLifetime::UntilClosed is registered once, by the
+    /// first such park, and every later one only takes a slot on that registration -- arming it
+    /// further if it is not yet armed for what the park watches, and otherwise asking the backend
+    /// for nothing.
     ///
     /// **Called outside a turn, it also asks the backend for the turn that will reach the park.**
     /// This is where that arming lives for every park — @c addTimer, @c schedule, `delay()` and
@@ -746,6 +756,54 @@ class EventLoop: public async::IExecutor
     /// @param handler The ready park's handler, whose `owner` is its @c detail::Park.
     static void onParkReady(ReadinessHandler& handler) noexcept;
 
+    /// The readable callback of a @c detail::HandleWatch. It only enqueues: the reader, the writer
+    /// beside it, and -- when there is no reader to take the report -- a request to narrow.
+    ///
+    /// **The writer is queued too, and the reason is the one-callback rule rather than a guess.**
+    /// A backend services one callback per registration per wait and prefers readability, so on a
+    /// registration a reader and a writer share, a socket that stays readable would never have its
+    /// writability reported at all: the writer would starve behind its own socket's reads. Queuing
+    /// it costs one `send` that may answer `EAGAIN`, which its owner's retry loop already treats
+    /// as "stay parked" -- and only ever while both directions are parked at once.
+    /// @param handler The watch's handler, whose `owner` is its @c detail::HandleWatch.
+    static void onWatchReadable(ReadinessHandler& handler) noexcept;
+
+    /// The writable callback of a @c detail::HandleWatch. It only enqueues.
+    /// @param handler The watch's handler, whose `owner` is its @c detail::HandleWatch.
+    static void onWatchWritable(ReadinessHandler& handler) noexcept;
+
+    /// Finds or makes the registration a @c RegistrationLifetime::UntilClosed park on @p handle
+    /// shares, and arms it for @p interest on top of whatever it is armed for already.
+    /// @param handle The handle to watch.
+    /// @param kind What @p handle is.
+    /// @param interest What the new park needs the registration armed for.
+    /// @return The watch, or why the backend refused it. A refusal leaves no watch behind that this
+    ///         call made.
+    [[nodiscard]] std::expected<detail::HandleWatch*, NetError> watchHandle(platform::NativeHandle handle,
+                                                                            HandleKind kind,
+                                                                            Interest interest);
+
+    /// Frees the slot @p park holds on its handle's watch, if it holds one. The registration stays.
+    /// @param park The park being taken, cancelled or unparked.
+    /// @return What the freed slot was for, or @c Interest::None if @p park held none.
+    [[nodiscard]] Interest releaseWatchSlot(detail::Park& park) noexcept;
+
+    /// Re-arms @p watch for exactly what its slots ask for, plus whatever of @p keep it is armed for
+    /// already. A backend that refuses keeps the old arming, which errs towards a spurious report
+    /// rather than a lost one.
+    /// @param watch The watch to narrow.
+    /// @param keep What may stay armed with no slot asking for it: @c Interest::Read after a write
+    ///        is taken, @c Interest::None once a wait has reported something nobody took.
+    void narrowWatch(detail::HandleWatch& watch, Interest keep) noexcept;
+
+    /// Narrows every watch a wait reported with nobody parked to take the report. Turn step 4,
+    /// after the wait, because a backend callback may only enqueue.
+    void narrowReportedWatches() noexcept;
+
+    /// Detaches and forgets the watch on @p handle, if there is one. The handle must still be open.
+    /// @param handle The handle about to be closed.
+    void dropWatch(platform::NativeHandle handle) noexcept;
+
     /// What a host's pump calls: one turn, waiting on nothing.
     ///
     /// Static and `noexcept`, because that is what a @c HostCallback is. An exception escaping a
@@ -819,6 +877,14 @@ class EventLoop: public async::IExecutor
     std::deque<ReadyEntry> _ready;
 
     detail::ParkTable _parks; ///< Every park, by id, with its reverse indices.
+
+    /// The registrations kept for the life of a handle (@c RegistrationLifetime::UntilClosed), by
+    /// handle. Held by `unique_ptr` because the backend holds each watch's handler by address.
+    std::unordered_map<platform::NativeHandle, std::unique_ptr<detail::HandleWatch>> _watches;
+
+    /// The handles whose watch a wait reported with no park to take the report, to be narrowed once
+    /// the wait returns. Cleared rather than swapped, so its capacity is kept across turns.
+    std::vector<platform::NativeHandle> _watchesToNarrow;
 
     /// Parks whose handle closed since the last turn, merged into the next turn as one more source
     /// of readiness. Consumed ONLY in a turn: ~EventLoop must resume parked flows through its own
