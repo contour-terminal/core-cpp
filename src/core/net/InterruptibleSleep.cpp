@@ -47,7 +47,7 @@ namespace
 
         /// @return False: an elapsed deadline is answered by @c await_suspend, never here, as for
         ///         @c DelayAwaiter (fastcached#1546, `.agent/rules/async-and-net.md`).
-        [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
+        [[nodiscard]] constexpr bool await_ready() const noexcept { return false; }
 
         /// Parks the awaiting coroutine on the deadline and arms both stop callbacks.
         ///
@@ -124,10 +124,6 @@ namespace
         async::StopToken _flowToken;
         ParkId _park {};
     };
-
-    // The pin for fastcached#1546, here because the type has no name outside this file: reading
-    // the clock in `await_ready` again cannot compile.
-    static_assert(!TokenDelayAwaiter::await_ready());
 
 } // namespace
 

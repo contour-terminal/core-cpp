@@ -200,7 +200,7 @@ class [[nodiscard]] Task
         ///         `await_ready` makes one
         ///         ([fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546)),
         ///         and every `co_await task()` is that shape.
-        [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
+        [[nodiscard]] constexpr bool await_ready() const noexcept { return false; }
 
         /// Records the awaiting coroutine as the child's continuation, propagates the
         /// cancellation token and the chain's ownership down, and starts the child via
@@ -324,7 +324,7 @@ class [[nodiscard]] Task<void>
         ~Awaiter() = default;
 
         /// @return False, for the reason @c Task<T>::Awaiter::await_ready gives.
-        [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
+        [[nodiscard]] constexpr bool await_ready() const noexcept { return false; }
 
         /// @param awaiting The coroutine performing the `co_await`.
         /// @return The child handle to resume; @p awaiting itself, resuming it at once, where

@@ -868,7 +868,7 @@ class DelayAwaiter
 
     /// @return False: a null loop and an elapsed deadline are answered by @c await_suspend, for
     ///         the reason the class comment gives.
-    [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
+    [[nodiscard]] constexpr bool await_ready() const noexcept { return false; }
 
     /// Parks the awaiting coroutine on the deadline, unless there is no loop, the deadline has
     /// already passed, or the flow is already cancelled.

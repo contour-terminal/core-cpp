@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/async/Awaitable.hpp>
 #include <core/async/SyncRun.hpp>
 #include <core/async/Task.hpp>
 #include <core/async/WhenAll.hpp>
@@ -45,9 +46,10 @@ static_assert(!std::is_default_constructible_v<Measurement>,
 // fastcached#1546: MSVC 19.44's ARM64 code generator drops the enclosing `try` of a `co_await` on
 // a temporary awaiter whose `await_ready` makes a call, so an `OperationCancelled` from
 // `await_resume` passes every handler. An `await_ready` here answers a constant and the decision
-// is `await_suspend`'s (.agent/rules/async-and-net.md); putting a call back cannot compile.
-static_assert(!Task<int>::Awaiter::await_ready());
-static_assert(!Task<void>::Awaiter::await_ready());
+// is `await_suspend`'s (.agent/rules/async-and-net.md); a call put back fails to compile wherever
+// the question can be asked at compile time (core::async::awaitReadyIsConstantFalse).
+static_assert(core::async::awaitReadyIsConstantFalse<Task<int>::Awaiter>());
+static_assert(core::async::awaitReadyIsConstantFalse<Task<void>::Awaiter>());
 
 /// A computational task that completes synchronously when first resumed.
 Task<int> answer()

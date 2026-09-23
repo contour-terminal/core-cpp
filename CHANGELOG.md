@@ -31,10 +31,12 @@ workflow refuses one without a section here.
 
 ### Changed
 
-- **The `await_ready` of nine public awaiters is `static constexpr` and answers `false`**:
+- **The `await_ready` of nine public awaiters is a `constexpr` constant `false`**:
   `core::net::DelayAwaiter`, `core::async::Task<T>::Awaiter`, `Task<void>::Awaiter`, the awaiter
   `whenAll` and `whenAny` return, `AsyncQueue<T>::PopAwaiter`, and the four `TuiRuntime` awaiters
-  (which also became `noexcept`). A `co_await` behaves as before. Code that called `await_ready()`
+  (which also became `noexcept`). It stays a `const` member rather than a `static` one, which
+  clang-tidy's `readability-static-accessed-through-instance` would report at every `co_await` in
+  a caller's code. A `co_await` behaves as before. Code that called `await_ready()`
   directly to learn whether an await would park gets `false` where it got `true`, for instance
   `sleepUntil(nullptr, t).await_ready()`; `await_suspend(std::noop_coroutine())` answering `false`
   is the question now. `ResultAwaitable::await_ready` still answers whether the operation settled
@@ -52,8 +54,11 @@ workflow refuses one without a section here.
   `tools/migrate/renames.json`'s `core::net::ReusePort` row points at it.
 - **`core-cpp.await-ready`**, a `tree-level` check with a self-test (`scripts/check-await-ready.py`,
   run by the `style` job), refusing an `await_ready` body under `src/` or `tests/` that calls a
-  function or constructs an object. It cannot see an overloaded operator; the fixed awaiters also
-  carry a `static_assert` that their `await_ready` is a constant, so a call there fails to compile.
+  function or constructs an object. It cannot see an overloaded operator; the fixed public awaiters
+  also carry a `static_assert(core::async::awaitReadyIsConstantFalse<A>())`, new in
+  `<core/async/Awaitable.hpp>`, which asks the question at compile time without constructing an
+  awaiter (P2280), so a call there fails to compile on GCC 14, Clang 20 and MSVC 19.51 or newer;
+  on older compilers it asserts nothing.
 - **The `cl-release-arm64` preset and the `windows (cl-release-arm64)` CI leg**, on
   `windows-11-arm`: MSVC's ARM64 code generator is the only one that miscompiles the shape above,
   and no other leg can observe it. The preset expects an arm64 developer shell.

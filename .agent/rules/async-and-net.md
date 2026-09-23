@@ -489,9 +489,14 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   `await_suspend` BEFORE the flow's stop token is read or a callback registered, or a flow that is
   already stopped starts throwing where `await_ready`'s answer used to resume it normally --
   `SleepUntil_test.cpp`'s stopped-flow case is the one that notices. What guards it, stated as
-  small as it is: a `static_assert` that each of those `await_ready`s but `ResultAwaitable`'s (a
-  member read) is a constant -- in the module's test, or beside the type where it has no name
-  outside its file -- which makes a call there fail to COMPILE everywhere; `scripts/check-await-ready.py`, which refuses a call or a
+  small as it is: `static_assert(core::async::awaitReadyIsConstantFalse<A>())` for each of those
+  with a name outside its file but `ResultAwaitable` (a member read), in the module's test -- the
+  helper cannot name a type with internal linkage, so `TokenDelayAwaiter`, `SlotPark` and
+  `SerialGate::Awaiter` have the scan below and nothing else -- which makes a call there fail to COMPILE on GCC 14, Clang 20 and
+  MSVC 19.51 or newer, and asserts nothing on the compilers that predate P2280 (MSVC 19.44 among
+  them); `await_ready` stays a `const` member, not a `static` one, because clang-tidy's
+  `readability-static-accessed-through-instance` reports a static one at every `co_await` in every
+  caller (391 findings here when it was tried); `scripts/check-await-ready.py`, which refuses a call or a
   construction in any `await_ready` body under `src/` and `tests/` but cannot see an overloaded
   operator; and the `windows (cl-release-arm64)` leg, the only one on which the miscompile itself
   is observable. None of the C++ is wrong, so no x64 leg and no sanitizer can fail for it. Origin:

@@ -274,7 +274,7 @@ class AsyncQueue final
         ///         code generator drops the enclosing `try` of a `co_await` on a temporary awaiter
         ///         whose `await_ready` makes one
         ///         ([fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546)).
-        [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
+        [[nodiscard]] constexpr bool await_ready() const noexcept { return false; }
 
         /// Registers @p awaiting as this queue's single waiter, and its stop token as what can
         /// take the park back.

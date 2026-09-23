@@ -507,7 +507,7 @@ class NextInputEventAwaiter
     ///         a `co_await` on a temporary awaiter whose `await_ready` makes one
     ///         ([fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546)).
     ///         The three awaiters below answer the same, for the same reason.
-    [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
+    [[nodiscard]] constexpr bool await_ready() const noexcept { return false; }
 
     /// Asks for a buffered event BEFORE reading the token, which keeps the answer the one
     /// `await_ready` gave when it held the question: a buffered event is delivered even to a
@@ -583,7 +583,7 @@ class NextEventForAwaiter
     }
 
     /// @return False, for @c NextInputEventAwaiter::await_ready's reason.
-    [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
+    [[nodiscard]] constexpr bool await_ready() const noexcept { return false; }
 
     /// Asks for a buffered event before reading the token, as @c NextInputEventAwaiter does.
     /// @tparam Promise The awaiting coroutine's promise type.
@@ -639,7 +639,7 @@ class NextActivityAwaiter
     }
 
     /// @return False, for @c NextInputEventAwaiter::await_ready's reason.
-    [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
+    [[nodiscard]] constexpr bool await_ready() const noexcept { return false; }
 
     /// Asks for a buffered event or a pending agent message before reading the token, as
     /// @c NextInputEventAwaiter does.
@@ -698,7 +698,7 @@ class NextAgentReadyAwaiter
     explicit NextAgentReadyAwaiter(TuiRuntime& runtime) noexcept: _runtime(runtime) {}
 
     /// @return False, for @c NextInputEventAwaiter::await_ready's reason.
-    [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
+    [[nodiscard]] constexpr bool await_ready() const noexcept { return false; }
 
     /// Asks for a pending message before reading the token, as @c NextInputEventAwaiter does.
     /// @tparam Promise The awaiting coroutine's promise type.

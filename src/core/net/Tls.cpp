@@ -263,7 +263,7 @@ namespace
         ///         under the gate's mutex: taking a lock is a call, and MSVC 19.44's ARM64 code
         ///         generator drops the enclosing `try` of a `co_await` on a temporary awaiter whose
         ///         `await_ready` makes one (fastcached#1546, `.agent/rules/async-and-net.md`).
-        [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
+        [[nodiscard]] constexpr bool await_ready() const noexcept { return false; }
 
         /// A free or abandoned gate resumes at once, before the token is read or a callback
         /// registered -- what `await_ready` answered when it held that check. Otherwise registers
@@ -344,10 +344,6 @@ namespace
         /// another thread, and that callback reads the members above.
         std::optional<async::StopCallback<CancelWait>> _stopRegistration;
     };
-
-    // The pin for fastcached#1546, here because the type has no name outside this file: taking the
-    // lock in `await_ready` again cannot compile.
-    static_assert(!SerialGate::Awaiter::await_ready());
 
     SerialGate::Awaiter SerialGate::wait(std::shared_ptr<SerialGate> gate, Direction direction) noexcept
     {

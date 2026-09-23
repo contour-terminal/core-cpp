@@ -264,7 +264,7 @@ class JoinAwaiter
     ///         asking a container is a call, and MSVC 19.44's ARM64 code generator drops the
     ///         enclosing `try` of a `co_await` on a temporary awaiter whose `await_ready` makes one
     ///         ([fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546)).
-    [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
+    [[nodiscard]] constexpr bool await_ready() const noexcept { return false; }
 
     /// Builds and starts a runner per task, keeping the awaiting coroutine suspended unless the
     /// join completed during the start phase.

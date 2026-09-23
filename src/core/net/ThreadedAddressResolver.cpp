@@ -134,7 +134,7 @@ namespace
         ///         asked under the slot's mutex: taking a lock is a call, and MSVC 19.44's ARM64
         ///         code generator drops the enclosing `try` of a `co_await` on a temporary awaiter
         ///         whose `await_ready` makes one (fastcached#1546, `.agent/rules/async-and-net.md`).
-        [[nodiscard]] static constexpr bool await_ready() noexcept { return false; }
+        [[nodiscard]] constexpr bool await_ready() const noexcept { return false; }
 
         /// Templated on the promise so `parkedWorkFor` can ask the PARKING coroutine's own
         /// promise whether anything else owns its chain: @c settle hands this chain to a loop
@@ -186,10 +186,6 @@ namespace
             return slot->result;
         }
     };
-
-    // The pin for fastcached#1546, here because the type has no name outside this file: taking the
-    // lock in `await_ready` again cannot compile.
-    static_assert(!SlotPark::await_ready());
 
 } // namespace
 
