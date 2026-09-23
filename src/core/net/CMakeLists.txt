@@ -49,6 +49,7 @@ set(_coreCppNetSubset
     EventLoop.cpp
     HostDrivenBackend.cpp
     InterruptibleSleep.cpp
+    detail/ParkId.hpp
     detail/ParkTable.hpp
     detail/ReadyBatch.hpp
     detail/ScopeGuard.hpp
@@ -144,6 +145,7 @@ core_cpp_add_module(net KIND STATIC
         UdpSocket.hpp
         WithTimeout.hpp
         WriteQueue.hpp
+        detail/ParkId.hpp
         detail/ParkTable.hpp
         detail/ReadinessSlot.hpp
         detail/WorkerIdentity.hpp

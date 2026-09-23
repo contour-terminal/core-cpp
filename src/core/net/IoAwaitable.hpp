@@ -31,7 +31,7 @@
 #include <core/async/Task.hpp>
 #include <core/net/IoResult.hpp>
 #include <core/net/NetError.hpp>
-#include <core/net/detail/ParkTable.hpp>
+#include <core/net/detail/ParkId.hpp>
 
 #include <cassert>
 #include <coroutine>
@@ -49,9 +49,9 @@ namespace core::net
 /// `ISocket.hpp` includes this header, so whatever this header includes lands in every translation
 /// unit that touches a socket. `<core/net/EventLoop.hpp>` was that, for ONE call --
 /// `requestCancel` on the stop path below -- and `SocketContract.hpp` goes to the trouble of
-/// forward-declaring the same class for the same reason. Measured: the loop's header is 138k
-/// preprocessed lines against `detail/ParkTable.hpp`'s 130k, which is what is left once `ParkId`
-/// still has to be a complete type here.
+/// forward-declaring the same class for the same reason. `ParkId` still has to be a complete type
+/// here, and it comes from `detail/ParkId.hpp` rather than the park table for the same reason
+/// again (core-cpp#43).
 class EventLoop;
 
 /// Requests cancellation of @p park on @p loop, out of line so this header need not include the
