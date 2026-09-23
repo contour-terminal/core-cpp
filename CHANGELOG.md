@@ -1313,7 +1313,6 @@ workflow refuses one without a section here.
   and a socket with a read already parked has no second read slot for it. TLS 1.3 has none.
 - `AsyncBufferedReader` is neither copyable nor movable, since a parked refill writes into a
   member buffer that must keep its address (Task B10 review).
-
 - **`core::net::serve` awaits each connection's `handshakeIfNeeded()` before reading a request**
   (Task B10), and drops a connection whose handshake fails without reading from it or answering it.
   A plaintext socket completes the verb inline, so nothing changes for one; a negotiating transport

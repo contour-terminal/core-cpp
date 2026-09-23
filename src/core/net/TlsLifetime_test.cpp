@@ -316,30 +316,6 @@ TEST_CASE("A read that loses a race while parked on the handshake leaves nothing
     CHECK(**next.result == "greeting");
 }
 
-TEST_CASE("cancelRead during a handshake the read drives leaves the socket usable", "[net][tls][tlsgate]")
-{
-    // `cancelRead` is not a close: the socket stays open and a later read works. A cancelled inner
-    // read consumed no ciphertext, so the handshake can simply be driven again.
-    auto c = Conversation {};
-    auto read = Outcome {};
-    observeRead(c.tls.get(), &read);
-    c.settle();
-    REQUIRE_FALSE(read.settled);
-
-    c.tls->cancelRead();
-    REQUIRE(c.pumpUntil([&] { return read.settled; }));
-    CHECK(read.code() == NetErrorCode::Cancelled);
-
-    auto next = Outcome {};
-    observeRead(c.tls.get(), &next);
-    REQUIRE(c.run(peerHandshakesAndSays(c.peer.get(), c.wire.get(), "after the cancel"))
-            == std::optional<bool> { true });
-    REQUIRE(c.pumpUntil([&] { return next.settled; }));
-    REQUIRE(next.result.has_value());
-    REQUIRE(next.result->has_value());
-    CHECK(**next.result == "after the cancel");
-}
-
 TEST_CASE("A reader's cancelRead does not reach into a write that drives the handshake",
           "[net][tls][tlsgate]")
 {

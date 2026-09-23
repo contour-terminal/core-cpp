@@ -738,8 +738,9 @@ TEST_CASE("serve completes the transport handshake before it reads a request", "
 
     // Bounded: a serve() that read the socket after all would not return, and the wait says so
     // rather than leaving it to ctest's TIMEOUT.
-    REQUIRE(loop.blockOn(core::net::withTimeout(
-        &loop, core::net::serve(&listener, std::move(handler)), std::chrono::seconds { 10 })));
+    auto const served = loop.blockOn(core::net::withTimeout(
+        &loop, core::net::serve(&listener, std::move(handler)), std::chrono::seconds { 10 }));
+    REQUIRE(served);
 
     CHECK(reads == 0);
     CHECK(writes == 0);

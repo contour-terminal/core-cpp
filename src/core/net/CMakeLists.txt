@@ -359,6 +359,10 @@ core_cpp_add_test(net NAME net_tls
         TlsLifetime_test.cpp
         TlsSocket_test.cpp
         Tls_test.cpp
+    # POSIX-only for CancelRead_test's reason: the case retires a read through the inner socket's
+    # own `cancelRead`, which WindowsSocket does not implement.
+    SOURCES_POSIX
+        posix/TlsCancelRead_test.cpp
     LABELS loopback
     TIMEOUT 120)
 
