@@ -318,10 +318,10 @@ TEST_CASE("a stop ends a lookup that never returns and the answer that arrives l
     inner.release();
     resolver.stop(); // joins: the worker has published by the time this returns
 
-    // Nothing is left for the loop to run. Asked by DRAINING rather than by `pendingSubmissions`,
-    // which counts the ready queue only: a hand-back from a worker arrives through the loop's
-    // cross-thread inbound queue and would not show there. A turn that resumes something is what
-    // delivering the late answer looks like, and it resumes rather than leaks it on the way.
+    // Nothing is left for the loop to run. Asked by DRAINING rather than by `pendingSubmissions`: a
+    // hand-back from a worker arrives through the loop's cross-thread inbound queue, which that
+    // counter now includes, but a turn that resumes something is what delivering the late answer
+    // looks like, and it resumes rather than leaks it on the way.
     CHECK(loop.drain() == 0);
 }
 

@@ -250,6 +250,30 @@ TEST_CASE("TestLoop::submit resumes a single coroutine and drains", "[TestLoop]"
     CHECK(loop.pendingSubmissions() == 0);
 }
 
+TEST_CASE("TestLoop's counters include what was handed over between turns", "[TestLoop]")
+{
+    // The test thread outside a turn is not the loop's worker, so `submit` and `schedule` go to the
+    // cross-thread inbound queue rather than straight to the ready queue and the park table. A
+    // counter that read only those answered 0 right after a submit -- the answer depended on which
+    // thread submitted, which is the reason cancelPending already searches the inbound queue.
+    auto clock = ManualClock {};
+    auto loop = TestLoop { clock };
+
+    auto counter = 0;
+    auto task = countYields(&loop, &counter, 1);
+    loop.submit(task.handle());
+    CHECK(loop.pendingSubmissions() == 1);
+
+    loop.schedule(clock.now() + 50ms, std::noop_coroutine());
+    CHECK(loop.pendingTimers() == 1);
+
+    clock.advance(50ms);
+    std::ignore = loop.drain();
+    CHECK(task.done());
+    CHECK(loop.pendingSubmissions() == 0);
+    CHECK(loop.pendingTimers() == 0);
+}
+
 TEST_CASE("TestLoop processes submissions in FIFO order", "[TestLoop]")
 {
     // FIFO is what makes a loop fair rather than merely correct: two flows handed over in an order

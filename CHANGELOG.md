@@ -42,6 +42,15 @@ workflow refuses one without a section here.
   connections, where the IOCP listener has always used `SO_EXCLUSIVEADDRUSE`. It uses that too
   now, and fails the bind if the option is refused. `BackendKind::Wfmo` is not the Windows
   default, so only a caller that asked for it by name was exposed.
+- **`testing::TestLoop::pendingSubmissions()` and `pendingTimers()` count what was handed over
+  between turns.** A `submit` or `schedule` from a thread that is not the loop's worker -- the
+  case's own thread outside a turn included -- goes to the inbound queue until turn step 1, and the
+  two counters read only the ready queue and the park table, so a case that submitted and then
+  counted read 0 (at least 12 of fastcached's cases, on migration). They now add the inbound
+  submissions and scheduled deadlines, read under the inbound lock through two new
+  `EventLoop` accessors, `inboundSubmissionCount()` and `inboundScheduledCount()` --
+  `cancelPending` already searched that queue, so the answer no longer depends on which thread
+  submitted. Both counters lost `noexcept`: taking the lock can throw.
 
 ### Changed
 

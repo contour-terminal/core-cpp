@@ -459,8 +459,27 @@ class EventLoop: public async::IExecutor
     [[nodiscard]] std::size_t parkedWaiterCount() const noexcept { return _parks.readinessCount(); }
 
     /// @return How many coroutines are queued for the next drain. Nonzero after a turn means the
-    ///         turn's batch bound was reached.
+    ///         turn's batch bound was reached. The ready queue only: what another thread -- or this
+    ///         one, outside a turn -- submitted waits in the inbound queue until turn step 1, and
+    ///         @c inboundSubmissionCount counts that.
     [[nodiscard]] std::size_t readyCount() const noexcept { return _ready.size(); }
+
+    /// @return How many coroutines were submitted from off the loop's worker thread and are waiting
+    ///         for turn step 1 to queue them. Read under the inbound lock, so any thread may ask.
+    [[nodiscard]] std::size_t inboundSubmissionCount() const
+    {
+        auto const lock = std::scoped_lock { _inboundMutex };
+        return _inbound.submissions.size();
+    }
+
+    /// @return How many deadlines were scheduled from off the loop's worker thread and are waiting
+    ///         for turn step 1 to arm them; @c pendingTimerCount counts them once armed. Read under
+    ///         the inbound lock, so any thread may ask.
+    [[nodiscard]] std::size_t inboundScheduledCount() const
+    {
+        auto const lock = std::scoped_lock { _inboundMutex };
+        return _inbound.scheduled.size();
+    }
 
     /// @return The monotonic clock backing every deadline. Awaiters read deadlines through this so
     ///         tests can drive time deterministically via an injected @c platform::ManualClock.

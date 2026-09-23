@@ -73,11 +73,16 @@ class TestLoop final: private detail::OwnedNullBackend, public EventLoop
     /// @return How much every turn drained in all — coroutines resumed plus timer callbacks run.
     std::size_t drain() { return runUntilIdle(); }
 
-    /// @return How many coroutines are queued for the next drain.
-    [[nodiscard]] std::size_t pendingSubmissions() const noexcept { return readyCount(); }
+    /// @return How many coroutines are waiting to be resumed by a drain: the ready queue, plus what
+    ///         was submitted between turns. A case's own thread is not the loop's worker outside a
+    ///         turn, so a `submit` from it goes to the inbound queue; counting the ready queue alone
+    ///         answered 0 right after that submit, which made the answer depend on which thread
+    ///         submitted (the reason @c EventLoop::cancelPending searches the inbound queue too).
+    [[nodiscard]] std::size_t pendingSubmissions() const { return readyCount() + inboundSubmissionCount(); }
 
-    /// @return How many parks are waiting on a deadline.
-    [[nodiscard]] std::size_t pendingTimers() const noexcept { return pendingTimerCount(); }
+    /// @return How many deadlines are waiting: the parks armed on one, plus what was scheduled
+    ///         between turns and is not armed yet, for the reason @c pendingSubmissions gives.
+    [[nodiscard]] std::size_t pendingTimers() const { return pendingTimerCount() + inboundScheduledCount(); }
 
     /// @return The backend this loop owns, for a case that asserts what it was asked.
     [[nodiscard]] NullBackend& backend() noexcept { return _ownedBackend; }
