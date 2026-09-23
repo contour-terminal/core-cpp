@@ -368,6 +368,8 @@ endif()
 set_tests_properties(core-cpp.text-encoding core-cpp.text-encoding-selftest PROPERTIES
     LABELS "core-cpp;hygiene;tree-level"
     TIMEOUT 60)
+# Outside a git checkout (a source archive) the check cannot tell which files are the tree's.
+set_tests_properties(core-cpp.text-encoding PROPERTIES SKIP_RETURN_CODE 77)
 
 # scripts/tidy-record.py refuses a clang-tidy result that carries no instrument record: the build's
 # exit, the analyser the build resolved against the pin, the statements that carry it, the steps

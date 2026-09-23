@@ -9,7 +9,8 @@ Each refusal gets a file that plants exactly that defect, and one case plants te
 non-ASCII and CORRECT -- an em-dash, an accented letter, a multiplication sign -- because a check
 that refused every byte above 0x7F would pass every refusal here and fail every real document.
 The instrument's own failure modes are cases too: a binary file is not read, an allowed file is
-excused, an allow row that excuses nothing is refused, and a scan that read nothing says so.
+excused, an allow row that excuses nothing is refused, a scan that read nothing says so, and a
+tree git cannot list is a skip rather than a traceback.
 """
 
 from __future__ import annotations
@@ -91,6 +92,19 @@ class TextEncodingTest(unittest.TestCase):
         problems, _ = self.run_on(files, {"records/f.md": "quotes it", "g.md": "excuses nothing"})
         self.assertEqual(len(problems), 1)
         self.assertIn("g.md: [stale-allow]", problems[0])
+
+    def test_a_tree_git_cannot_list_is_a_skip_that_says_why(self):
+        # A release tarball has no .git. The check cannot know what is tracked there, and a
+        # traceback reads as a defect in the tree; exit 77 is ctest's "skipped", with the reason.
+        with tempfile.TemporaryDirectory() as scratch:
+            (Path(scratch) / "a.md").write_bytes(b"clean\n")
+            run = subprocess.run(
+                [sys.executable, str(CHECKER), "--root", scratch], capture_output=True, text=True, check=False
+            )
+        self.assertEqual(run.returncode, 77, run.stdout + run.stderr)
+        self.assertIn("SKIPPED", run.stdout)
+        self.assertIn("git", run.stdout)
+        self.assertNotIn("Traceback", run.stderr)
 
     def test_the_real_tree_is_read_rather_than_skipped(self):
         # A scan that read nothing would report nothing; the real tree has hundreds of text files.

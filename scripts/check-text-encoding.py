@@ -140,7 +140,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", type=Path, default=REPOSITORY_ROOT)
     arguments = parser.parse_args()
-    files = tracked_files(arguments.root)
+    try:
+        files = tracked_files(arguments.root)
+    except (OSError, subprocess.CalledProcessError) as error:
+        # A source archive has no .git, so nothing says which files are the tree's. Exit 77 is
+        # ctest's "skipped": a traceback here would read as a defect in the tree.
+        print(
+            f"check-text-encoding: SKIPPED -- git cannot list the tracked files under {arguments.root}: {error}"
+        )
+        return 77
     problems, read = check(arguments.root, files, ALLOW)
     if read == 0:
         print(
