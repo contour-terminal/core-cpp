@@ -265,7 +265,7 @@ function(core_cpp_add_static_runtime_twin name module sources publicLibs private
 endfunction()
 
 function(core_cpp_add_module name)
-    cmake_parse_arguments(PARSE_ARGV 1 arg "" "KIND"
+    cmake_parse_arguments(PARSE_ARGV 1 arg "NO_STATIC_RUNTIME_TWIN" "KIND"
                           "HEADERS;${CORE_CPP_SOURCE_KEYWORDS};PUBLIC_LIBS;PRIVATE_LIBS")
     if(arg_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "core_cpp_add_module(${name}): unexpected arguments: ${arg_UNPARSED_ARGUMENTS}")
@@ -346,7 +346,9 @@ function(core_cpp_add_module name)
         # (cmake/CoreCppOptions.cmake). Test binaries are not here: a parent does not build them.
         set_property(GLOBAL APPEND PROPERTY CORE_CPP_TARGETS ${target})
     endif()
-    if(arg_KIND STREQUAL "STATIC" AND CORE_CPP_BUILD_STATIC_RUNTIME_VARIANTS)
+    # NO_STATIC_RUNTIME_TWIN: a module whose directory edits its target after this call, which the
+    # twin would not mirror, or that links something only ever built /MD.
+    if(arg_KIND STREQUAL "STATIC" AND CORE_CPP_BUILD_STATIC_RUNTIME_VARIANTS AND NOT arg_NO_STATIC_RUNTIME_TWIN)
         core_cpp_add_static_runtime_twin(${name} ${module} "${sources}" "${arg_PUBLIC_LIBS}" "${arg_PRIVATE_LIBS}")
     endif()
 

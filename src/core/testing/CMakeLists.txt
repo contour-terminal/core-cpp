@@ -22,9 +22,11 @@ core_cpp_add_module(testing_dialogs KIND OBJECT
 
 # main() for every test binary: Catch2 with core-cpp's exit-code contract, after the LOG filter is
 # applied to core::log. The only part of this module that needs Catch2, so the only part
-# CORE_CPP_CATCH2_MAIN gates.
+# CORE_CPP_CATCH2_MAIN gates. No static-CRT twin: the lines below edit the target after it is
+# declared, which a twin would not mirror -- its binaries would lack the dialog suppression and the
+# skip exit code -- and Catch2 and core::testing_dialogs are built /MD whatever it links.
 if(CORE_CPP_CATCH2_MAIN)
-    core_cpp_add_module(testing_main KIND STATIC
+    core_cpp_add_module(testing_main KIND STATIC NO_STATIC_RUNTIME_TWIN
         HEADERS ExitCode.hpp
         SOURCES CatchMain.cpp ExitCode.cpp
         PUBLIC_LIBS core::testing core::log Catch2::Catch2)
