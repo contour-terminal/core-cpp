@@ -637,6 +637,19 @@ jobs:
       - name: Test
         run: ctest --preset ${{ matrix.preset }} -LE tree-level
 
+      # CORE_CPP_MSVC_STATIC_RUNTIME_VARIANTS, in a second tree with the option on, building only
+      # what the /MT smoke links: the twins are EXCLUDE_FROM_ALL. The tree above ran the other half,
+      # core-cpp.static-crt-mismatch, with the option off. On one cl leg and one clang-cl leg, since
+      # link.exe and lld-link report the mismatch differently.
+      - name: Static-CRT twins
+        if: matrix.preset == 'cl-release' || matrix.preset == 'clangcl-release'
+        run: |
+          tree="out/build/${{ matrix.preset }}-mt"
+          cmake --preset ${{ matrix.preset }} -B "$tree" -DCORE_CPP_MSVC_STATIC_RUNTIME_VARIANTS=ON \
+            ${CXX_COMPILER_PATH:+"-DCMAKE_CXX_COMPILER=$CXX_COMPILER_PATH"}
+          cmake --build "$tree" --target core-cpp-static-crt-smoke
+          ctest --test-dir "$tree" -R '^core-cpp\.static-crt-' --output-on-failure
+
       # The one tree-level check that also runs off the style job, on one leg (Ruling R96).
       # core-cpp.vendor-selftest carries the label because its input is the tree -- but what it
       # asserts is that the vendoring tool reads git blobs with core.autocrlf=false, refuses a CR

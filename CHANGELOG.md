@@ -67,6 +67,17 @@ workflow refuses one without a section here.
 
 ### Added
 
+- **`CORE_CPP_MSVC_STATIC_RUNTIME_VARIANTS`** (OFF): with an MSVC-ABI compiler, every compiled module
+  also gets a static-CRT twin, `core::<name>_mt` (target `core-cpp-<name>-mt`), built `/MT` or
+  `/MTd` and linking the twins of the modules it links (header-only modules are shared as they
+  are). The MSVC linker refuses to mix C runtimes (`LNK2038 ... 'RuntimeLibrary'`, or lld-link's
+  `/failifmismatch`), so one build of core-cpp could not serve both fastcached's `/MD` daemon and
+  its `/MT` launcher, fastcache-cc; with the option on it can. The twins are declared by
+  `core_cpp_add_module` from the module table, so they follow it; they join `CORE_CPP_TARGETS`,
+  and are `EXCLUDE_FROM_ALL`, so a parent builds only those it links. Other compilers ignore the
+  option with one status line. Two tests pin it on Windows: a `/MT` program linking `core::net`
+  and `core::log` fails to link, naming `RuntimeLibrary`, and the same program linking
+  `core::net_mt` and `core::log_mt` links and runs a loopback echo.
 - **`adoptSocket(EventLoop&, platform::NativeHandle, std::string peerAddress)`**, beside
   `adoptFd` and `adoptListener` in `<core/net/Sockets.hpp>`: a connected socket accepted or
   dialled outside core-cpp, driven by the loop the caller chooses. It is what a Windows server

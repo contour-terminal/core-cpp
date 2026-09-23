@@ -23,6 +23,7 @@ core-cpp never writes to the parent's cache.
 | `CORE_CPP_CLANG_TIDY_EXE` | found on `PATH` | The clang-tidy to run; `.clang-tidy-version` pins 22.1.8 and a mismatch warns |
 | `CORE_CPP_SANITIZERS` | empty | A list of `address`, `undefined`, `thread` and `leak`. Top-level builds only: as a subproject it stops the configure |
 | `CORE_CPP_COVERAGE` | OFF | Instrument core-cpp's targets for coverage (source-based with clang) |
+| `CORE_CPP_MSVC_STATIC_RUNTIME_VARIANTS` | OFF | With an MSVC-ABI compiler (cl, clang-cl), also declare a static-CRT twin of every compiled module: `core::<name>_mt`, target `core-cpp-<name>-mt`, built `/MT` (`/MTd` in Debug) and linking the other twins, for a `/MT` program in a build whose other programs link core-cpp `/MD`. The twins are `EXCLUDE_FROM_ALL`: linking `core::net_mt` builds base, log, platform and net a second time and nothing else. Anything else a twin links (OpenSSL, libunicode) is linked as given. Ignored, with one status line, by every other compiler |
 
 "ON when top-level" means the default is `PROJECT_IS_TOP_LEVEL`: on when core-cpp is the
 project being built, off when it is a subproject.

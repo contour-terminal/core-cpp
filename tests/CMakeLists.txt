@@ -461,6 +461,49 @@ set_tests_properties(core-cpp.format-scripts-selftest PROPERTIES
     LABELS "core-cpp;hygiene;tree-level"
     TIMEOUT 120)
 
+# The static-CRT twins (CORE_CPP_MSVC_STATIC_RUNTIME_VARIANTS), on a compiler with the MSVC ABI --
+# the only one where a program chooses its C runtime and the linker refuses to mix two.
+#
+#   core-cpp.static-crt-mismatch  a /MT program linking the ordinary (/MD) core::net and core::log
+#                                 must FAIL to link, naming RuntimeLibrary. It is registered with the
+#                                 option on and off: it is why the twins exist, and it is asserted
+#                                 rather than assumed, so a toolchain that stopped recording its C
+#                                 runtime would turn this red instead of making the twins pointless
+#                                 in silence. It builds its target from inside ctest (EXCLUDE_FROM_ALL,
+#                                 so the main build never tries), hence RUN_SERIAL.
+#   core-cpp.static-crt-smoke     with the option on, the same program linking core::net_mt and
+#                                 core::log_mt links and runs a loopback echo and a log line.
+#
+# Bounds: the mismatch builds one translation unit and fails at link, 10s measured on cl-debug; the
+# smoke is a loopback round trip, well under a second. 300 and 120 leave room for a cold runner.
+if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+    set(_coreCppStaticCrt "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+    add_executable(core-cpp-static-crt-mismatch EXCLUDE_FROM_ALL StaticCrtSmoke.cpp)
+    set_target_properties(core-cpp-static-crt-mismatch PROPERTIES MSVC_RUNTIME_LIBRARY "${_coreCppStaticCrt}")
+    target_link_libraries(core-cpp-static-crt-mismatch PRIVATE core::net core::log)
+    core_cpp_apply_toolchain(core-cpp-static-crt-mismatch)
+    add_test(NAME core-cpp.static-crt-mismatch
+             COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}" --config $<CONFIG>
+                     --target core-cpp-static-crt-mismatch)
+    set_tests_properties(core-cpp.static-crt-mismatch PROPERTIES
+        PASS_REGULAR_EXPRESSION "RuntimeLibrary"
+        RUN_SERIAL ON
+        LABELS "core-cpp;static-crt"
+        TIMEOUT 300)
+
+    if(TARGET core::net_mt)
+        add_executable(core-cpp-static-crt-smoke StaticCrtSmoke.cpp)
+        set_target_properties(core-cpp-static-crt-smoke PROPERTIES MSVC_RUNTIME_LIBRARY "${_coreCppStaticCrt}")
+        target_link_libraries(core-cpp-static-crt-smoke PRIVATE core::net_mt core::log_mt)
+        core_cpp_apply_toolchain(core-cpp-static-crt-smoke)
+        add_test(NAME core-cpp.static-crt-smoke COMMAND core-cpp-static-crt-smoke)
+        set_tests_properties(core-cpp.static-crt-smoke PROPERTIES
+            LABELS "core-cpp;static-crt;loopback"
+            TIMEOUT 120)
+    endif()
+endif()
+
 # A CRT assert, abort(), invalid parameter or crash must not open a dialog that waits for a click.
 # What each run must do differs: `assert` and `abort` die, `invalid-parameter` is handled and
 # CONTINUES -- a no-op handler is what the suppression installs, so surviving is the proof. What

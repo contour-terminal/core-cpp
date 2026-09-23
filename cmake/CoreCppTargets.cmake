@@ -81,6 +81,25 @@ set(CORE_CPP_PLATFORM_SOURCE_TABLE
     "SOURCES_EMSCRIPTEN|EMSCRIPTEN"
 )
 set(CORE_CPP_SOURCE_KEYWORDS SOURCES)
+
+# Static-CRT twins (CORE_CPP_MSVC_STATIC_RUNTIME_VARIANTS). The MSVC ABI records the C runtime a
+# translation unit was compiled against, and the linker refuses to mix them (/failifmismatch
+# RuntimeLibrary). A parent that builds a /MD daemon and a /MT tool in one build -- fastcached's
+# fastcache-cc is installed as a bare exe, so it links the CRT statically -- cannot link both
+# against one core-cpp library, so the option declares a second, static-CRT copy of each compiled
+# module beside the first. Every other compiler has one C runtime, so there the option is ignored,
+# and says so once.
+set(CORE_CPP_BUILD_STATIC_RUNTIME_VARIANTS OFF)
+if(CORE_CPP_MSVC_STATIC_RUNTIME_VARIANTS)
+    if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+        set(CORE_CPP_BUILD_STATIC_RUNTIME_VARIANTS ON)
+        message(STATUS "[core-cpp] static-CRT twins: every compiled module also builds as core::<name>_mt")
+    else()
+        message(STATUS
+            "[core-cpp] CORE_CPP_MSVC_STATIC_RUNTIME_VARIANTS is ignored: ${CMAKE_CXX_COMPILER_ID} does not "
+            "target the MSVC ABI, which is the only one with a choice of C runtime")
+    endif()
+endif()
 foreach(_coreCppRow IN LISTS CORE_CPP_PLATFORM_SOURCE_TABLE)
     string(REGEX REPLACE "\\|.*$" "" _coreCppKeyword "${_coreCppRow}")
     list(APPEND CORE_CPP_SOURCE_KEYWORDS ${_coreCppKeyword})
@@ -189,6 +208,62 @@ function(core_cpp_check_layering name module libs)
     endforeach()
 endfunction()
 
+## @brief Declares core-cpp-<@p name>-mt, alias core::<@p name>_mt: the static-CRT twin of the
+## compiled module target @p name of module @p module, built from @p sources and linking what
+## @p publicLibs and @p privateLibs link.
+##
+## Same sources, same flags (core_cpp_apply_toolchain), same include directories and usage
+## requirements, and MSVC_RUNTIME_LIBRARY MultiThreaded[Debug]. A core::<x> it links becomes
+## core::<x>_mt where x has a twin -- a compiled module -- and stays as it is where it has none,
+## which is an INTERFACE module (core::async, core::net_types): header-only, so it has no C runtime
+## to disagree about. Anything else (Threads, OpenSSL, libunicode) is linked as given, and a
+## consumer that links a twin into a /MT program must supply those built /MT too.
+##
+## EXCLUDE_FROM_ALL, so a twin is built only when something links it: a parent that links
+## core::net_mt builds base, log, platform and net twice and nothing else twice. It joins
+## CORE_CPP_TARGETS like any compiled library, so a parent instruments it too, and it is not in
+## CORE_CPP_HEADER_TARGETS: its headers are its original's, and are checked there.
+function(core_cpp_add_static_runtime_twin name module sources publicLibs privateLibs)
+    set(twin core-cpp-${name}-mt)
+    add_library(${twin} STATIC EXCLUDE_FROM_ALL)
+    add_library(core::${name}_mt ALIAS ${twin})
+    set_target_properties(${twin} PROPERTIES
+        CORE_CPP_MODULE "${module}"
+        CORE_CPP_STATIC_RUNTIME_TWIN_OF "core-cpp-${name}"
+        EXPORT_NAME "${name}_mt"
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_sources(${twin} PRIVATE ${sources})
+    target_include_directories(${twin} PUBLIC
+        "$<BUILD_INTERFACE:${CORE_CPP_SOURCE_DIR}/src>"
+        "$<BUILD_INTERFACE:${CORE_CPP_GENERATED_INCLUDE_DIR}>")
+    foreach(scope IN ITEMS PUBLIC PRIVATE)
+        if(scope STREQUAL "PUBLIC")
+            set(libs ${publicLibs})
+        else()
+            set(libs ${privateLibs})
+        endif()
+        set(mapped "")
+        foreach(lib IN LISTS libs)
+            # Two steps, not one `if(... MATCHES ... AND TARGET ...${CMAKE_MATCH_1}...)`: the variable
+            # is expanded before the condition runs, so it would be the PREVIOUS match's.
+            set(twinned "")
+            if(lib MATCHES "^core::(.+)$")
+                set(twinned "${CMAKE_MATCH_1}")
+            endif()
+            if(twinned AND TARGET core-cpp-${twinned}-mt)
+                list(APPEND mapped core::${twinned}_mt)
+            else()
+                list(APPEND mapped ${lib})
+            endif()
+        endforeach()
+        if(mapped)
+            target_link_libraries(${twin} ${scope} ${mapped})
+        endif()
+    endforeach()
+    core_cpp_apply_toolchain(${twin})
+    set_property(GLOBAL APPEND PROPERTY CORE_CPP_TARGETS ${twin})
+endfunction()
+
 function(core_cpp_add_module name)
     cmake_parse_arguments(PARSE_ARGV 1 arg "" "KIND"
                           "HEADERS;${CORE_CPP_SOURCE_KEYWORDS};PUBLIC_LIBS;PRIVATE_LIBS")
@@ -270,6 +345,9 @@ function(core_cpp_add_module name)
         # not there, and is why CORE_CPP_SANITIZERS refuses to run in a subproject build
         # (cmake/CoreCppOptions.cmake). Test binaries are not here: a parent does not build them.
         set_property(GLOBAL APPEND PROPERTY CORE_CPP_TARGETS ${target})
+    endif()
+    if(arg_KIND STREQUAL "STATIC" AND CORE_CPP_BUILD_STATIC_RUNTIME_VARIANTS)
+        core_cpp_add_static_runtime_twin(${name} ${module} "${sources}" "${arg_PUBLIC_LIBS}" "${arg_PRIVATE_LIBS}")
     endif()
 
     # Every target that publishes headers, INTERFACE ones included -- which is why this is a list

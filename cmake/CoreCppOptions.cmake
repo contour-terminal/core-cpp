@@ -27,6 +27,8 @@ option(CORE_CPP_CLANG_TIDY
 set(CORE_CPP_SANITIZERS "" CACHE STRING
     "Sanitizers for core-cpp's targets, a list of address, undefined, thread and leak (top-level builds only)")
 option(CORE_CPP_COVERAGE "Instrument core-cpp's targets for coverage" OFF)
+option(CORE_CPP_MSVC_STATIC_RUNTIME_VARIANTS
+       "With an MSVC-ABI compiler, also declare a static-CRT twin core::<name>_mt of every compiled module" OFF)
 
 # core-cpp's own tests link core::testing_main, so testing forces it on. A normal variable
 # shadows the cache entry, as below for Emscripten, and leaves the parent's cache alone.
