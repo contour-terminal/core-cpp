@@ -429,6 +429,12 @@ if(CORE_CPP_TESTING AND NOT EMSCRIPTEN)
             FAIL_REGULAR_EXPRESSION "was accepted;returned on a host-driven loop"
             LABELS "core-cpp;net;canary")
     endforeach()
+    # `closedPark` is judged on the ASSERTION'S OWN TEXT, as the loop-affinity canaries below are:
+    # its marker is printed before `addTimer`, and an abort anywhere on the `registerPark` path
+    # after it -- another assertion than the one this mode exists for -- would match the marker.
+    # The colon is what keeps it apart from the canary's own "... pending returned" line.
+    set_tests_properties(core-cpp.hostdriven-canary.closedPark PROPERTIES
+        PASS_REGULAR_EXPRESSION "armHostWake with a closed park pending: a host-driven backend")
 
     # Every loop-thread-only member of EventLoop, called from a second thread while the loop runs on
     # its own -- fastcached's reactor-teardown-gate (0708dd54) in this tree's shape. One mode per
