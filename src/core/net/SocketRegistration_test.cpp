@@ -304,7 +304,9 @@ TEST_CASE("a socket that stays readable does not starve its parked write", "[net
         auto received = std::size_t { 0 };
         loop.spawn(writeAll(&socket, &payload, &written));
         loop.spawn(readForever(&socket, &received));
-        backend.pushTimeout();
+        // No script step for this turn: `spawn` woke the backend, and a wake consumes none. One
+        // pushed here would be left over and taken by the first round's wait in place of its
+        // report, which would put every round's report a round late.
         std::ignore = loop.runOnce(core::platform::SteadyDuration::zero());
         REQUIRE_FALSE(written);
         auto const watch = backend.lastHandlerId();
@@ -313,25 +315,61 @@ TEST_CASE("a socket that stays readable does not starve its parked write", "[net
         // Every round: the peer sends a byte and makes room, so the socket is genuinely readable
         // and writable, and the wait says both. Bounded -- a starved writer is a case that fails,
         // not one that hangs.
+        //
+        // What is asserted is PROGRESS per wake, not that the payload got through: how many rounds
+        // 2 MiB takes is the socket pair's buffer size, not starvation. macOS gives an AF_UNIX pair
+        // about 8 KiB, so the payload needs about as many rounds as the bound -- more, with every
+        // report a round late, as the one pushed before the first turn made them -- and a case that
+        // asserted completion failed there with the writer waking on every round. The peer
+        // has just emptied the pair when each wake is reported, so a writer that is woken sends
+        // something, and the next round's drain finds it; a starved writer is never resumed and
+        // the drain finds nothing.
         auto sink = std::array<std::byte, std::size_t { 64 } * 1024> {};
+        auto const drainPeer = [&sink, peer] {
+            auto drained = std::size_t { 0 };
+            while (true)
+            {
+                auto const got = ::read(peer, sink.data(), sink.size());
+                if (got <= 0)
+                    return drained;
+                drained += static_cast<std::size_t>(got);
+            }
+        };
         constexpr auto MaxRounds = std::size_t { 256 };
+        auto wakes = std::size_t { 0 };
+        auto stalledWakes = std::size_t { 0 };
         for ([[maybe_unused]] auto const round: std::views::iota(std::size_t { 0 }, MaxRounds))
         {
             if (written)
                 break;
             auto const one = std::byte { 1 };
             REQUIRE(::write(peer, &one, 1) == 1);
-            while (::read(peer, sink.data(), sink.size()) > 0)
-            {
-            }
+            // What the writer sent since the peer last drained: after a wake, what that wake moved.
+            if (drainPeer() == 0 && wakes > 0)
+                ++stalledWakes;
             backend.pushReadiness(watch, core::net::Readiness::Readable | core::net::Readiness::Writable);
             std::ignore = loop.runOnce(core::platform::SteadyDuration::zero());
+            ++wakes;
+            // Then turns until one resumes nothing. The wait only queues what the report woke, and
+            // what that resumes may queue more, so this makes sure everything the wake moved is in
+            // the pair before the next round drains it. Every one of these turns waits, on a
+            // timeout: the reader is parked throughout.
+            for ([[maybe_unused]] auto const settle: std::views::iota(0, 8))
+            {
+                backend.pushTimeout();
+                if (loop.runOnce(core::platform::SteadyDuration::zero()).drained == 0)
+                    break;
+            }
         }
+        // The last wake, unless it was the one that completed the write.
+        if (!written && drainPeer() == 0)
+            ++stalledWakes;
 
         // The reads were served -- the readable side of each report was taken, which is what
         // would starve the writer if it were all a report could wake.
         CHECK(received > 0);
-        CHECK(written);
+        CHECK(wakes > 1);
+        CHECK(stalledWakes == 0);
 
         // Close with a step in hand: the closed reader is resumed inline, but a turn still waits.
         backend.pushTimeout();
