@@ -146,6 +146,8 @@ RawConnection rawLoopbackConnection()
     core::platform::ensureWinsockInitialized();
 #endif
     auto const listener = RawHandle { handleOf(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) };
+    if (listener.get() == core::platform::InvalidHandle)
+        return {};
     auto address = sockaddr_in {};
     address.sin_family = AF_INET;
     address.sin_port = 0;
@@ -157,6 +159,8 @@ RawConnection rawLoopbackConnection()
         return {};
 
     auto client = RawHandle { handleOf(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) };
+    if (client.get() == core::platform::InvalidHandle)
+        return {};
     if (::connect(rawOf(client.get()), generic, static_cast<SockLen>(sizeof(address))) != 0)
         return {};
     auto accepted = RawHandle { handleOf(::accept(rawOf(listener.get()), nullptr, nullptr)) };
