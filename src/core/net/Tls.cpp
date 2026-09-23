@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/Tls.hpp>
 
+#include <core/async/Awaitable.hpp>
+#include <core/async/Cancellation.hpp>
+#include <core/async/IExecutor.hpp>
+#include <core/async/ParkedWork.hpp>
+#include <core/async/StopToken.hpp>
 #include <core/net/SocketContract.hpp>
 #include <core/net/detail/ScopeGuard.hpp>
 
@@ -24,9 +29,11 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -35,7 +42,7 @@ namespace core::net
 
 namespace
 {
-    /// The most recent OpenSSL error, for diagnostics.
+    /// The EARLIEST error on this thread's OpenSSL queue, taken off it, for diagnostics.
     [[nodiscard]] std::string opensslError()
     {
         auto const code = ERR_get_error();
@@ -86,6 +93,25 @@ namespace
         Skip,
     };
 
+    /// Which direction of the socket an operation belongs to.
+    ///
+    /// `cancelRead` retires the READ direction and nothing else. Where the handshake runs under a
+    /// write, the inner read parked below it is the write's, and a reader's cancel must not reach
+    /// it; where a read waits on a gate, that wait is the reader's to lose.
+    enum class Direction : std::uint8_t
+    {
+        Read,  ///< `read` and `waitReadable`.
+        Write, ///< `write`, and `shutdownWrite`'s `close_notify`.
+        Any,   ///< `handshakeIfNeeded`: a caller of neither direction, which `cancelRead` leaves be.
+    };
+
+    /// How a wait on a @c SerialGate ended, where it did not throw.
+    enum class GateExit : std::uint8_t
+    {
+        Open,    ///< The gate was left; the waiter re-decides for itself.
+        Retired, ///< `cancelRead` retired this READ waiter: it answers `Cancelled` as a value.
+    };
+
     /// One coroutine at a time through a stretch of the record pump; the others park until it
     /// leaves.
     ///
@@ -95,72 +121,239 @@ namespace
     /// inner transport's `write` through the outbound flush. Two handshake drivers corrupt the
     /// handshake; two flushes put a second write into the inner socket's single write slot
     /// (`contract::claimWriteSlot`), which drops the parked one and interleaves the ciphertext.
+    ///
+    /// **Shared, not a member, because the socket can die before its waiters do.** A socket
+    /// destroyed with an operation parked on it unwinds that operation, and the unwind leaves the
+    /// gate -- after the socket, and a member gate with it, is gone. So the state lives behind a
+    /// `shared_ptr` that the socket, every waiter and every holder's scope guard each hold, and the
+    /// socket's destructor marks it abandoned rather than taking it down.
+    ///
+    /// **A waiter is never resumed inline** (`.agent/rules/async-and-net.md`, "A queue or a
+    /// resource never resumes its consumer inline"). Releasing hands each one to the loop and
+    /// returns. Resumed inline, the first waiter ran to wherever its flow went -- which can be
+    /// destroying the socket -- and the loop over the rest then resumed the next one onto the
+    /// freed socket.
+    ///
+    /// **A waiter honours its stop token.** A stopped waiter is taken off the gate and handed back
+    /// to unwind; left parked, it came back to life when the handshake completed and read the
+    /// peer's first bytes into a buffer its caller had already given up on.
     class SerialGate
     {
       public:
-        /// Suspends the awaiting coroutine until the gate is next left.
-        class Awaiter
-        {
-          public:
-            explicit Awaiter(SerialGate* gate) noexcept: _gate(gate) {}
-            [[nodiscard]] bool await_ready() const noexcept { return !_gate->_busy; }
-            void await_suspend(std::coroutine_handle<> handle) const { _gate->_waiters.push_back(handle); }
-            void await_resume() const noexcept {}
+        /// @param executor Where released waiters are resumed; must outlive every waiter.
+        explicit SerialGate(async::IExecutor& executor) noexcept: _executor(executor) {}
 
-          private:
-            SerialGate* _gate;
-        };
+        SerialGate(SerialGate const&) = delete;
+        SerialGate& operator=(SerialGate const&) = delete;
+        SerialGate(SerialGate&&) = delete;
+        SerialGate& operator=(SerialGate&&) = delete;
+        ~SerialGate() = default;
+
+        class Awaiter;
 
         /// @return True while a coroutine is inside.
-        [[nodiscard]] bool busy() const noexcept { return _busy; }
+        [[nodiscard]] bool busy() const
+        {
+            auto const guard = std::scoped_lock { _mutex };
+            return _busy;
+        }
 
         /// Marks the gate held by the calling coroutine.
-        void enter() noexcept { _busy = true; }
+        void enter()
+        {
+            auto const guard = std::scoped_lock { _mutex };
+            _busy = true;
+        }
 
-        /// @return An awaitable that parks until the gate is left.
-        [[nodiscard]] Awaiter wait() noexcept { return Awaiter { this }; }
-
-        /// Opens the gate and resumes every coroutine parked on it.
+        /// Opens the gate and hands every parked waiter to the loop.
         ///
         /// Invoked from a scope guard, so it runs on EVERY exit of the holder -- the exceptional
-        /// one included, which is the whole point. Unwinding through `OperationCancelled` (a
-        /// `whenAny` sibling won, or the loop is shutting down) used to reset the flag and leave
-        /// the parked coroutines suspended for ever, their frames never destroyed: a
-        /// `WriteQueue::drain` waiting here never observed `draining == false`, so
-        /// `flushThenClose()` hung and a TLS client could not exit.
-        ///
-        /// Nothing is invented about the outcome. A released waiter re-decides for itself.
-        void leave() noexcept
+        /// one included. Unwinding through `OperationCancelled` used to reset the flag and leave
+        /// the parked coroutines suspended for ever: a `WriteQueue::drain` waiting here never
+        /// observed `draining == false`, so `flushThenClose()` hung and a TLS client could not exit.
+        void leave() noexcept { release(Release::Leave); }
+
+        /// Retires every READ waiter: each resumes, on a later turn, with @c GateExit::Retired.
+        void retireReaders() noexcept { release(Release::RetireReaders); }
+
+        /// The socket is going away: every waiter, now and later, unwinds.
+        void abandon() noexcept { release(Release::Abandon); }
+
+        /// @param gate The gate to wait on; the awaiter keeps it alive.
+        /// @param direction Which direction the waiting operation belongs to.
+        /// @return An awaitable that parks until the gate is left.
+        [[nodiscard]] static Awaiter wait(std::shared_ptr<SerialGate> gate, Direction direction) noexcept;
+
+      private:
+        /// One parked coroutine. Lives in the awaiter, so in the waiting frame.
+        struct Waiter
         {
-            _busy = false;
-            for (auto const handle: std::exchange(_waiters, {}))
+            async::ParkedWork work {};
+            Direction direction = Direction::Any;
+            GateExit exit = GateExit::Open;
+            bool released = false;  ///< Handed to the executor: the park is over.
+            bool cancelled = false; ///< Its stop token took it back.
+        };
+
+        /// What a release does to the gate and to whom.
+        enum class Release : std::uint8_t
+        {
+            Leave,         ///< Open the gate; release everyone.
+            RetireReaders, ///< Leave the gate as it is; release the READ waiters as retired.
+            Abandon,       ///< The socket is gone; release everyone, and every later arrival.
+        };
+
+        void release(Release what) noexcept
+        {
+            auto released = std::vector<async::ParkedWork> {};
             {
-                if (!handle || handle.done())
-                    continue;
-                try
-                {
-                    handle.resume();
-                }
-                catch (...)
-                {
-                    // A waiter resumed while the holder unwinds may unwind too (its next await
-                    // throws OperationCancelled during loop shutdown). That destroys its frame,
-                    // which is exactly what should happen; what must not happen is it taking the
-                    // rest of the queue -- or this noexcept guard -- down with it.
-                    continue;
-                }
+                auto const guard = std::scoped_lock { _mutex };
+                if (what == Release::Leave)
+                    _busy = false;
+                if (what == Release::Abandon)
+                    _abandoned = true;
+                std::erase_if(_waiters, [&](Waiter* waiter) {
+                    if (what == Release::RetireReaders && waiter->direction != Direction::Read)
+                        return false;
+                    if (what == Release::RetireReaders)
+                        waiter->exit = GateExit::Retired;
+                    waiter->released = true;
+                    released.push_back(std::exchange(waiter->work, {}));
+                    return true;
+                });
             }
+            // Outside the lock: the executor's own lock never nests under this one.
+            for (auto& work: released)
+                _executor.submit(std::move(work));
+        }
+
+        async::IExecutor& _executor;
+        mutable std::mutex _mutex; ///< A stop callback may run on any thread; all else is the loop's.
+        bool _busy = false;
+        bool _abandoned = false;
+        std::vector<Waiter*> _waiters;
+    };
+
+    /// Parks until the gate is left, the waiter is retired or cancelled, or the socket goes away.
+    class SerialGate::Awaiter
+    {
+      public:
+        /// @param gate The gate; kept alive by this awaiter.
+        /// @param direction Which direction the waiting operation belongs to.
+        Awaiter(std::shared_ptr<SerialGate> gate, Direction direction) noexcept: _gate(std::move(gate))
+        {
+            _waiter.direction = direction;
+        }
+
+        Awaiter(Awaiter const&) = delete;
+        Awaiter& operator=(Awaiter const&) = delete;
+        Awaiter(Awaiter&&) = delete;
+        Awaiter& operator=(Awaiter&&) = delete;
+
+        /// A frame destroyed while parked takes its park back, so a release never hands the loop a
+        /// handle to a freed frame.
+        ~Awaiter()
+        {
+            _stopRegistration.reset();
+            auto const guard = std::scoped_lock { _gate->_mutex };
+            std::erase(_gate->_waiters, &_waiter);
+        }
+
+        [[nodiscard]] bool await_ready() const
+        {
+            auto const guard = std::scoped_lock { _gate->_mutex };
+            return !_gate->_busy || _gate->_abandoned;
+        }
+
+        /// Registers the stop callback BEFORE publishing the park, as `AsyncQueue` does: a token
+        /// already stopped runs the callback here, which finds nothing parked and only records the
+        /// cancellation for the re-check below.
+        /// @tparam Promise The awaiting coroutine's promise type.
+        /// @param awaiting The coroutine to park.
+        /// @return True to stay parked.
+        template <typename Promise>
+        [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting)
+        {
+            if constexpr (async::HasStopToken<Promise>)
+                _token = awaiting.promise().stopToken();
+            if (_token.stop_possible())
+                _stopRegistration.emplace(_token, CancelWait { this });
+
+            auto const guard = std::scoped_lock { _gate->_mutex };
+            if (!_gate->_busy || _gate->_abandoned || _waiter.cancelled)
+                return false;
+            _waiter.work = async::detail::parkedWorkFor(awaiting);
+            _gate->_waiters.push_back(&_waiter);
+            return true;
+        }
+
+        /// @return How the wait ended.
+        /// @throws async::OperationCancelled where the socket went away, or the waiter's own stop
+        ///         token was requested -- whatever released it, a stopped flow does not go on to
+        ///         read into a buffer its caller has abandoned.
+        [[nodiscard]] GateExit await_resume()
+        {
+            _stopRegistration.reset();
+            auto const guard = std::scoped_lock { _gate->_mutex };
+            std::erase(_gate->_waiters, &_waiter);
+            if (_gate->_abandoned || _waiter.cancelled || _token.stop_requested())
+                throw async::OperationCancelled {};
+            return _waiter.exit;
         }
 
       private:
-        bool _busy = false;
-        std::vector<std::coroutine_handle<>> _waiters;
+        /// The stop callback: takes the park back, if it is still a park, and hands it to the loop
+        /// to unwind.
+        class CancelWait
+        {
+          public:
+            explicit CancelWait(Awaiter* awaiter) noexcept: _awaiter(awaiter) {}
+
+            void operator()() const noexcept
+            {
+                auto work = async::ParkedWork {};
+                {
+                    auto const guard = std::scoped_lock { _awaiter->_gate->_mutex };
+                    _awaiter->_waiter.cancelled = true;
+                    if (_awaiter->_waiter.released)
+                        return;
+                    std::erase(_awaiter->_gate->_waiters, &_awaiter->_waiter);
+                    _awaiter->_waiter.released = true;
+                    work = std::exchange(_awaiter->_waiter.work, {});
+                }
+                if (work.resume)
+                    _awaiter->_gate->_executor.submit(std::move(work));
+            }
+
+          private:
+            Awaiter* _awaiter;
+        };
+
+        std::shared_ptr<SerialGate> _gate;
+        Waiter _waiter;
+        async::StopToken _token;
+
+        /// Declared LAST, so it is destroyed FIRST: its destructor waits for a callback running on
+        /// another thread, and that callback reads the members above.
+        std::optional<async::StopCallback<CancelWait>> _stopRegistration;
     };
+
+    SerialGate::Awaiter SerialGate::wait(std::shared_ptr<SerialGate> gate, Direction direction) noexcept
+    {
+        return Awaiter { std::move(gate), direction };
+    }
 
     /// The answer to a transport that ended before the peer's `close_notify`.
     [[nodiscard]] NetError truncated()
     {
         return makeNetError(NetErrorCode::ConnReset, 0, "peer closed without close_notify");
+    }
+
+    /// The answer to a read that `cancelRead` retired while it waited on the handshake.
+    [[nodiscard]] NetError retiredRead()
+    {
+        return makeNetError(
+            NetErrorCode::Cancelled, 0, "cancelRead retired a read waiting on the TLS handshake");
     }
 
     /// A TLS layer over an inner `ISocket`. OpenSSL talks to two memory BIOs; this pumps
@@ -180,13 +373,35 @@ namespace
     class TlsSocket final: public ISocket
     {
       public:
-        TlsSocket(std::unique_ptr<ISocket> inner, SSL* ssl):
-            _inner(std::move(inner)), _ssl(ssl), _rbio(SSL_get_rbio(ssl)), _wbio(SSL_get_wbio(ssl))
+        /// @param inner The connected transport (owned).
+        /// @param ssl The session, its BIOs attached (owned).
+        /// @param executor The loop a waiter parked on one of the gates is resumed on; must outlive
+        ///        every operation on this socket.
+        TlsSocket(std::unique_ptr<ISocket> inner, SSL* ssl, async::IExecutor& executor):
+            _inner(std::move(inner)),
+            _ssl(ssl),
+            _rbio(SSL_get_rbio(ssl)),
+            _wbio(SSL_get_wbio(ssl)),
+            _handshaking(std::make_shared<SerialGate>(executor)),
+            _flushing(std::make_shared<SerialGate>(executor))
         {
         }
 
+        /// Abandons every operation parked on this socket, and only then frees the session.
+        ///
+        /// **The order is the fix for a double free.** An operation can be parked in two places:
+        /// on one of the gates, or inside the inner transport, driving the handshake or a flush.
+        /// The gates are marked abandoned first, so a waiter that is released after this point --
+        /// by the loop, or by a driver unwinding -- throws rather than re-entering the pump. Then
+        /// the inner transport is destroyed while the session still exists, which ABANDONS its
+        /// parked operation: the driver unwinds through its scope guard, which leaves a gate that
+        /// is shared rather than a member, so it is still there to leave. The session goes last,
+        /// once nothing can reach it.
         ~TlsSocket() override
         {
+            _handshaking->abandon();
+            _flushing->abandon();
+            _inner.reset();
             if (_ssl != nullptr)
                 SSL_free(_ssl); // frees the attached BIOs too
         }
@@ -228,7 +443,7 @@ namespace
         /// @return Nothing once the session is up, or why it could not be established.
         [[nodiscard]] ResultAwaitable<void> handshakeIfNeeded() override
         {
-            return ResultAwaitable<void> { handshake() };
+            return ResultAwaitable<void> { handshake(Direction::Any) };
         }
 
         /// Reports whether the peer has finished sending, decrypting whatever records that takes
@@ -289,7 +504,19 @@ namespace
         /// inner socket's slot occupied and hand the next read a double-arm. The inner read
         /// completes with `Cancelled`, the pump returns it, and the caller's operation resolves
         /// with it.
-        void cancelRead() noexcept override { _inner->cancelRead(); }
+        ///
+        /// **It retires the READ direction and nothing else.** A read waiting on the handshake gate
+        /// is retired there, and answers `Cancelled` as a value on a later turn. The inner read is
+        /// retired only where it is a read's: where a write drives the handshake, the inner read
+        /// under it is the write's, and cancelling it failed the write -- and, stored as the
+        /// handshake's outcome, every later operation. A cancelled handshake is never sticky: the
+        /// inner read took no ciphertext, so the next operation drives it again.
+        void cancelRead() noexcept override
+        {
+            _handshaking->retireReaders();
+            if (_innerReadOwner == Direction::Read)
+                _inner->cancelRead();
+        }
 
         /// @param deadline How long a read may wait; bounds the INNER transport's read, which is
         ///        where a TLS read actually waits.
@@ -314,7 +541,7 @@ namespace
       private:
         async::Task<IoResult> readPlain(std::span<std::byte> buffer)
         {
-            if (auto const handshaken = co_await handshake(); !handshaken)
+            if (auto const handshaken = co_await handshake(Direction::Read); !handshaken)
                 co_return std::unexpected(handshaken.error());
 
             while (true)
@@ -335,7 +562,7 @@ namespace
                     case SSL_ERROR_WANT_READ: {
                         if (auto const flushed = co_await flushOut(FlushWait::Skip); !flushed)
                             co_return std::unexpected(flushed.error());
-                        auto const fed = co_await feedIn();
+                        auto const fed = co_await feedIn(Direction::Read);
                         if (!fed)
                             co_return std::unexpected(fed.error());
                         if (*fed == 0)
@@ -354,7 +581,7 @@ namespace
 
         async::Task<IoResult> writePlain(std::span<std::byte const> buffer)
         {
-            if (auto const handshaken = co_await handshake(); !handshaken)
+            if (auto const handshaken = co_await handshake(Direction::Write); !handshaken)
                 co_return std::unexpected(handshaken.error());
 
             auto total = std::size_t { 0 };
@@ -382,7 +609,7 @@ namespace
                     case SSL_ERROR_WANT_READ: {
                         if (auto const flushed = co_await flushOut(FlushWait::Join); !flushed)
                             co_return std::unexpected(flushed.error());
-                        auto const fed = co_await feedIn();
+                        auto const fed = co_await feedIn(Direction::Write);
                         if (!fed)
                             co_return std::unexpected(fed.error());
                         if (*fed == 0)
@@ -401,7 +628,7 @@ namespace
         /// Answers @c waitReadable once the answer is a TLS-level one.
         async::Task<IoResult> probeReadable()
         {
-            if (auto const handshaken = co_await handshake(); !handshaken)
+            if (auto const handshaken = co_await handshake(Direction::Read); !handshaken)
                 co_return std::unexpected(handshaken.error());
 
             // One byte, never taken: SSL_peek decrypts the whole record into OpenSSL's read buffer
@@ -415,7 +642,9 @@ namespace
                     co_return static_cast<std::size_t>(std::max(SSL_pending(_ssl), 1));
                 switch (SSL_get_error(_ssl, n))
                 {
-                    case SSL_ERROR_ZERO_RETURN: co_return std::size_t { 0 }; // close_notify
+                    case SSL_ERROR_ZERO_RETURN:
+                        _peerClosed = true; // as `read` records it, so `isClosed` agrees with the watch
+                        co_return std::size_t { 0 }; // close_notify
                     case SSL_ERROR_WANT_WRITE:
                         if (auto const flushed = co_await flushOut(FlushWait::Skip); !flushed)
                             co_return std::unexpected(flushed.error());
@@ -423,7 +652,7 @@ namespace
                     case SSL_ERROR_WANT_READ: {
                         if (auto const flushed = co_await flushOut(FlushWait::Skip); !flushed)
                             co_return std::unexpected(flushed.error());
-                        auto const fed = co_await feedIn();
+                        auto const fed = co_await feedIn(Direction::Read);
                         if (!fed)
                             co_return std::unexpected(fed.error());
                         // A raw EOF with no close_notify is a truncation, and `0` would tell the
@@ -442,9 +671,9 @@ namespace
         /// Writes and flushes `close_notify`, then half-closes the inner transport.
         async::Task<std::expected<void, NetError>> closeNotify()
         {
-            if (_handshaking.busy() || _handshakeDone)
+            if (_handshaking->busy() || _handshakeDone)
             {
-                if (auto const handshaken = co_await handshake(); handshaken)
+                if (auto const handshaken = co_await handshake(Direction::Write); handshaken)
                 {
                     if ((SSL_get_shutdown(_ssl) & SSL_SENT_SHUTDOWN) == 0)
                     {
@@ -466,7 +695,7 @@ namespace
         /// driving it -- waits for that to finish. OpenSSL is not reentrant, so concurrent read()
         /// and write() must NOT both call SSL_do_handshake: on one loop the two interleave at every
         /// suspension and corrupt the handshake without this gate.
-        async::Task<std::expected<void, NetError>> handshake()
+        async::Task<std::expected<void, NetError>> handshake(Direction direction)
         {
             // A loop rather than a one-shot check, because a released waiter re-decides HERE: the
             // driver may have completed, failed, or been cancelled mid-flight, and only the last
@@ -478,19 +707,28 @@ namespace
                     co_return std::expected<void, NetError> {};
                 if (_handshakeError)
                     co_return std::unexpected(*_handshakeError);
-                if (!_handshaking.busy())
+                if (!_handshaking->busy())
                     break;
-                co_await _handshaking.wait();
+                if (co_await SerialGate::wait(_handshaking, direction) == GateExit::Retired)
+                    co_return std::unexpected(retiredRead());
             }
 
-            _handshaking.enter();
+            _handshaking->enter();
             auto outcome = std::expected<void, NetError> {};
-            auto const openGate = detail::ScopeGuard { [this]() noexcept { _handshaking.leave(); } };
+            // The gate by value, not through `this`: this guard also runs while the socket is being
+            // destroyed under a parked driver, and the socket's members are gone by then.
+            auto const openGate = detail::ScopeGuard { [gate = _handshaking]() noexcept { gate->leave(); } };
             while (true)
             {
                 ERR_clear_error();
                 auto const result = SSL_do_handshake(_ssl);
                 auto const err = SSL_get_error(_ssl, result);
+                // The reason is read NOW, before the flush below can park: while it is parked,
+                // other connections on this thread clear the queue, and it would come back empty
+                // or a neighbour's.
+                auto const reason = result == 1 || err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE
+                                        ? std::string {}
+                                        : opensslError();
                 // Always flush whatever the last step queued (ClientHello, the server's flight,
                 // Finished, ...) before deciding what to await.
                 if (auto const flushed = co_await flushOut(FlushWait::Join); !flushed)
@@ -505,7 +743,7 @@ namespace
                 }
                 if (err == SSL_ERROR_WANT_READ)
                 {
-                    auto const fed = co_await feedIn();
+                    auto const fed = co_await feedIn(direction);
                     if (!fed)
                     {
                         outcome = std::unexpected(fed.error());
@@ -521,15 +759,18 @@ namespace
                 else if (err != SSL_ERROR_WANT_WRITE)
                 {
                     outcome = std::unexpected(
-                        makeNetError(NetErrorCode::SystemError, 0, "TLS handshake: " + opensslError()));
+                        makeNetError(NetErrorCode::SystemError, 0, "TLS handshake: " + reason));
                     break;
                 }
             }
 
-            if (!outcome)
-                // The reason travels in NetError::context ("TLS handshake: <openssl error>"), which
-                // NetError::toString() folds in. net RETURNS failures rather than logging them.
-                _handshakeError = outcome.error(); // parked waiters observe the same failure
+            // A failure is sticky -- parked waiters and every later operation observe it -- with one
+            // exception: a cancelled inner read took no ciphertext, so the handshake can simply be
+            // driven again, and `cancelRead` is documented not to be a close. The reason travels in
+            // NetError::context ("TLS handshake: <openssl error>"); net RETURNS failures rather than
+            // logging them.
+            if (!outcome && outcome.error().code != NetErrorCode::Cancelled)
+                _handshakeError = outcome.error();
             co_return outcome;
         }
 
@@ -537,15 +778,17 @@ namespace
         /// @param wait Whether to wait for a flush already in progress (see @c FlushWait).
         async::Task<std::expected<void, NetError>> flushOut(FlushWait wait)
         {
-            while (_flushing.busy())
+            while (_flushing->busy())
             {
                 if (wait == FlushWait::Skip)
                     co_return std::expected<void, NetError> {};
-                co_await _flushing.wait();
+                // Only writes join a flush, and only READ waiters are ever retired.
+                std::ignore = co_await SerialGate::wait(_flushing, Direction::Write);
             }
 
-            _flushing.enter();
-            auto const openGate = detail::ScopeGuard { [this]() noexcept { _flushing.leave(); } };
+            _flushing->enter();
+            // By value, for the handshake's reason: this guard runs under a destroyed socket too.
+            auto const openGate = detail::ScopeGuard { [gate = _flushing]() noexcept { gate->leave(); } };
             auto& chunk = _outChunk;
             while (true)
             {
@@ -569,10 +812,15 @@ namespace
         }
 
         /// Reads ciphertext from the inner socket into OpenSSL's incoming BIO.
+        /// @param direction Whose operation the inner read serves, so `cancelRead` can tell.
         /// @return Bytes fed (0 = a clean inner EOF).
-        async::Task<std::expected<std::size_t, NetError>> feedIn()
+        async::Task<std::expected<std::size_t, NetError>> feedIn(Direction direction)
         {
             auto& chunk = _inChunk;
+            // Recorded before the read parks, and never cleared: an inner read is only ever parked
+            // by the latest feed, so a stale value names a read that is no longer there, and
+            // retiring nothing is what `cancelRead` then does.
+            _innerReadOwner = direction;
             auto const n = co_await _inner->read(chunk);
             if (!n)
                 co_return std::unexpected(n.error());
@@ -604,10 +852,14 @@ namespace
         BIO* _rbio; ///< Network -> SSL (owned by _ssl).
         BIO* _wbio; ///< SSL -> network (owned by _ssl).
         bool _handshakeDone = false;
-        bool _peerClosed = false;                ///< A read saw the peer's close_notify or inner EOF.
-        std::optional<NetError> _handshakeError; ///< Set once the handshake fails (sticky).
-        SerialGate _handshaking;                 ///< Held by the coroutine driving the handshake.
-        SerialGate _flushing;                    ///< Held by the coroutine writing ciphertext out.
+        bool _peerClosed = false;                   ///< A read saw the peer's close_notify or inner EOF.
+        std::optional<NetError> _handshakeError;    ///< Set once the handshake fails (sticky).
+        Direction _innerReadOwner = Direction::Any; ///< Whose operation the latest inner read served.
+
+        /// Held by the coroutine driving the handshake. Shared: see @c SerialGate.
+        std::shared_ptr<SerialGate> _handshaking;
+        /// Held by the coroutine writing ciphertext out. Shared: see @c SerialGate.
+        std::shared_ptr<SerialGate> _flushing;
     };
 
     /// The SHA-256 fingerprint of @p cert as lower-case hex, or empty if it cannot be computed.
@@ -634,7 +886,7 @@ namespace
       public:
         TlsContext(SslCtxPtr ctx, TlsRole role): _ctx(std::move(ctx)), _role(role) {}
 
-        std::unique_ptr<ISocket> wrap(std::unique_ptr<ISocket> inner) override
+        std::unique_ptr<ISocket> wrap(std::unique_ptr<ISocket> inner, async::IExecutor& executor) override
         {
             auto* ssl = SSL_new(_ctx.get());
             if (ssl == nullptr)
@@ -660,7 +912,7 @@ namespace
                 SSL_set_accept_state(ssl);
             else
                 SSL_set_connect_state(ssl);
-            return std::make_unique<TlsSocket>(std::move(inner), ssl);
+            return std::make_unique<TlsSocket>(std::move(inner), ssl, executor);
         }
 
         [[nodiscard]] std::string certificateFingerprint() const override
@@ -847,6 +1099,10 @@ std::expected<CertKeyPem, std::string> generateSelfSignedCertificate(SelfSignedO
     ERR_clear_error();
     if (options.commonName.empty())
         return std::unexpected(std::string { "a self-signed certificate needs a common name" });
+    // A validity that is not positive yields a certificate already expired, which every client
+    // refuses -- a misconfiguration that reads as a TLS failure.
+    if (options.validity <= std::chrono::seconds::zero())
+        return std::unexpected(std::string { "a self-signed certificate needs a positive validity" });
 
     auto const& names =
         options.subjectNames.empty() ? std::vector<std::string> { options.commonName } : options.subjectNames;
@@ -880,8 +1136,15 @@ std::expected<CertKeyPem, std::string> generateSelfSignedCertificate(SelfSignedO
         || BN_to_ASN1_INTEGER(serial.get(), X509_get_serialNumber(cert.get())) == nullptr)
         return std::unexpected("setting the certificate serial: " + opensslError());
 
+    // Days and seconds apart, through X509_time_adj_ex: a `long` of seconds is 32 bits on Windows,
+    // so a validity beyond about 68 years wrapped into the past.
+    auto const validityDays = std::chrono::floor<std::chrono::days>(options.validity);
+    auto const validitySeconds = options.validity - validityDays;
     if (X509_gmtime_adj(X509_getm_notBefore(cert.get()), 0) == nullptr
-        || X509_gmtime_adj(X509_getm_notAfter(cert.get()), static_cast<long>(options.validity.count()))
+        || X509_time_adj_ex(X509_getm_notAfter(cert.get()),
+                            static_cast<int>(validityDays.count()),
+                            static_cast<long>(validitySeconds.count()),
+                            nullptr)
                == nullptr)
         return std::unexpected("setting the certificate validity: " + opensslError());
     if (X509_set_pubkey(cert.get(), key.get()) != 1)
@@ -951,12 +1214,22 @@ std::expected<std::shared_ptr<ITlsContext>, std::string> makeTlsClientContext(
     }
     else
     {
+        // Every certificate in the PEM is a trust anchor, not only the first: a bundle of two CAs
+        // silently losing the second is the chain defect `useServerMaterial` had, on this side.
         auto caBio = memBio(caPem);
-        auto const ca = X509Ptr { PEM_read_bio_X509(caBio.get(), nullptr, nullptr, nullptr), X509_free };
-        if (!ca)
+        auto anchors = 0;
+        while (true)
+        {
+            auto const ca = X509Ptr { PEM_read_bio_X509(caBio.get(), nullptr, nullptr, nullptr), X509_free };
+            if (!ca)
+                break;
+            if (X509_STORE_add_cert(SSL_CTX_get_cert_store(ctx.get()), ca.get()) != 1)
+                return std::unexpected("X509_STORE_add_cert: " + opensslError());
+            ++anchors;
+        }
+        if (anchors == 0)
             return std::unexpected("invalid CA PEM: " + opensslError());
-        if (X509_STORE_add_cert(SSL_CTX_get_cert_store(ctx.get()), ca.get()) != 1)
-            return std::unexpected("X509_STORE_add_cert: " + opensslError());
+        ERR_clear_error(); // reading past the last certificate is the loop's end, not a failure
         SSL_CTX_set_verify(ctx.get(), SSL_VERIFY_PEER, nullptr);
 
         // Bind the certificate to the host that was asked for. Without this, verification proves

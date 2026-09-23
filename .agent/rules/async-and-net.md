@@ -936,6 +936,17 @@ in-process doubles (`testing::DatagramBus`, `testing::InMemorySocket`, the parki
   Origin: Task B11; [fastcached#712](https://github.com/LASTRADA-Software/fastcached/issues/712)
   for the `waitReadable` half of the same fact (a `close_notify` is a record, so a raw peek
   reads it as data).
+- **A decorator's own parks live as long as their waiters, go through the loop, and hear stop.**
+  `TlsSocket`'s handshake and flush gates are shared with every waiter and every holder's scope
+  guard, because a socket destroyed under a parked driver unwinds that driver after the socket's
+  members are gone; the destructor abandons the gates, then the inner socket, then frees the
+  session. A released waiter is handed to the socket's loop, never resumed inline, and a waiter
+  whose stop token fires unwinds at once rather than when the gate opens. Origin: Task B11's
+  review, B1/S1/S2, each a case in `TlsLifetime_test.cpp` that crashed or hung before.
+- **`cancelRead` on a decorator retires the READ direction only**, and a cancel is never a sticky
+  failure: a cancelled inner read took nothing from the stream, so the next operation re-drives.
+  Where a write drives the handshake, the inner read under it is the write's. Origin: Task B11's
+  review, S3.
 - **A TLS read answers `0` for `close_notify` and nothing else.** A transport EOF before the
   alert is `NetErrorCode::ConnReset` ("peer closed without close_notify"), because `0` tells the
   caller the stream ended whole, and a truncated stream -- an attacker's cut, or a crash -- would

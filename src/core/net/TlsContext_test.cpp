@@ -89,7 +89,7 @@ PeerView presentTo(core::net::ITlsContext& context)
     auto loop = core::net::EventLoop { *backend };
     auto pair = core::net::testing::makeSocketPair(loop);
     REQUIRE(pair.has_value());
-    auto server = context.wrap(std::move(pair->first));
+    auto server = context.wrap(std::move(pair->first), loop);
     REQUIRE(server != nullptr);
     auto peer = StrictTlsPeer::client();
     REQUIRE(peer.has_value());
@@ -285,13 +285,13 @@ TEST_CASE("wrapTls encrypts only when a context is configured", "[net][tls][cont
     REQUIRE(pair.has_value());
 
     auto* const plain = pair->first.get();
-    auto unchanged = core::net::wrapTls(std::move(pair->first), nullptr);
+    auto unchanged = core::net::wrapTls(std::move(pair->first), nullptr, loop);
     CHECK(unchanged.get() == plain); // plaintext: the very same socket
 
     auto const context = core::net::makeSelfSignedServerContext();
     REQUIRE(context.has_value());
     auto* const raw = pair->second.get();
-    auto wrapped = core::net::wrapTls(std::move(pair->second), context->get());
+    auto wrapped = core::net::wrapTls(std::move(pair->second), context->get(), loop);
     REQUIRE(wrapped != nullptr);
     CHECK(wrapped.get() != raw);
 }

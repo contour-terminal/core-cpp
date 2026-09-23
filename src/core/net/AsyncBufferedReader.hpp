@@ -49,6 +49,14 @@ class AsyncBufferedReader
     {
     }
 
+    /// Neither copyable nor movable: a parked refill writes into @c _chunk, which must stay at one
+    /// address for as long as the reader lives.
+    AsyncBufferedReader(AsyncBufferedReader const&) = delete;
+    AsyncBufferedReader& operator=(AsyncBufferedReader const&) = delete;
+    AsyncBufferedReader(AsyncBufferedReader&&) = delete;
+    AsyncBufferedReader& operator=(AsyncBufferedReader&&) = delete;
+    ~AsyncBufferedReader() = default;
+
     /// Reads the next LF-terminated line, filling from the socket as needed.
     ///
     /// The trailing LF is stripped, as is one optional CR before it (client line

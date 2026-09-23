@@ -91,7 +91,11 @@ struct HttpLimits
 /// layer targets. Returns when the listener is closed or the flow is cancelled.
 ///
 /// Each connection's @c ISocket::handshakeIfNeeded is awaited before its request is
-/// read, and a connection whose handshake fails is dropped without an answer.
+/// read, and a connection whose handshake fails is dropped without an answer. **Neither
+/// the handshake nor the request read has a deadline of its own**, so in this sequential
+/// loop one client that connects and says nothing stalls every later connection; bound a
+/// connection with @c ISocket::setReceiveDeadline on the accepted socket, or serve from
+/// behind something that does.
 ///
 /// **Every connection is closed by its destructor, straight after the response is
 /// written**, with no lingering close: a request refused with its body still unread

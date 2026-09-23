@@ -107,7 +107,7 @@ class StrictTlsPeer
     [[nodiscard]] async::Task<bool> flush(ISocket* wire);
 
     /// Reads one chunk of ciphertext from @p wire into OpenSSL; at EOF, tells OpenSSL so.
-    /// @return The bytes fed; 0 at EOF.
+    /// @return The bytes fed; 0 at EOF, and 0 on a wire error, which it records apart.
     [[nodiscard]] async::Task<std::size_t> feed(ISocket* wire);
 
     std::unique_ptr<State> _state;

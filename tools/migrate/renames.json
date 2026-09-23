@@ -6752,7 +6752,7 @@
         "header": "core/net/ITlsContext.hpp",
         "symbol": "core::net::wrapTls"
       },
-      "note": "Task B11. Takes an ITlsContext* and needs no FC_TLS_ENABLED: the seam is in core::net, so the call compiles in a build without TLS and a null context hands the socket back unchanged."
+      "note": "Task B11. Takes an ITlsContext* and the loop the socket belongs to -- wrapTls(socket, context, loop) -- and needs no FC_TLS_ENABLED: the seam is in core::net, so the call compiles in a build without TLS and a null context hands the socket back unchanged. The loop is where the TLS socket resumes the operations it parks on itself."
     },
     {
       "kind": "member",

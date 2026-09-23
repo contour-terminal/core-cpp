@@ -61,7 +61,7 @@ workflow refuses one without a section here.
   `SelfSignedOptions` (common name, subject names, validity), `makeTlsServerContextFromFiles()`,
   `certificateFingerprint()` of a PEM certificate and `ITlsContext::certificateFingerprint()` of a
   context's own. `<core/net/ITlsContext.hpp>` holds the seam in `core::net` itself, with
-  `wrapTls(socket, context)`, which hands the socket back unchanged for a null context -- so an
+  `wrapTls(socket, context, loop)`, which hands the socket back unchanged for a null context -- so an
   accept path compiles identically in a build without TLS. `core::net::testing::StrictTlsPeer`
   is the layer's test double: OpenSSL driven by hand, reading a FIN with no `close_notify` as the
   truncation OpenSSL 3 calls it.
@@ -712,6 +712,13 @@ workflow refuses one without a section here.
 
 ### Breaking
 
+- **`ITlsContext::wrap()` and `wrapTls()` take the loop the socket belongs to** (Task B11, fix
+  round 1): `wrap(std::move(socket), loop)`, `wrapTls(std::move(socket), context, loop)`, where
+  `loop` is any `core::async::IExecutor` and outlives the socket. A TLS socket parks operations on
+  itself -- a read waiting while a write drives the handshake, a write waiting for a flush in
+  progress -- and a waiter is never resumed inline by whatever releases it, so the socket needs a
+  loop to hand it to. Migration: pass the `EventLoop` the inner socket was made on.
+
 - **`PosixSocket` no longer reports `EPIPE` as `NetErrorCode::ConnReset`; it is `SystemError`.**
   `EPIPE` is a write after this end's own half-close, or after a peer's FIN that the previous write
   turned into a reset -- the state Winsock reports as `WSAESHUTDOWN` or `WSAECONNABORTED`, which
@@ -1301,6 +1308,12 @@ workflow refuses one without a section here.
   skipped on the next wait.
 
 ### Changed
+- **Every TLS context sets `SSL_OP_NO_RENEGOTIATION`** (Task B11): a TLS 1.2 peer that
+  renegotiates now fails. Renegotiation is the one way a write can need a read after the handshake,
+  and a socket with a read already parked has no second read slot for it. TLS 1.3 has none.
+- `AsyncBufferedReader` is neither copyable nor movable, since a parked refill writes into a
+  member buffer that must keep its address (Task B10 review).
+
 - **`core::net::serve` awaits each connection's `handshakeIfNeeded()` before reading a request**
   (Task B10), and drops a connection whose handshake fails without reading from it or answering it.
   A plaintext socket completes the verb inline, so nothing changes for one; a negotiating transport
@@ -1383,6 +1396,26 @@ workflow refuses one without a section here.
   which says the same thing.
 
 ### Fixed
+
+- **Four defects in the TLS socket's handshake and flush gates** (Task B11, fix round 1), each with a
+  case in `TlsLifetime_test.cpp` that failed before the fix:
+  - **Destroying a TLS socket with an operation parked in its handshake or flush was a double
+    free** (`double free or corruption` in a plain Debug build): the members were destroyed before
+    the inner socket, whose destructor unwinds the parked driver into a gate that was already gone.
+    The gates are now shared with their waiters, the destructor abandons them and the inner socket
+    before freeing the session, and every flow parked on the socket unwinds.
+  - **Releasing a gate resumed its waiters inline**, so a waiter whose flow dropped the socket left
+    the next waiter to be resumed onto the freed one (SIGSEGV). Waiters are handed to the loop.
+  - **A gate waiter ignored its stop token**, so a read that lost a `withTimeout` race while
+    waiting on the handshake came back when it completed and read the peer's first bytes into the
+    caller's abandoned buffer. It now unwinds when its token is stopped.
+  - **`cancelRead()` during the handshake poisoned the socket**: the retired inner read was stored
+    as a sticky handshake failure, and where a write drove the handshake it retired the WRITE's
+    inner read. A cancelled handshake is no longer sticky, and `cancelRead` retires only the read
+    direction: a read waiting on the handshake gate, or an inner read a read is parked on.
+- `makeTlsClientContext()` trusts every certificate in its CA PEM, not only the first; a
+  self-signed certificate's validity is refused when not positive, and one beyond about 68 years
+  no longer wraps into the past on Windows, where `long` is 32 bits.
 
 - **A TLS read beside a parked TLS write no longer puts a second write into the inner socket**
   (Task B11). A write larger than one flush chunk leaves ciphertext queued in OpenSSL's BIO while

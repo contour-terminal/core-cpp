@@ -78,6 +78,7 @@ struct StrictTlsPeer::State
     SSL* ssl = nullptr;
     BIO* incoming = nullptr; ///< Network -> SSL; owned by `ssl`.
     std::array<std::byte, 16384> staging {};
+    bool wireFailed = false; ///< The wire answered an ERROR, which is not an end of stream.
 
     State() = default;
     State(State const&) = delete;
@@ -174,7 +175,13 @@ async::Task<bool> StrictTlsPeer::flush(ISocket* wire)
 async::Task<std::size_t> StrictTlsPeer::feed(ISocket* wire)
 {
     auto const n = co_await wire->read(_state->staging);
-    if (!n || *n == 0)
+    if (!n)
+    {
+        // A reset is not an end: kept apart, so `readToEnd` answers `Failed` and not `Truncated`.
+        _state->wireFailed = true;
+        co_return std::size_t { 0 };
+    }
+    if (*n == 0)
     {
         // The strict half: a memory BIO answers "retry" when empty unless it is told the stream has
         // ended, and OpenSSL can only call a missing close_notify a truncation once it is.
@@ -228,6 +235,8 @@ async::Task<StreamEnd> StrictTlsPeer::readToEnd(ISocket* wire, std::string* out)
                 if (sawEof || !co_await flush(wire))
                     co_return StreamEnd::Failed;
                 sawEof = co_await feed(wire) == 0;
+                if (_state->wireFailed)
+                    co_return StreamEnd::Failed;
                 break;
             case SSL_ERROR_WANT_WRITE:
                 if (!co_await flush(wire))

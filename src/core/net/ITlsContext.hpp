@@ -15,6 +15,7 @@
 /// (`FastCache/Net/TlsWrap.hpp` at `0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21`), which reached the
 /// same shape through a preprocessor switch this seam replaces.
 
+#include <core/async/IExecutor.hpp>
 #include <core/net/ISocket.hpp>
 
 #include <memory>
@@ -40,9 +41,18 @@ class ITlsContext
     ITlsContext& operator=(ITlsContext&&) = delete;
 
     /// Wraps @p inner in a TLS layer of this context's role.
+    ///
+    /// **@p executor is the loop the socket's own waits are resumed on.** A TLS socket parks an
+    /// operation on itself -- a read waiting while a write drives the handshake, a write waiting for
+    /// a flush in progress -- and a waiter is never resumed inline by whatever releases it
+    /// (`.agent/rules/async-and-net.md`), so the socket needs somewhere to hand it. Pass the loop
+    /// @p inner belongs to.
     /// @param inner The connected transport to encrypt (owned by the result).
+    /// @param executor Where the socket resumes its waiters; must outlive the returned socket and
+    ///        every operation on it.
     /// @return The TLS socket, or null when it could not be allocated.
-    [[nodiscard]] virtual std::unique_ptr<ISocket> wrap(std::unique_ptr<ISocket> inner) = 0;
+    [[nodiscard]] virtual std::unique_ptr<ISocket> wrap(std::unique_ptr<ISocket> inner,
+                                                        async::IExecutor& executor) = 0;
 
     /// The SHA-256 fingerprint of the certificate this context presents, as 64 lower-case hex
     /// digits.
@@ -63,13 +73,16 @@ class ITlsContext
 /// than each re-deriving the "is TLS on?" question.
 /// @param socket The connected transport (owned).
 /// @param context The TLS context, or null for plaintext.
+/// @param executor The loop @p socket belongs to, as @c ITlsContext::wrap takes it.
 /// @return @p socket, wrapped when @p context is non-null; null only when wrapping could not
 ///         allocate, as @c ITlsContext::wrap documents.
-[[nodiscard]] inline std::unique_ptr<ISocket> wrapTls(std::unique_ptr<ISocket> socket, ITlsContext* context)
+[[nodiscard]] inline std::unique_ptr<ISocket> wrapTls(std::unique_ptr<ISocket> socket,
+                                                      ITlsContext* context,
+                                                      async::IExecutor& executor)
 {
     if (context == nullptr)
         return socket;
-    return context->wrap(std::move(socket));
+    return context->wrap(std::move(socket), executor);
 }
 
 } // namespace core::net

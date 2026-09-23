@@ -6,11 +6,13 @@
 #include <core/net/ISocket.hpp>
 #include <core/net/IoBackend.hpp>
 #include <core/net/Sockets.hpp>
+#include <core/net/WithTimeout.hpp>
 #include <core/net/testing/InMemoryTransport.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -734,7 +736,10 @@ TEST_CASE("serve completes the transport handshake before it reads a request", "
         return HttpResponse::ok("unreachable");
     } };
 
-    loop.blockOn(core::net::serve(&listener, std::move(handler)));
+    // Bounded: a serve() that read the socket after all would not return, and the wait says so
+    // rather than leaving it to ctest's TIMEOUT.
+    REQUIRE(loop.blockOn(core::net::withTimeout(
+        &loop, core::net::serve(&listener, std::move(handler)), std::chrono::seconds { 10 })));
 
     CHECK(reads == 0);
     CHECK(writes == 0);

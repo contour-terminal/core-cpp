@@ -122,7 +122,7 @@ std::unique_ptr<Conversation> serverConversation()
     REQUIRE(pair.has_value());
     auto context = core::net::makeSelfSignedServerContext();
     REQUIRE(context.has_value());
-    conversation->tls = (*context)->wrap(std::move(pair->first));
+    conversation->tls = (*context)->wrap(std::move(pair->first), conversation->loop);
     REQUIRE(conversation->tls != nullptr);
     conversation->wire = std::move(pair->second);
     auto peer = StrictTlsPeer::client();
@@ -225,7 +225,7 @@ TEST_CASE("shutdownWrite sends close_notify before the transport's FIN", "[net][
     CHECK(reply == "answer");
 }
 
-TEST_CASE("handshakeIfNeeded completes the handshake before any application byte", "[net][tls][tlssocket]")
+TEST_CASE("handshakeIfNeeded completes the handshake with nothing else driving it", "[net][tls][tlssocket]")
 {
     auto c = serverConversation();
 
@@ -530,7 +530,7 @@ TEST_CASE("A read beside a parked write never puts a second write into the inner
     REQUIRE(clientContext.has_value());
     auto gatedOwner = std::make_unique<GatedWrites>(c->loop, std::move(pair->first));
     auto* const gated = gatedOwner.get();
-    c->tls = (*clientContext)->wrap(std::move(gatedOwner));
+    c->tls = (*clientContext)->wrap(std::move(gatedOwner), c->loop);
     c->wire = std::move(pair->second);
     auto peer = StrictTlsPeer::server(*material);
     REQUIRE(peer.has_value());

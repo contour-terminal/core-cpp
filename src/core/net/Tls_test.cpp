@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -81,8 +82,8 @@ TEST_CASE("TLS handshakes and echoes application data over the reactor", "[net][
     auto clientCtx = core::net::makeTlsClientContext();
     REQUIRE(clientCtx.has_value());
 
-    auto serverTls = (*serverCtx)->wrap(std::move(pair.first));
-    auto clientTls = (*clientCtx)->wrap(std::move(pair.second));
+    auto serverTls = (*serverCtx)->wrap(std::move(pair.first), loop);
+    auto clientTls = (*clientCtx)->wrap(std::move(pair.second), loop);
     REQUIRE(serverTls != nullptr);
     REQUIRE(clientTls != nullptr);
 
@@ -119,8 +120,8 @@ TEST_CASE("a generated dev certificate drives a verified TLS handshake", "[net][
     auto clientCtx = core::net::makeTlsClientContext(material->certPem);
     REQUIRE(clientCtx.has_value());
 
-    auto serverTls = (*serverCtx)->wrap(std::move(pair.first));
-    auto clientTls = (*clientCtx)->wrap(std::move(pair.second));
+    auto serverTls = (*serverCtx)->wrap(std::move(pair.first), loop);
+    auto clientTls = (*clientCtx)->wrap(std::move(pair.second), loop);
     REQUIRE(serverTls != nullptr);
     REQUIRE(clientTls != nullptr);
 
@@ -153,8 +154,8 @@ TEST_CASE("a pinned CA is not enough: the certificate must name the host asked f
         REQUIRE(serverCtx.has_value());
         REQUIRE(clientCtx.has_value());
 
-        auto serverTls = (*serverCtx)->wrap(std::move(pair.first));
-        auto clientTls = (*clientCtx)->wrap(std::move(pair.second));
+        auto serverTls = (*serverCtx)->wrap(std::move(pair.first), loop);
+        auto clientTls = (*clientCtx)->wrap(std::move(pair.second), loop);
         auto received = std::string {};
         auto matched = false;
         loop.blockOn(core::net::testing::allOf(echoOnce(serverTls.get(), &received),
@@ -177,8 +178,8 @@ TEST_CASE("a pinned CA is not enough: the certificate must name the host asked f
         REQUIRE(serverCtx.has_value());
         REQUIRE(clientCtx.has_value());
 
-        auto serverTls = (*serverCtx)->wrap(std::move(pair.first));
-        auto clientTls = (*clientCtx)->wrap(std::move(pair.second));
+        auto serverTls = (*serverCtx)->wrap(std::move(pair.first), loop);
+        auto clientTls = (*clientCtx)->wrap(std::move(pair.second), loop);
         auto received = std::string {};
         auto matched = false;
         loop.blockOn(core::net::testing::allOf(echoOnce(serverTls.get(), &received),
@@ -187,6 +188,119 @@ TEST_CASE("a pinned CA is not enough: the certificate must name the host asked f
         CHECK(received.empty());
         CHECK_FALSE(matched);
     }
+}
+
+namespace
+{
+
+/// Handshakes a server presenting @p material against a client that pins it and expects
+/// @p expectedHost, and reports whether a payload crossed both ways.
+/// @param material The certificate and key the server presents, which the client also pins.
+/// @param expectedHost The host the client checks the certificate against.
+/// @return True when the handshake verified and the echo came back.
+bool verifiesAgainst(core::net::CertKeyPem const& material, std::string_view expectedHost)
+{
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = core::net::EventLoop { *source };
+    auto made = core::net::testing::makeSocketPair(loop);
+    REQUIRE(made.has_value());
+    auto pair = std::move(*made);
+
+    auto serverCtx = core::net::makeTlsServerContext(material.certPem, material.keyPem);
+    auto clientCtx = core::net::makeTlsClientContext(material.certPem, expectedHost);
+    REQUIRE(serverCtx.has_value());
+    REQUIRE(clientCtx.has_value());
+
+    auto serverTls = (*serverCtx)->wrap(std::move(pair.first), loop);
+    auto clientTls = (*clientCtx)->wrap(std::move(pair.second), loop);
+    auto received = std::string {};
+    auto matched = false;
+    loop.blockOn(core::net::testing::allOf(echoOnce(serverTls.get(), &received),
+                                           sendAndVerify(clientTls.get(), "addressed peer", &matched)));
+    return received == "addressed peer" && matched;
+}
+
+} // namespace
+
+TEST_CASE("an IP-literal host is verified against the certificate's IP entries", "[net][tls]")
+{
+    // The IP branch of the client check (X509_VERIFY_PARAM_set1_ip_asc) is a separate path from
+    // the DNS one: set1_host would look for the address in a dNSName, which a correct certificate
+    // does not carry. So it gets the same pair of cases, plus the spelling it exists to refuse.
+    //
+    // The certificate's common name is deliberately NOT the address. With the address in both, a
+    // name check would find it through the common-name fallback and pass for the wrong reason --
+    // measured: pointing this branch at set1_host passed all three sections below until the name
+    // moved.
+    auto const byAddress = core::net::generateSelfSignedCertificate(
+        { .commonName = "core-test", .subjectNames = { "127.0.0.1" } });
+    REQUIRE(byAddress.has_value());
+
+    SECTION("the address the certificate carries handshakes")
+    {
+        CHECK(verifiesAgainst(*byAddress, "127.0.0.1"));
+    }
+
+    SECTION("a DIFFERENT address fails, though the CA is the same")
+    {
+        CHECK_FALSE(verifiesAgainst(*byAddress, "127.0.0.2"));
+    }
+
+    SECTION("an address in the common name alone does not match")
+    {
+        auto const inNameOnly = core::net::generateSelfSignedCertificate(
+            { .commonName = "127.0.0.1", .subjectNames = { "localhost" } });
+        REQUIRE(inNameOnly.has_value());
+        CHECK_FALSE(verifiesAgainst(*inNameOnly, "127.0.0.1"));
+    }
+}
+
+TEST_CASE("a client trusts every CA in the bundle it is given", "[net][tls]")
+{
+    // Only the first certificate of the CA PEM used to be read, so a bundle of two anchors silently
+    // lost the second -- and a server whose certificate the second one vouches for was refused.
+    auto const first = core::net::generateSelfSignedCertificate({ .commonName = "first-anchor" });
+    auto const second = core::net::generateSelfSignedCertificate({ .commonName = "second-anchor" });
+    REQUIRE(first.has_value());
+    REQUIRE(second.has_value());
+    auto const bundle =
+        core::net::CertKeyPem { .certPem = first->certPem + second->certPem, .keyPem = second->keyPem };
+
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = core::net::EventLoop { *source };
+    auto made = core::net::testing::makeSocketPair(loop);
+    REQUIRE(made.has_value());
+    auto pair = std::move(*made);
+    auto serverCtx = core::net::makeTlsServerContext(second->certPem, second->keyPem);
+    auto clientCtx = core::net::makeTlsClientContext(bundle.certPem, "second-anchor");
+    REQUIRE(serverCtx.has_value());
+    REQUIRE(clientCtx.has_value());
+    auto serverTls = (*serverCtx)->wrap(std::move(pair.first), loop);
+    auto clientTls = (*clientCtx)->wrap(std::move(pair.second), loop);
+    auto received = std::string {};
+    auto matched = false;
+    loop.blockOn(core::net::testing::allOf(echoOnce(serverTls.get(), &received),
+                                           sendAndVerify(clientTls.get(), "second anchor", &matched)));
+    CHECK(received == "second anchor");
+    CHECK(matched);
+}
+
+TEST_CASE("a generated certificate's validity is refused when not positive, and kept when long", "[net][tls]")
+{
+    CHECK_FALSE(core::net::generateSelfSignedCertificate(
+                    { .commonName = "x", .validity = std::chrono::seconds { 0 } })
+                    .has_value());
+    CHECK_FALSE(core::net::generateSelfSignedCertificate(
+                    { .commonName = "x", .validity = std::chrono::seconds { -1 } })
+                    .has_value());
+
+    // A century is past what a 32-bit `long` of seconds holds (Windows), which used to wrap the
+    // expiry into the past; a verifying client refuses an expired certificate, so this handshake
+    // is what says the date came out right.
+    auto const century = core::net::generateSelfSignedCertificate(
+        { .commonName = "long-lived", .validity = std::chrono::days { 36500 } });
+    REQUIRE(century.has_value());
+    CHECK(verifiesAgainst(*century, "long-lived"));
 }
 
 TEST_CASE("a server TLS context rejects mismatched certificate and key", "[net][tls]")
@@ -244,14 +358,16 @@ TEST_CASE("TLS completes a two-reactor handshake under concurrent client I/O", "
 
     auto received = std::string {};
     auto serverThread = std::thread { [&] {
-        serverLoop.blockOn(
-            [](core::net::IListener* l, core::net::ITlsContext* ctx, std::string* recv) -> Task<void> {
-                auto accepted = co_await l->accept();
-                if (!accepted)
-                    co_return;
-                auto tls = ctx->wrap(std::move(*accepted));
-                co_await echoOnce(tls.get(), recv);
-            }(listener->get(), serverCtx->get(), &received));
+        serverLoop.blockOn([](core::net::EventLoop* loop,
+                              core::net::IListener* l,
+                              core::net::ITlsContext* ctx,
+                              std::string* recv) -> Task<void> {
+            auto accepted = co_await l->accept();
+            if (!accepted)
+                co_return;
+            auto tls = ctx->wrap(std::move(*accepted), *loop);
+            co_await echoOnce(tls.get(), recv);
+        }(&serverLoop, listener->get(), serverCtx->get(), &received));
     } };
 
     auto const clientSource = core::net::makeDefaultBackend();
@@ -269,7 +385,7 @@ TEST_CASE("TLS completes a two-reactor handshake under concurrent client I/O", "
             releaseServer(remote, acceptor); // else the join below waits on a parked accept
             co_return;
         }
-        auto tls = ctx->wrap(std::move(*connected));
+        auto tls = ctx->wrap(std::move(*connected), *loop);
         co_await core::net::testing::allOf(justWrite(tls.get(), "two reactor tls"),
                                            justReadMatch(tls.get(), "two reactor tls", ok));
     }(&clientLoop, &serverLoop, listener->get(), clientCtx->get(), &matched));
@@ -348,7 +464,7 @@ TEST_CASE("a cancelled TLS handshake releases the coroutines parked on it", "[ne
             releaseServer(remote, acceptor); // else the join below waits on a parked accept
             co_return;
         }
-        auto tls = ctx->wrap(std::move(*connected));
+        auto tls = ctx->wrap(std::move(*connected), *loop);
         // Order matters: the driver suspends INSIDE the handshake first, so the waiter that
         // starts next finds `_handshaking` set and parks on the gate.
         co_await core::net::testing::allOf(cancelledDriver(loop, tls.get()), gateWaiter(tls.get(), ok));

@@ -356,6 +356,7 @@ endif()
 core_cpp_add_test(net NAME net_tls
     SOURCES
         TlsContext_test.cpp
+        TlsLifetime_test.cpp
         TlsSocket_test.cpp
         Tls_test.cpp
     LABELS loopback
