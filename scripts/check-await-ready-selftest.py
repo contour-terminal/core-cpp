@@ -14,7 +14,9 @@ that reads nothing is a gate that passes on everything, so both are cases here.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import sys
 import tempfile
 import unittest
@@ -127,9 +129,40 @@ class AwaitReadyTest(unittest.TestCase):
         self.assertEqual(len(problems), 1)
         self.assertIn("src/core/H.hpp: [stale-allow] `now`", problems[0])
 
+    def test_a_nested_noexcept_and_a_ref_qualifier_are_definitions_too(self):
+        # A definition the pattern does not recognise is not counted and not read, so nothing
+        # reports it: the two spellings the first pattern missed.
+        problems, _, definitions = self.run_on(
+            {
+                "src/core/J.hpp": "struct J {\n"
+                "    bool await_ready() const noexcept(noexcept(probe())) { return probe(); }\n"
+                "    bool await_ready() const& noexcept { return _loop->clock().now() > d; }\n"
+                "    bool await_ready() && { return ready(); }\n"
+                "};\n"
+            }
+        )
+        self.assertEqual(definitions, 3)
+        self.assertEqual(len(problems), 4, problems)
+        self.assertIn("src/core/J.hpp:2: [call] await_ready calls `probe`", problems[0])
+        self.assertIn("src/core/J.hpp:3: [call] await_ready calls `clock`", problems[1])
+        self.assertIn("src/core/J.hpp:4: [call] await_ready calls `ready`", problems[3])
+
     def test_a_tree_with_no_definition_is_a_broken_scan_not_a_clean_one(self):
         _, read, definitions = self.run_on({"src/core/I.hpp": "int i;\n"})
         self.assertEqual((read, definitions), (1, 0))
+
+    def test_the_exit_status_of_a_broken_scan_is_a_failure(self):
+        # The counts above are scan()'s; the exit status is what CI reads.
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            (root / "src").mkdir()
+            (root / "src" / "I.hpp").write_bytes(b"int i;\n")
+            with contextlib.redirect_stdout(io.StringIO()) as said:
+                self.assertEqual(CHECK.main(root), 1)
+            self.assertIn("the scan is broken", said.getvalue())
+            (root / "src" / "I.hpp").write_bytes(b"bool await_ready() const noexcept { return false; }\n")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(CHECK.main(root), 0)
 
     def test_the_real_tree_is_read(self):
         _, read, definitions = CHECK.scan(CHECKER.parent.parent, CHECK.ALLOWED)

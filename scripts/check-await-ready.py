@@ -53,12 +53,19 @@ REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 
 SUFFIXES = (".hpp", ".cpp", ".h")
 
+# Balanced parentheses three deep, which is as deep as a `noexcept(...)` operand gets in practice:
+# `noexcept(noexcept(probe()))` is two.
+PARENTHESISED = r"\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)"
+
 # `await_ready()`, its qualifiers, and the `{` that opens a body. Anything else after the `()` --
-# `)`, `;`, `}` -- is a use or a declaration, which has no body to read.
+# `)`, `;`, `}` -- is a use or a declaration, which has no body to read. A definition this does not
+# recognise is neither counted nor read, and nothing reports it, so every qualifier a member
+# function can carry is spelled here: cv, a ref-qualifier, a `noexcept` with any operand.
 DEFINITION = re.compile(
     r"\bawait_ready\s*\(\s*\)\s*"
     r"(?:const\s*)?"
-    r"(?:noexcept(?:\s*\([^()]*\))?\s*)?"
+    r"(?:&&?\s*)?"
+    r"(?:noexcept(?:\s*" + PARENTHESISED + r")?\s*)?"
     r"(?:(?:override|final)\s*)*"
     r"(?:->\s*[\w:<>,\s]+?\s*)?"
     r"\{"
@@ -175,8 +182,9 @@ def scan(root: Path, allowed: dict[tuple[str, str], str]) -> tuple[list[str], in
     return problems, read, definitions
 
 
-def main() -> int:
-    problems, read, definitions = scan(REPOSITORY_ROOT, ALLOWED)
+def main(root: Path = REPOSITORY_ROOT) -> int:
+    """:return: the exit status for a scan of @p root; the self-test passes a scratch tree."""
+    problems, read, definitions = scan(root, ALLOWED)
     if read == 0 or definitions == 0:
         print(
             f"check-await-ready: read {read} file(s) and {definitions} await_ready definition(s) "
