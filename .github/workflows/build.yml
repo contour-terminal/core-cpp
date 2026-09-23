@@ -337,13 +337,13 @@ jobs:
       # OpenSSL's headers and libraries: every unix preset turns CORE_CPP_WITH_TLS on, and
       # core::net_tls takes OpenSSL from the system.
       - name: Install Ninja and OpenSSL
-        run: sudo apt-get update -q && sudo apt-get install -y -q ninja-build libssl-dev
+        run: scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libssl-dev
 
       - name: Install clang ${{ env.LLVM_VERSION }}
         if: matrix.compiler == 'clang'
         run: |
-          wget -q https://apt.llvm.org/llvm.sh
-          sudo bash llvm.sh "$LLVM_VERSION"
+          scripts/ci-retry.sh wget -q https://apt.llvm.org/llvm.sh
+          scripts/ci-retry.sh sudo bash llvm.sh "$LLVM_VERSION"
           echo "CXX_COMPILER=clang++-$LLVM_VERSION" >> "$GITHUB_ENV"
 
       - name: Install GCC ${{ matrix.gcc }}
@@ -354,9 +354,9 @@ jobs:
         run: |
           gxx="g++-${{ matrix.gcc }}"
           if ! command -v "$gxx"; then
-            sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-            sudo apt-get update -q
-            sudo apt-get install -y -q "$gxx"
+            scripts/ci-retry.sh sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+            scripts/ci-retry.sh sudo apt-get update -q
+            scripts/ci-retry.sh sudo apt-get install -y -q "$gxx"
           fi
           command -v "$gxx" || { echo "::error::$gxx was not installed"; exit 1; }
           "$gxx" --version | head -1
@@ -439,7 +439,7 @@ jobs:
       # OpenSSL is keg-only on Homebrew; the TLS module finds it through OPENSSL_ROOT_DIR.
       - name: Install Ninja and OpenSSL
         run: |
-          brew install ninja openssl@3
+          scripts/ci-retry.sh brew install ninja openssl@3
           echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
 
       # The versioned formula when Homebrew has one, else `llvm`, and either way the major
@@ -449,7 +449,7 @@ jobs:
         run: |
           formula="llvm@$LLVM_VERSION"
           brew info "$formula" >/dev/null 2>&1 || formula=llvm
-          brew install "$formula"
+          scripts/ci-retry.sh brew install "$formula"
           prefix="$(brew --prefix "$formula")"
           "$prefix/bin/clang++" --version
           "$prefix/bin/clang++" --version | grep -q "clang version $LLVM_VERSION\." \
@@ -635,9 +635,9 @@ jobs:
       # OpenSSL for core::net_tls, which the unix presets build (CORE_CPP_WITH_TLS).
       - name: Install Ninja, OpenSSL and clang ${{ env.LLVM_VERSION }}
         run: |
-          sudo apt-get update -q && sudo apt-get install -y -q ninja-build libssl-dev
-          wget -q https://apt.llvm.org/llvm.sh
-          sudo bash llvm.sh "$LLVM_VERSION"
+          scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libssl-dev
+          scripts/ci-retry.sh wget -q https://apt.llvm.org/llvm.sh
+          scripts/ci-retry.sh sudo bash llvm.sh "$LLVM_VERSION"
 
       # ThreadSanitizer cannot map its shadow memory under the runner kernel's full ASLR entropy.
       - name: Reduce ASLR entropy for ThreadSanitizer
@@ -689,9 +689,9 @@ jobs:
       # OpenSSL, so that core::net_tls (CORE_CPP_WITH_TLS, on in the unix presets) is analysed too.
       - name: Install Ninja, OpenSSL and clang ${{ env.LLVM_VERSION }}
         run: |
-          sudo apt-get update -q && sudo apt-get install -y -q ninja-build libssl-dev
-          wget -q https://apt.llvm.org/llvm.sh
-          sudo bash llvm.sh "$LLVM_VERSION"
+          scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libssl-dev
+          scripts/ci-retry.sh wget -q https://apt.llvm.org/llvm.sh
+          scripts/ci-retry.sh sudo bash llvm.sh "$LLVM_VERSION"
 
       # Installed with --target and run in place: the wheel's binary finds its resource headers
       # relative to itself, and a copied binary parses nothing. The binary is the one under
@@ -761,7 +761,7 @@ jobs:
           restore-keys: cpm-${{ runner.os }}-
 
       - name: Install Ninja
-        run: sudo apt-get update -q && sudo apt-get install -y -q ninja-build
+        run: scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build
 
       # A pinned version is cached; `latest` is not, or the cache would pin it.
       - name: emsdk ${{ matrix.emsdk }}
@@ -825,7 +825,7 @@ jobs:
       # it the daemon exits 127 at start-up, and the module (correctly) disables caching. OpenSSL is
       # for core::net_tls, which the unix presets build (CORE_CPP_WITH_TLS).
       - name: Install Ninja, GCC ${{ env.GCC_VERSION }}, OpenSSL and the daemon's runtime library
-        run: sudo apt-get update -q && sudo apt-get install -y -q ninja-build "g++-$GCC_VERSION" libssl-dev libyaml-cpp0.8
+        run: scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build "g++-$GCC_VERSION" libssl-dev libyaml-cpp0.8
 
       - name: No other compiler cache is installed
         run: |
@@ -925,14 +925,14 @@ jobs:
 
       - name: Install Ninja
         if: matrix.leg != 'vendored'
-        run: sudo apt-get update -q && sudo apt-get install -y -q ninja-build
+        run: scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build
 
       # --- cpm ---------------------------------------------------------------------------------
       - name: Install clang ${{ env.LLVM_VERSION }}
         if: matrix.leg == 'cpm'
         run: |
-          wget -q https://apt.llvm.org/llvm.sh
-          sudo bash llvm.sh "$LLVM_VERSION"
+          scripts/ci-retry.sh wget -q https://apt.llvm.org/llvm.sh
+          scripts/ci-retry.sh sudo bash llvm.sh "$LLVM_VERSION"
 
       - name: A CPM consumer builds and runs against this checkout
         if: matrix.leg == 'cpm'
@@ -1033,10 +1033,10 @@ jobs:
       # is for core::net_tls, which the unix presets build (CORE_CPP_WITH_TLS).
       - name: Install Ninja, OpenSSL, clang ${{ env.LLVM_VERSION }} and its coverage tools
         run: |
-          sudo apt-get update -q && sudo apt-get install -y -q ninja-build libssl-dev
-          wget -q https://apt.llvm.org/llvm.sh
-          sudo bash llvm.sh "$LLVM_VERSION"
-          sudo apt-get install -y -q "llvm-$LLVM_VERSION"
+          scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libssl-dev
+          scripts/ci-retry.sh wget -q https://apt.llvm.org/llvm.sh
+          scripts/ci-retry.sh sudo bash llvm.sh "$LLVM_VERSION"
+          scripts/ci-retry.sh sudo apt-get install -y -q "llvm-$LLVM_VERSION"
 
       - name: Configure
         run: cmake --preset clang-coverage -DCMAKE_CXX_COMPILER="clang++-$LLVM_VERSION"
