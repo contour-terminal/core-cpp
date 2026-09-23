@@ -66,6 +66,7 @@ set(_coreCppNetSubsetTests
     IoBackend_test.cpp
     SleepUntil_test.cpp
     Timers_test.cpp
+    detail/ParkTable_test.cpp
     testing/ScriptedBackend_test.cpp)
 #
 # Exactly one DefaultBackend.cpp is compiled, and it is the whole of how a platform picks its

@@ -171,10 +171,13 @@ namespace detail
             return *this;
         }
 
+        /// A null check where the claim is empty, which it is for every park with no detached chain
+        /// behind it -- the common case, destroyed several times per parked operation -- and the
+        /// release out of line only where there is one to make.
         ~AbandonClaim()
         {
             if (_state)
-                _state->release();
+                releaseClaim();
         }
 
         /// Gives the chain back, for every claim on it. See @c AbandonState::disarm().
@@ -196,7 +199,31 @@ namespace detail
             return _state == other._state;
         }
 
+        /// Gives this claim up now rather than at destruction, which frees the chain if it was the
+        /// last one; empty afterwards.
+        void reset() noexcept
+        {
+            if (_state)
+                releaseClaim();
+        }
+
+        /// Gives this claim up and takes over @p other's, leaving @p other empty.
+        /// @param other The claim to take over.
+        void adopt(AbandonClaim& other) noexcept
+        {
+            reset();
+            _state = std::exchange(other._state, {});
+        }
+
       private:
+        /// Gives up this claim. A function of its own, so the destructor an empty claim runs -- a null
+        /// check -- is small enough to inline where it is called.
+        void releaseClaim() noexcept
+        {
+            _state->release();
+            _state.reset();
+        }
+
         std::shared_ptr<AbandonState> _state;
     };
 
@@ -317,14 +344,19 @@ namespace detail
         Parked(Parked const&) = delete;
         Parked& operator=(Parked const&) = delete;
 
-        Parked(Parked&& other) noexcept: _work(std::exchange(other._work, ParkedWork {})) {}
+        // The moves, `take` and `abandon` move the two members one by one rather than exchanging a
+        // whole `ParkedWork` for a fresh one. That exchange builds a temporary work item and runs a
+        // by-value claim assignment and two claim destructors, all on nothing. An entry is moved in
+        // and out of a ready queue once per wake, and that was a visible share of it.
+        Parked(Parked&& other) noexcept: _work(other.take()) {}
 
         Parked& operator=(Parked&& other) noexcept
         {
             if (this != &other)
             {
                 abandon();
-                _work = std::exchange(other._work, ParkedWork {});
+                _work.resume = std::exchange(other._work.resume, {});
+                _work.abandon.adopt(other._work.abandon);
             }
             return *this;
         }
@@ -351,7 +383,7 @@ namespace detail
         /// freed, never neither*.
         void resume()
         {
-            auto const work = std::exchange(_work, ParkedWork {});
+            auto const work = take();
             if (work.resume && !work.resume.done())
             {
                 // Disarmed for EVERY claim on this chain, not only this one: resuming one park
@@ -372,11 +404,19 @@ namespace detail
         /// After this the caller is the only one who may resume or destroy it, so this entry must
         /// do neither.
         /// @return What was parked here; empty afterwards.
-        [[nodiscard]] ParkedWork take() noexcept { return std::exchange(_work, ParkedWork {}); }
+        [[nodiscard]] ParkedWork take() noexcept
+        {
+            return ParkedWork { .resume = std::exchange(_work.resume, {}),
+                                .abandon = std::move(_work.abandon) };
+        }
 
       private:
         /// Gives up this entry's claim on the chain, which frees it if no other park holds one.
-        void abandon() noexcept { _work = ParkedWork {}; }
+        void abandon() noexcept
+        {
+            _work.resume = {};
+            _work.abandon.reset();
+        }
 
         ParkedWork _work {};
     };

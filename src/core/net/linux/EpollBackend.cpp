@@ -9,6 +9,7 @@
 #include <array>
 #include <cerrno>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <stdexcept>
 
@@ -19,11 +20,6 @@ namespace core::net
 
 namespace
 {
-    /// The largest number of ready events one `epoll_wait` reports. A wait that fills
-    /// the batch reports the rest on the next one — level-triggered interest means
-    /// nothing is lost by capping it.
-    constexpr std::size_t ReadyBatchSize = 64;
-
     /// Translates a readiness interest into epoll event bits.
     /// @param interest What the registration is watched for.
     /// @return The corresponding EPOLLIN/EPOLLOUT bits.
@@ -54,7 +50,13 @@ namespace
     }
 } // namespace
 
-EpollBackend::EpollBackend(): _epollFd { ::epoll_create1(EPOLL_CLOEXEC) }
+struct EpollBackend::ReadyEvents
+{
+    std::array<epoll_event, ReadyBatchSize> entries {};
+};
+
+EpollBackend::EpollBackend():
+    _events { std::make_unique<ReadyEvents>() }, _epollFd { ::epoll_create1(EPOLL_CLOEXEC) }
 {
     // A backend whose epoll instance failed to materialise reports `good() == false`
     // and is discarded by makeBackend, which falls back to poll(2).
@@ -195,16 +197,17 @@ WaitResult EpollBackend::wait(std::optional<platform::SteadyDuration> timeout)
     if (_epollFd < 0)
         return WaitResult {};
 
-    auto events = std::array<epoll_event, ReadyBatchSize> {};
-    auto const ready = ::epoll_wait(
-        _epollFd, events.data(), static_cast<int>(events.size()), detail::toTimeoutMillis(timeout));
+    auto const ready = ::epoll_wait(_epollFd,
+                                    _events->entries.data(),
+                                    static_cast<int>(_events->entries.size()),
+                                    detail::toTimeoutMillis(timeout));
     if (ready <= 0)
         // 0: timed out. <0: EINTR or an error — nothing ready this round.
         // Level-triggered interest re-reports a still-ready descriptor on the next
         // wait, so nothing is lost.
         return WaitResult {};
 
-    for (auto const& event: std::span { events.data(), static_cast<std::size_t>(ready) })
+    for (auto const& event: std::span { _events->entries.data(), static_cast<std::size_t>(ready) })
         _batch.add(*static_cast<ReadinessHandler*>(event.data.ptr), fromEpollEvents(event.events));
 
     return WaitResult { .dispatched = _batch.dispatch() };

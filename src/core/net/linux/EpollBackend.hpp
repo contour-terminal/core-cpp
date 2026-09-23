@@ -23,6 +23,7 @@
 
 #include <cstddef>
 #include <expected>
+#include <memory>
 #include <optional>
 #include <unordered_map>
 
@@ -96,6 +97,20 @@ class EpollBackend final: public IoBackend
     /// duplicate, so re-arming the same handler costs no second descriptor.
     void disarm(Registration& registration) const noexcept;
 
+    /// The largest number of ready events one `epoll_wait` reports. A wait that fills the batch
+    /// reports the rest on the next one -- level-triggered interest means nothing is lost by
+    /// capping it.
+    static constexpr std::size_t ReadyBatchSize = 64;
+
+    /// Where `epoll_wait` writes: @c ReadyBatchSize entries, defined beside `wait` so that
+    /// `<sys/epoll.h>` stays out of a header consumers include.
+    struct ReadyEvents;
+
+    /// Allocated once. A local array was value-initialised -- 768 bytes zeroed -- on every wait,
+    /// and a wait is once per request on a busy connection. Declared first, so a failed allocation
+    /// leaves nothing behind to close.
+    std::unique_ptr<ReadyEvents> _events;
+
     /// The wakeup channel is declared BEFORE the kernel descriptor, and the order is
     /// load-bearing rather than tidy: @c detail::WakeupChannel's constructor throws
     /// under descriptor exhaustion, a constructor that throws from its mem-init list
@@ -103,7 +118,7 @@ class EpollBackend final: public IoBackend
     /// other way round, the epoll instance was created first and leaked on exactly the pressure
     /// that makes a descriptor worth having -- which also made
     /// @c makeDefaultBackend()'s documented fallback to @c PollBackend less likely to
-    /// succeed. Declared first, it is constructed first and `epoll_create1` is never reached.
+    /// succeed. Declared earlier, it is constructed earlier and `epoll_create1` is never reached.
     detail::WakeupChannel _wakeup; ///< How another thread breaks a wait in flight.
     int _epollFd = -1;             ///< The epoll instance (owned).
     detail::ReadyBatch _batch;     ///< What this wait found ready, and what `detach` withdraws from.

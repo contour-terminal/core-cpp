@@ -108,6 +108,18 @@ workflow refuses one without a section here.
   requests a second at 16, 64 and 256 connections; a raw epoll echo, the floor, is 4.2 us. The
   turn is unchanged. `SocketRegistration_test.cpp` counts the backend calls, and fails with the
   per-park registration.
+- **An operation parked on a socket allocates nothing in `EventLoop`, and a turn nobody handed
+  work to takes no lock.** Each park was a fresh allocation, filed in a `std::unordered_map` and,
+  whatever its registration, in a second map by handle: three allocations and three frees per
+  parked operation. Parks are now recycled and kept in an open-addressing table, and a park on a
+  socket's lifetime registration is found through that registration rather than the handle map. A
+  turn skips the inbound mutex when nothing was posted and the timer heap when no deadline is armed,
+  `stop()` sets an atomic, `ResultAwaitable` registers no stop callback on a token that can never
+  be stopped, a queued entry no longer moves an empty work item through a temporary, and
+  `EpollBackend` no longer zeroes a 768-byte event array on every wait. On fastcached's GET at 16
+  connections (WSL2, clang-22 Release, median of 5, the daemon's CPU per request), memcached text
+  went from 24.1 to 23.4 us and RESP from 26.9 to 25.0 us, against 23.7 and 25.7 us on fastcached's
+  own epoll reactor, and allocations per request from 10.1 to 7.1 and from 26.1 to 23.1.
 
 ### Added
 

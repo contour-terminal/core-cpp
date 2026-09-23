@@ -25,6 +25,7 @@
 #include <core/platform/Types.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
@@ -272,10 +273,16 @@ struct ParkEntry
 namespace detail
 {
 
+    struct HandleWatch;
+
     /// One piece of work parked on a loop.
     ///
     /// Held by `unique_ptr` in the table, because @c ReadinessHandler::owner points back at this
     /// and the backend holds the handler's address: a park may not move once registered.
+    ///
+    /// **A field added here is reset in @c ParkTable::recycle as well**, which clears a park field
+    /// by field rather than assigning a fresh one; `ParkTable_test.cpp` sets every field and checks
+    /// that a recycled park holds none of them.
     struct Park
     {
         ParkId id {};                    ///< This park's identity.
@@ -291,10 +298,15 @@ namespace detail
 
         bool attached = false; ///< Whether @c handler is registered with the backend.
 
-        /// Whether this park holds a slot on its handle's @c HandleWatch rather than a registration
-        /// of its own (@c RegistrationLifetime::UntilClosed). Such a park never sets @c attached:
-        /// the registration is the watch's, and taking the park only frees the slot.
-        bool watched = false;
+        /// The @c HandleWatch this park holds a slot on, rather than a registration of its own
+        /// (@c RegistrationLifetime::UntilClosed), or null. Such a park never sets @c attached: the
+        /// registration is the watch's, and taking the park only frees the slot. The loop clears it
+        /// in every park the watch names before the watch goes, so it never dangles.
+        HandleWatch* watch = nullptr;
+
+        /// Whether @c ParkTable filed this park in its handle index. A watched park is not: its
+        /// watch's slots already name it, and a closing handle asks the watch.
+        bool handleIndexed = false;
 
         /// What to call when this park's deadline arrives, for a callback timer; null for a park
         /// with a coroutine behind it. **This is the whole of how a frameless timer joins the
@@ -350,6 +362,156 @@ namespace detail
         bool narrowQueued = false;       ///< Whether a wait has already asked for it to be narrowed.
     };
 
+    /// The parks one loop holds, keyed by id: an open-addressing table with linear probing.
+    ///
+    /// **A park is filed and taken once per parked operation, so this is a hot path, and the node
+    /// container it replaces was the cost.** `std::unordered_map` allocates a node per insert and
+    /// frees it per erase and chases a pointer per lookup; on a request/response socket that was two
+    /// heap operations and three hashed lookups per request in the table alone. Here an entry lives
+    /// in one flat array, a lookup is a multiply and usually one probe, and nothing is allocated
+    /// until the table grows. The ids are unchanged -- still the one never-reused 64-bit counter,
+    /// still the generation check -- because the key is the id itself, not a slot index.
+    ///
+    /// Deletion shifts the following run back rather than leaving a tombstone, so a long-lived
+    /// loop's probe lengths depend on how many parks are live, never on how many have come and gone.
+    class ParkMap
+    {
+      public:
+        /// @param id The park to find.
+        /// @return It, or null.
+        [[nodiscard]] Park* find(ParkId id) const noexcept
+        {
+            if (_size == 0)
+                return nullptr;
+            auto index = home(id.value);
+            while (_entries[index].key != 0)
+            {
+                if (_entries[index].key == id.value)
+                    return _entries[index].park.get();
+                index = (index + 1) & mask();
+            }
+            return nullptr;
+        }
+
+        /// Files @p park under @p id, which must not be present.
+        /// @param id The key; never zero.
+        /// @param park What to hold.
+        void insert(ParkId id, std::unique_ptr<Park> park)
+        {
+            if ((_size + 1) * 2 > _entries.size())
+                grow();
+            auto index = home(id.value);
+            while (_entries[index].key != 0)
+                index = (index + 1) & mask();
+            _entries[index] = Entry { .key = id.value, .park = std::move(park) };
+            ++_size;
+        }
+
+        /// Removes @p id and hands its park back.
+        /// @param id The park to take.
+        /// @return The park, or null if it was not here.
+        [[nodiscard]] std::unique_ptr<Park> erase(ParkId id) noexcept
+        {
+            // Zero is the empty-slot marker, so it would "match" the first free slot on the probe
+            // and the removal would shift live entries out of their runs. Callers do pass it:
+            // `unregisterPark(ParkId::invalid())` is documented as a no-op.
+            if (_size == 0 || !id)
+                return {};
+            auto index = home(id.value);
+            while (_entries[index].key != id.value)
+            {
+                if (_entries[index].key == 0)
+                    return {};
+                index = (index + 1) & mask();
+            }
+            auto park = std::move(_entries[index].park);
+            --_size;
+            // Backward shift: every entry after the hole whose home is not strictly inside the gap
+            // moves into it, so no probe sequence is ever cut short by the removal.
+            auto hole = index;
+            auto next = (hole + 1) & mask();
+            while (_entries[next].key != 0)
+            {
+                auto const wanted = home(_entries[next].key);
+                auto const distanceToNext = (next - wanted) & mask();
+                auto const distanceToHole = (hole - wanted) & mask();
+                if (distanceToHole <= distanceToNext)
+                {
+                    _entries[hole] = std::move(_entries[next]);
+                    hole = next;
+                }
+                next = (next + 1) & mask();
+            }
+            _entries[hole] = Entry {};
+            return park;
+        }
+
+        /// @return How many parks are held.
+        [[nodiscard]] std::size_t size() const noexcept { return _size; }
+
+        /// Calls @p visit with every held id and park, in no particular order. @p visit must not
+        /// insert or erase.
+        /// @param visit What to call, as `visit(ParkId, std::unique_ptr<Park>&)`.
+        template <typename Visit>
+        void forEach(Visit const& visit)
+        {
+            for (auto& entry: _entries)
+                if (entry.key != 0)
+                    visit(ParkId { entry.key }, entry.park);
+        }
+
+        /// Calls @p visit with every held id, in no particular order.
+        /// @param visit What to call, as `visit(ParkId)`.
+        template <typename Visit>
+        void forEachId(Visit const& visit) const
+        {
+            for (auto const& entry: _entries)
+                if (entry.key != 0)
+                    visit(ParkId { entry.key });
+        }
+
+        /// Forgets every entry, keeping the capacity.
+        void clear() noexcept
+        {
+            for (auto& entry: _entries)
+                entry = Entry {};
+            _size = 0;
+        }
+
+      private:
+        /// One slot of the table: a key of zero is an empty slot, which the id space never uses.
+        struct Entry
+        {
+            std::uint64_t key = 0;
+            std::unique_ptr<Park> park;
+        };
+
+        /// Where @p key's probe sequence starts: Fibonacci hashing, so the sequential ids a loop
+        /// hands out spread over the table rather than filling one run.
+        [[nodiscard]] std::size_t home(std::uint64_t key) const noexcept
+        {
+            return static_cast<std::size_t>((key * 0x9E37'79B9'7F4A'7C15ULL) >> _shift);
+        }
+
+        [[nodiscard]] std::size_t mask() const noexcept { return _entries.size() - 1; }
+
+        /// Doubles the table and refiles every entry.
+        void grow()
+        {
+            auto old =
+                std::exchange(_entries, std::vector<Entry>(_entries.empty() ? 16 : _entries.size() * 2));
+            _shift = 64 - static_cast<unsigned>(std::countr_zero(_entries.size()));
+            _size = 0;
+            for (auto& entry: old)
+                if (entry.key != 0)
+                    insert(ParkId { entry.key }, std::move(entry.park));
+        }
+
+        std::vector<Entry> _entries;
+        std::size_t _size = 0;
+        unsigned _shift = 64;
+    };
+
     /// The parks one loop holds, by id, with the reverse indices every resolution path needs.
     ///
     /// Three questions are asked of it, and each has its own index because each is on a path that
@@ -359,6 +521,47 @@ namespace detail
     class ParkTable
     {
       public:
+        /// @return A park to fill in: one recycled by @c recycle, or a new one. Every field holds
+        ///         its default.
+        [[nodiscard]] std::unique_ptr<Park> acquire()
+        {
+            if (_spare.empty())
+                return std::make_unique<Park>();
+            auto park = std::move(_spare.back());
+            _spare.pop_back();
+            return park;
+        }
+
+        /// Keeps @p park for the next @c acquire rather than freeing it -- a park is made and
+        /// dropped once per parked operation, and on a request/response socket that was a heap
+        /// allocation and a free per request.
+        /// @param park A park just taken out of the table, with nothing left parked in it: it is
+        ///        reset here, and resetting a park that still held a chain would free the chain.
+        void recycle(std::unique_ptr<Park> park) noexcept
+        {
+            if (!park || park->parked || _spare.size() >= MaxSpareParks)
+                return;
+            // Field by field rather than `*park = Park {}`: assigning a whole park moves an empty
+            // `Parked` over an empty `Parked`, and that was a visible share of the once-per-operation
+            // path for nothing. `parked` is empty already -- checked above -- and `take` has cleared
+            // the indices' own fields.
+            park->id = ParkId::invalid();
+            park->handler = ReadinessHandler {};
+            park->loop = nullptr;
+            park->handle = platform::InvalidHandle;
+            park->waiterKey = nullptr;
+            park->attached = false;
+            park->watch = nullptr;
+            park->handleIndexed = false;
+            park->onExpired = nullptr;
+            park->onReady = nullptr;
+            park->callbackState = nullptr;
+            park->ownedByLoop = false;
+            park->deadline.reset();
+            park->sequence = 0;
+            _spare.push_back(std::move(park));
+        }
+
         /// Files @p park and gives it an id.
         /// @param park The park to hold; must be non-null and not yet filed.
         /// @return Its id, which is never zero and never reused.
@@ -373,7 +576,14 @@ namespace detail
                 _byWaiter.emplace(park->waiterKey, id);
             }
             if (park->handle != platform::InvalidHandle)
-                _byHandle.emplace(park->handle, id);
+            {
+                ++_readiness;
+                if (park->watch == nullptr)
+                {
+                    _byHandle.emplace(park->handle, id);
+                    park->handleIndexed = true;
+                }
+            }
             if (park->deadline.has_value())
             {
                 _timers.push_back(
@@ -381,18 +591,14 @@ namespace detail
                 std::ranges::push_heap(_timers, soonestFirst);
                 ++_liveTimers;
             }
-            _parks.emplace(id, std::move(park));
+            _parks.insert(id, std::move(park));
             return id;
         }
 
         /// @param id The park to look up.
         /// @return The park, or null if it is no longer here — which is what a cancel request for
         ///         a park that has already resumed resolves to.
-        [[nodiscard]] Park* find(ParkId id) noexcept
-        {
-            auto const found = _parks.find(id);
-            return found == _parks.end() ? nullptr : found->second.get();
-        }
+        [[nodiscard]] Park* find(ParkId id) noexcept { return _parks.find(id); }
 
         /// @param waiter The parked coroutine.
         /// @return The park holding it, or @c ParkId::invalid().
@@ -405,7 +611,8 @@ namespace detail
         }
 
         /// @param handle The native handle.
-        /// @return Every park on it. A copy rather than a range, because the caller detaches and
+        /// @return Every park on it that has a registration of its own -- a WATCHED park is named
+        ///         by its handle's watch instead. A copy rather than a range, because the caller detaches and
         ///         destroys parks while walking it, which would invalidate a live range.
         [[nodiscard]] std::vector<ParkId> parksOn(platform::NativeHandle handle) const
         {
@@ -442,11 +649,9 @@ namespace detail
         ///         is how a loop with many deadlines becomes quadratic.
         [[nodiscard]] std::unique_ptr<Park> take(ParkId id) noexcept
         {
-            auto const found = _parks.find(id);
-            if (found == _parks.end())
+            auto park = _parks.erase(id);
+            if (!park)
                 return {};
-            auto park = std::move(found->second);
-            _parks.erase(found);
             dropWaiterIndices(*park);
             dropHandleIndex(*park);
             return park;
@@ -458,11 +663,12 @@ namespace detail
         {
             auto taken = std::vector<std::unique_ptr<Park>> {};
             taken.reserve(_parks.size());
-            for (auto& entry: _parks)
-                taken.push_back(std::move(entry.second));
+            _parks.forEach(
+                [&taken](ParkId, std::unique_ptr<Park>& park) { taken.push_back(std::move(park)); });
             _parks.clear();
             _byWaiter.clear();
             _byHandle.clear();
+            _readiness = 0;
             _timers.clear();
             _liveTimers = 0;
             return taken;
@@ -474,8 +680,7 @@ namespace detail
         {
             auto found = std::vector<ParkId> {};
             found.reserve(_parks.size());
-            for (auto const& entry: _parks)
-                found.push_back(entry.first);
+            _parks.forEachId([&found](ParkId id) { found.push_back(id); });
             return found;
         }
 
@@ -502,7 +707,7 @@ namespace detail
         /// what the backend holds. `Park::attached` is the attachment; this is the key. The
         /// over-count is the safe direction — a "no registration leaked" assertion now fails
         /// loudly rather than reading zero while a registration is live.
-        [[nodiscard]] std::size_t readinessCount() const noexcept { return _byHandle.size(); }
+        [[nodiscard]] std::size_t readinessCount() const noexcept { return _readiness; }
 
         /// @return The soonest deadline any park is waiting on, or nullopt if none is.
         [[nodiscard]] std::optional<platform::SteadyTimePoint> nextDeadline() noexcept
@@ -575,9 +780,8 @@ namespace detail
             while (!_timers.empty())
             {
                 auto const& slot = _timers.front();
-                auto const found = _parks.find(slot.id);
-                if (found != _parks.end() && found->second->deadline.has_value()
-                    && found->second->sequence == slot.sequence)
+                auto const* const found = _parks.find(slot.id);
+                if (found != nullptr && found->deadline.has_value() && found->sequence == slot.sequence)
                     return;
                 std::ranges::pop_heap(_timers, soonestFirst);
                 _timers.pop_back();
@@ -614,6 +818,10 @@ namespace detail
         {
             if (park.handle == platform::InvalidHandle)
                 return;
+            --_readiness;
+            if (!park.handleIndexed)
+                return;
+            park.handleIndexed = false;
             // Erase this park alone: a descriptor may carry a second one — a reader beside a
             // writer — and erasing by key would silently drop that one too.
             auto const [first, last] = _byHandle.equal_range(park.handle);
@@ -623,7 +831,14 @@ namespace detail
                 _byHandle.erase(index);
         }
 
-        std::unordered_map<ParkId, std::unique_ptr<Park>> _parks;
+        /// How many taken parks @c recycle keeps for reuse. Enough for a loop's steady churn -- a
+        /// park is taken and another filed per operation -- without holding a burst's worth of
+        /// memory for ever.
+        static constexpr std::size_t MaxSpareParks = 64;
+
+        ParkMap _parks;
+        std::vector<std::unique_ptr<Park>> _spare;
+        std::size_t _readiness = 0; ///< Parks holding a handle key, indexed or watched.
         std::unordered_map<void*, ParkId> _byWaiter;
         std::unordered_multimap<platform::NativeHandle, ParkId> _byHandle;
         std::vector<TimerSlot> _timers;

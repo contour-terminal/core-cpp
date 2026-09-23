@@ -53,6 +53,7 @@
 #include <core/platform/Clock.hpp>
 #include <core/platform/Types.hpp>
 
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <coroutine>
@@ -693,9 +694,9 @@ class EventLoop: public async::IExecutor
     /// looping until a pass finds nothing — because freeing a chain can park again.
     void abandonParkedWork() noexcept;
 
-    /// @return Whether @c stop() has been called. Read under the inbound mutex, because it is
-    ///         written from any thread.
-    [[nodiscard]] bool stopRequested() const;
+    /// @return Whether @c stop() has been called. An atomic rather than a read under the inbound
+    ///         mutex, because it is written from any thread and `run()` asks it every turn.
+    [[nodiscard]] bool stopRequested() const noexcept;
 
     /// Turn step 2: resumes queued coroutines, up to the batch bound.
     ///
@@ -831,9 +832,10 @@ class EventLoop: public async::IExecutor
     /// Tells a host-driven backend when the next turn is due, after every turn.
     void armHostWake();
 
-    IoBackend& _backend;            ///< The injected multiplexed wait and dispatcher.
-    platform::IClock& _clock;       ///< The injected monotonic time source.
-    EventLoopOptions _options;      ///< Fixed at construction.
+    IoBackend& _backend;       ///< The injected multiplexed wait and dispatcher.
+    platform::IClock& _clock;  ///< The injected monotonic time source.
+    EventLoopOptions _options; ///< Fixed at construction.
+    bool _hostDriven;          ///< @c IoBackend::isHostDriven, asked once: a backend does not change kind.
     detail::WorkerIdentity _worker; ///< Which thread is inside a turn, if any.
 
     /// One queued resumption, and whether the chain behind it is the loop's to free.
@@ -915,9 +917,15 @@ class EventLoop: public async::IExecutor
 
     async::StopSource _rootStop; ///< Root cancellation source.
 
-    mutable std::mutex _inboundMutex; ///< Guards @c _inbound and @c _stopRequested.
+    mutable std::mutex _inboundMutex; ///< Guards @c _inbound.
     Inbound _inbound;                 ///< What other threads have handed over.
-    bool _stopRequested = false;      ///< Set by @c stop(), from any thread; read by @c run().
+
+    /// Whether @c _inbound may hold something: set under the lock by every hand-off, cleared under
+    /// it by the turn that takes them. Read WITHOUT the lock at the top of every turn, so a loop no
+    /// other thread talks to never takes the mutex at all.
+    std::atomic<bool> _inboundPending { false };
+
+    std::atomic<bool> _stopRequested { false }; ///< Set by @c stop(), from any thread; read by @c run().
 };
 
 /// Awaitable that resumes after a delay (or throws on cancellation).

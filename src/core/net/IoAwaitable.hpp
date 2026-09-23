@@ -250,7 +250,12 @@ class ResultAwaitable
         // Registered only once the operation is genuinely parked, and only after `cancelThrough`
         // has been given the park — so the callback, which may run on any thread, reads a park id
         // that was written before it could possibly fire.
-        _cancelReg.emplace(_token, [this] { onStop(); });
+        //
+        // Not at all where the token can never be stopped -- a detached flow's, which is every
+        // connection a server spawns: there is no source to fire it, and the registration would be
+        // a `std::function` built and torn down once per parked operation for nothing.
+        if (_token.stop_possible())
+            _cancelReg.emplace(_token, [this] { onStop(); });
         return std::noop_coroutine();
     }
 

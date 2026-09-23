@@ -5,6 +5,7 @@
 #include <core/net/detail/ScopeGuard.hpp>
 
 #include <algorithm>
+#include <initializer_list>
 #include <limits>
 #include <ranges>
 #include <tuple>
@@ -33,7 +34,7 @@ namespace
 } // namespace
 
 EventLoop::EventLoop(IoBackend& backend, platform::IClock& clock, EventLoopOptions options):
-    _backend(backend), _clock(clock), _options(options)
+    _backend(backend), _clock(clock), _options(options), _hostDriven(backend.isHostDriven())
 {
     // A zero batch drains nothing, so queued work would stay queued for ever -- and since an idle
     // turn is one that leaves the ready queue empty, `runUntilIdle` would never return. Refused
@@ -190,6 +191,7 @@ void EventLoop::abandonParkedWork() noexcept
         {
             auto const lock = std::scoped_lock { _inboundMutex };
             std::swap(inbound, _inbound);
+            _inboundPending.store(false, std::memory_order_relaxed);
         }
         if (ready.empty() && parks.empty() && inbound.empty())
             return;
@@ -373,12 +375,20 @@ RunOnceResult EventLoop::turn(std::optional<platform::SteadyDuration> maxWait, s
 
 bool EventLoop::runInbound()
 {
+    // Nothing handed over, which is every turn of a loop no other thread talks to: answered without
+    // the lock. A hand-off that lands after this load is no worse off than one that lands after the
+    // swap below: every hand-off wakes the backend once it is queued, so the wait this turn enters
+    // returns at once and the next turn takes it.
+    if (!_inboundPending.load(std::memory_order_acquire))
+        return false;
+
     // Swap under the lock, run outside it: a callback may itself post (or spawn, or resume
     // coroutines that do), and must not deadlock or invalidate the container mid-iteration. Work
     // handed over DURING the run lands in the fresh queue and is picked up on the next turn.
     auto pending = Inbound {};
     {
         auto const lock = std::scoped_lock { _inboundMutex };
+        _inboundPending.store(false, std::memory_order_relaxed);
         pending.posts.swap(_inbound.posts);
         pending.submissions.swap(_inbound.submissions);
         pending.scheduled.swap(_inbound.scheduled);
@@ -418,20 +428,24 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
     auto resumed = std::size_t { 0 };
     while (resumed < bound && !_ready.empty())
     {
-        auto entry = std::move(_ready.front());
-        _ready.pop_front();
-
         // A due timer callback runs HERE, where a coroutine resumption runs, and nowhere else.
         // Step 5 could have called it the moment it found the deadline due -- and then user code
         // would run at a second point in the turn, outside the bound, outside the one assertion
         // that says no backend dispatch is in flight, and after the drain rather than in it. One
-        // place that hands control outside the loop is worth the extra queue hop.
-        if (entry.callbackPark)
+        // place that hands control outside the loop is worth the extra queue hop. Read in place and
+        // popped before the call: the entry holds no coroutine to move out, and the callback may
+        // queue more.
+        if (auto const callback = _ready.front().callbackPark)
         {
-            runDueCallback(entry.callbackPark, entry.wake);
+            auto const wake = _ready.front().wake;
+            _ready.pop_front();
+            runDueCallback(callback, wake);
             ++resumed;
             continue;
         }
+
+        auto entry = std::move(_ready.front());
+        _ready.pop_front();
 
         auto const handle = entry.parked.handle();
 
@@ -493,6 +507,10 @@ std::optional<platform::SteadyDuration> EventLoop::computeTimeout(
 
 std::size_t EventLoop::fireExpiredTimers()
 {
+    // No deadline armed at all, which is every turn of a loop serving sockets and nothing else:
+    // answered before the heap is consulted.
+    if (_parks.timerSlotCount() == 0)
+        return 0;
     auto fired = std::size_t { 0 };
     for (auto const park: _parks.takeExpired(_clock.now()))
     {
@@ -541,7 +559,7 @@ void EventLoop::runDueCallback(ParkId park, ParkWake wake)
 
 void EventLoop::armHostWake()
 {
-    if (!_backend.isHostDriven())
+    if (!_hostDriven)
         return;
 
     // **`_closedParks` is not in the test below, and this asserts the reason rather than trusting
@@ -619,6 +637,7 @@ void EventLoop::submit(async::ParkedWork work)
     {
         auto const lock = std::scoped_lock { _inboundMutex };
         _inbound.submissions.push_back(std::move(work));
+        _inboundPending.store(true, std::memory_order_release);
     }
     _backend.wake();
 }
@@ -640,6 +659,7 @@ void EventLoop::schedule(platform::SteadyTimePoint deadline, async::ParkedWork w
     {
         auto const lock = std::scoped_lock { _inboundMutex };
         _inbound.scheduled.push_back(TimedWork { .deadline = deadline, .work = std::move(work) });
+        _inboundPending.store(true, std::memory_order_release);
     }
     _backend.wake();
 }
@@ -720,6 +740,7 @@ void EventLoop::post(std::function<void()> callback)
     {
         auto const lock = std::scoped_lock { _inboundMutex };
         _inbound.posts.push_back(std::move(callback));
+        _inboundPending.store(true, std::memory_order_release);
     }
     // Break a possibly-blocked wait. The wakeup channel belongs to the backend -- `wake()` is the
     // one member of IoBackend another thread may call -- so the loop holds no descriptor of its
@@ -730,17 +751,13 @@ void EventLoop::post(std::function<void()> callback)
 
 void EventLoop::stop() noexcept
 {
-    {
-        auto const lock = std::scoped_lock { _inboundMutex };
-        _stopRequested = true;
-    }
+    _stopRequested.store(true, std::memory_order_release);
     _backend.wake();
 }
 
-bool EventLoop::stopRequested() const
+bool EventLoop::stopRequested() const noexcept
 {
-    auto const lock = std::scoped_lock { _inboundMutex };
-    return _stopRequested;
+    return _stopRequested.load(std::memory_order_acquire);
 }
 
 void EventLoop::requestStop()
@@ -877,7 +894,7 @@ ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
     if (!entry.work.resume && entry.onExpired == nullptr && entry.onReady == nullptr)
         return ParkId::invalid();
 
-    auto park = std::make_unique<detail::Park>();
+    auto park = _parks.acquire();
     park->loop = this;
     park->handle = entry.handle;
     park->deadline = entry.deadline;
@@ -885,7 +902,10 @@ ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
     park->onReady = entry.onReady;
     park->callbackState = entry.callbackState;
     park->ownedByLoop = static_cast<bool>(entry.work.abandon);
-    park->parked = async::detail::Parked { std::move(entry.work) };
+    // A frameless park -- a socket operation, a timer callback -- has no coroutine to hold, and a
+    // park recycled by `unregisterPark` holds none already: nothing to move in.
+    if (entry.work.resume)
+        park->parked = async::detail::Parked { std::move(entry.work) };
 
     detail::HandleWatch* watch = nullptr;
     if (entry.handle != platform::InvalidHandle && entry.lifetime == RegistrationLifetime::UntilClosed)
@@ -903,7 +923,7 @@ ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
             return ParkId::invalid();
         }
         watch = *watched;
-        park->watched = true;
+        park->watch = watch;
     }
     else if (entry.handle != platform::InvalidHandle)
     {
@@ -1010,8 +1030,10 @@ void EventLoop::unregisterPark(ParkId park) noexcept
     // The abandon mark goes with the park, on every path that takes one. `wakeReasonOf` consumes
     // it one turn later on the ordinary path, but a park closed under `FdWakePolicy::Cancel` and
     // then taken by `cancelPending` -- or freed at teardown -- never reaches that, and the mark
-    // would outlive the park it names for the loop's whole life.
-    _abandoned.erase(park);
+    // would outlive the park it names for the loop's whole life. Asked only when there is a mark
+    // at all: this runs once per parked operation, and there almost never is.
+    if (!_abandoned.empty())
+        _abandoned.erase(park);
     if (!entry)
         return;
     if (entry->attached)
@@ -1019,13 +1041,15 @@ void EventLoop::unregisterPark(ParkId park) noexcept
     // A watched park gives its slot back and leaves the registration where it is. Writability is
     // narrowed away NOW rather than when a wait next reports it, because it would be reported on
     // the very next wait: a socket with room in its send buffer is writable on every one of them.
-    if (hasInterest(releaseWatchSlot(*entry), Interest::Write))
-        if (auto const watch = _watches.find(entry->handle); watch != _watches.end())
-            narrowWatch(*watch->second, Interest::Read);
+    if (auto* const watch = entry->watch; hasInterest(releaseWatchSlot(*entry), Interest::Write))
+        narrowWatch(*watch, Interest::Read);
     // Whatever is still here is a frame that is resuming right now -- await_resume is what calls
     // this -- so the chain belongs to it again rather than to the loop.
     if (entry->parked)
         entry->parked.take().abandon.disarm();
+    // Kept for the next park rather than freed: this is the once-per-operation path, and the park
+    // is empty now that its chain is handed back.
+    _parks.recycle(std::move(entry));
 }
 
 FdWakeReason EventLoop::wakeReasonOf(ParkId park) noexcept
@@ -1036,7 +1060,10 @@ FdWakeReason EventLoop::wakeReasonOf(ParkId park) noexcept
            && "EventLoop::wakeReasonOf from a second thread while another is driving this loop: "
               "post() a call to it instead");
     // Consumed rather than merely read: the awaiter asks exactly once, and an id left behind here
-    // would outlive its park and grow without bound on a long-lived loop.
+    // would outlive its park and grow without bound on a long-lived loop. An empty set is the
+    // common case by far -- a handle closed under a parked flow is rare -- and is answered unhashed.
+    if (_abandoned.empty())
+        return FdWakeReason::Ready;
     return _abandoned.erase(park) != 0 ? FdWakeReason::Abandoned : FdWakeReason::Ready;
 }
 
@@ -1062,6 +1089,7 @@ void EventLoop::requestCancel(ParkId park) noexcept
     {
         auto const lock = std::scoped_lock { _inboundMutex };
         _inbound.cancels.push_back(park);
+        _inboundPending.store(true, std::memory_order_release);
     }
     _backend.wake();
 }
@@ -1175,15 +1203,9 @@ std::expected<detail::HandleWatch*, NetError> EventLoop::watchHandle(platform::N
 
 Interest EventLoop::releaseWatchSlot(detail::Park& park) noexcept
 {
-    if (!park.watched)
-        return Interest::None;
-    park.watched = false;
-    auto const found = _watches.find(park.handle);
-    if (found == _watches.end())
-        return Interest::None; // closed already: the watch went with the announcement
-    // Compared by id, never assumed: a descriptor number reused since this park was filed has a new
-    // watch, whose slots name parks this one is not.
-    auto& watch = *found->second;
+    if (park.watch == nullptr)
+        return Interest::None; // no watch, or it went with the handle's close announcement
+    auto& watch = *std::exchange(park.watch, nullptr);
     auto released = Interest::None;
     if (watch.reader == park.id)
     {
@@ -1231,6 +1253,11 @@ void EventLoop::dropWatch(platform::NativeHandle handle) noexcept
     auto const found = _watches.find(handle);
     if (found == _watches.end())
         return;
+    // The parks holding its slots let go of it first: they may outlive it by a turn, and a pointer
+    // left behind would name freed storage when they are taken.
+    for (auto const slot: { found->second->reader, found->second->writer })
+        if (auto* const park = _parks.find(slot); park != nullptr && park->watch == found->second.get())
+            park->watch = nullptr;
     _backend.detach(found->second->handler);
     _watches.erase(found);
 }
@@ -1295,13 +1322,22 @@ void EventLoop::notifyHandleClosing(platform::NativeHandle handle, FdWakePolicy 
     if (handle == platform::InvalidHandle)
         return;
 
+    // The parks on the handle: those with a registration of their own, from the handle index, and
+    // those holding a slot on the handle's watch, which the index does not carry -- the watch names
+    // them, and filing them twice would cost the index an insert and an erase per operation.
+    auto parks = _parks.parksOn(handle);
+    if (auto const watch = _watches.find(handle); watch != _watches.end())
+        for (auto const slot: { watch->second->reader, watch->second->writer })
+            if (slot && _parks.find(slot) != nullptr)
+                parks.push_back(slot);
+
     // The registration kept for the handle's life ends HERE, which is the promise
     // `RegistrationLifetime::UntilClosed` asked of the caller: while the descriptor is still open,
     // for the reason the loop below gives, and out of any batch a wait in flight is walking, which
     // `detach` does and which is what keeps a closed descriptor from ever being dispatched.
     dropWatch(handle);
 
-    for (auto const park: _parks.parksOn(handle))
+    for (auto const park: parks)
     {
         auto* const entry = _parks.find(park);
         if (entry == nullptr)
