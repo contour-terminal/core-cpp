@@ -34,22 +34,64 @@ teardown and cancellation. The rules and the fastcached issue behind each are
 **Breaking, for the projects that carried a copy.** Every entry under *Breaking* below names what
 a caller changes. `tools/migrate/renames.json` and the codemods beside it apply the mechanical ones
 (every rename row, and a `removed` row for every symbol that has gone), and
-`.agent/guides/consumer-migration.md` is the procedure. What each consumer meets first:
+`.agent/guides/consumer-migration.md` is the procedure. A consumer meets the breaks of every copy
+it carries, so the list is by copy first and by consumer after it; every item is an entry under
+*Breaking*, where its migration is.
 
-- **contour** (`src/crispy`, `src/coro`, `src/net`): the namespaces (`crispy::` is `core::`,
-  `coro::` is `core::async::`, `net::` is `core::net::`); `EventSource` is `IoBackend`, and the
-  loop is `EventLoop` over it; `ISocket`'s operations are awaitables rather than `Task`s, and
-  `shutdownWrite()` returns one; `NetErrorCode::Other` is `SystemError`; `IListener::localPort()`
-  is `boundPort()`; `connect()` no longer resolves a name on the calling thread; `wrapTls()` takes
-  the loop.
-- **endo** (`src/platform`, `src/tui`): `LanguageId::Endo` and `registerEndoHighlighter()` are gone
-  -- endo registers its language through the registry seam; `TuiRuntime` is composed on
-  `core::net::EventLoop` rather than its own scheduler; the completion types live in
-  `core::tui::completer`; `FileSystem::openWrite()` and `copyFile()` take their modes as enums.
-- **tuidu** (`src/coro`, `src/platform`, `src/tui`): the `coro` and `tui` changes above, and
-  `whenAny()` resolving to `std::optional<std::size_t>`.
-- **fastcached** (`src/FastCache/{Async,Net}`): the camelBack spellings (`renames.json` has every
-  one), `IAdmissionControl` as one `tryAdmit()` and a lease, and `IReactor` as `EventLoop`.
+- **A copy of contour's `src/crispy`** (contour, and endo, which fetches it): the namespace
+  (`crispy::` is `core::`); `Flags::operator&=` intersects rather than clearing, a reversal
+  invisible at the call site; `FNV`'s byte-wise overload refuses a type with padding;
+  `base64::decodeLength()` answers the tight bound; `readFileAsString()` answers exactly the bytes
+  on disk and an empty string for a missing file; `<core/Escape.hpp>` and `readFileAsString()`
+  are `[[nodiscard]]`; `Times2D::operator[]` answers the tuple `*it` yields;
+  `joinHumanReadableQuoted()` takes a `std::string_view` separator.
+- **A copy of contour's `src/coro`** (contour, endo, tuidu, and fastcached's `vendor/endo`): the
+  namespace (`coro::` is `core::async::`); `Task`'s `operator co_await` is rvalue-only and the
+  awaiter owns the frame, so a task awaited with `std::move` is empty afterwards; `result()` of a
+  task that owns no frame throws `std::logic_error`; `whenAll()`/`whenAny()` take their tasks by
+  rvalue; `whenAny()` resolves to `std::optional<std::size_t>`.
+- **A copy of contour's `src/net`** (contour, and endo, which fetches it):
+  - the loop: the namespace (`net::` is `core::net::`); `EventSource` is `IoBackend` and the loop
+    is `EventLoop` over it, with a resumption one turn after readiness, a `blockOn()` that blocks,
+    a destructor that frees what the loop owns, and `WaitFdAwaiter` as `WaitHandleAwaiter`;
+    `FdInterest::None` mutes on every backend; a socket still parked when its loop is destroyed is
+    never resumed, so sockets die first;
+  - the socket: `ISocket`'s operations are awaitables rather than `Task`s, and a caller that
+    stores one wraps it in `asTask`; `shutdownWrite()` returns one; a stop of the flow's own token
+    throws `OperationCancelled` out of a socket operation, and a read parked when `close()` came
+    reports `Cancelled`, not `BadHandle`; `isClosed()` latches the peer's EOF; `WriteQueue`
+    refuses a null socket;
+  - the errors: `NetErrorCode::Other` is `SystemError` and renders `"system error"`; `EPIPE` on a
+    write is `SystemError`, not `ConnReset`; a TLS peer that closes without `close_notify` reads
+    as `ConnReset`, not `0`;
+  - TLS: `wrapTls()` and `ITlsContext::wrap()` take the loop; `generateSelfSignedCertificate()` and
+    `makeSelfSignedServerContext()` take a `SelfSignedOptions`, and the **default common name is
+    `"localhost"`, not `"contour-daemon"`** -- contour's `src/vthost/Daemon.cpp` calls
+    `makeSelfSignedServerContext()`, so the certificate it serves changes name unless it passes
+    `{ .commonName = "contour-daemon" }`;
+  - the dial: `connect()` no longer resolves on the calling thread, takes its host as a
+    `std::string`, throws `OperationCancelled` on the flow's stop and reports an unresolvable name
+    as `AddressError`; `IListener::localPort()` is `boundPort()`.
+- **A copy of endo's `src/platform`** (endo, tuidu, and fastcached's `vendor/endo`):
+  `FileSystem::openWrite()` and `copyFile()` take `WriteMode` and `OverwritePolicy` rather than a
+  `bool`; `testing::InMemoryFileSystem` keeps a stream across `remove()` and `rename()`, as POSIX
+  does; `TestEnvironmentProvider` is in `core::platform::testing`.
+- **A copy of endo's `src/tui`** (endo, tuidu, and fastcached's `vendor/endo`): `TuiRuntime` is
+  composed on `core::net::EventLoop` -- constructed over a loop, destroyed before it, with the
+  `runtime::EventSource` family gone -- so the `EventLoop` and `IoBackend` items above reach a
+  consumer through the TUI too; the completion types are in `core::tui::completer`;
+  `LanguageId::Endo` and `registerEndoHighlighter()` are gone, and endo registers its language
+  with a `SyntaxHighlighterRegistry` it owns.
+- **fastcached's `src/FastCache/{Async,Net}`**: the camelBack spellings (`renames.json` has every
+  one); `IReactor` and its reactors as `EventLoop` and `IoBackend`s; `IAdmissionControl` as one
+  `tryAdmit()` and a lease; `NetErrorCode::BadFileHandle` as `BadHandle`; `NetError::toString()`
+  in contour's shape rather than `NetError(code=...)`; `TlsContext::CreateSelfSigned()` and
+  `Create()` as `makeSelfSignedServerContext()` and `makeTlsServerContextFromFiles()`.
+
+So: **contour** meets the crispy, coro and net items; **endo** meets all of contour's, because it
+fetches contour's copies, and the platform and tui items; **tuidu** meets the coro, platform and
+tui items; **fastcached** meets its own, and the coro, platform and tui items through
+`vendor/endo`.
 
 ### Added
 
@@ -1118,8 +1160,8 @@ a caller changes. `tools/migrate/renames.json` and the codemods beside it apply 
     `notifyHandleClosing`. They mutate the loop's own containers with no lock and no inbound
     queue to hand to, so a call from a second thread while another drives tears a `std::list` or
     rehashes a map underneath a turn. `spawn` is the one to check first when migrating from
-    `submit`: it looks like it and is not. `core-cpp.hostdriven-canary.spawnOffThread` proves the
-    family fires. `resumeSoon`'s documentation previously named thread-pool callbacks among its
+    `submit`: it looks like it and is not. `core-cpp.loop-affinity-canary.<member>` proves each
+    one fires. `resumeSoon`'s documentation previously named thread-pool callbacks among its
     callers, which the assert aborts — use `submit(async::ParkedWork)`, the same operation with
     the cross-thread hand-off.
   - `FdRegistrationFailed` gains a `NetError reason` member carrying what the backend refused
