@@ -83,7 +83,7 @@ namespace
     auto decodeUtf8At(std::string_view s, std::size_t pos) -> char32_t
     {
         if (pos >= s.size())
-            return U'�';
+            return U'\uFFFD';
         auto const lead = static_cast<unsigned char>(s[pos]);
         if (lead < 0x80)
             return static_cast<char32_t>(lead);
@@ -107,16 +107,16 @@ namespace
         }
         else
         {
-            return U'�'; // Stray continuation byte or invalid lead byte.
+            return U'\uFFFD'; // Stray continuation byte or invalid lead byte.
         }
 
         if (pos + extraBytes >= s.size())
-            return U'�';
+            return U'\uFFFD';
         for (auto const i: std::views::iota(std::size_t { 1 }, extraBytes + 1))
         {
             auto const cont = static_cast<unsigned char>(s[pos + i]);
             if ((cont & 0xC0) != 0x80)
-                return U'�';
+                return U'\uFFFD';
             cp = (cp << 6) | (cont & 0x3F);
         }
         return cp;

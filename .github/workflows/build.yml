@@ -158,6 +158,16 @@ jobs:
           -DWORK_DIR="$RUNNER_TEMP/read-buffer-guard-selftest"
           -P tests/cmake/check-read-buffer-guard-selftest.cmake
 
+      # Every tracked text file is clean UTF-8: no invalid bytes, no U+FFFD, no double encoding
+      # (core-cpp#40). Nothing else reads bytes as text, so this is the only gate that sees it.
+      # covers: core-cpp.text-encoding
+      - name: Text encoding
+        run: python scripts/check-text-encoding.py
+
+      # covers: core-cpp.text-encoding-selftest
+      - name: Text-encoding self-test
+        run: python scripts/check-text-encoding-selftest.py
+
       # covers: core-cpp.check-release-selftest
       - name: Release-check self-test
         run: >-

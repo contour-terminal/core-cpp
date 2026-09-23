@@ -348,6 +348,27 @@ set_tests_properties(core-cpp.preset-coverage core-cpp.preset-coverage-selftest 
     LABELS "core-cpp;hygiene;tree-level"
     TIMEOUT 60)
 
+# Every tracked text file is clean UTF-8, with no U+FFFD and no double encoding (core-cpp#40): a repair
+# that decoded a file as cp1252 and encoded it again turned 72 em-dashes into mojibake, which is
+# still valid UTF-8, and no other gate reads bytes as text. tree-level: it reads the tree and git's
+# list of it, so its answer cannot differ between platforms.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME core-cpp.text-encoding
+             COMMAND "${Python3_EXECUTABLE}" "${CORE_CPP_SOURCE_DIR}/scripts/check-text-encoding.py")
+    add_test(NAME core-cpp.text-encoding-selftest
+             COMMAND "${Python3_EXECUTABLE}" "${CORE_CPP_SOURCE_DIR}/scripts/check-text-encoding-selftest.py")
+else()
+    add_test(NAME core-cpp.text-encoding COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.text-encoding: SKIPPED -- no Python 3 interpreter was found at configure time")
+    add_test(NAME core-cpp.text-encoding-selftest COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.text-encoding-selftest: SKIPPED -- no Python 3 interpreter was found at configure time")
+    set_tests_properties(core-cpp.text-encoding core-cpp.text-encoding-selftest PROPERTIES
+        SKIP_REGULAR_EXPRESSION "SKIPPED")
+endif()
+set_tests_properties(core-cpp.text-encoding core-cpp.text-encoding-selftest PROPERTIES
+    LABELS "core-cpp;hygiene;tree-level"
+    TIMEOUT 60)
+
 # That scripts/clang-format.py and scripts/python-style.py refuse a path that is not theirs.
 #
 # Both filtered by extension only inside `sources()`, which serves `--all`, so a path a caller
