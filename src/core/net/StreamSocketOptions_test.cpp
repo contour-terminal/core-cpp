@@ -82,15 +82,7 @@ core::platform::NativeHandle handleOf(ISocket const& socket)
 class RawTcpSocket
 {
   public:
-    RawTcpSocket()
-    {
-#ifdef _WIN32
-        core::platform::ensureWinsockInitialized();
-        _handle = reinterpret_cast<core::platform::NativeHandle>(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
-#else
-        _handle = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-#endif
-    }
+    RawTcpSocket(): _handle(openTcp()) {}
 
     RawTcpSocket(RawTcpSocket const&) = delete;
     RawTcpSocket(RawTcpSocket&&) = delete;
@@ -112,7 +104,18 @@ class RawTcpSocket
     [[nodiscard]] core::platform::NativeHandle handle() const noexcept { return _handle; }
 
   private:
-    core::platform::NativeHandle _handle = core::platform::InvalidHandle;
+    /// @return A fresh TCP socket, or @c platform::InvalidHandle.
+    static core::platform::NativeHandle openTcp() noexcept
+    {
+#ifdef _WIN32
+        core::platform::ensureWinsockInitialized();
+        return reinterpret_cast<core::platform::NativeHandle>(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
+#else
+        return ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+#endif
+    }
+
+    core::platform::NativeHandle _handle;
 };
 
 /// Accepts one connection on @p listener into @p accepted.

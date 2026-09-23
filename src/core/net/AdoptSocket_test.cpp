@@ -23,6 +23,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #ifdef _WIN32
     #include <core/platform/WinsockInit.hpp>
@@ -117,7 +118,7 @@ bool rawSendAll(NativeHandle handle, std::string_view payload) noexcept
 #else
     auto const sent = ::send(handle, payload.data(), payload.size(), 0);
 #endif
-    return sent == static_cast<decltype(sent)>(payload.size());
+    return std::cmp_equal(sent, payload.size());
 }
 
 /// Receives up to @p size bytes with a plain blocking call.

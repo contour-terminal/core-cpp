@@ -725,34 +725,6 @@ TEST_CASE("a concurrent reader and writer on one socket both make progress", "[n
     }
 }
 
-namespace
-{
-
-/// Runs @ref loopbackEcho against @p listener on @p loop, within a budget.
-///
-/// Bounded because the failure this guards is a connection the kernel handed to a DIFFERENT
-/// listener on the same port: the echo's accept then parks with nothing coming, and an unbounded
-/// wait turns that red into a hang (.agent/rules/testing.md).
-/// @return Whether the echo completed, served and matched, inside the budget.
-bool echoWithin(EventLoop& loop, core::net::IListener* listener)
-{
-    constexpr auto Budget = std::chrono::milliseconds { 10000 };
-    auto served = false;
-    auto matched = false;
-    auto timedOut = false;
-    auto budget = [](EventLoop* lp, std::chrono::milliseconds limit, bool* expired) -> Task<void> {
-        co_await lp->delay(limit);
-        *expired = true;
-    };
-    loop.blockOn(core::net::testing::anyOf(loopbackEcho(&loop, listener, &served, &matched),
-                                           budget(&loop, Budget, &timedOut)));
-    INFO("waited " << Budget.count() << "ms for one echo on port " << listener->boundPort());
-    CHECK_FALSE(timedOut);
-    return !timedOut && served && matched;
-}
-
-} // namespace
-
 TEST_CASE("a second listener on a bound port is refused by default", "[net][listen]")
 {
     // The default is exclusive, and it has to stay so: a port a second process can bind is a port
@@ -783,6 +755,34 @@ TEST_CASE("a second listener on a bound port is refused by default", "[net][list
 }
 
 #ifndef _WIN32
+namespace
+{
+
+/// Runs @ref loopbackEcho against @p listener on @p loop, within a budget.
+///
+/// Bounded because the failure this guards is a connection the kernel handed to a DIFFERENT
+/// listener on the same port: the echo's accept then parks with nothing coming, and an unbounded
+/// wait turns that red into a hang (.agent/rules/testing.md).
+/// @return Whether the echo completed, served and matched, inside the budget.
+bool echoWithin(EventLoop& loop, core::net::IListener* listener)
+{
+    constexpr auto Budget = std::chrono::milliseconds { 10000 };
+    auto served = false;
+    auto matched = false;
+    auto timedOut = false;
+    auto budget = [](EventLoop* lp, std::chrono::milliseconds limit, bool* expired) -> Task<void> {
+        co_await lp->delay(limit);
+        *expired = true;
+    };
+    loop.blockOn(core::net::testing::anyOf(loopbackEcho(&loop, listener, &served, &matched),
+                                           budget(&loop, Budget, &timedOut)));
+    INFO("waited " << Budget.count() << "ms for one echo on port " << listener->boundPort());
+    CHECK_FALSE(timedOut);
+    return !timedOut && served && matched;
+}
+
+} // namespace
+
 TEST_CASE("PortSharing::Shared lets a listener per loop bind one port, and each accepts", "[net][listen]")
 {
     // A daemon binds one listener per loop on the same port and lets the kernel spread the
