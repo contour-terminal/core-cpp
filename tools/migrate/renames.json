@@ -7298,7 +7298,7 @@
       "profiles": [
         "fastcached"
       ],
-      "note": "SO_REUSEPORT is not imported: nothing in core-cpp binds one port from several loops yet, and an option that is never exercised is an option that is never right. ListenOptions is where it would go."
+      "note": "Port sharing is a field of the listener's options now: listen(loop, ListenOptions { ..., .sharing = PortSharing::Shared }) sets SO_REUSEPORT on Linux, the BSDs and macOS, so one listener per loop can bind the same port. On Windows it is refused with NetErrorCode::Unsupported, because SO_REUSEADDR there lets a later socket take the port over rather than share it. The default is PortSharing::Exclusive."
     },
     {
       "kind": "include",

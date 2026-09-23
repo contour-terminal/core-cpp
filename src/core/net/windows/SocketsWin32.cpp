@@ -27,6 +27,11 @@ namespace core::net
 
 std::expected<std::unique_ptr<IListener>, NetError> listen(EventLoop& loop, ListenOptions options)
 {
+    // Refused, never mapped: Windows has no load-balancing SO_REUSEPORT, and its SO_REUSEADDR
+    // lets a later socket take over a port another one holds -- a hijack, not a share.
+    if (options.sharing == PortSharing::Shared)
+        return std::unexpected(makeNetError(
+            NetErrorCode::Unsupported, 0, "port sharing: Windows has no load-balancing SO_REUSEPORT"));
     platform::ensureWinsockInitialized();
     // Which listener is the loop's question, not the platform's: a completion port completes
     // AcceptEx, and a readiness backend is told FD_ACCEPT. Both are built on Windows, and

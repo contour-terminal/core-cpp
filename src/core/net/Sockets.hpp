@@ -14,6 +14,7 @@
 #include <core/net/IListener.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/IoResult.hpp>
+#include <core/net/UdpSocket.hpp>
 #include <core/platform/Types.hpp>
 
 #include <cstddef>
@@ -45,6 +46,17 @@ struct ListenOptions
 
     /// The `::listen` backlog.
     int backlog = 128;
+
+    /// Whether other listeners may bind the same address and port at the same time.
+    ///
+    /// @c PortSharing::Shared is what a server with one listener per loop asks for: each loop binds
+    /// the port and the kernel spreads incoming connections across them (`SO_REUSEPORT` on Linux,
+    /// the BSDs and macOS; which listener a connection reaches is the kernel's choice). On Windows
+    /// it is refused with @c NetErrorCode::Unsupported, never mapped: Windows has no load-balancing
+    /// option, and its `SO_REUSEADDR` lets a later socket take over a port another one holds, which
+    /// is a hijack rather than a share. The default is exclusive, so a second bind of a held port
+    /// fails with @c NetErrorCode::AddressInUse.
+    PortSharing sharing = PortSharing::Exclusive;
 };
 
 /// Binds a TCP listener as @p options asks, driven by @p loop's backend.

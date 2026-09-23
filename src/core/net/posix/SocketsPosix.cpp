@@ -44,7 +44,7 @@ namespace
 std::expected<std::unique_ptr<IListener>, NetError> listen(EventLoop& loop, ListenOptions options)
 {
     platform::ensureWinsockInitialized();
-    return PosixListener::bind(loop, options.host, options.port, options.backlog)
+    return PosixListener::bind(loop, options.host, options.port, options.backlog, options.sharing)
         .transform(
             [](std::unique_ptr<PosixListener> listener) -> std::unique_ptr<IListener> { return listener; });
 }

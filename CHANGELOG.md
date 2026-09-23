@@ -42,6 +42,14 @@ workflow refuses one without a section here.
 
 ### Added
 
+- **`ListenOptions::sharing`**, a `PortSharing` defaulting to `PortSharing::Exclusive`. With
+  `PortSharing::Shared`, `listen()` sets `SO_REUSEPORT` on Linux, the BSDs and macOS, so a server
+  can bind one listener per loop on the same port and let the kernel spread the connections;
+  fastcached's daemon does this by default, and without it the second loop's bind failed with
+  `AddressInUse`. On Windows a shared listener is refused with `NetErrorCode::Unsupported` rather
+  than mapped to `SO_REUSEADDR`, which there lets a later socket take a held port over. It is the
+  UDP sockets' existing enum, so `<core/net/Sockets.hpp>` now includes `<core/net/UdpSocket.hpp>`.
+  `tools/migrate/renames.json`'s `core::net::ReusePort` row points at it.
 - **`core-cpp.await-ready`**, a `tree-level` check with a self-test (`scripts/check-await-ready.py`,
   run by the `style` job), refusing an `await_ready` body under `src/` or `tests/` that calls a
   function or constructs an object. It cannot see an overloaded operator; the fixed awaiters also

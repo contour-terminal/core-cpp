@@ -4,6 +4,7 @@
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/IListener.hpp>
+#include <core/net/UdpSocket.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -30,11 +31,14 @@ class PosixListener final: public IListener
     /// @param host The bind address (e.g. "127.0.0.1", "0.0.0.0", "::").
     /// @param port The bind port; 0 asks the OS for an ephemeral port.
     /// @param backlog The listen backlog.
+    /// @param sharing Whether other listeners may bind the same port (`SO_REUSEPORT`).
     /// @return The bound listener, or a @c NetError on failure.
-    [[nodiscard]] static std::expected<std::unique_ptr<PosixListener>, NetError> bind(EventLoop& loop,
-                                                                                      std::string_view host,
-                                                                                      std::uint16_t port,
-                                                                                      int backlog = 128);
+    [[nodiscard]] static std::expected<std::unique_ptr<PosixListener>, NetError> bind(
+        EventLoop& loop,
+        std::string_view host,
+        std::uint16_t port,
+        int backlog = 128,
+        PortSharing sharing = PortSharing::Exclusive);
 
     /// Adopts an already-bound, already-listening descriptor; @see core::net::adoptListener.
     ///

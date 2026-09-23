@@ -22,6 +22,24 @@
 namespace core::net
 {
 
+namespace
+{
+    /// Lets other listeners bind the port @p fd is about to bind, and the kernel spread incoming
+    /// connections across them.
+    ///
+    /// `SO_REUSEPORT`, which Linux, the BSDs and macOS all spell the same way. Not `SO_REUSEADDR`:
+    /// that is set on every listener already, and on none of these does it let two sockets LISTEN
+    /// on one port. Not behind `#ifdef SO_REUSEPORT` either: a POSIX platform without it has no
+    /// way to honour the request, and a build error says so where a silent fallback would not.
+    /// @param fd The unbound descriptor.
+    /// @return Whether the option was set; errno says why not.
+    [[nodiscard]] bool enablePortSharing(int fd) noexcept
+    {
+        int const one = 1;
+        return ::setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) == 0;
+    }
+} // namespace
+
 PosixListener::PosixListener(EventLoop& loop, int fd, std::uint16_t boundPort) noexcept:
     _loop(loop), _fd(fd), _boundPort(boundPort)
 {
@@ -56,10 +74,8 @@ void PosixListener::close(FdWakePolicy policy) noexcept
     }
 }
 
-std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::bind(EventLoop& loop,
-                                                                            std::string_view host,
-                                                                            std::uint16_t port,
-                                                                            int backlog)
+std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::bind(
+    EventLoop& loop, std::string_view host, std::uint16_t port, int backlog, PortSharing sharing)
 {
     auto hints = addrinfo {};
     hints.ai_family = AF_UNSPEC;
@@ -96,6 +112,16 @@ std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::bind(Even
 
         int const one = 1;
         ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+
+        // Failed rather than ignored the way SO_REUSEADDR is: a caller that asked for a shared
+        // port and silently got an exclusive one finds out as EADDRINUSE on its second loop.
+        if (sharing == PortSharing::Shared && !enablePortSharing(fd))
+        {
+            lastError = makeNetError(NetErrorCode::SystemError, errno, "setsockopt(SO_REUSEPORT)");
+            ::close(fd);
+            fd = -1;
+            continue;
+        }
 
         // makeNonBlockingCloexec stays: on a platform without the atomic socket() flags
         // makeStreamSocket sets them best-effort and ignores a failure, while a listener must
