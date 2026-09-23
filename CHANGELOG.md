@@ -7,9 +7,69 @@ release may break the API; every break is listed under **Breaking** with a migra
 release tag `vX.Y.Z` equals the version in `project(core-cpp VERSION X.Y.Z)`, and the release
 workflow refuses one without a section here.
 
-## [Unreleased]
+## [0.1.0]
+
+The first release: the shared C++23 foundation of the Contour Terminal projects, in namespace
+`core`, replacing the copies of the same code that contour, endo, fastcached and tuidu each carry.
+The date is stamped when the release is cut.
+
+**What it is made of.** Imported, and recorded file by file in
+[`.agent/reference/provenance.md`](https://github.com/contour-terminal/core-cpp/blob/master/.agent/reference/provenance.md) (see *Imported* below for each
+import and what changed on the way in): contour at `6777ff05014f8ff163b071e8b0e942830119db80`
+(crispy's generic half, `src/coro`, `src/net`; 110 files), endo at
+`f774a210ce989e5947b8f61d715068b1dc96088c` (the generic half of `src/platform` and `src/tui`; 212
+files), and fastcached at `0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21` (its async and networking
+layer; 103 files, plus 8 at three earlier commits). 95 files were written here.
+
+**The merged design.** contour's coroutine and networking layer and fastcached's are one design
+now, not two side by side: one `EventLoop` with a five-step turn and a six-step teardown over an
+injected `IoBackend` (poll, epoll, kqueue, an I/O completion port as the Windows default, WFMO kept
+one release, and a host-driven backend for WebAssembly); one park table and one deadline mechanism;
+one frame-free, stop-aware socket contract with one read and one write operation per socket; one
+TLS layer; one socket-error table per platform; and fastcached's ownership rules for parked work,
+teardown and cancellation. The rules and the fastcached issue behind each are
+[Coroutines and lifetimes](https://contour-terminal.github.io/core-cpp/design/coroutines-and-lifetimes/); the threading guarantees are
+[Threading](https://contour-terminal.github.io/core-cpp/design/threading/).
+
+**Breaking, for the projects that carried a copy.** Every entry under *Breaking* below names what
+a caller changes. `tools/migrate/renames.json` and the codemods beside it apply the mechanical ones
+(every rename row, and a `removed` row for every symbol that has gone), and
+`.agent/guides/consumer-migration.md` is the procedure. What each consumer meets first:
+
+- **contour** (`src/crispy`, `src/coro`, `src/net`): the namespaces (`crispy::` is `core::`,
+  `coro::` is `core::async::`, `net::` is `core::net::`); `EventSource` is `IoBackend`, and the
+  loop is `EventLoop` over it; `ISocket`'s operations are awaitables rather than `Task`s, and
+  `shutdownWrite()` returns one; `NetErrorCode::Other` is `SystemError`; `IListener::localPort()`
+  is `boundPort()`; `connect()` no longer resolves a name on the calling thread; `wrapTls()` takes
+  the loop.
+- **endo** (`src/platform`, `src/tui`): `LanguageId::Endo` and `registerEndoHighlighter()` are gone
+  -- endo registers its language through the registry seam; `TuiRuntime` is composed on
+  `core::net::EventLoop` rather than its own scheduler; the completion types live in
+  `core::tui::completer`; `FileSystem::openWrite()` and `copyFile()` take their modes as enums.
+- **tuidu** (`src/coro`, `src/platform`, `src/tui`): the `coro` and `tui` changes above, and
+  `whenAny()` resolving to `std::optional<std::size_t>`.
+- **fastcached** (`src/FastCache/{Async,Net}`): the camelBack spellings (`renames.json` has every
+  one), `IAdmissionControl` as one `tryAdmit()` and a lease, and `IReactor` as `EventLoop`.
 
 ### Added
+
+- **Gates that hold the merged design's rules, each watched refusing** (Task B13). Ported from
+  fastcached (0708dd54) with self-tests: `core-cpp.cancel-read-declared` refuses a transport that
+  inherits `ISocket::cancelRead`'s no-op, and `core-cpp.read-buffer-guard` an `ISocket::read` that
+  does not call `contract::requireReadBuffer` before its first return (or delegate). New:
+  `core-cpp.loop-affinity-canary.*`, one process per loop-thread-only `EventLoop` member, judged
+  on the assertion's own text; `core-cpp.hostdriven-canary.closedPark`; `core-cpp.layering` now
+  refuses an `#include` of a module the including module's row does not reach, and checks that the
+  build and the vendoring tool read the same module table; `core-cpp.text-encoding` refuses
+  invalid UTF-8, U+FFFD and double encoding in any tracked text file (core-cpp#40);
+  `core-cpp.ambient-reads` refuses a direct clock or environment read outside its seam; and
+  `core-cpp.tree-level-coverage` now also refuses a workflow whose `ci-ok` does not need `style`
+  (core-cpp#39). `scripts/tidy-record.py` refuses a clang-tidy result that carries no instrument
+  record, and the `clang-tidy` job records its build through it.
+
+- **CI retries the toolchain installs that fail for reasons no change can cause**
+  (`scripts/ci-retry.sh`, core-cpp#42): apt, the apt.llvm.org script and Homebrew, three attempts,
+  each retry a warning on the log; each step still asserts what it installed.
 
 - **Datagrams** (`<core/net/IDatagramSocket.hpp>`, `<core/net/UdpSocket.hpp>`,
   `<core/net/SharedPortDatagram.hpp>`). `openUdpSocket(bindAddress, port, BroadcastMode,
@@ -1364,6 +1424,26 @@ workflow refuses one without a section here.
   skipped on the next wait.
 
 ### Changed
+- **`PosixSocket`, `WindowsSocket` and the POSIX dial classify errors through the one socket-error
+  table** (Task B13), as the datagram, blocking and completion-port transports already did. A socket
+  error the private switches reported as `SystemError` now has its category: `ECONNREFUSED` is
+  `ConnRefused`, `EHOSTUNREACH`/`ENETUNREACH` `HostUnreach`, `EADDRNOTAVAIL` `AddressNotAvail`,
+  `EACCES` and `EPERM` `PermissionDenied`, `ETIMEDOUT` `Timeout`, `EAFNOSUPPORT` and
+  `EPROTONOSUPPORT` `Unsupported`, and the Winsock equivalents likewise. `EPIPE` stays
+  `SystemError`. A caller that matched `SystemError` for one of those should match its category.
+
+- **`<core/net/ISocket.hpp>` no longer includes the park table**: `ParkId` has its own header,
+  `<core/net/detail/ParkId.hpp>` (core-cpp#43). A translation unit that includes `ISocket.hpp`
+  preprocesses 113,503 lines rather than 130,784. A consumer that named `ParkEntry` or
+  `TimerCallback` through `ISocket.hpp` alone includes `<core/net/EventLoop.hpp>`.
+
+- `core::homeResolvedPath()` takes its input by `std::string const&` rather than by value:
+  `std::filesystem::path` has no `std::string&&` constructor on Windows, so the move was a copy
+  there. Source-compatible.
+
+- `core::platform::InvalidHandle` is declared `void* const` on Windows, which is the type it always
+  had (`NativeHandle const` read as a pointer to const and was not one).
+
 - **Every TLS context sets `SSL_OP_NO_RENEGOTIATION`** (Task B11): a TLS 1.2 peer that
   renegotiates now fails. Renegotiation is the one way a write can need a read after the handshake,
   and a socket with a read already parked has no second read slot for it. TLS 1.3 has none.
@@ -1462,6 +1542,21 @@ workflow refuses one without a section here.
   which says the same thing.
 
 ### Fixed
+
+- **`EventLoop::cancelPending()` takes a waiter queued after readiness together with its park**
+  (core-cpp#41). A readiness-dispatched waiter is in the ready queue while its park stays filed and
+  attached until `await_resume` runs; the ready-queue branch returned before the branch that
+  detaches, so the caller was handed a frame the backend still held a handler for. `~TuiRuntime`
+  no longer resumes each taken-back flow to work around it; it destroys the frame.
+
+- **`WindowsSocket` implements `cancelRead()`** instead of inheriting the no-op that cannot retire a
+  parked read: a parked `read` or `waitReadable` on the WFMO backend's socket is taken back and
+  completed with `NetErrorCode::Cancelled` inline, as on POSIX. `CancelRead_test` runs on the WFMO
+  backend, and `TlsCancelRead_test` on every platform.
+
+- **58 clang-tidy findings in Windows-only code**, which no CI leg analyses: comparisons against
+  `INVALID_SOCKET` (now `detail::InvalidSocket`, one `SOCKET`-typed constant), redundant casts,
+  member initialisers, ranges, a 32-bit multiply that widened, and a const that blocked a move.
 
 - **Four defects in the TLS socket's handshake and flush gates** (Task B11, fix round 1), each with a
   case in `TlsLifetime_test.cpp` that failed before the fix:

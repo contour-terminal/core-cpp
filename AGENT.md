@@ -30,7 +30,7 @@ Every module exists. `Generator` is in base (Task A5b: it needs only std, and
 `net_types`; and `tui` is endo's terminal UI (Task A7), native only, with `tui_output` split off as
 a leaf that links base alone. Task B12 composed the TUI runtime on `core::net::EventLoop`, which
 is why the `tui` row lists `net`; `tui_output` still links base alone, which is the point of the
-split. What is left of Phase B is the networking half of that merge, into `net`. The module DAG is the
+split. Phase B is complete: the networking half of the merge landed in `net` (Tasks B6 to B11). The module DAG is the
 table in `cmake/CoreCppModules.cmake`, and configure refuses a link it does not list.
 
 Consumers: contour (vendored), endo, fastcached, tuidu, Lightweight's `dbtool`, morph (CPM). Who
