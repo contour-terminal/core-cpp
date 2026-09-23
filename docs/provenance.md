@@ -18,7 +18,7 @@ Counted from the per-file table, one row per file under `src/core/`, `cmake/port
 | fastcached | `ee71f868547712892b7d9a2ebff60d49c496e25c` | 4 | `Profiling.hpp` and `Ranges.hpp`, with their tests |
 | fastcached | `f6ec49f3446b8bc121eba82c64cde2de759e774a` | 2 | `cmake/portable/CompileCache.cmake` and `cmake/FetchTransferBound.cmake`, verbatim |
 | fastcached | `5389e29a5eeca9c2319f43757bd7d6d0ac1c1a13` | 2 | `TuiRuntime.hpp` and its test, from fastcached's vendored endo, where the coroutine runtime was upstreamed |
-| core-cpp | -- | 95 | written here: the merge's seams, the host-driven backend, the gates, and the tests that pin one design to another |
+| core-cpp | -- | 97 | written here: the merge's seams, the host-driven backend, the gates, and the tests that pin one design to another |
 
 The `Imported` section of the [changelog](changelog.md) lists every import by commit, with what was
 changed on the way in.
