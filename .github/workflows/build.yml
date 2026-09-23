@@ -134,6 +134,30 @@ jobs:
           -DWORK_DIR="$RUNNER_TEMP/openssl-seam-selftest"
           -P tests/cmake/check-openssl-seam-selftest.cmake
 
+      # Every transport declares cancelRead rather than inheriting the no-op that cannot retire a
+      # parked read; and every ISocket::read refuses an empty buffer before its first return.
+      # covers: core-cpp.cancel-read-declared
+      - name: Every transport declares cancelRead
+        run: cmake -DROOT="$GITHUB_WORKSPACE" -P tests/cmake/check-cancel-read-declared.cmake
+
+      # covers: core-cpp.cancel-read-declared-selftest
+      - name: cancelRead-declared self-test
+        run: >-
+          cmake -DCHECKER="$GITHUB_WORKSPACE/tests/cmake/check-cancel-read-declared.cmake"
+          -DWORK_DIR="$RUNNER_TEMP/cancel-read-declared-selftest"
+          -P tests/cmake/check-cancel-read-declared-selftest.cmake
+
+      # covers: core-cpp.read-buffer-guard
+      - name: Every ISocket::read refuses an empty buffer
+        run: cmake -DROOT="$GITHUB_WORKSPACE" -P tests/cmake/check-read-buffer-guard.cmake
+
+      # covers: core-cpp.read-buffer-guard-selftest
+      - name: Read-buffer-guard self-test
+        run: >-
+          cmake -DCHECKER="$GITHUB_WORKSPACE/tests/cmake/check-read-buffer-guard.cmake"
+          -DWORK_DIR="$RUNNER_TEMP/read-buffer-guard-selftest"
+          -P tests/cmake/check-read-buffer-guard-selftest.cmake
+
       # covers: core-cpp.check-release-selftest
       - name: Release-check self-test
         run: >-

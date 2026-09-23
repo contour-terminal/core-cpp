@@ -161,6 +161,10 @@ core_cpp_hygiene_allow(source-glob cmake/CoreCppVendor.cmake
     "enumerates a vendored copy to find the files its manifest does not list; it is not a source list")
 core_cpp_hygiene_allow(source-glob tests/cmake/check-openssl-seam.cmake
     "enumerates the tree it scans for OpenSSL includes and types; it is not a source list")
+core_cpp_hygiene_allow(source-glob tests/cmake/check-cancel-read-declared.cmake
+    "derives the set of transports from the tree it scans; it is not a source list")
+core_cpp_hygiene_allow(source-glob tests/cmake/check-read-buffer-guard.cmake
+    "derives the set of ISocket::read definitions from the tree it scans; it is not a source list")
 
 # The consumer smoke projects under tests/ are not core-cpp's build: each is a project of its own,
 # written the way the consumer it stands for writes one. These rules say what core-cpp may do

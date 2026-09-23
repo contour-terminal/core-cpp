@@ -123,6 +123,41 @@ set_tests_properties(core-cpp.openssl-seam core-cpp.openssl-seam-selftest PROPER
     LABELS "core-cpp;hygiene;tree-level"
     TIMEOUT 300)
 
+# Two socket-contract scans ported from fastcached (0708dd54), each with the self-test that proves it
+# refuses what it claims and accepts what complies. Both read files and nothing else, so both are
+# tree-level and the `style` job runs them.
+#
+#   cancel-read-declared  every transport in src/core/net/ declares `cancelRead` rather than
+#                         inheriting ISocket's no-op, which cannot retire a parked read.
+#   read-buffer-guard     every `ISocket::read` calls `contract::requireReadBuffer` before its first
+#                         return, or delegates to another socket's read -- the canary for that guard
+#                         aborts at the first violation, so it can only ever watch one transport.
+add_test(NAME core-cpp.cancel-read-declared
+         COMMAND "${CMAKE_COMMAND}"
+                 "-DROOT=${CORE_CPP_SOURCE_DIR}"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-cancel-read-declared.cmake")
+add_test(NAME core-cpp.cancel-read-declared-selftest
+         COMMAND "${CMAKE_COMMAND}"
+                 "-DCHECKER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-cancel-read-declared.cmake"
+                 "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/cancel-read-declared-selftest"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-cancel-read-declared-selftest.cmake")
+add_test(NAME core-cpp.read-buffer-guard
+         COMMAND "${CMAKE_COMMAND}"
+                 "-DROOT=${CORE_CPP_SOURCE_DIR}"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-read-buffer-guard.cmake")
+add_test(NAME core-cpp.read-buffer-guard-selftest
+         COMMAND "${CMAKE_COMMAND}"
+                 "-DCHECKER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-read-buffer-guard.cmake"
+                 "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/read-buffer-guard-selftest"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-read-buffer-guard-selftest.cmake")
+# Spelled out rather than looped: check-tree-level-coverage.py reads test names from this file's
+# text, and a name assembled from a loop variable is one it cannot see.
+set_tests_properties(core-cpp.cancel-read-declared core-cpp.cancel-read-declared-selftest
+                     core-cpp.read-buffer-guard core-cpp.read-buffer-guard-selftest PROPERTIES
+    FAIL_REGULAR_EXPRESSION "CMake Error"
+    LABELS "core-cpp;hygiene;tree-level"
+    TIMEOUT 120)
+
 # A release tag must name the tree it releases (Part I §4). The release workflow runs
 # check-release.cmake on the pushed tag; this proves that it accepts a matching tree and refuses
 # each mismatch by name.
