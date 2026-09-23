@@ -15,28 +15,36 @@
 // it keeps only the first and settles the waiter with whatever its receive did
 // (fastcached#884), which `windows/IocpSocket_test.cpp` holds.
 #include <core/async/Cancellation.hpp>
+#include <core/async/StopToken.hpp>
 #include <core/async/Task.hpp>
 #include <core/async/WhenAll.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/IoBackend.hpp>
 #include <core/net/NetError.hpp>
+#include <core/net/WithTimeout.hpp>
 #include <core/net/testing/BackendMatrix.hpp>
 #include <core/net/testing/InMemoryTransport.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <array>
+#include <chrono>
+#include <coroutine>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <utility>
 
 using core::async::OperationCancelled;
+using core::async::StopSource;
+using core::async::StopToken;
 using core::async::Task;
 using core::net::EventLoop;
+using core::net::IoResult;
 using core::net::ISocket;
 using core::net::NetErrorCode;
 using core::net::testing::BackendMatrix;
@@ -128,6 +136,111 @@ Task<void> watchTwiceAndRetireTwice(
     EventLoop* loop, ISocket* sock, WatchOutcome* first, WatchOutcome* second, bool* parkedFirst)
 {
     co_await core::async::whenAll(watchThenRearm(sock, first, second), retireTwice(loop, sock, parkedFirst));
+}
+
+/// Gives the awaiting coroutine a stop token of the caller's choosing, without suspending, so a
+/// case can stop ONE flow's token while its siblings' stay live -- the state a `whenAny` or
+/// `withTimeout` loser is in for the rest of the turn its sibling won.
+struct AdoptStopToken
+{
+    StopToken token; ///< The token the awaiting coroutine, and everything it awaits, observes.
+
+    [[nodiscard]] bool await_ready() const noexcept { return false; }
+
+    /// @return False: resume at once, now observing @c token.
+    template <typename Promise>
+    [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> self) const noexcept
+    {
+        self.promise().setStopToken(token);
+        return false;
+    }
+
+    void await_resume() const noexcept {}
+};
+
+/// Parks a read under @p token and records how it ended.
+Task<void> readUnderToken(StopToken token, ISocket* sock, WatchOutcome* out)
+{
+    co_await AdoptStopToken { std::move(token) };
+    auto buffer = std::array<std::byte, 4> {};
+    try
+    {
+        auto const got = co_await sock->read(buffer);
+        out->resolved = true;
+        out->hasValue = got.has_value();
+        if (got.has_value())
+            out->count = *got;
+        else
+            out->code = got.error().code;
+    }
+    catch (OperationCancelled const&)
+    {
+        out->resolved = true;
+        out->threw = true;
+    }
+}
+
+/// One read, as a task, so `withTimeout` can bound it.
+Task<IoResult> readInto(ISocket* sock, std::span<std::byte> buffer)
+{
+    co_return co_await sock->read(buffer);
+}
+
+/// Sends one byte once the reader has had a turn to park.
+Task<void> sendAfterPark(EventLoop* loop, ISocket* peer)
+{
+    co_await loop->delay(std::chrono::milliseconds { 10 });
+    auto const payload = std::array<std::byte, 1> { std::byte { 0x5A } };
+    std::ignore = co_await peer->write(std::span<std::byte const> { payload });
+}
+
+/// Reads once, bounded, and records the outcome; a timeout records nothing but @p timedOut.
+Task<void> boundedRead(EventLoop* loop, ISocket* sock, WatchOutcome* out, bool* timedOut)
+{
+    auto buffer = std::array<std::byte, 4> {};
+    auto const got =
+        co_await core::net::withTimeout(loop, readInto(sock, buffer), std::chrono::seconds { 5 });
+    *timedOut = !got.has_value();
+    if (!got.has_value())
+        co_return;
+    out->resolved = true;
+    out->hasValue = got->has_value();
+    if (got->has_value())
+        out->count = **got;
+    else
+        out->code = got->error().code;
+}
+
+/// Stops the parked reader's token, retires it with `cancelRead` in the SAME turn -- before the
+/// loop delivers the stop -- and then reads again, with the byte arriving only after that read
+/// has parked, so the read is completed by a real wake-up rather than by data already waiting.
+Task<void> stopRetireThenReadAgain(EventLoop* loop,
+                                   ISocket* sock,
+                                   ISocket* peer,
+                                   StopSource* source,
+                                   bool* parkedFirst,
+                                   WatchOutcome* next,
+                                   bool* timedOut)
+{
+    *parkedFirst = loop->parkedWaiterCount() > 0;
+    source->request_stop();
+    sock->cancelRead();
+    co_await core::async::whenAll(boundedRead(loop, sock, next, timedOut), sendAfterPark(loop, peer));
+}
+
+/// Runs the reader whose token is stopped against the retirement and the read after it.
+Task<void> stoppedReaderRetiredThenReadAgain(EventLoop* loop,
+                                             ISocket* sock,
+                                             ISocket* peer,
+                                             StopSource* source,
+                                             WatchOutcome* first,
+                                             bool* parkedFirst,
+                                             WatchOutcome* next,
+                                             bool* timedOut)
+{
+    co_await core::async::whenAll(
+        readUnderToken(source->get_token(), sock, first),
+        stopRetireThenReadAgain(loop, sock, peer, source, parkedFirst, next, timedOut));
 }
 
 } // namespace
@@ -243,6 +356,46 @@ TEST_CASE("A second cancelRead takes the watch the first one's resumption armed"
             REQUIRE(second.resolved);
             REQUIRE_FALSE(second.hasValue);
             CHECK(second.code == NetErrorCode::Cancelled);
+        }
+    }
+}
+
+TEST_CASE("A read retired while its own stop is pending leaves the next read untouched",
+          "[net][socket][cancelread]")
+{
+    // A `withTimeout` loser: its token is stopped, and the stop is delivered on the NEXT turn -- but
+    // the timeout's handler retires the stale read with `cancelRead` in this one. The retirement
+    // resumes a flow whose token is stopped, so the read unwinds through `OperationCancelled`
+    // rather than answering `Cancelled`, and whatever the retirement marked on the socket for that
+    // answer must not outlive it: the NEXT read, woken by a real byte, returns the byte.
+    for (auto const& backend: BackendMatrix)
+    {
+        auto source = core::net::makeBackend(backend.kind);
+        if (!source)
+            continue;
+        DYNAMIC_SECTION("backend=" << backend.name)
+        {
+            auto loop = EventLoop { *source };
+            auto pair = core::net::testing::makeSocketPair(loop);
+            REQUIRE(pair.has_value());
+
+            auto stop = StopSource {};
+            auto first = WatchOutcome {};
+            auto next = WatchOutcome {};
+            auto parkedFirst = false;
+            auto timedOut = false;
+            loop.blockOn(stoppedReaderRetiredThenReadAgain(
+                &loop, pair->first.get(), pair->second.get(), &stop, &first, &parkedFirst, &next, &timedOut));
+
+            CHECK(parkedFirst); // or nothing was retired and the rest of this case is vacuous
+            REQUIRE(first.resolved);
+            CHECK(first.threw); // its own token was stopped, so it unwound
+
+            CHECK_FALSE(timedOut); // waited 5 s for the second read's byte
+            REQUIRE(next.resolved);
+            CHECK(next.code == NetErrorCode::Ok);
+            REQUIRE(next.hasValue);
+            CHECK(next.count == 1);
         }
     }
 }

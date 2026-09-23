@@ -156,8 +156,14 @@ async::Task<WindowsSocket::ParkEnd> WindowsSocket::parkUntilReady(Ready kind)
             }
             catch (...)
             {
+                // `_readRetired` too: a `cancelRead` that resumes a flow whose own token is stopped
+                // lands HERE, not on the line that consumes the flag, and a flag left set would
+                // retire the socket's NEXT read the moment real data woke it.
                 if (!lifetime.expired())
+                {
                     _readWaiter = {};
+                    _readRetired = false;
+                }
                 throw;
             }
             _readWaiter = {};

@@ -183,10 +183,14 @@ class WindowsSocket final: public ISocket
     bool _readReady = false;
     bool _writeReady = false;
     /// The frame of @ref parkUntilReady while it is parked for a READ, else empty: what
-    /// @c cancelRead hands to @c EventLoop::cancelPending. Cleared on every way out of the park,
-    /// so it can never name a frame that has gone -- a stale address could match a newer frame.
+    /// @c cancelRead hands to @c EventLoop::cancelPending. Cleared on every way the frame RESUMES
+    /// out of the park, normally or unwinding, so it cannot name a frame that has gone -- a stale
+    /// address could match a newer frame. A parked frame destroyed without resuming clears
+    /// nothing; nothing destroys one while the socket and its loop both live.
     std::coroutine_handle<> _readWaiter;
-    /// Set by @c cancelRead immediately before it resumes @c _readWaiter, and consumed by it.
+    /// Set by @c cancelRead immediately before it resumes @c _readWaiter, and cleared by that
+    /// resumption whichever way it leaves the park: consumed on the normal path, dropped on the
+    /// unwinding one.
     bool _readRetired = false;
     /// Expires with this socket. A parked read unwinding through `OperationCancelled` may run after
     /// the destructor (which closes with @c FdWakePolicy::Cancel), and asks this -- never `this` --
