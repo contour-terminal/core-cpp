@@ -11,6 +11,7 @@
 
 #include <core/net/Diagnostics.hpp>
 #include <core/net/detail/WaitTimeout.hpp>
+#include <core/net/windows/InvalidSocket.hpp>
 #include <core/net/windows/IocpOperation.hpp>
 #include <core/net/windows/NetworkEvents.hpp>
 #include <core/net/windows/WaitCompletionPacket.hpp>
@@ -71,16 +72,6 @@ namespace
     /// connect, must be woken to learn it from its own `send`, and a selection naming
     /// only `FD_WRITE` would leave it parked for ever.
     constexpr auto WriteEventMask = long { FD_WRITE | FD_CONNECT | FD_CLOSE };
-
-    /// `INVALID_SOCKET` as a `SOCKET` rather than as the macro.
-    ///
-    /// The macro expands to `(SOCKET)(~0)`, and comparing against it directly reads as a
-    /// signed/unsigned comparison — the inner `~0` is an `int` and `SOCKET` is a
-    /// `UINT_PTR`. Naming it once makes every comparison below an unsigned one, which is
-    /// what it always meant. Spelled with the type rather than as `SOCKET { ... }`,
-    /// which the house style would prefer, because the braced form is a cast to the type
-    /// the macro already has and reads as a redundant one.
-    constexpr SOCKET InvalidSocketValue = INVALID_SOCKET;
 } // namespace
 
 // ---------------------------------------------------------------------------------
@@ -170,7 +161,7 @@ class IocpBackend::Slot final: public detail::ReadinessSlot
             // dead event. `WSAEventSelect(s, nullptr, 0)` is how a selection is
             // withdrawn; it leaves the socket non-blocking, which is what
             // `WSAEventSelect` made it and what its owner has to know either way.
-            if (socket != InvalidSocketValue)
+            if (socket != detail::InvalidSocket)
                 std::ignore = WSAEventSelect(socket, nullptr, 0);
             std::ignore = WSACloseEvent(writeEvent);
             writeEvent = WSA_INVALID_EVENT;
@@ -232,7 +223,7 @@ class IocpBackend::Slot final: public detail::ReadinessSlot
     PTP_WAIT threadpoolWait = nullptr; ///< The thread-pool bridge, if that is the path.
     std::unique_ptr<detail::WaitCompletionPacket> waitPacket; ///< The kernel bridge, if that is.
     WSAEVENT writeEvent = WSA_INVALID_EVENT; ///< `FD_WRITE` selection; socket registrations only.
-    SOCKET socket = InvalidSocketValue;      ///< The socket, for a `HandleKind::Socket` registration.
+    SOCKET socket = detail::InvalidSocket;   ///< The socket, for a `HandleKind::Socket` registration.
 
     /// The owner's operation, for a `HandleKind::Completion` registration, and null for every
     /// other kind. Its `route` names this slot for exactly as long as this field names it; both
@@ -819,7 +810,8 @@ void IocpBackend::consumeCompletion(std::uintptr_t key, void* overlapped, Collec
         // Only here is `slot.handler` read, and only because neither retirement was
         // set: a retired slot names storage the caller may already have freed.
         _batch.add(*slot.handler, node->report);
-        if (slot.socket != InvalidSocketValue && !node->isSocketRead && slot.writeEvent != WSA_INVALID_EVENT)
+        if (slot.socket != detail::InvalidSocket && !node->isSocketRead
+            && slot.writeEvent != WSA_INVALID_EVENT)
         {
             // The one way an indication is taken off a Winsock event, and the reason
             // nothing here reaches for `WSAResetEvent`: a reset clears the EVENT and

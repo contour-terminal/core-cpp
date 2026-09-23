@@ -112,7 +112,7 @@ TEST_CASE("canonicalCasePath.corrects_case_and_uppercases_drive", "[platform]")
     REQUIRE(result.size() >= 2);
     CHECK(result[1] == ':');
     CHECK(std::isupper(static_cast<unsigned char>(result[0])) != 0); // Drive letter upper-cased.
-    CHECK(result.find('\\') == std::string::npos);                   // Forward slashes only.
+    CHECK_FALSE(result.contains('\\'));                              // Forward slashes only.
     CHECK(lastComponent == dirName);                                 // Real on-disk component case.
 
     fs::remove(dir, ec);

@@ -219,6 +219,7 @@ core_cpp_add_module(net KIND STATIC
         testing/windows/InMemoryTransport.cpp
         windows/BlockingPrimitives.cpp
         windows/DialPrimitives.cpp
+        windows/InvalidSocket.hpp
         windows/IocpBackend.cpp
         windows/IocpBackend.hpp
         windows/IocpDial.cpp

@@ -19,10 +19,8 @@ namespace core::platform
 bool WindowsEnvironmentProvider::CaseInsensitiveLess::operator()(std::string const& a,
                                                                  std::string const& b) const
 {
-    return std::lexicographical_compare(
-        a.begin(), a.end(), b.begin(), b.end(), [](unsigned char ac, unsigned char bc) {
-            return std::tolower(ac) < std::tolower(bc);
-        });
+    return std::ranges::lexicographical_compare(
+        a, b, [](unsigned char ac, unsigned char bc) { return std::tolower(ac) < std::tolower(bc); });
 }
 
 WindowsEnvironmentProvider& WindowsEnvironmentProvider::instance()
@@ -96,8 +94,8 @@ std::vector<std::string> WindowsEnvironmentProvider::keys() const
 
     for (auto const& [key, _]: _values)
     {
-        auto const found = std::find_if(result.begin(), result.end(), [&](std::string const& existing) {
-            return std::equal(existing.begin(), existing.end(), key.begin(), key.end(), [](char a, char b) {
+        auto const found = std::ranges::find_if(result, [&](std::string const& existing) {
+            return std::ranges::equal(existing, key, [](char a, char b) {
                 return std::tolower(static_cast<unsigned char>(a))
                        == std::tolower(static_cast<unsigned char>(b));
             });

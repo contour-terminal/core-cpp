@@ -15,6 +15,7 @@
 #include <core/net/SocketContract.hpp>
 #include <core/net/detail/PeerAddress.hpp>
 #include <core/net/detail/ScopeGuard.hpp>
+#include <core/net/windows/InvalidSocket.hpp>
 #include <core/net/windows/IocpOperation.hpp>
 #include <core/net/windows/WinsockError.hpp>
 #include <core/platform/WinsockInit.hpp>
@@ -34,9 +35,6 @@ namespace core::net
 
 namespace
 {
-    /// `INVALID_SOCKET` as a `SOCKET` rather than as the macro, whose inner `~0` is a signed `int`
-    /// and turns every comparison against it into a signed/unsigned one; see `IocpBackend.cpp`.
-    constexpr SOCKET InvalidSocketValue = INVALID_SOCKET;
 
     /// The most one `WSABUF` may say it carries. A larger span is sent in pieces, which a partial
     /// completion already has to handle.
@@ -210,7 +208,7 @@ IocpSocket::IocpSocket(EventLoop& loop,
     if (_port == nullptr)
         _associationError =
             makeNetError(NetErrorCode::Unsupported, 0, "the loop's backend lends no completion port");
-    else if (_socket == InvalidSocketValue)
+    else if (_socket == detail::InvalidSocket)
         _associationError = makeNetError(NetErrorCode::BadHandle, 0, "IocpSocket: invalid socket");
     else if (association == IocpAssociation::Associate)
     {
@@ -222,7 +220,7 @@ IocpSocket::IocpSocket(EventLoop& loop,
     // Non-blocking, for the ONE non-overlapped call this socket makes: the `MSG_PEEK` that measures
     // what a completed readability probe found. An overlapped operation ignores the mode, so this
     // changes nothing else -- libuv runs its Windows sockets the same way.
-    if (_socket != InvalidSocketValue)
+    if (_socket != detail::InvalidSocket)
     {
         auto nonBlocking = u_long { 1 };
         // FIONBIO is an unsigned constant and `ioctlsocket` takes a signed command, as
@@ -269,7 +267,7 @@ void IocpSocket::close(FdWakePolicy policy) noexcept
         if (auto* const awaitable = take(*node); awaitable != nullptr)
             parked.push_back(awaitable);
 
-    if (_socket != InvalidSocketValue)
+    if (_socket != detail::InvalidSocket)
     {
         // Forgotten BEFORE the close: an association ends with the handle, Windows reuses handle
         // values, and a record left standing would make the next socket handed this value look
@@ -277,7 +275,7 @@ void IocpSocket::close(FdWakePolicy policy) noexcept
         if (_port != nullptr && !_associationError.has_value())
             _port->forget(reinterpret_cast<platform::NativeHandle>(_socket));
         ::closesocket(_socket);
-        _socket = InvalidSocketValue;
+        _socket = detail::InvalidSocket;
     }
 
     // Past this point nothing may touch a member.
@@ -292,7 +290,7 @@ void IocpSocket::close(FdWakePolicy policy) noexcept
 
 std::optional<NetError> IocpSocket::unusable(char const* what) const
 {
-    if (_closed || _socket == InvalidSocketValue)
+    if (_closed || _socket == detail::InvalidSocket)
         return closedSocket(what);
     return _associationError;
 }
@@ -337,7 +335,7 @@ void IocpSocket::cancelInKernel(Node& node) const noexcept
     // Only while the kernel holds it: `self` is set from the issue to the dequeue. `CancelIoEx`
     // does not take the operation back, it ASKS for it back -- the completion still arrives,
     // carrying the abort or whatever the operation had already done.
-    if (node.self && !node.completed && _socket != InvalidSocketValue)
+    if (node.self && !node.completed && _socket != detail::InvalidSocket)
         std::ignore = ::CancelIoEx(reinterpret_cast<HANDLE>(_socket), &node.overlapped);
 }
 
@@ -688,7 +686,7 @@ ResultAwaitable<void> IocpSocket::shutdownWrite()
     // is not on any other plain socket: `SocketContractCanary`'s write-slot-inline mode breaks it on
     // purpose to reach the write-slot guard behind it, and a second assertion in front would take
     // the guard's place.
-    if (_closed || _socket == InvalidSocketValue)
+    if (_closed || _socket == detail::InvalidSocket)
         return ResultAwaitable<void> { std::expected<void, NetError> {} };
     if (::shutdown(_socket, SD_SEND) == SOCKET_ERROR)
     {
@@ -1064,7 +1062,7 @@ namespace
 /// without touching a listener that is gone.
 struct IocpListener::Shared
 {
-    SOCKET socket = InvalidSocketValue; ///< The listening socket; `INVALID_SOCKET` once closed.
+    SOCKET socket = detail::InvalidSocket; ///< The listening socket; `INVALID_SOCKET` once closed.
 
     /// Every accept parked right now, so a close can resolve them: `IListener::close` says a
     /// pending accept resolves with `Cancelled`, and waiting for each abort to come back through
@@ -1105,13 +1103,13 @@ void IocpListener::close() noexcept
     // destroy it before the call returns, so nothing below the socket's close reads a member.
     auto const shared = _shared;
     auto const accepting = std::exchange(shared->accepting, {});
-    if (shared->socket != InvalidSocketValue)
+    if (shared->socket != detail::InvalidSocket)
     {
         if (auto* const port = _loop.completionPort(); port != nullptr)
             port->forget(reinterpret_cast<platform::NativeHandle>(shared->socket));
         // What aborts every AcceptEx still outstanding; each completes later into its own node.
         ::closesocket(shared->socket);
-        shared->socket = InvalidSocketValue;
+        shared->socket = detail::InvalidSocket;
     }
     for (auto* const wait: accepting)
         wait->close();
@@ -1188,7 +1186,7 @@ std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::bind(EventL
         rc != 0 || resolved == nullptr)
         return std::unexpected(makeNetError(NetErrorCode::AddressError, rc, "getaddrinfo"));
 
-    auto socket = InvalidSocketValue;
+    auto socket = detail::InvalidSocket;
     auto lastError = makeNetError(NetErrorCode::AddressError, 0, "no usable address");
     auto const* next = resolved;
     while (next != nullptr)
@@ -1200,7 +1198,7 @@ std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::bind(EventL
                               nullptr,
                               0,
                               WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
-        if (socket == InvalidSocketValue)
+        if (socket == detail::InvalidSocket)
         {
             lastError = detail::fromWinsockError(::WSAGetLastError(), "socket");
             continue;
@@ -1219,10 +1217,10 @@ std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::bind(EventL
             break;
         lastError = detail::fromWinsockError(::WSAGetLastError(), "bind/listen");
         ::closesocket(socket);
-        socket = InvalidSocketValue;
+        socket = detail::InvalidSocket;
     }
     ::freeaddrinfo(resolved);
-    if (socket == InvalidSocketValue)
+    if (socket == detail::InvalidSocket)
         return std::unexpected(std::move(lastError));
 
     auto acceptEx = LPFN_ACCEPTEX { nullptr };
@@ -1242,7 +1240,7 @@ std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::bind(EventL
 std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::adopt(EventLoop& loop, SOCKET socket)
 {
     platform::ensureWinsockInitialized();
-    if (socket == InvalidSocketValue)
+    if (socket == detail::InvalidSocket)
         return std::unexpected(makeNetError(NetErrorCode::BadHandle, 0, "adoptListener"));
 
     auto acceptEx = LPFN_ACCEPTEX { nullptr };
@@ -1268,7 +1266,7 @@ async::Task<AcceptResult> IocpListener::accept()
     auto* const loop = &_loop;
     auto const shared = _shared;
     auto const listening = shared->socket;
-    if (_closed || listening == InvalidSocketValue)
+    if (_closed || listening == detail::InvalidSocket)
         co_return std::unexpected(cancelled("accept on closed listener"));
     auto* const port = loop->completionPort();
     auto* const acceptEx = reinterpret_cast<LPFN_ACCEPTEX>(_acceptEx);
@@ -1276,14 +1274,14 @@ async::Task<AcceptResult> IocpListener::accept()
 
     auto accepted = ::WSASocketW(
         _family, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
-    if (accepted == InvalidSocketValue)
+    if (accepted == detail::InvalidSocket)
         co_return std::unexpected(detail::fromWinsockError(::WSAGetLastError(), "socket(accept)"));
     // Closed on every way out but the hand-off to `IocpSocket` -- a frame destroyed while parked
     // included, which no line below would otherwise see. Closing it is what aborts an AcceptEx
     // nothing will wait for, whose completion lands in the operation's own share; left open, it
     // would take the next client into a socket nobody owns.
     auto const discard = detail::ScopeGuard { [&accepted]() noexcept {
-        if (accepted != InvalidSocketValue)
+        if (accepted != detail::InvalidSocket)
             ::closesocket(accepted);
     } };
 
@@ -1371,7 +1369,7 @@ async::Task<AcceptResult> IocpListener::accept()
         }
     }
     co_return std::unique_ptr<ISocket> { new IocpSocket(
-        *loop, std::exchange(accepted, InvalidSocketValue), std::move(peer)) };
+        *loop, std::exchange(accepted, detail::InvalidSocket), std::move(peer)) };
 }
 
 } // namespace core::net

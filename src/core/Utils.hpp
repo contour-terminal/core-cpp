@@ -702,7 +702,8 @@ inline std::string replace(std::string_view text, std::string_view pattern, T&& 
     return os.str();
 }
 
-inline std::filesystem::path homeResolvedPath(std::string input, std::filesystem::path const& homeDirectory)
+inline std::filesystem::path homeResolvedPath(std::string const& input,
+                                              std::filesystem::path const& homeDirectory)
 {
     if (!input.empty() && input[0] == '~')
     {
@@ -711,7 +712,7 @@ inline std::filesystem::path homeResolvedPath(std::string input, std::filesystem
         return homeDirectory / std::filesystem::path(subPath);
     }
 
-    return { std::move(input) };
+    return { input };
 }
 
 /// Substitutes each `${NAME}` in @p text with `replace(NAME)`.

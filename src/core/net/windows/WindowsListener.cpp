@@ -12,6 +12,7 @@
 
 #include <core/net/SocketAddress.hpp>
 #include <core/net/detail/PeerAddress.hpp>
+#include <core/net/windows/InvalidSocket.hpp>
 #include <core/net/windows/NetworkEvents.hpp>
 #include <core/net/windows/WindowsSocket.hpp>
 
@@ -74,7 +75,7 @@ namespace
 
         // A socket file is there: reclaim it only when no live server answers.
         auto const probe = ::socket(AF_UNIX, SOCK_STREAM, 0);
-        if (probe == INVALID_SOCKET)
+        if (probe == detail::InvalidSocket)
             return std::unexpected(
                 makeNetError(NetErrorCode::SystemError, WSAGetLastError(), "probe socket"));
         auto const rc = ::connect(probe, reinterpret_cast<sockaddr const*>(&address), sizeof(address));
@@ -118,14 +119,14 @@ void WindowsListener::close(FdWakePolicy policy) noexcept
         // Before the close, while the handle is still valid. The event -- not the
         // socket -- is what accept() registers with the loop, so it is the handle a
         // parked accept must be woken by.
-        _loop.notifyHandleClosing(static_cast<HANDLE>(_event), policy);
+        _loop.notifyHandleClosing(_event, policy);
         WSACloseEvent(_event);
         _event = WSA_INVALID_EVENT;
     }
-    if (_socket != INVALID_SOCKET)
+    if (_socket != detail::InvalidSocket)
     {
         closesocket(_socket);
-        _socket = INVALID_SOCKET;
+        _socket = detail::InvalidSocket;
     }
     // Parity with UnixListener::close(): the socket FILE goes with the socket. Leaving it
     // behind makes the next bind's liveness probe find a path whose server is gone, and
@@ -158,7 +159,7 @@ std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bind(
     if (rc != 0 || resolved == nullptr)
         return std::unexpected(makeNetError(NetErrorCode::AddressError, rc, "getaddrinfo"));
 
-    SOCKET sock = INVALID_SOCKET;
+    auto sock = detail::InvalidSocket;
     NetError lastError = makeNetError(NetErrorCode::AddressError, 0, "no usable address");
     auto const* next = resolved;
     while (next != nullptr)
@@ -166,7 +167,7 @@ std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bind(
         // Step to the next candidate first, so every `continue` below moves on to it.
         auto const* ai = std::exchange(next, next->ai_next);
         sock = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-        if (sock == INVALID_SOCKET)
+        if (sock == detail::InvalidSocket)
         {
             lastError = makeNetError(NetErrorCode::SystemError, WSAGetLastError(), "socket");
             continue;
@@ -183,11 +184,11 @@ std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bind(
                                  WSAGetLastError(),
                                  "bind/listen");
         closesocket(sock);
-        sock = INVALID_SOCKET;
+        sock = detail::InvalidSocket;
     }
     freeaddrinfo(resolved);
 
-    if (sock == INVALID_SOCKET)
+    if (sock == detail::InvalidSocket)
         return std::unexpected(lastError);
 
     auto const event = WSACreateEvent();
@@ -217,7 +218,7 @@ std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bind(
 std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::adopt(EventLoop& loop,
                                                                                  SOCKET socket)
 {
-    if (socket == INVALID_SOCKET)
+    if (socket == detail::InvalidSocket)
         return std::unexpected(makeNetError(NetErrorCode::BadHandle, 0, "adoptListener"));
 
     // The event, not the socket, is what an accept registers with the loop — and associating it
@@ -266,7 +267,7 @@ std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bindU
     ::DeleteFileA(pathString.c_str()); // the probe proved this a stale socket
 
     auto const sock = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    if (sock == INVALID_SOCKET)
+    if (sock == detail::InvalidSocket)
         return std::unexpected(makeNetError(NetErrorCode::Unsupported, WSAGetLastError(), "socket(AF_UNIX)"));
 
     if (::bind(sock, reinterpret_cast<sockaddr const*>(&addr), sizeof(addr)) != 0
@@ -297,13 +298,13 @@ async::Task<AcceptResult> WindowsListener::accept()
 {
     while (true)
     {
-        if (_closed || _socket == INVALID_SOCKET)
+        if (_closed || _socket == detail::InvalidSocket)
             co_return std::unexpected(makeNetError(NetErrorCode::Cancelled, 0, "accept on closed listener"));
 
         auto peer = sockaddr_storage {};
         auto peerLen = int { sizeof(peer) };
         auto const conn = ::accept(_socket, reinterpret_cast<sockaddr*>(&peer), &peerLen);
-        if (conn != INVALID_SOCKET)
+        if (conn != detail::InvalidSocket)
             co_return std::unique_ptr<ISocket>(new WindowsSocket(_loop, conn, formatPeer(peer)));
 
         auto const err = WSAGetLastError();
@@ -321,7 +322,7 @@ async::Task<AcceptResult> WindowsListener::accept()
                 continue; // a connection arrived in that window: take it rather than park
             try
             {
-                co_await _loop.waitReadable(static_cast<HANDLE>(_event));
+                co_await _loop.waitReadable(_event);
             }
             catch (async::OperationCancelled const&)
             {

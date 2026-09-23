@@ -9,13 +9,15 @@
 
 #include <core/net/windows/WindowsLoopback.hpp>
 
+#include <core/net/windows/InvalidSocket.hpp>
+
 namespace core::net
 {
 
 bool makeLoopbackPair(std::array<SOCKET, 2>& out) noexcept
 {
     auto listener = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (listener == INVALID_SOCKET)
+    if (listener == detail::InvalidSocket)
         return false;
 
     sockaddr_in addr {};
@@ -41,7 +43,7 @@ bool makeLoopbackPair(std::array<SOCKET, 2>& out) noexcept
     }
 
     auto client = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (client == INVALID_SOCKET)
+    if (client == detail::InvalidSocket)
     {
         cleanupListener();
         return false;
@@ -55,7 +57,7 @@ bool makeLoopbackPair(std::array<SOCKET, 2>& out) noexcept
 
     auto server = ::accept(listener, nullptr, nullptr);
     cleanupListener();
-    if (server == INVALID_SOCKET)
+    if (server == detail::InvalidSocket)
     {
         closesocket(client);
         return false;

@@ -8,10 +8,10 @@
 namespace core::platform
 {
 
-Wakeup::Wakeup()
-{
+Wakeup::Wakeup():
     // Manual-reset event: stays signaled until ResetEvent() is called.
-    _handle = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+    _handle(CreateEvent(nullptr, TRUE, FALSE, nullptr))
+{
     if (_handle == nullptr || _handle == INVALID_HANDLE_VALUE)
         throw std::runtime_error("Failed to create Wakeup event");
 }

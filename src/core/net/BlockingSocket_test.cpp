@@ -165,7 +165,7 @@ TEST_CASE("A write to a peer that hung up fails instead of killing the process",
     connectPair(pair);
     pair.accepted->close();
 
-    constexpr std::size_t ChunkBytes = 256UL * 1024UL;
+    constexpr auto ChunkBytes = std::size_t { 256 } * 1024;
     constexpr int MaxChunks = 64; // 16 MiB is far past any loopback send buffer
     auto const chunk = std::vector<std::byte>(ChunkBytes, std::byte { 0xAB });
 

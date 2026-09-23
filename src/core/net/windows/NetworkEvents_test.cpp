@@ -8,6 +8,7 @@
 #include <ws2tcpip.h>
 // clang-format on
 
+#include <core/net/windows/InvalidSocket.hpp>
 #include <core/net/windows/NetworkEvents.hpp>
 #include <core/platform/WinsockInit.hpp>
 
@@ -18,6 +19,13 @@
 namespace
 {
 
+/// @return A new TCP socket, Winsock initialised first, or `InvalidSocket`.
+SOCKET openTcpSocket() noexcept
+{
+    core::platform::ensureWinsockInitialized();
+    return ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+}
+
 /// A listening loopback socket with an FD_ACCEPT event, exactly as WindowsListener::bind
 /// builds one — raw rather than through the listener, because the race this is about lives
 /// between two Winsock calls the listener makes back to back and cannot be opened from
@@ -25,11 +33,9 @@ namespace
 class AcceptFixture
 {
   public:
-    AcceptFixture()
+    AcceptFixture(): _socket(openTcpSocket())
     {
-        core::platform::ensureWinsockInitialized();
-        _socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (_socket == INVALID_SOCKET)
+        if (_socket == core::net::detail::InvalidSocket)
             return;
 
         auto address = sockaddr_in {};
@@ -53,11 +59,11 @@ class AcceptFixture
 
     ~AcceptFixture()
     {
-        if (_client != INVALID_SOCKET)
+        if (_client != core::net::detail::InvalidSocket)
             ::closesocket(_client);
         if (_event != WSA_INVALID_EVENT)
             WSACloseEvent(_event);
-        if (_socket != INVALID_SOCKET)
+        if (_socket != core::net::detail::InvalidSocket)
             ::closesocket(_socket);
     }
 
@@ -69,7 +75,7 @@ class AcceptFixture
     /// @return True if the listening socket and its event were both set up.
     [[nodiscard]] bool ready() const noexcept
     {
-        return _socket != INVALID_SOCKET && _event != WSA_INVALID_EVENT;
+        return _socket != core::net::detail::InvalidSocket && _event != WSA_INVALID_EVENT;
     }
 
     [[nodiscard]] SOCKET listening() const noexcept { return _socket; }
@@ -80,7 +86,7 @@ class AcceptFixture
     [[nodiscard]] bool connectClient()
     {
         _client = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (_client == INVALID_SOCKET)
+        if (_client == core::net::detail::InvalidSocket)
             return false;
         auto address = sockaddr_in {};
         address.sin_family = AF_INET;
@@ -90,8 +96,8 @@ class AcceptFixture
     }
 
   private:
-    SOCKET _socket = INVALID_SOCKET;
-    SOCKET _client = INVALID_SOCKET;
+    SOCKET _socket = core::net::detail::InvalidSocket;
+    SOCKET _client = core::net::detail::InvalidSocket;
     WSAEVENT _event = WSA_INVALID_EVENT;
     std::uint16_t _port = 0;
 };
@@ -103,13 +109,13 @@ class AcceptFixture
 /// @return True once the event is signalled with a connection pending behind it.
 [[nodiscard]] bool reachRecordedAcceptState(AcceptFixture& fixture)
 {
-    if (::accept(fixture.listening(), nullptr, nullptr) != INVALID_SOCKET)
+    if (::accept(fixture.listening(), nullptr, nullptr) != core::net::detail::InvalidSocket)
         return false; // nothing may be pending yet, or this is not the race
     if (WSAGetLastError() != WSAEWOULDBLOCK)
         return false;
     if (!fixture.connectClient())
         return false;
-    return WaitForSingleObject(static_cast<HANDLE>(fixture.event()), 2000) == WAIT_OBJECT_0;
+    return WaitForSingleObject(fixture.event(), 2000) == WAIT_OBJECT_0;
 }
 
 } // namespace
@@ -130,8 +136,8 @@ TEST_CASE("consuming an accept indication keeps the pending connection", "[net][
     CHECK((indications & FD_ACCEPT) != 0);
 
     auto const accepted = ::accept(fixture.listening(), nullptr, nullptr);
-    CHECK(accepted != INVALID_SOCKET); // the connection the retry serves
-    if (accepted != INVALID_SOCKET)
+    CHECK(accepted != core::net::detail::InvalidSocket); // the connection the retry serves
+    if (accepted != core::net::detail::InvalidSocket)
         ::closesocket(accepted);
 }
 
@@ -146,11 +152,11 @@ TEST_CASE("resetting the event instead loses the accept wake-up", "[net][windows
     REQUIRE(reachRecordedAcceptState(fixture));
 
     WSAResetEvent(fixture.event());
-    CHECK(WaitForSingleObject(static_cast<HANDLE>(fixture.event()), 250) == WAIT_TIMEOUT);
+    CHECK(WaitForSingleObject(fixture.event(), 250) == WAIT_TIMEOUT);
 
     // And the connection really was there all along: the park would have been for ever.
     auto const accepted = ::accept(fixture.listening(), nullptr, nullptr);
-    CHECK(accepted != INVALID_SOCKET);
-    if (accepted != INVALID_SOCKET)
+    CHECK(accepted != core::net::detail::InvalidSocket);
+    if (accepted != core::net::detail::InvalidSocket)
         ::closesocket(accepted);
 }

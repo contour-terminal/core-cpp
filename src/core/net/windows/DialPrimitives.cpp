@@ -13,6 +13,7 @@
 
 #include <core/net/EventLoop.hpp>
 #include <core/net/detail/SocketErrors.hpp>
+#include <core/net/windows/InvalidSocket.hpp>
 #include <core/net/windows/WindowsSocket.hpp>
 #include <core/net/windows/WinsockError.hpp>
 #include <core/platform/WinsockInit.hpp>
@@ -86,7 +87,7 @@ std::expected<DialHandles, NetError> openDialSocket(ResolvedEndpoint const& endp
     platform::ensureWinsockInitialized();
 
     auto const socket = ::socket(endpoint.family, SOCK_STREAM, endpoint.protocol);
-    if (socket == INVALID_SOCKET)
+    if (socket == detail::InvalidSocket)
         return std::unexpected(fromWinsockError(WSAGetLastError(), "socket"));
 
     // **The socket is not what the loop watches here.** Winsock reports readiness for a socket

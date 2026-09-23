@@ -14,6 +14,7 @@
 #include <core/net/IoBackend.hpp>
 #include <core/net/Sockets.hpp>
 #include <core/net/testing/CoroTestSupport.hpp>
+#include <core/net/windows/InvalidSocket.hpp>
 #include <core/platform/WinsockInit.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -40,7 +41,7 @@ namespace
 /// associates the readiness event and puts it into non-blocking mode.
 struct RawListener
 {
-    SOCKET socket = INVALID_SOCKET;
+    SOCKET socket = core::net::detail::InvalidSocket;
     std::uint16_t port = 0;
 };
 
@@ -50,7 +51,7 @@ struct RawListener
 
     auto raw = RawListener {};
     raw.socket = ::socket(AF_INET, SOCK_STREAM, 0);
-    REQUIRE(raw.socket != INVALID_SOCKET);
+    REQUIRE(raw.socket != core::net::detail::InvalidSocket);
 
     auto address = sockaddr_in {};
     address.sin_family = AF_INET;

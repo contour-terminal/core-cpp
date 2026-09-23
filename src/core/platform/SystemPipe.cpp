@@ -133,6 +133,11 @@ namespace
 
 #else // _WIN32
 
+    /// `INVALID_SOCKET` as a `SOCKET` rather than as the macro, whose inner `~0` is a signed `int`
+    /// and makes every comparison against it read as a signed/unsigned one. `core::net` has the
+    /// same constant (`windows/InvalidSocket.hpp`); this module cannot include that one.
+    constexpr SOCKET InvalidSocket = INVALID_SOCKET;
+
     /// Bounds a byte count to what the `int` parameter of Winsock's send()/recv() can carry.
     ///
     /// A bare cast turns a count past INT_MAX into a negative one and a count past 4 GiB into a
@@ -168,9 +173,9 @@ namespace
         {
             if (_event != WSA_INVALID_EVENT)
                 WSACloseEvent(_event);
-            if (_readSock != INVALID_SOCKET)
+            if (_readSock != InvalidSocket)
                 closesocket(_readSock);
-            if (_writeSock != INVALID_SOCKET)
+            if (_writeSock != InvalidSocket)
                 closesocket(_writeSock);
         }
 
@@ -231,7 +236,7 @@ namespace
 
         [[nodiscard]] bool good() const noexcept override
         {
-            return _readSock != INVALID_SOCKET && _writeSock != INVALID_SOCKET && _event != WSA_INVALID_EVENT;
+            return _readSock != InvalidSocket && _writeSock != InvalidSocket && _event != WSA_INVALID_EVENT;
         }
 
       private:
@@ -251,9 +256,10 @@ namespace
     [[nodiscard]] bool areConnectedToEachOther(SOCKET a, SOCKET b) noexcept
     {
         auto const addressOf = [](auto const& query, SOCKET socket, sockaddr_in& out) {
-            auto length = static_cast<int>(sizeof(out));
+            constexpr auto Expected = static_cast<int>(sizeof(sockaddr_in));
+            auto length = Expected;
             return query(socket, reinterpret_cast<sockaddr*>(&out), &length) != SOCKET_ERROR
-                   && length == static_cast<int>(sizeof(out));
+                   && length == Expected;
         };
         auto const same = [](sockaddr_in const& x, sockaddr_in const& y) {
             return x.sin_family == y.sin_family && x.sin_port == y.sin_port
@@ -277,7 +283,7 @@ namespace
     [[nodiscard]] bool tryMakeLoopbackPair(std::array<SOCKET, 2>& out) noexcept
     {
         auto listener = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (listener == INVALID_SOCKET)
+        if (listener == InvalidSocket)
             return false;
 
         sockaddr_in addr {};
@@ -303,7 +309,7 @@ namespace
         }
 
         auto client = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (client == INVALID_SOCKET)
+        if (client == InvalidSocket)
         {
             cleanupListener();
             return false;
@@ -317,7 +323,7 @@ namespace
 
         auto server = ::accept(listener, nullptr, nullptr);
         cleanupListener();
-        if (server == INVALID_SOCKET)
+        if (server == InvalidSocket)
         {
             closesocket(client);
             return false;

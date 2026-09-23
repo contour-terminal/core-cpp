@@ -503,7 +503,7 @@ std::expected<fs::path, std::string> NativeFileSystem::createTempFile(std::strin
     auto templateStr = templatePath.wstring();
     if (_wmktemp_s(templateStr.data(), templateStr.size() + 1) != 0)
         return std::unexpected("Failed to create temporary file name");
-    auto const created = fs::path(templateStr);
+    auto created = fs::path(templateStr);
     auto ofs = std::ofstream(created);
     if (!ofs)
         return std::unexpected("Failed to create temporary file");

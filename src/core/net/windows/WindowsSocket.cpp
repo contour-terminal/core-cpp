@@ -3,6 +3,7 @@
 
 #include <core/net/SocketContract.hpp>
 #include <core/net/detail/ScopeGuard.hpp>
+#include <core/net/windows/InvalidSocket.hpp>
 #include <core/net/windows/NetworkEvents.hpp>
 
 #include <array>
@@ -57,7 +58,7 @@ WindowsSocket::WindowsSocket(EventLoop& loop, SOCKET socket, std::string peerAdd
 {
     // Associate the socket's read/write/close readiness with the event so the
     // loop can wait on it. WSAEventSelect also sets the socket non-blocking.
-    if (_event != WSA_INVALID_EVENT && _socket != INVALID_SOCKET)
+    if (_event != WSA_INVALID_EVENT && _socket != detail::InvalidSocket)
         WSAEventSelect(_socket, _event, FD_READ | FD_WRITE | FD_CLOSE);
 }
 
@@ -84,20 +85,20 @@ void WindowsSocket::close(FdWakePolicy policy) noexcept
         // Before the close, while the handle is still valid. The event -- not the
         // socket -- is what parkUntilReady registers with the loop, so it is the
         // handle a parked flow must be woken by.
-        _loop.notifyHandleClosing(static_cast<HANDLE>(_event), policy);
+        _loop.notifyHandleClosing(_event, policy);
         WSACloseEvent(_event);
         _event = WSA_INVALID_EVENT;
     }
-    if (_socket != INVALID_SOCKET)
+    if (_socket != detail::InvalidSocket)
     {
         closesocket(_socket);
-        _socket = INVALID_SOCKET;
+        _socket = detail::InvalidSocket;
     }
 }
 
 std::optional<NetError> WindowsSocket::closedError(char const* op) const noexcept
 {
-    if (_closed || _socket == INVALID_SOCKET)
+    if (_closed || _socket == detail::InvalidSocket)
         return makeNetError(NetErrorCode::BadHandle, 0, op);
     return std::nullopt;
 }
@@ -224,7 +225,7 @@ IoAwaitable WindowsSocket::waitReadable()
 ResultAwaitable<void> WindowsSocket::shutdownWrite()
 {
     // Completes INLINE, as on POSIX: there is nothing to flush before the FIN.
-    if (_closed || _socket == INVALID_SOCKET)
+    if (_closed || _socket == detail::InvalidSocket)
         return ResultAwaitable<void> { std::expected<void, NetError> {} };
     if (::shutdown(_socket, SD_SEND) == SOCKET_ERROR)
     {

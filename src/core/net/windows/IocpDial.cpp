@@ -22,6 +22,7 @@
 #include <core/net/EventLoop.hpp>
 #include <core/net/detail/DialPrimitives.hpp>
 #include <core/net/detail/ScopeGuard.hpp>
+#include <core/net/windows/InvalidSocket.hpp>
 #include <core/net/windows/IocpOperation.hpp>
 #include <core/net/windows/IocpSocket.hpp>
 #include <core/net/windows/WinsockError.hpp>
@@ -37,8 +38,6 @@ namespace core::net::detail
 
 namespace
 {
-    /// `INVALID_SOCKET` as a `SOCKET`; see `IocpBackend.cpp`.
-    constexpr SOCKET InvalidSocketValue = INVALID_SOCKET;
 
     /// One outstanding `ConnectEx`. It holds itself while the kernel holds it.
     struct ConnectOperation: IocpOperation
@@ -119,7 +118,7 @@ async::Task<SocketResult> dialCompletion(EventLoop* loop,
                                nullptr,
                                0,
                                WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
-    if (socket == InvalidSocketValue)
+    if (socket == detail::InvalidSocket)
         co_return std::unexpected(fromWinsockError(::WSAGetLastError(), "socket"));
 
     // Closes whatever is LEFT when this frame goes -- an `OperationCancelled` thrown out of the wait
@@ -127,7 +126,7 @@ async::Task<SocketResult> dialCompletion(EventLoop* loop,
     // lands in the operation's own share. The success path empties `socket` instead of disarming.
     auto associated = false;
     auto const discard = ScopeGuard { [&]() noexcept {
-        if (socket == InvalidSocketValue)
+        if (socket == detail::InvalidSocket)
             return;
         if (associated)
             port->forget(reinterpret_cast<platform::NativeHandle>(socket));
@@ -205,7 +204,7 @@ async::Task<SocketResult> dialCompletion(EventLoop* loop,
                                             .kind = HandleKind::Socket },
                               keepAlive);
 
-    auto const connected = std::exchange(socket, InvalidSocketValue);
+    auto const connected = std::exchange(socket, detail::InvalidSocket);
     co_return std::unique_ptr<ISocket> { new IocpSocket(
         *loop, connected, formatPeerAddress(endpoint), IocpAssociation::AlreadyAssociated) };
 }

@@ -4,6 +4,7 @@
 #include <core/net/detail/DatagramAddressing.hpp>
 #include <core/net/detail/DatagramReceiveBuffer.hpp>
 #include <core/net/detail/SocketErrors.hpp>
+#include <core/net/windows/InvalidSocket.hpp>
 #include <core/platform/WinsockInit.hpp>
 
 #include <algorithm>
@@ -51,7 +52,7 @@ namespace
 
         ~WindowsUdpSocket() override
         {
-            if (_socket != INVALID_SOCKET)
+            if (_socket != detail::InvalidSocket)
                 ::closesocket(_socket);
         }
 
@@ -237,7 +238,7 @@ std::expected<std::unique_ptr<IDatagramSocket>, NetError> detail::openUdpSocketW
     {
         auto const* const candidate = std::exchange(next, next->ai_next);
         auto const socket = ::socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
-        if (socket == INVALID_SOCKET)
+        if (socket == detail::InvalidSocket)
         {
             failure = lastError("socket");
             continue;

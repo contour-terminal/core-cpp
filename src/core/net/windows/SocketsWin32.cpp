@@ -9,6 +9,7 @@
 // clang-format on
 
 #include <core/net/Sockets.hpp>
+#include <core/net/windows/InvalidSocket.hpp>
 #include <core/net/windows/IocpSocket.hpp>
 #include <core/net/windows/WindowsListener.hpp>
 #include <core/net/windows/WindowsSocket.hpp>
@@ -89,7 +90,7 @@ async::Task<std::expected<std::unique_ptr<ISocket>, NetError>> connectUnix(Event
     std::memcpy(addr.sun_path, path.data(), path.size());
 
     auto const sock = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    if (sock == INVALID_SOCKET)
+    if (sock == detail::InvalidSocket)
         co_return std::unexpected(
             makeNetError(NetErrorCode::Unsupported, WSAGetLastError(), "socket(AF_UNIX)"));
 

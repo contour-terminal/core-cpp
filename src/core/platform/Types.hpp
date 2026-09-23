@@ -29,8 +29,9 @@ using NativeHandle = void*;
 using ProcessId = unsigned long;
 
 /// Invalid handle sentinel value, Windows' `INVALID_HANDLE_VALUE`.
-/// Cannot be constexpr on Windows because the value is a pointer made from an integer.
-inline NativeHandle const InvalidHandle = reinterpret_cast<NativeHandle>(static_cast<std::intptr_t>(-1));
+/// Cannot be constexpr on Windows because the value is a pointer made from an integer. Spelled
+/// `void* const` rather than `NativeHandle const`, which reads as a pointer to const and is not one.
+inline void* const InvalidHandle = reinterpret_cast<NativeHandle>(static_cast<std::intptr_t>(-1));
 
 /// Invalid process ID sentinel value.
 constexpr ProcessId InvalidProcessId = 0;

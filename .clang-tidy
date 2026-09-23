@@ -214,6 +214,14 @@ CheckOptions:
   readability-identifier-naming.UnionCase: CamelCase
   readability-identifier-naming.VariableCase: camelBack
   readability-identifier-naming.GlobalVariableCase: camelBack
+  # A namespace-scope constant POINTER cannot be constexpr when it is made from an integer, which is
+  # what Windows' `platform::InvalidHandle` is (INVALID_HANDLE_VALUE), and it is a constant like any
+  # other: CamelCase, as the house rule says and as its POSIX twin, a constexpr int, already is.
+  # Without this it falls under ConstantCase, and the one public constant that differs by platform
+  # would have to be spelled differently on one of them. Deliberately the POINTER style and not
+  # GlobalConstantCase: the wider one also claims every namespace-scope `const` value, which the
+  # tree spells camelBack today.
+  readability-identifier-naming.GlobalConstantPointerCase: CamelCase
   # No Hungarian notation: no g/s_/k prefixes. Globals are plain camelBack.
   #
   # The hook names, as fastcached's FunctionIgnoredRegexp lists them: what the language and the
