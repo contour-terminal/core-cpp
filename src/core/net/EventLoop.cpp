@@ -539,10 +539,12 @@ void EventLoop::armHostWake()
     // never resumed** -- the one failure a readiness poller cannot report for itself, which is why
     // `notifyHandleClosing` exists at all.
     //
-    // It has **no case**, and for the reason every assertion in this file has none: observing one
-    // from inside a Catch case aborts the binary. The tree's shape for that is a `WILL_FAIL` canary
-    // process, and a third canary mode for an invariant that is unreachable today is more than it
-    // is worth -- recorded here so it is a decision rather than an omission.
+    // **Its case is a canary mode, `core-cpp.hostdriven-canary.closedPark`**, because observing an
+    // assertion from inside a Catch case aborts the binary. It was once declined, priced against a
+    // whole `WILL_FAIL` process for an invariant unreachable today; with the marker scheme a mode is
+    // a few lines in an existing canary, and "unreachable today" is the argument FOR a canary, not
+    // against one -- the assertion exists for the day the premise breaks, so the case builds a
+    // host-driven backend that accepts readiness and watches it fire.
     assert(_closedParks.empty()
            && "armHostWake with a closed park pending: a host-driven backend has gained readiness, "
               "so this condition and notifyHandleClosing both need to arm the host");

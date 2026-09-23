@@ -389,7 +389,7 @@ if(CORE_CPP_TESTING AND NOT EMSCRIPTEN)
     # library on every platform and a no-op off Windows.
     target_link_libraries(core-cpp-hostdriven-canary PRIVATE core::net core::testing_dialogs)
     core_cpp_apply_toolchain(core-cpp-hostdriven-canary)
-    foreach(mode IN ITEMS run blockOn spawnOffThread)
+    foreach(mode IN ITEMS run blockOn closedPark)
         add_test(NAME core-cpp.hostdriven-canary.${mode}
                  COMMAND core-cpp-hostdriven-canary ${mode})
         # **A canary is judged by a POSITIVE match, not by WILL_FAIL.** WILL_FAIL inverts ANY
@@ -421,6 +421,41 @@ if(CORE_CPP_TESTING AND NOT EMSCRIPTEN)
             TIMEOUT 60
             SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
             FAIL_REGULAR_EXPRESSION "was accepted;returned on a host-driven loop"
+            LABELS "core-cpp;net;canary")
+    endforeach()
+
+    # Every loop-thread-only member of EventLoop, called from a second thread while the loop runs on
+    # its own -- fastcached's reactor-teardown-gate (0708dd54) in this tree's shape. One mode per
+    # member, and the PASS expression is the ASSERTION'S OWN TEXT, naming that member, rather than a
+    # marker printed before the call: a process that died of something else on its way there (a
+    # race's segfault, a failed thread spawn) prints no such text, and a mode that reached another
+    # member's guard names the other member. Upstream's gate kept exactly those outcomes apart, and
+    # measured that "died" is not "the guard refused". Every message is matched on its FIRST string
+    # literal only, because the compilers print the expression as written and a message split across
+    # two literals is printed with the quotes between them.
+    add_executable(core-cpp-loop-affinity-canary LoopAffinityCanary.cpp)
+    target_link_libraries(core-cpp-loop-affinity-canary PRIVATE core::net core::testing_dialogs)
+    core_cpp_apply_toolchain(core-cpp-loop-affinity-canary)
+    set(_coreCppAffinityModes
+        "destroy|an EventLoop must be destroyed on its own worker thread"
+        "runOnce|an EventLoop turn was entered from a second thread while another is driving")
+    foreach(member IN ITEMS cancelPending requestStop spawn addTimer cancelTimer resumeSoon registerPark
+                            unregisterPark wakeReasonOf notifyHandleClosing)
+        list(APPEND _coreCppAffinityModes
+             "${member}|EventLoop::${member} from a second thread while another is driving")
+    endforeach()
+    foreach(row IN LISTS _coreCppAffinityModes)
+        string(FIND "${row}" "|" bar)
+        string(SUBSTRING "${row}" 0 ${bar} mode)
+        math(EXPR bar "${bar} + 1")
+        string(SUBSTRING "${row}" ${bar} -1 refusal)
+        add_test(NAME core-cpp.loop-affinity-canary.${mode}
+                 COMMAND core-cpp-loop-affinity-canary ${mode})
+        set_tests_properties(core-cpp.loop-affinity-canary.${mode} PROPERTIES
+            PASS_REGULAR_EXPRESSION "${refusal}"
+            FAIL_REGULAR_EXPRESSION "was accepted;unknown mode;usage:;no default backend"
+            TIMEOUT 60
+            SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
             LABELS "core-cpp;net;canary")
     endforeach()
 endif()
