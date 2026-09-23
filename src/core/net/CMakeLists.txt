@@ -337,6 +337,7 @@ core_cpp_add_test(net
         SocketDecorator_test.cpp
         posix/AdoptListener_test.cpp
         posix/FdPassing_test.cpp
+        posix/SocketErrors_test.cpp
         posix/UnixSocket_test.cpp
     SOURCES_WINDOWS
         windows/AdoptListener_test.cpp
@@ -344,6 +345,7 @@ core_cpp_add_test(net
         windows/IocpDial_test.cpp
         windows/IocpSocket_test.cpp
         windows/NetworkEvents_test.cpp
+        windows/SocketErrors_test.cpp
         windows/WfmoBackend_test.cpp
     LABELS loopback
     # A reactor defect does not fail a case here, it HANGS it: a lost readiness wake-up parks a

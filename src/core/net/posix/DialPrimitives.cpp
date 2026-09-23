@@ -2,6 +2,7 @@
 #include <core/net/detail/DialPrimitives.hpp>
 
 #include <core/net/EventLoop.hpp>
+#include <core/net/detail/SocketErrors.hpp>
 #include <core/net/posix/FdUtils.hpp>
 #include <core/net/posix/PosixSocket.hpp>
 
@@ -24,37 +25,6 @@ namespace core::net::detail
 
 namespace
 {
-    /// Maps an errno from the dial path onto the vocabulary a caller can act on.
-    ///
-    /// `ConnRefused` and `HostUnreach` are the two a caller genuinely branches on — one says
-    /// "nothing is listening there", the other says "this machine cannot get there" — and
-    /// collapsing either into `SystemError` leaves a connector unable to do the job it exists
-    /// for.
-    /// @param err The captured errno.
-    /// @param context What was being attempted.
-    /// @return The classified error.
-    [[nodiscard]] NetError fromDialErrno(int err, std::string context)
-    {
-        auto code = NetErrorCode::SystemError;
-        switch (err)
-        {
-            case ECONNREFUSED: code = NetErrorCode::ConnRefused; break;
-            case ECONNRESET: code = NetErrorCode::ConnReset; break;
-            case ETIMEDOUT: code = NetErrorCode::Timeout; break;
-            case EHOSTUNREACH:
-            case ENETUNREACH: code = NetErrorCode::HostUnreach; break;
-            case EADDRNOTAVAIL: code = NetErrorCode::AddressNotAvail; break;
-            case EACCES:
-            case EPERM: code = NetErrorCode::PermissionDenied; break;
-            case EAFNOSUPPORT:
-            case EPROTONOSUPPORT: code = NetErrorCode::Unsupported; break;
-            case EBADF:
-            case ENOTSOCK: code = NetErrorCode::BadHandle; break;
-            default: break;
-        }
-        return makeNetError(code, err, std::move(context));
-    }
-
     /// Whole seconds, and never zero.
     ///
     /// The keepalive options take seconds, and a zero is not "immediately" — it is rejected, or
@@ -108,7 +78,7 @@ std::expected<DialHandles, NetError> openDialSocket(ResolvedEndpoint const& endp
     // Non-blocking AND close-on-exec in one call where the platform allows it; see makeStreamSocket.
     auto const fd = makeStreamSocket(endpoint.family, endpoint.protocol);
     if (fd < 0)
-        return std::unexpected(fromDialErrno(errno, "socket"));
+        return std::unexpected(detail::socketError(errno, "socket"));
 
     // The descriptor IS the readiness object here: poll, epoll and kqueue all watch it directly.
     return DialHandles { .socket = fd, .readiness = fd, .kind = DefaultHandleKind };
@@ -137,7 +107,7 @@ std::expected<ConnectProgress, NetError> beginConnect(DialHandles const& handles
     // kernel took the request and readiness will say how it ended.
     if (err == EINPROGRESS || err == EALREADY || err == EAGAIN)
         return ConnectProgress::Pending;
-    return std::unexpected(fromDialErrno(err, "connect"));
+    return std::unexpected(detail::socketError(err, "connect"));
 }
 
 std::expected<void, NetError> pendingSocketError(DialHandles const& handles)
@@ -145,9 +115,9 @@ std::expected<void, NetError> pendingSocketError(DialHandles const& handles)
     auto pending = 0;
     auto length = static_cast<socklen_t>(sizeof(pending));
     if (::getsockopt(handles.socket, SOL_SOCKET, SO_ERROR, &pending, &length) != 0)
-        return std::unexpected(fromDialErrno(errno, "getsockopt(SO_ERROR)"));
+        return std::unexpected(detail::socketError(errno, "getsockopt(SO_ERROR)"));
     if (pending != 0)
-        return std::unexpected(fromDialErrno(pending, "connect"));
+        return std::unexpected(detail::socketError(pending, "connect"));
     return {};
 }
 

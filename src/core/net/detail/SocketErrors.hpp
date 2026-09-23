@@ -5,12 +5,13 @@
 /// `detail::classifySocketError` — a platform socket error, as this library's vocabulary.
 ///
 /// One declaration, one table per platform (`posix/SocketErrors.cpp`, `windows/SocketErrors.cpp`),
-/// chosen by the source list. **Not yet the only table in the module, and that is a known debt
-/// rather than a design**: `PosixSocket`, `WindowsSocket` and the dial primitives each still carry a
-/// private switch, and a private switch is the shape that lacked a row and turned a firewall's
-/// `EACCES` into an unclassified `SystemError` upstream. The datagram and blocking transports use
-/// this one; moving the other three onto it is a change to files other tasks own. Private to
-/// `core::net`.
+/// chosen by the source list, and **the only table in the module**: every socket, the datagram and
+/// blocking transports and both platforms' dial read their errors through it -- on Windows by way
+/// of `windows/WinsockError.hpp`, which adds only the two things a WSAE* table cannot hold. Until
+/// Task B13, `PosixSocket`, `WindowsSocket` and the POSIX dial each carried a private switch, and a
+/// private switch is the shape that lacked a row and turned a firewall's `EACCES` into an
+/// unclassified `SystemError` upstream. `posix/SocketErrors_test.cpp` and
+/// `windows/SocketErrors_test.cpp` assert every row. Private to `core::net`.
 ///
 /// Origin: fastcached `Detail::TranslateSocketError` in `src/FastCache/Net/BlockingSocket.cpp`
 /// (`0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21`), plus `MessageTooLarge`.

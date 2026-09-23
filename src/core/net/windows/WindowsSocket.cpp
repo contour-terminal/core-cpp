@@ -5,6 +5,7 @@
 #include <core/net/detail/ScopeGuard.hpp>
 #include <core/net/windows/InvalidSocket.hpp>
 #include <core/net/windows/NetworkEvents.hpp>
+#include <core/net/windows/WinsockError.hpp>
 
 #include <array>
 #include <coroutine>
@@ -16,21 +17,6 @@ namespace core::net
 
 namespace
 {
-    /// Maps a WSA error to a NetError category.
-    [[nodiscard]] NetError fromWsa(int err, std::string context)
-    {
-        auto code = NetErrorCode::SystemError;
-        switch (err)
-        {
-            case WSAECONNRESET: code = NetErrorCode::ConnReset; break;
-            case WSAECONNREFUSED: code = NetErrorCode::ConnRefused; break;
-            case WSAENOTSOCK:
-            case WSAEBADF: code = NetErrorCode::BadHandle; break;
-            default: break;
-        }
-        return makeNetError(code, err, std::move(context));
-    }
-
     /// Records the awaiting coroutine's handle and carries on without suspending: how a coroutine
     /// learns its own handle, for a caller that has to find it again in the loop's park table.
     struct PublishSelf
@@ -213,7 +199,7 @@ async::Task<IoResult> WindowsSocket::readTask(std::span<std::byte> buffer)
                     makeNetError(NetErrorCode::Cancelled, 0, "the read was retired by cancelRead"));
             continue;
         }
-        co_return std::unexpected(fromWsa(err, "recv"));
+        co_return std::unexpected(detail::fromWinsockError(err, "recv"));
     }
 }
 
@@ -232,7 +218,7 @@ ResultAwaitable<void> WindowsSocket::shutdownWrite()
         auto const err = ::WSAGetLastError();
         // WSAENOTCONN is the state the caller asked for, not a failure to report.
         if (err != WSAENOTCONN)
-            return ResultAwaitable<void> { std::unexpected(fromWsa(err, "shutdown")) };
+            return ResultAwaitable<void> { std::unexpected(detail::fromWinsockError(err, "shutdown")) };
     }
     return ResultAwaitable<void> { std::expected<void, NetError> {} };
 }
@@ -262,7 +248,7 @@ async::Task<IoResult> WindowsSocket::waitReadableTask()
         }
         // Anything but "nothing yet" is the peer GONE -- a reset above all -- and answering "one
         // byte is pending" there says the opposite of what happened to a caller that only watches.
-        co_return std::unexpected(fromWsa(err, "recv"));
+        co_return std::unexpected(detail::fromWinsockError(err, "recv"));
     }
 }
 
@@ -294,7 +280,7 @@ async::Task<IoResult> WindowsSocket::writeTask(std::span<std::byte const> buffer
             std::ignore = co_await parkUntilReady(Ready::Write);
             continue;
         }
-        co_return std::unexpected(fromWsa(err, "send"));
+        co_return std::unexpected(detail::fromWinsockError(err, "send"));
     }
     co_return total;
 }

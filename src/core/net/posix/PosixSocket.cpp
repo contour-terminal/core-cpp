@@ -2,6 +2,7 @@
 #include <core/net/posix/PosixSocket.hpp>
 
 #include <core/net/SocketContract.hpp>
+#include <core/net/detail/SocketErrors.hpp>
 #include <core/net/detail/WouldBlock.hpp>
 #include <core/net/posix/FdUtils.hpp> // MSG_NOSIGNAL fallback, makeNonBlockingCloexec
 
@@ -38,28 +39,6 @@ namespace
     /// stack array rather than the write: a caller passing more segments than this simply takes
     /// more syscalls, which is what a partial send would have cost anyway.
     constexpr std::size_t MaxIoVectors = 16;
-
-    /// Maps an errno from a socket call to a NetError category.
-    /// @param err The captured errno.
-    /// @param context What was being attempted.
-    /// @return The classified error.
-    [[nodiscard]] NetError fromErrno(int err, std::string context)
-    {
-        auto code = NetErrorCode::SystemError;
-        switch (err)
-        {
-            case ECONNRESET: code = NetErrorCode::ConnReset; break;
-            // EPIPE is NOT a reset, and it has no row of its own: it is a write after this end's own
-            // half-close, or after a peer's FIN that the previous write turned into a reset -- which
-            // Winsock reports as `WSAESHUTDOWN` and `WSAECONNABORTED`, both `SystemError`. A reset is
-            // the peer closing over bytes it had not read (`ECONNRESET`), and a caller counts that
-            // apart from a goodbye. `SocketClosedStates_test` pins the fake to this answer against a
-            // real pair; mapping EPIPE here reddened it on every POSIX leg.
-            case EBADF: code = NetErrorCode::BadHandle; break;
-            default: break;
-        }
-        return makeNetError(code, err, std::move(context));
-    }
 
     /// @param what Which verb is refusing.
     /// @return The error a verb reports on a socket that is already closed.
@@ -165,7 +144,7 @@ ResultAwaitable<void> PosixSocket::shutdownWrite()
         // ENOTCONN is not a failure to report: the peer is already gone, which is the state the
         // caller was asking for.
         if (err != ENOTCONN)
-            return ResultAwaitable<void> { std::unexpected(fromErrno(err, "shutdown")) };
+            return ResultAwaitable<void> { std::unexpected(detail::socketError(err, "shutdown")) };
     }
     return ResultAwaitable<void> { std::expected<void, NetError> {} };
 }
@@ -210,7 +189,7 @@ std::optional<IoResult> PosixSocket::tryRead(std::span<std::byte> buffer)
         }
         if (isWouldBlock(err) || err == EINTR)
             return std::nullopt;
-        return IoResult { std::unexpected(fromErrno(err, _plainFd ? "read" : "recv")) };
+        return IoResult { std::unexpected(detail::socketError(err, _plainFd ? "read" : "recv")) };
     }
 }
 
@@ -289,7 +268,7 @@ std::optional<std::expected<ReadWithFd, NetError>> PosixSocket::tryReadWithFd(st
         }
         if (isWouldBlock(err) || err == EINTR)
             return std::nullopt;
-        return std::unexpected(fromErrno(err, "recvmsg"));
+        return std::unexpected(detail::socketError(err, "recvmsg"));
     }
 }
 
@@ -312,7 +291,7 @@ std::optional<IoResult> PosixSocket::tryProbe()
                 return std::nullopt;
             if (err == EIO)
                 return IoResult { std::size_t { 0 } }; // a PTY master reports child exit as EIO
-            return IoResult { std::unexpected(fromErrno(err, "ioctl(FIONREAD)")) };
+            return IoResult { std::unexpected(detail::socketError(err, "ioctl(FIONREAD)")) };
         }
         if (pending > 0)
             return IoResult { std::size_t { 1 } };
@@ -349,7 +328,7 @@ std::optional<IoResult> PosixSocket::tryProbe()
     // parking again is right. Anything else — ECONNRESET above all — is the peer GONE, and a
     // watcher that never reads would take "one byte is pending" as proof of life
     // ([fastcached#899](https://github.com/LASTRADA-Software/fastcached/issues/899)).
-    return IoResult { std::unexpected(fromErrno(err, "recv")) };
+    return IoResult { std::unexpected(detail::socketError(err, "recv")) };
 }
 
 IoAwaitable PosixSocket::read(std::span<std::byte> buffer)
@@ -637,7 +616,7 @@ std::optional<IoResult> PosixSocket::trySendFlat(WriteOperation& operation)
             continue; // interrupted before anything moved; the same send again
         if (isWouldBlock(err))
             return std::nullopt;
-        return IoResult { std::unexpected(fromErrno(err, _plainFd ? "write" : "send")) };
+        return IoResult { std::unexpected(detail::socketError(err, _plainFd ? "write" : "send")) };
     }
     return IoResult { operation.written };
 }
@@ -699,7 +678,7 @@ std::optional<IoResult> PosixSocket::trySendSegments(WriteOperation& operation)
             continue;
         if (isWouldBlock(err))
             return std::nullopt;
-        return IoResult { std::unexpected(fromErrno(err, "sendmsg")) };
+        return IoResult { std::unexpected(detail::socketError(err, "sendmsg")) };
     }
 
     operation.segmentIndex = operation.segments.size();

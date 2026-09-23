@@ -20,7 +20,14 @@ NetErrorCode classifySocketError(int systemCode) noexcept
         case ENETUNREACH: return NetErrorCode::HostUnreach;
         case EADDRINUSE: return NetErrorCode::AddressInUse;
         case EADDRNOTAVAIL: return NetErrorCode::AddressNotAvail;
-        case EACCES: return NetErrorCode::PermissionDenied;
+        // `EPERM` beside `EACCES`: a packet filter refusing a connect answers EPERM on Linux, and
+        // a caller asks one question -- "was I refused by policy" -- whichever spelling it got.
+        case EACCES:
+        case EPERM: return NetErrorCode::PermissionDenied;
+        // A family or protocol this host does not have, which a dial or an `openUdpSocket` meets
+        // on a machine without IPv6.
+        case EAFNOSUPPORT:
+        case EPROTONOSUPPORT: return NetErrorCode::Unsupported;
         case EBADF:
         case ENOTSOCK: return NetErrorCode::BadHandle;
         case EINTR: return NetErrorCode::Cancelled;
