@@ -62,9 +62,16 @@ namespace detail
     extern A const& unconstructedAwaiter;
 
     /// Whether this compiler evaluates a member call through a reference to an object it knows
-    /// nothing about in a constant expression (P2280, part of C++23). Measured: GCC 14, Clang 22
-    /// and MSVC 19.51 do; MSVC 19.44 does not, and neither does a Clang older than 20 -- AppleClang
-    /// and the older emsdk among them. On those @c awaitReadyIsConstantFalse asserts nothing.
+    /// nothing about in a constant expression (P2280, part of C++23).
+    ///
+    /// **A compiler-capability check, not platform logic**: the `#if` below asks which compiler
+    /// this is, never which operating system, and changes no behaviour -- only whether a
+    /// compile-time assertion can be evaluated. Measured: GCC 14, Clang 22, clang-cl 22 and MSVC
+    /// 19.51 evaluate it, and fail to compile a call or a member read in `await_ready`. On these
+    /// @c awaitReadyIsConstantFalse asserts NOTHING, because they reject even a constant `false`:
+    /// MSVC before 19.51 -- 19.44 included, the compiler of fastcached#1546 -- and every Clang
+    /// before 20, which takes in AppleClang up to 17 (LLVM 19) and emsdk 3.1.56's Clang 19.
+    /// `scripts/check-await-ready.py` is what covers those.
 #if (defined(__clang__) && __clang_major__ < 20) \
     || (defined(_MSC_VER) && !defined(__clang__) && _MSC_VER < 1951)
     inline constexpr bool CanAskAwaitReadyAtCompileTime = false;
