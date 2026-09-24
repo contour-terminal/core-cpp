@@ -38,6 +38,15 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- **The migration table sends the completion types to `core::tui::completer::`**
+  ([core-cpp#48](https://github.com/contour-terminal/core-cpp/issues/48), found by the endo
+  migration). endo and tuidu declare `CompletionItem`, `CompletionProvider`, `Completer`,
+  `CompletionConfig`, `FuzzyMatch`, `FuzzyMatchResult`, `FuzzyConfig`, `SmartCaseMatch` and
+  `SmartCaseConfig` in `namespace tui`; `tools/migrate/renames.json` had no row for them, so the
+  `tui` namespace row rewrote them to `core::tui::`, which does not compile. Each has a symbol row
+  now, and `check_renames_test.py` fails without them. The provenance record of
+  `src/core/testing/SuppressWindowsDialogsAtStartup.cpp` no longer calls it a verbatim copy of
+  endo's: endo's product variant, which suppressed only under ctest, was dropped.
 - **A hung-up terminal no longer spins the TUI at 100% CPU**
   ([core-cpp#49](https://github.com/contour-terminal/core-cpp/issues/49), found by the tuidu
   migration). With `SIGHUP` ignored, a terminal that hangs up leaves its input readable for ever,

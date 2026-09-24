@@ -16,6 +16,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import renames
+import rewrite
 
 HERE = Path(__file__).resolve().parent
 REPOSITORY_ROOT = HERE.parent.parent
@@ -662,6 +663,62 @@ class TheSchemaIsChecked(unittest.TestCase):
         table = renames.load(TABLE)
         self.assertGreater(len(table.rows), 100)
         self.assertEqual(set(table.profiles), {"contour", "endo", "tuidu", "fastcached"})
+
+
+class TheCompleterTypesHaveRowsOfTheirOwn(unittest.TestCase):
+    """core-cpp#48: the completion types moved one namespace deeper than the rest of the TUI.
+
+    endo and tuidu declare them in `namespace tui`, like every other TUI type, and core-cpp in
+    `namespace core::tui::completer`. The namespace row sends `tui::X` to `core::tui::X`, which is
+    right for everything else and names a type that does not exist for these -- endo's migration
+    (endo#187) had to qualify each one by hand. A symbol row applies before the namespace row
+    (renames.KINDS), so a row per type is what sends them to the right place.
+
+    Hermetic, as this file requires: the type list is spelled here rather than scanned from the
+    headers, and whether each target still exists is `core-cpp.migrate-renames`' question.
+    """
+
+    TYPES = (
+        "CompletionConfig",
+        "Completer",
+        "CompletionItem",
+        "CompletionProvider",
+        "FuzzyConfig",
+        "FuzzyMatch",
+        "FuzzyMatchResult",
+        "SmartCaseConfig",
+        "SmartCaseMatch",
+    )
+
+    def test_every_completer_type_has_a_symbol_row(self) -> None:
+        rows = {row.source: row for row in renames.load(TABLE).rows if row.kind == "symbol"}
+        for name in self.TYPES:
+            with self.subTest(type=name):
+                row = rows.get(f"tui::{name}")
+                self.assertIsNotNone(
+                    row, f"no symbol row for tui::{name}; the namespace row sends it to core::tui::{name}"
+                )
+                self.assertEqual(row.target, f"core::tui::completer::{name}")
+                self.assertEqual(set(row.profiles), {"endo", "tuidu"})
+                self.assertEqual(row.delivers.symbol, f"core::tui::completer::{name}")
+
+    def test_the_rewrite_sends_a_completer_type_to_its_namespace_and_the_rest_to_core_tui(self) -> None:
+        # The rest of the TUI still takes the namespace row: the symbol rows must not be so broad
+        # that they catch a longer name either (FuzzyMatch against FuzzyMatchResult).
+        source = (
+            "tui::CompletionItem item;\n"
+            "tui::FuzzyMatchResult result = tui::FuzzyMatch::match(query, candidate);\n"
+            "tui::Screen screen;\n"
+        )
+        expected = (
+            "core::tui::completer::CompletionItem item;\n"
+            "core::tui::completer::FuzzyMatchResult result = core::tui::completer::FuzzyMatch::match(query, candidate);\n"
+            "core::tui::Screen screen;\n"
+        )
+        for profile in ("endo", "tuidu"):
+            with self.subTest(profile=profile):
+                rewritten, _ = rewrite.rewrite_text(source, renames.load(TABLE).text_rows(profile))
+                self.assertEqual(rewritten, expected)
 
 
 if __name__ == "__main__":

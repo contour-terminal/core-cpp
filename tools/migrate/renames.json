@@ -4104,6 +4104,132 @@
       ]
     },
     {
+      "kind": "symbol",
+      "from": "tui::CompletionConfig",
+      "to": "core::tui::completer::CompletionConfig",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/completer/Completer.hpp",
+        "symbol": "core::tui::completer::CompletionConfig"
+      },
+      "note": "core-cpp#48: the completion types are one namespace deeper than the rest of the TUI, so the `tui` namespace row alone would send this to core::tui::"
+    },
+    {
+      "kind": "symbol",
+      "from": "tui::Completer",
+      "to": "core::tui::completer::Completer",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/completer/Completer.hpp",
+        "symbol": "core::tui::completer::Completer"
+      },
+      "note": "core-cpp#48: the completion types are one namespace deeper than the rest of the TUI, so the `tui` namespace row alone would send this to core::tui::"
+    },
+    {
+      "kind": "symbol",
+      "from": "tui::CompletionItem",
+      "to": "core::tui::completer::CompletionItem",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/completer/CompletionItem.hpp",
+        "symbol": "core::tui::completer::CompletionItem"
+      },
+      "note": "core-cpp#48: the completion types are one namespace deeper than the rest of the TUI, so the `tui` namespace row alone would send this to core::tui::"
+    },
+    {
+      "kind": "symbol",
+      "from": "tui::CompletionProvider",
+      "to": "core::tui::completer::CompletionProvider",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/completer/CompletionProvider.hpp",
+        "symbol": "core::tui::completer::CompletionProvider"
+      },
+      "note": "core-cpp#48: the completion types are one namespace deeper than the rest of the TUI, so the `tui` namespace row alone would send this to core::tui::"
+    },
+    {
+      "kind": "symbol",
+      "from": "tui::FuzzyConfig",
+      "to": "core::tui::completer::FuzzyConfig",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/completer/FuzzyMatch.hpp",
+        "symbol": "core::tui::completer::FuzzyConfig"
+      },
+      "note": "core-cpp#48: the completion types are one namespace deeper than the rest of the TUI, so the `tui` namespace row alone would send this to core::tui::"
+    },
+    {
+      "kind": "symbol",
+      "from": "tui::FuzzyMatch",
+      "to": "core::tui::completer::FuzzyMatch",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/completer/FuzzyMatch.hpp",
+        "symbol": "core::tui::completer::FuzzyMatch"
+      },
+      "note": "core-cpp#48: the completion types are one namespace deeper than the rest of the TUI, so the `tui` namespace row alone would send this to core::tui::"
+    },
+    {
+      "kind": "symbol",
+      "from": "tui::FuzzyMatchResult",
+      "to": "core::tui::completer::FuzzyMatchResult",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/completer/FuzzyMatch.hpp",
+        "symbol": "core::tui::completer::FuzzyMatchResult"
+      },
+      "note": "core-cpp#48: the completion types are one namespace deeper than the rest of the TUI, so the `tui` namespace row alone would send this to core::tui::"
+    },
+    {
+      "kind": "symbol",
+      "from": "tui::SmartCaseConfig",
+      "to": "core::tui::completer::SmartCaseConfig",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/completer/SmartCaseMatch.hpp",
+        "symbol": "core::tui::completer::SmartCaseConfig"
+      },
+      "note": "core-cpp#48: the completion types are one namespace deeper than the rest of the TUI, so the `tui` namespace row alone would send this to core::tui::"
+    },
+    {
+      "kind": "symbol",
+      "from": "tui::SmartCaseMatch",
+      "to": "core::tui::completer::SmartCaseMatch",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "target": {
+        "header": "core/tui/completer/SmartCaseMatch.hpp",
+        "symbol": "core::tui::completer::SmartCaseMatch"
+      },
+      "note": "core-cpp#48: the completion types are one namespace deeper than the rest of the TUI, so the `tui` namespace row alone would send this to core::tui::"
+    },
+    {
       "kind": "namespace",
       "from": "crispy::base64",
       "to": "core::base64",
