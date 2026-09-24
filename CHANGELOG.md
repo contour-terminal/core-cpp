@@ -7,7 +7,7 @@ release may break the API; every break is listed under **Breaking** with a migra
 release tag `vX.Y.Z` equals the version in `project(core-cpp VERSION X.Y.Z)`, and the release
 workflow refuses one without a section here.
 
-## [Unreleased]
+## [0.2.1] - 2026-09-24
 
 Every behaviour change in this section is a defect fixed, and each entry says which guarantee it
 restores and what a caller that depended on the defect changes. None of them is a break of a
