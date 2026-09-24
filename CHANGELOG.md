@@ -47,22 +47,30 @@ documented promise, which is why they are under *Fixed* in a patch release.
   _connection->close();`, where the first close resumed `runClient`, which destroyed the client).
   Each now settles the operation at once, with the same value (`Cancelled`, or the data that won),
   and hands the waiter to `EventLoop::resumeSoon`; an awaiter whose frame is destroyed while its
-  waiter is queued takes it back with `cancelPending`. The listeners already deferred through the
-  loop's closed-park list, and TLS's `SerialGate` since Task B11. `CloseResumesThroughLoop_test.cpp`
-  holds it over `BackendMatrix`, contour's crash included.
+  waiter is queued takes it back with `cancelPending`. The listeners already resumed a closed
+  accept through the loop's closed-park list, and TLS's `SerialGate` its waiters since Task B11.
+  `CloseResumesThroughLoop_test.cpp` holds it over `BackendMatrix`, contour's crash included.
   - *Migration*: a caller that asserted a parked flow's outcome right after `close()` or
     `cancelRead()` runs one loop turn first (`runOnce`, `runUntilIdle`, a `blockOn`). Two
     `cancelRead()` calls in a row no longer retire the read the first victim arms when it runs: the
     second finds the slot empty (fastcached#1233's shape). `testing::InMemorySocket` and
     `testing::ParkingReadableSocket`, which have no loop, still resume inline.
-  - *The socket may be gone when the flow runs*: the waiter resumes on a later turn, so an owner
-    that destroys the socket in the same turn as `close()` or `cancelRead()` -- `conn->close();
-    connections.erase(id);` -- has destroyed it before the flow sees its `Cancelled` result. A flow
-    must not touch a socket it does not own after such a result (`ISocket::close` says so). The
-    transports touch nothing of it: the frame-free ones settled a value that does not refer to the
-    socket, and `WindowsSocket`, whose read is a coroutine, now asks its lifetime token on the
-    normal path as well as the unwinding one, and unwinds with `OperationCancelled` where it used
-    to write into the freed socket (WFMO only; a heap-use-after-free under AddressSanitizer).
+  - *The socket may be gone when the flow runs, whatever the result*: the waiter resumes later
+    in the drain, so an owner that destroys the socket first -- `conn->close();
+    connections.erase(id);` -- has destroyed it before the flow sees its result, a `Cancelled`
+    one or bytes a read already took. A flow must not touch a socket it does not own after its
+    operation resumes (`ISocket::close` says so). The transports touch nothing of it: the
+    frame-free ones settled a value that does not refer to the socket, and the coroutine-shaped
+    ones ask a lifetime token on every way back and unwind with `OperationCancelled` where they
+    used to write into freed storage -- WFMO's `WindowsSocket` (its `_readWaiter`), and the TLS
+    layer, whose `feedIn` wrote the ciphertext of a read that settled with data into the freed
+    session's BIO, on every backend. Both were a heap-use-after-free under AddressSanitizer.
+  - *A listener closed and destroyed in one turn* -- `listener->close(); listener.reset();` --
+    woke its parked accept through the loop, and the accept then read the freed listener's
+    closed flag and descriptor: `PosixListener`, `UnixListener` and WFMO's `WindowsListener`, a
+    defect older than this release. The accept now asks the listener's lifetime token first and
+    answers `Cancelled` ("the listener was destroyed"). `IocpListener` keeps what an accept reads
+    in state it shares, and was not affected.
   - *Teardown*: `~EventLoop` drains what destroying the spawned roots queued -- a borrowed flow
     whose socket or listener a root owned -- so no flow is left suspended with an operation naming
     a destroyed loop; and a chain nobody owns (a `DetachedTask`) that a socket queued is freed at
@@ -97,7 +105,9 @@ documented promise, which is why they are under *Fixed* in a patch release.
     end of input as final**, or the spin moves from the runtime into its own loop: it asks
     `inputClosed()` and exits. endo's `Prompt::read` is the example -- it catches
     `OperationCancelled` and returns an empty line, and its REPL reads again for as long as the
-    prompt is ready.
+    prompt is ready. tuidu's `runModal` (`tui/runtime/Modal.hpp`) is the other: it returns
+    `std::nullopt` on the cancellation, so a caller that shows the modal again on `nullopt` spins
+    the same way.
   - `TerminalInput::poll()` records the end in `inputClosed()` too (a hangup with nothing to read on
     POSIX, a failed wait on Windows), but a loop driven by `poll()` itself must ask it; nothing ends
     that loop for it.
