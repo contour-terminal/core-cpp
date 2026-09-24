@@ -74,12 +74,12 @@ std::vector<core::async::Task<void>>& flows()
 
 /// Starts @p task, keeping it in @c flows().
 /// @param task The flow to run until it first suspends.
-/// @return The flow, as held.
-core::async::Task<void>& start(core::async::Task<void> task)
+/// @return Whether it ran to its end rather than parking.
+bool startFinishes(core::async::Task<void> task)
 {
     auto& held = flows().emplace_back(std::move(task));
     held.handle().resume();
-    return held;
+    return held.done();
 }
 
 core::async::Task<void> readOnce(core::net::ISocket* socket, std::span<std::byte> buffer)
@@ -98,8 +98,7 @@ int provokeReadSlot(char const* mode)
     auto pair = core::net::testing::InMemorySocketPair::create();
     flows().reserve(2);
     auto first = std::array<std::byte, 4> {};
-    auto const& parked = start(readOnce(pair.server.get(), first));
-    if (parked.done())
+    if (startFinishes(readOnce(pair.server.get(), first)))
     {
         survived("the first read did not park, so nothing was provoked");
         return 2;
@@ -107,7 +106,7 @@ int provokeReadSlot(char const* mode)
 
     auto second = std::array<std::byte, 4> {};
     announce(mode);
-    std::ignore = start(readOnce(pair.server.get(), second));
+    std::ignore = startFinishes(readOnce(pair.server.get(), second));
     survived("a second read was armed over a parked one");
     return 1;
 }
@@ -118,15 +117,14 @@ int provokeWriteSlot(char const* mode)
     auto pair = core::net::testing::InMemorySocketPair::create(2);
     auto const payload = std::array<std::byte, 8> {};
     flows().reserve(2);
-    auto const& parked = start(writeOnce(pair.client.get(), payload));
-    if (parked.done())
+    if (startFinishes(writeOnce(pair.client.get(), payload)))
     {
         survived("the first write did not park, so nothing was provoked");
         return 2;
     }
 
     announce(mode);
-    std::ignore = start(writeOnce(pair.client.get(), payload));
+    std::ignore = startFinishes(writeOnce(pair.client.get(), payload));
     survived("a second write was armed over a parked one");
     return 1;
 }
