@@ -473,8 +473,15 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
 
     reapFinishedRoots();
     auto resumed = std::size_t { 0 };
-    while (resumed < bound && !_ready.empty())
+    while (resumed < bound)
     {
+        auto next = takeNextReady();
+        if (!next)
+            break;
+        // Taken back by `cancelPending` while it waited in a callback's position: nothing to run.
+        if (!next->callbackPark && !next->parked.handle())
+            continue;
+
         // A due timer callback runs HERE, where a coroutine resumption runs, and nowhere else.
         // Step 5 could have called it the moment it found the deadline due -- and then user code
         // would run at a second point in the turn, outside the bound, outside the one assertion
@@ -482,30 +489,32 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
         // place that hands control outside the loop is worth the extra queue hop. Read in place and
         // popped before the call: the entry holds no coroutine to move out, and the callback may
         // queue more.
-        if (auto const callback = _ready.front().callbackPark)
+        if (auto const callback = next->callbackPark)
         {
-            auto const wake = _ready.front().wake;
-            _ready.pop_front();
+            auto const wake = next->wake;
             // What the callback queues -- the waiter its completion hands to `resumeSoon` -- runs
-            // in the callback's position: put at the FRONT once the callback returns, in the order
+            // in the callback's position: taken next once the callback returns, in the order
             // queued, so it resumes before anything that was queued after the callback. Not inside
             // the callback, which is G2, and not at the back, which let a flow queued ahead of the
             // callback yield past the waiter and read state the waiter had not updated yet. A
             // waiter that re-parks is completed by a later callback, in that one's position, so
             // nothing here recurses.
             //
-            // The scratch is a member whose capacity survives, so a callback that queues nothing
-            // -- or one waiter -- allocates nothing once it has grown. Each callback owns the range
-            // from `mark`, and the previous target is restored, so a callback that drives a nested
-            // drain leaves the outer one's entries where they are.
+            // Neither step allocates once warm: the callback queues into a member vector whose
+            // capacity survives, and its range moves to the front of `_resumeFirst`, another,
+            // rather than into the deque, whose front insertion allocates a block on some standard
+            // libraries. Each callback owns the range from `mark`, and the previous target is
+            // restored, so a callback that drives a nested drain leaves the outer one's entries
+            // where they are; `cancelPending` marks an entry taken rather than erasing it, so no
+            // range moves under a mark.
             auto const mark = _callbackScratch.size();
             auto* const previous = std::exchange(_queuedByCallback, &_callbackScratch);
             auto const inPosition = detail::ScopeGuard { [this, mark, previous]() noexcept {
                 _queuedByCallback = previous;
                 auto const first = _callbackScratch.begin() + static_cast<std::ptrdiff_t>(mark);
-                _ready.insert(_ready.begin(),
-                              std::make_move_iterator(first),
-                              std::make_move_iterator(_callbackScratch.end()));
+                _resumeFirst.insert(_resumeFirst.begin() + static_cast<std::ptrdiff_t>(_resumeFirstHead),
+                                    std::make_move_iterator(first),
+                                    std::make_move_iterator(_callbackScratch.end()));
                 _callbackScratch.erase(first, _callbackScratch.end());
             } };
             runDueCallback(callback, wake);
@@ -513,8 +522,7 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
             continue;
         }
 
-        auto entry = std::move(_ready.front());
-        _ready.pop_front();
+        auto entry = std::move(*next);
 
         // `resume()` disowns and resumes in one expression, so work that runs normally is never
         // also freed by the entry going out of scope here -- and a handle it DECLINES to resume
@@ -529,7 +537,40 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
         // connection pays forever.
         reapFinishedRoots();
     }
+
+    // The bound stopped the drain with a callback's waiters still in its position: they stay ahead
+    // of everything else, at the front of the ready queue, for the next drain. The one path here
+    // that can allocate, and only where a turn's batch ends in the middle of a callback's work.
+    if (_resumeFirstHead < _resumeFirst.size())
+    {
+        _ready.insert(
+            _ready.begin(),
+            std::make_move_iterator(_resumeFirst.begin() + static_cast<std::ptrdiff_t>(_resumeFirstHead)),
+            std::make_move_iterator(_resumeFirst.end()));
+        _resumeFirst.clear();
+        _resumeFirstHead = 0;
+    }
     return resumed;
+}
+
+std::optional<EventLoop::ReadyEntry> EventLoop::takeNextReady()
+{
+    if (_resumeFirstHead < _resumeFirst.size())
+    {
+        auto entry = std::optional<ReadyEntry> { std::move(_resumeFirst[_resumeFirstHead]) };
+        ++_resumeFirstHead;
+        if (_resumeFirstHead == _resumeFirst.size())
+        {
+            _resumeFirst.clear(); // keeps the capacity
+            _resumeFirstHead = 0;
+        }
+        return entry;
+    }
+    if (_ready.empty())
+        return std::nullopt;
+    auto entry = std::optional<ReadyEntry> { std::move(_ready.front()) };
+    _ready.pop_front();
+    return entry;
 }
 
 void EventLoop::reapFinishedRoots() noexcept
@@ -547,11 +588,14 @@ void EventLoop::reapFinishedRoots() noexcept
 
 void EventLoop::handOverFinishedRoot(std::list<SpawnedRoot>::iterator slot) noexcept
 {
-    {
-        auto const lock = std::scoped_lock { _inboundMutex };
-        _inbound.finishedRoots.push_back(slot);
-        _inboundPending.store(true, std::memory_order_release);
-    }
+    // The wake is made UNDER the lock, unlike `post`'s. Turn step 1 takes this lock before it
+    // reaps the root, and ~EventLoop takes it (step 5) before the roots and the backend go, so once
+    // an owner can see the root released -- spawnedCount() at zero, runUntilIdle returned -- this
+    // thread is out of the loop and its backend. Woken after the unlock, it was still inside
+    // `_backend.wake()` while an owner that saw zero destroyed both.
+    auto const lock = std::scoped_lock { _inboundMutex };
+    _inbound.finishedRoots.push_back(slot);
+    _inboundPending.store(true, std::memory_order_release);
     _backend.wake();
 }
 
@@ -791,9 +835,12 @@ bool EventLoop::cancelPending(std::coroutine_handle<> handle) noexcept
 
     // The ready queue first: a handle submitted and not yet resumed -- and what a running
     // drain-step callback has queued, which joins the ready queue only when the callback returns.
-    auto const takeFrom = [this, handle](auto& queue) {
-        auto const found = std::ranges::find_if(
-            queue, [handle](ReadyEntry const& entry) { return entry.parked.handle() == handle; });
+    // An entry in a callback's range, or in the callback position, is marked taken rather than
+    // erased: marks into those ranges stay valid, and the drain skips it.
+    auto const takeFrom = [this, handle](auto& queue, auto first, bool erase) {
+        auto const found = std::find_if(first, queue.end(), [handle](ReadyEntry const& entry) {
+            return entry.parked.handle() == handle;
+        });
         if (found == queue.end())
             return false;
         // Taken rather than only erased: the caller becomes the only one who may resume or destroy
@@ -802,7 +849,8 @@ bool EventLoop::cancelPending(std::coroutine_handle<> handle) noexcept
         // handed, which is the opposite of an ownership transfer.
         auto const source = found->sourcePark;
         found->parked.take().abandon.disarm();
-        queue.erase(found);
+        if (erase)
+            queue.erase(found);
         // **The park it was queued from comes down with it** -- the two structures answer "is it
         // queued" and "is it parked", and a waiter dispatched by readiness is BOTH until its
         // `await_resume` runs. This frame will never run it, so what `await_resume` would have
@@ -812,7 +860,9 @@ bool EventLoop::cancelPending(std::coroutine_handle<> handle) noexcept
         unregisterPark(source);
         return true;
     };
-    if (takeFrom(_ready) || takeFrom(_callbackScratch))
+    if (takeFrom(_ready, _ready.begin(), true)
+        || takeFrom(_resumeFirst, _resumeFirst.begin() + static_cast<std::ptrdiff_t>(_resumeFirstHead), false)
+        || takeFrom(_callbackScratch, _callbackScratch.begin(), false))
         return true;
 
     if (auto const id = _parks.byWaiter(handle))

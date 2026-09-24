@@ -1755,3 +1755,115 @@ TEST_CASE("A loop destroyed with a finished root it has not reaped frees it", "[
     }
     CHECK(ended.load());
 }
+
+namespace
+{
+
+/// A scripted backend whose `wake()`, called from any thread but the loop's, stalls before it
+/// returns -- long enough for a loop thread that does not wait for it to reap, and for its owner to
+/// destroy the loop, while that thread is still inside the loop's backend.
+class StallingWakeBackend final: public ScriptedBackend
+{
+  public:
+    /// @param loopThread The thread that drives the loop; its own wakes do not stall.
+    explicit StallingWakeBackend(std::thread::id loopThread): _loopThread(loopThread)
+    {
+        for ([[maybe_unused]] auto const step: std::views::iota(0, 10000))
+            pushTimeout();
+    }
+
+    void wake() noexcept override
+    {
+        ScriptedBackend::wake();
+        if (std::this_thread::get_id() == _loopThread)
+            return;
+        std::this_thread::sleep_for(std::chrono::milliseconds { 200 });
+        wakeReturned.store(true, std::memory_order_release);
+    }
+
+    std::atomic<bool> wakeReturned { false }; ///< Set as an off-thread wake returns.
+
+  private:
+    std::thread::id _loopThread;
+};
+
+/// What the nested-cancel case observed.
+struct NestedCancel
+{
+    EventLoop* loop = nullptr;
+    std::coroutine_handle<> x;
+    bool takenBack = false;
+};
+
+/// The outer callback: queues X, then drives a nested turn that runs the inner one.
+/// @param state The @c NestedCancel.
+void queueXThenNest(void* state)
+{
+    auto* const nested = static_cast<NestedCancel*>(state);
+    nested->loop->resumeSoon(core::async::ParkedWork { .resume = nested->x });
+    std::ignore = nested->loop->runOnce();
+}
+
+/// The inner callback: takes X back while the outer callback is still running.
+/// @param state The @c NestedCancel.
+void cancelX(void* state)
+{
+    auto* const nested = static_cast<NestedCancel*>(state);
+    nested->takenBack = nested->loop->cancelPending(nested->x);
+}
+
+} // namespace
+
+TEST_CASE("A root that ends on another thread is released only once that thread is out of the loop",
+          "[EventLoop][spawn][threads]")
+{
+    // The hand-off woke the backend AFTER releasing the inbound lock, so the loop could reap the root
+    // -- and its owner, seeing spawnedCount() reach zero, destroy the loop -- while the pool thread
+    // was still inside `wake()`: a use-after-free of the backend and the loop. The wake is made
+    // under the lock now, and the reap takes the lock, so zero is seen only after the wake returned.
+    auto pool = core::async::ThreadPoolExecutor { 1 };
+    auto clock = ManualClock {};
+    auto ended = std::atomic<bool> { false };
+    auto backend = StallingWakeBackend { std::this_thread::get_id() };
+    auto loop =
+        EventLoop { backend, clock, core::net::EventLoopOptions { .idle = core::net::IdlePolicy::Return } };
+
+    loop.spawn(endOnPool(&pool, &ended, false));
+    std::ignore = loop.runOnce();
+    REQUIRE(waitFor(ended));
+
+    auto turns = 0;
+    while (loop.spawnedCount() > 0 && turns < 5000)
+    {
+        std::ignore = loop.runOnce();
+        std::this_thread::sleep_for(std::chrono::milliseconds { 1 });
+        ++turns;
+    }
+    REQUIRE(loop.spawnedCount() == 0);
+    CHECK(backend.wakeReturned.load(std::memory_order_acquire));
+}
+
+TEST_CASE("A nested callback that takes back what an outer callback queued leaves both ranges valid",
+          "[EventLoop][turn][ordering]")
+{
+    // The outer callback queues X and drives a nested turn; the inner callback, whose range begins
+    // after X, takes X back. Erasing X shifted the inner range below its own start, and the splice
+    // then ran on an invalid range. X is marked taken instead, and the splice skips it.
+    auto clock = ManualClock {};
+    auto trace = Trace {};
+    auto loop = core::net::testing::TestLoop { clock };
+    trace.loop = &loop;
+    auto nested = NestedCancel { .loop = &loop };
+
+    auto x = waiterFlow(&trace);
+    x.handle().resume(); // parks
+    nested.x = trace.waiter;
+    REQUIRE(nested.x);
+
+    std::ignore = loop.addTimer(clock.now(), &queueXThenNest, &nested);
+    std::ignore = loop.addTimer(clock.now(), &cancelX, &nested);
+    std::ignore = loop.runUntilIdle();
+    CHECK(nested.takenBack);
+    CHECK_FALSE(x.handle().done()); // taken back, so never resumed
+    CHECK(trace.events.empty());
+}

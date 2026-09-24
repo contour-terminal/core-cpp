@@ -477,7 +477,10 @@ class EventLoop: public async::IExecutor
     ///         turn's batch bound was reached. The ready queue only: what another thread -- or this
     ///         one, outside a turn -- submitted waits in the inbound queue until turn step 1, and
     ///         @c inboundSubmissionCount counts that.
-    [[nodiscard]] std::size_t readyCount() const noexcept { return _ready.size(); }
+    [[nodiscard]] std::size_t readyCount() const noexcept
+    {
+        return _ready.size() + (_resumeFirst.size() - _resumeFirstHead);
+    }
 
     /// @return How many coroutines were submitted from off the loop's worker thread and are waiting
     ///         for turn step 1 to queue them. Read under the inbound lock, so any thread may ask.
@@ -933,6 +936,12 @@ class EventLoop: public async::IExecutor
     /// callback that drives a nested drain does not take the outer one's entries.
     std::vector<ReadyEntry> _callbackScratch;
 
+    /// The callback position itself: what a callback queued, taken by the drain before anything in
+    /// @c _ready from @c _resumeFirstHead on, emptied (keeping its capacity) once consumed, and moved
+    /// to the front of @c _ready if the drain's bound ends it early. Empty outside a drain.
+    std::vector<ReadyEntry> _resumeFirst;
+    std::size_t _resumeFirstHead = 0; ///< The next entry of @c _resumeFirst to take.
+
     detail::ParkTable _parks; ///< Every park, by id, with its reverse indices.
 
     /// The registrations kept for the life of a handle (@c RegistrationLifetime::UntilClosed), by
@@ -1026,12 +1035,20 @@ class EventLoop: public async::IExecutor
     /// @return The suspended root.
     static SpawnedRoot runSpawned(async::Task<void> task);
 
+    /// @return The next entry the drain runs: the callback position first, then the ready queue;
+    ///         nothing when both are empty.
+    [[nodiscard]] std::optional<ReadyEntry> takeNextReady();
+
     /// Destroys every root that reached its final suspension, in O(1) apiece. Called by the drain
     /// after each resume, which is where a root can finish, and before it, and by turn step 1 for
     /// the roots that finished off the loop's thread.
     void reapFinishedRoots() noexcept;
 
     /// Hands a root that finished off the loop's thread to turn step 1. Safe from any thread.
+    ///
+    /// Wakes the backend while it holds the inbound lock: step 1 takes that lock before it reaps,
+    /// and ~EventLoop before its roots and backend go, so nobody can observe the root released
+    /// while this thread is still inside the loop.
     /// @param slot Where the root sits in @c _roots.
     void handOverFinishedRoot(std::list<SpawnedRoot>::iterator slot) noexcept;
 
