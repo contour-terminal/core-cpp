@@ -274,12 +274,19 @@ TEST_CASE("A TLS read whose inner read settled with data is not resumed into a d
     REQUIRE(c.loop.readyCount() > 0);
     REQUIRE_FALSE(read.settled);
 
-    // Queued BEHIND the readiness: it runs after the inner read settled and queued `feedIn`, and
-    // before `feedIn` runs.
+    // Queued BEHIND the readiness. Until 0.3.0 it ran after the inner read settled and queued
+    // `feedIn`, and before `feedIn` ran, which is the destroyed-socket window this case was written
+    // for: `feedIn` had to see the socket gone and unwind. A waiter a readiness callback completes
+    // now resumes in the callback's position (async-and-net.md), so `feedIn` runs first, the read
+    // answers the record, and the close that follows finds nothing parked. What still holds, and
+    // what ASan watches, is that nothing is resumed into the destroyed socket.
     c.loop.spawn(closeAndDestroy(&c.tls));
     REQUIRE(c.pumpUntil([&] { return read.settled; }));
     CHECK(c.tls == nullptr);
-    CHECK(read.threw); // the socket went while the read was on its way back: it unwinds
+    CHECK_FALSE(read.threw);
+    REQUIRE(read.result.has_value());
+    REQUIRE(read.result->has_value());
+    CHECK(**read.result == "late");
 }
 
 TEST_CASE("Destroying a TLS socket mid-handshake resolves every operation parked on it",
