@@ -102,8 +102,13 @@ cmake -DMODE=check -DDEST=<dir> -P <dir>/cmake/CoreCppVendor.cmake
   included;
 - `LICENSE`, `NOTICE`, `README.md`, `CHANGELOG.md`, `.clang-format` and `.clang-tidy`.
 
-The top-level `tests/` directory is not part of the set, so a vendored copy cannot build
-core-cpp's own test suite: leave `CORE_CPP_TESTING` off, which is its default for a subproject.
+The top-level `tests/` directory is not part of the set. It holds the checks over core-cpp's own
+tree and build contract (hygiene, exit codes, canaries), not the module suites, which are the
+`*_test.cpp` files beside each module's sources and so ARE in the copy. `CORE_CPP_TESTING` is off
+by default for a subproject; turned on in a vendored copy (0.2.1 and later), it registers and builds
+the module suites of the modules copied, fetches or finds Catch2 3.8 like any other configure, and
+says in one status line that it left `tests/` out. Before 0.2.1 it stopped the configure instead.
+CI's `consumer-smoke (vendored)` leg runs those suites from the exported copy.
 
 ## What the consumer does
 

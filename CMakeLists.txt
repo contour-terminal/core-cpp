@@ -42,6 +42,16 @@ core_cpp_add_modules()
 # cannot stand alone fails the build rather than a test binary that includes it sideways.
 core_cpp_add_header_self_check()
 
+# tests/ holds the checks over the tree and the build contract (hygiene, exit codes, canaries), not
+# the module suites: those are src/core/**/*_test.cpp, registered by core_cpp_add_modules() above.
+# A vendored copy has the suites and not tests/ (docs/vendoring.md), and with CORE_CPP_TESTING on it
+# used to stop here -- so the suites it carries could never be switched on. It registers them now,
+# and says what it left out rather than leaving it to be noticed.
 if(CORE_CPP_TESTING)
-    add_subdirectory(tests)
+    if(EXISTS "${CORE_CPP_SOURCE_DIR}/tests/CMakeLists.txt")
+        add_subdirectory(tests)
+    else()
+        message(STATUS "[core-cpp] tests/: not in this tree (a vendored copy); the module suites are "
+                       "registered, the tree-level checks are not")
+    endif()
 endif()

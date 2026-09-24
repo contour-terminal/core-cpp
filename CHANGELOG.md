@@ -62,6 +62,12 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- **A vendored copy configures with `CORE_CPP_TESTING` on** (found by the contour migration). The
+  top-level `CMakeLists.txt` added `tests/` unconditionally, and the vendoring file set leaves
+  `tests/` out, so the module suites the copy carries (`src/core/**/*_test.cpp`) could never be
+  switched on. `tests/` is now added when it exists; a copy without it registers the module suites
+  and says so. `docs/vendoring.md` says the same, and the `consumer-smoke (vendored)` CI leg builds
+  and runs the exported copy's module suites.
 - **A parked flow is never resumed inside the call that settled it** (guarantee G2: every
   resumption happens in the loop's drain step; `.agent/rules/async-and-net.md`, "a resource never
   resumes its consumer inline"). `ResultAwaitable::complete()` resumed the waiter on the spot, so

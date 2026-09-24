@@ -1075,6 +1075,28 @@ jobs:
               ctest --test-dir /build --output-on-failure
             '
 
+      # The same copy with CORE_CPP_TESTING on, as contour configures it when it runs core-cpp's
+      # suites: the module suites (src/core/**/*_test.cpp) are in the copy, and tests/ is not. Until
+      # 0.2.1 that configure stopped at `add_subdirectory(tests)`. Outside the container, because
+      # Catch2 is fetched; the copy itself is the one verified offline above. The count is asserted,
+      # because a configure that registered nothing would otherwise pass a ctest that ran nothing.
+      - name: The vendored copy runs its module suites with CORE_CPP_TESTING on
+        if: matrix.leg == 'vendored'
+        run: |
+          scripts/ci-retry.sh sudo apt-get update -q
+          scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libssl-dev g++-14
+          cmake -S "$RUNNER_TEMP/vendor/core-cpp" -B "$RUNNER_TEMP/vendored-testing" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++-14 \
+            -DCORE_CPP_TESTING=ON -DCORE_CPP_WITH_TUI=OFF -DCORE_CPP_WITH_TLS=ON \
+            | tee "$RUNNER_TEMP/vendored-testing.log"
+          grep -q "tests/: not in this tree (a vendored copy)" "$RUNNER_TEMP/vendored-testing.log" \
+            || { echo "::error::the vendored configure did not say it left tests/ out"; exit 1; }
+          cmake --build "$RUNNER_TEMP/vendored-testing"
+          n=$(ctest --test-dir "$RUNNER_TEMP/vendored-testing" -N | sed -n 's/^Total Tests: //p')
+          echo "$n test(s) registered"
+          [ "${n:-0}" -ge 10 ] || { echo "::error::only ${n:-0} module suites registered"; exit 1; }
+          ctest --test-dir "$RUNNER_TEMP/vendored-testing" --output-on-failure
+
       # --- wasm --------------------------------------------------------------------------------
       - name: emsdk 3.1.56
         if: matrix.leg == 'wasm'
