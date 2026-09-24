@@ -811,8 +811,12 @@ namespace
                 if (n <= 0)
                     co_return std::unexpected(makeNetError(
                         NetErrorCode::SystemError, 0, "TLS flushOut: BIO_read failed: " + opensslError()));
+                auto const lifetime = std::weak_ptr<void const> { _lifetime };
                 auto const written = co_await _inner->write(
                     std::span<std::byte const> { chunk.data(), static_cast<std::size_t>(n) });
+                // See `feedIn`: the socket may have gone while the write was on its way back.
+                if (lifetime.expired())
+                    throw async::OperationCancelled {};
                 if (!written)
                     co_return std::unexpected(written.error());
             }
@@ -828,7 +832,15 @@ namespace
             // by the latest feed, so a stale value names a read that is no longer there, and
             // retiring nothing is what `cancelRead` then does.
             _innerReadOwner = direction;
+            auto const lifetime = std::weak_ptr<void const> { _lifetime };
             auto const n = co_await _inner->read(chunk);
+            // **The socket may be gone by now, even with DATA in hand.** The inner read settles in
+            // the drain that ran its readiness and this frame is resumed later in it (G2), so an
+            // entry queued in between -- an owner's `tls->close(); connections.erase(id);` -- may
+            // have destroyed this socket and freed the session. Nothing below may touch a member
+            // then: the flow unwinds, as it does from a destroyed socket's abandoned operation.
+            if (lifetime.expired())
+                throw async::OperationCancelled {};
             if (!n)
                 co_return std::unexpected(n.error());
             if (*n == 0)
@@ -867,6 +879,10 @@ namespace
         std::shared_ptr<SerialGate> _handshaking;
         /// Held by the coroutine writing ciphertext out. Shared: see @c SerialGate.
         std::shared_ptr<SerialGate> _flushing;
+
+        /// Expires with this socket: what `feedIn` and `flushOut` ask, never `this`, when an inner
+        /// operation hands them back, because the socket may have been destroyed in between.
+        std::shared_ptr<void const> _lifetime = std::make_shared<char const>('\0');
     };
 
     /// The SHA-256 fingerprint of @p cert as lower-case hex, or empty if it cannot be computed.

@@ -308,14 +308,17 @@ class ISocket
     /// So a caller that asserts the parked flow's outcome right after `close()` runs a loop turn
     /// first.
     ///
-    /// **The flow may run after the SOCKET is gone.** It resumes on a later turn with the value
-    /// settled here, and an owner that destroys the socket in the same turn -- `conn->close();
-    /// connections.erase(id);` -- has destroyed it by then. The transports touch nothing of it on
-    /// the way back (a coroutine-shaped one that finds its socket gone unwinds the flow with
-    /// @c async::OperationCancelled instead of answering), but the flow must not either: **after a
-    /// @c NetErrorCode::Cancelled or closed result, a flow touches no socket it does not own** --
-    /// no `isClosed()`, no `close()` in its cleanup, no retry. One that owns the socket, or knows
-    /// its owner outlives the next turn, may.
+    /// **The flow may run after the SOCKET is gone -- after ANY result, data included.** Every
+    /// operation, not only a closed one, settles in one place and resumes its flow later in the
+    /// drain (G2): here, on a later turn with the value settled by this call; for a read that got
+    /// bytes, after whatever the same drain ran first. An owner that destroys the socket in
+    /// between -- `conn->close(); connections.erase(id);` -- has destroyed it before the flow runs.
+    /// The transports touch nothing of it on the way back (a coroutine-shaped one -- WFMO's
+    /// `WindowsSocket`, the TLS layer -- that finds its socket gone unwinds the flow with
+    /// @c async::OperationCancelled instead of answering), but the flow must not either: **a flow
+    /// touches no socket it does not own after its operation resumes, unless it knows the owner
+    /// kept it** -- no `isClosed()`, no `close()` in its cleanup, no retry. One that owns the
+    /// socket, or knows its owner outlives the turn, may.
     ///
     /// **The order is still load-bearing: detach the operation FIRST, complete it LAST, and touch
     /// no member afterwards.** A test double with no loop (@c testing::InMemorySocket) still

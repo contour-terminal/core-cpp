@@ -226,7 +226,61 @@ Task<bool> peerHandshakesAndSays(StrictTlsPeer* peer, ISocket* wire, std::string
     co_return co_await peer->write(wire, std::move(text));
 }
 
+/// Closes the socket and destroys it in one turn, as `conn->close(); connections.erase(id);` does.
+Task<void> closeAndDestroy(std::unique_ptr<ISocket>* socket)
+{
+    (*socket)->close();
+    socket->reset();
+    co_return;
+}
+
 } // namespace
+
+TEST_CASE("A TLS read whose inner read settled with data is not resumed into a destroyed socket",
+          "[net][tls][tlsgate][resume]")
+{
+    // The inner read settles WITH DATA in the drain that runs its readiness, and its waiter -- the
+    // TLS socket's `feedIn` -- is queued behind whatever that drain already held (G2). Here that is
+    // an owner closing and destroying the TLS socket. `feedIn` then resumed and wrote the
+    // ciphertext into the freed session's BIO: a heap-use-after-free under AddressSanitizer,
+    // garbage without. It must see the socket is gone and unwind.
+    auto c = Conversation {};
+    auto handshake = Outcome {};
+    observeHandshake(c.tls.get(), &handshake);
+    auto const peerDone = c.run(c.peer->handshake(c.wire.get()));
+    REQUIRE(peerDone.has_value());
+    REQUIRE(peerDone->has_value());
+    REQUIRE(c.pumpUntil([&] { return handshake.settled; }));
+    REQUIRE((handshake.result.has_value() && handshake.result->has_value()));
+
+    auto read = Outcome {};
+    observeRead(c.tls.get(), &read);
+    c.settle();
+    REQUIRE_FALSE(read.settled); // parked on the inner read
+
+    // The peer's record goes out WITHOUT a loop turn: a small write to a writable socket completes
+    // inline, so the TLS side has not run yet.
+    auto say = c.peer->write(c.wire.get(), "late");
+    say.handle().resume();
+    REQUIRE(say.handle().done());
+
+    // Turn until the inner read's readiness is queued for the next drain, and no further.
+    auto turns = 0;
+    while (c.loop.readyCount() == 0 && turns < 100)
+    {
+        std::ignore = c.loop.runOnce(std::chrono::milliseconds { 10 });
+        ++turns;
+    }
+    REQUIRE(c.loop.readyCount() > 0);
+    REQUIRE_FALSE(read.settled);
+
+    // Queued BEHIND the readiness: it runs after the inner read settled and queued `feedIn`, and
+    // before `feedIn` runs.
+    c.loop.spawn(closeAndDestroy(&c.tls));
+    REQUIRE(c.pumpUntil([&] { return read.settled; }));
+    CHECK(c.tls == nullptr);
+    CHECK(read.threw); // the socket went while the read was on its way back: it unwinds
+}
 
 TEST_CASE("Destroying a TLS socket mid-handshake resolves every operation parked on it",
           "[net][tls][tlsgate]")
