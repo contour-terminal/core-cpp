@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <csignal>
+#include <optional>
 
 #ifdef _WIN32
     #include <windows.h>
@@ -24,6 +25,12 @@ namespace
     // than static members of SignalHandler, so its header names none of it.
     SignalCallback* currentCallback = nullptr;
     int currentSignalFd = -1;
+
+    /// The signal fd as a @c NativeHandle, set only where one exists. An optional rather than a
+    /// handle initialized to @c InvalidHandle, which on Windows is not a constant expression, so a
+    /// namespace-scope copy of it would be initialized dynamically, in an order no other
+    /// translation unit can rely on.
+    std::optional<NativeHandle> currentSignalHandle;
     std::atomic<bool> sigintPending { false };
     std::atomic<Wakeup*> interruptWakeup { nullptr };
 
@@ -111,6 +118,8 @@ int SignalHandler::initialize(SignalCallback* callback)
 
     // Create signalfd for receiving signals as file descriptor events
     currentSignalFd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
+    if (currentSignalFd >= 0)
+        currentSignalHandle = currentSignalFd;
     return currentSignalFd;
 #else
     // macOS/BSD: Use traditional signal handlers
@@ -159,6 +168,7 @@ void SignalHandler::restore()
     {
         close(currentSignalFd);
         currentSignalFd = -1;
+        currentSignalHandle.reset();
     }
 
     // Unblock signals
@@ -200,6 +210,11 @@ void SignalHandler::restore()
 int SignalHandler::signalFd() noexcept
 {
     return currentSignalFd;
+}
+
+NativeHandle SignalHandler::nativeHandle() noexcept
+{
+    return currentSignalHandle.value_or(InvalidHandle);
 }
 
 bool SignalHandler::processSignalFd()

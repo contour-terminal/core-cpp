@@ -4,6 +4,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <type_traits>
+
 #ifndef _WIN32
     #include <csignal>
 
@@ -124,3 +126,39 @@ TEST_CASE("SignalHandler::restore deregisters the interrupt wakeup", "[platform]
     SignalHandler::clearPendingSigint();
 }
 #endif
+
+namespace
+{
+/// A callback that records nothing, for the handle case below, which runs on every platform.
+class NoSignalCallback final: public core::platform::SignalCallback
+{
+  public:
+    void onSigchld() override {}
+    void onSigtstp() override {}
+    void onSigcont() override {}
+};
+} // namespace
+
+// The handle type is the question, so it is asked of the compiler: what the runtime's
+// `TuiRuntimeOptions::signalFd` takes is a `NativeHandle`, and `initialize()`'s `int` is not one on
+// Windows.
+static_assert(std::is_same_v<decltype(SignalHandler::nativeHandle()), core::platform::NativeHandle>);
+
+TEST_CASE("SignalHandler::nativeHandle is the signal fd as a NativeHandle, or InvalidHandle",
+          "[platform][signal]")
+{
+    // Every caller of initialize() converted its int for the runtime, and on Windows an int is the
+    // wrong type for a handle. nativeHandle() answers in the runtime's type: the signalfd where
+    // there is one (Linux), InvalidHandle where there is none -- the other platforms, and any
+    // platform before initialize() or after restore().
+    auto callback = NoSignalCallback {};
+    [[maybe_unused]] auto const fd = SignalHandler::initialize(&callback);
+    auto const whileInitialized = SignalHandler::nativeHandle();
+    auto const fdWhileInitialized = SignalHandler::signalFd();
+    SignalHandler::restore();
+    auto const afterRestore = SignalHandler::nativeHandle();
+
+    CHECK(fdWhileInitialized == fd);
+    CHECK((whileInitialized == core::platform::InvalidHandle) == (fd < 0));
+    CHECK(afterRestore == core::platform::InvalidHandle);
+}

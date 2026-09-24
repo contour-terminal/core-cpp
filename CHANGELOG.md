@@ -37,6 +37,11 @@ workflow refuses one without a section here.
 
 ### Added
 
+- **`core::platform::SignalHandler::nativeHandle()`**: the signal fd as the `NativeHandle`
+  `TuiRuntimeOptions::signalFd` takes -- the signalfd on Linux while initialized, `InvalidHandle`
+  everywhere else -- so a caller no longer converts `initialize()`'s `int`, which on Windows is the
+  wrong type for a handle. `initialize()` keeps its `int` for compatibility (found by the endo
+  migration).
 - **`ResultAwaitable::resumeThrough(EventLoop&)`**, for an owner with no park to hand
   `cancelThrough`: it names the loop `complete()` resumes the awaiting flow on. An owner that names
   no loop at all is resumed inline, as before.

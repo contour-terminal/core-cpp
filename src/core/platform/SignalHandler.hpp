@@ -47,6 +47,10 @@ class SignalHandler
   public:
     /// Initializes signal handling.
     ///
+    /// **The `int` is kept for compatibility**, and it is the wrong type for what a caller does
+    /// with it: `core::tui::runtime::TuiRuntimeOptions::signalFd` is a @c NativeHandle, which on
+    /// Windows is a `HANDLE`, so every caller converted. Ask @c nativeHandle for the runtime's type
+    /// instead. (Changing this return type is a 0.3.0 matter: it breaks every caller.)
     /// @param callback Pointer to the callback receiver for signal notifications
     /// @return signalfd file descriptor on Linux (for poll), -1 on other platforms
     [[nodiscard]] static int initialize(SignalCallback* callback);
@@ -56,6 +60,12 @@ class SignalHandler
 
     /// Returns the signalfd file descriptor (-1 if not using signalfd).
     [[nodiscard]] static int signalFd() noexcept;
+
+    /// Returns the signal fd as the handle type the TUI runtime watches
+    /// (`TuiRuntimeOptions::signalFd`), with no conversion at the call site.
+    /// @return The signalfd on Linux while initialized; @c InvalidHandle on every other platform,
+    ///         and before @c initialize or after @c restore.
+    [[nodiscard]] static NativeHandle nativeHandle() noexcept;
 
     /// Processes pending signals from signalfd (call when fd is readable).
     ///

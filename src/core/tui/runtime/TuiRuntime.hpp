@@ -106,8 +106,9 @@ struct TuiRuntimeOptions
     /// handed to the loop, and this hands it none.
     platform::Wakeup* interruptWakeup = nullptr;
 
-    /// The POSIX signal fd to watch (what @c core::platform::SignalHandler::initialize returns),
-    /// or @c platform::InvalidHandle. Windows has none, and passing none is how that is said.
+    /// The POSIX signal fd to watch -- @c core::platform::SignalHandler::nativeHandle, which is
+    /// already this type -- or @c platform::InvalidHandle. Windows has none, and passing none is
+    /// how that is said.
     platform::NativeHandle signalFd = platform::InvalidHandle;
 
     /// How long a partial escape sequence may sit unfinished before it is flushed as what it is.
