@@ -9,6 +9,14 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Changed
+
+- **`SyncGuard` brackets only a terminal.** `TerminalOutput::syncGuard()`, and a `SyncGuard`
+  constructed directly, ask the output's `isTerminal()` once and write `CSI ? 2026 h` / `l` only
+  when it answers true; on a pipe, a file or a capture that is not a terminal the guard still
+  flushes at both ends and writes no sequence. A caller that needs the sequences on a capture
+  answers `isTerminal()` true from its subclass, as a terminal-emulating capture already should.
+
 ### Added
 
 - **`CORE_CPP_WITH_TUI_OUTPUT`**, an option of `core::tui_output`'s own. With `CORE_CPP_WITH_TUI`
@@ -21,6 +29,10 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- **Piped output no longer carries synchronized-output sequences.** `TerminalOutput::syncGuard()`
+  wrote `CSI ? 2026 h` / `l` whatever the destination was, so every caller had to test
+  `isTerminal()` and choose between a guard and none, and one that did not wrote escape sequences
+  into a pipe or a file. See *Changed*.
 - **A consumer of `core::tui_output` alone no longer fetches libunicode** (found by Lightweight's
   `dbtool`). The leaf was gated on `CORE_CPP_WITH_TUI`, the same option as the libunicode row, so
   the only configuration that built it also fetched libunicode and, through libunicode's own

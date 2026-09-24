@@ -34,7 +34,8 @@ which fetches libunicode and, through libunicode's configure, `UCD.zip`.
   operating system about the process's standard output, and a subclass answers for its own.
 - `SyncGuard` brackets a frame in DEC mode 2026 so a terminal does not paint a half-drawn one. It
   writes through the `TerminalOutput` it was made from, so a retargeted output is bracketed on its
-  own stream.
+  own stream, and only when that output's `isTerminal()` is true: on any other destination it
+  flushes at both ends and writes no sequence, so a caller takes one unconditionally.
 - `buildSgrSequence()` turns a `Style` into one SGR sequence.
 - `core::tui::protocols` holds the sequence constants the input and output sides share (the Kitty
   keyboard protocol, bracketed paste, mouse and focus tracking, colour-scheme notification,

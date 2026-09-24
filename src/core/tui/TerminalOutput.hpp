@@ -96,6 +96,11 @@ class TerminalOutput;
 /// pipe, a second terminal) is bracketed by its own sequences and the process's standard output
 /// is left alone. It is also why the guard carries no native handle, and this header no
 /// `<windows.h>` type.
+///
+/// **Only a terminal is bracketed.** The guard asks the output's @c TerminalOutput::isTerminal()
+/// once, when it is made, and on any other destination writes no sequence at all while still
+/// flushing at both ends. So a caller takes a guard unconditionally, and piped output carries the
+/// frame without the markers, as it carries text without colour.
 class SyncGuard
 {
   public:
@@ -115,7 +120,11 @@ class SyncGuard
     auto operator=(SyncGuard&&) noexcept -> SyncGuard&;
 
   private:
-    TerminalOutput* _output = nullptr; ///< The bracketed output, or nullptr for a no-op guard.
+    /// Flushes the region's bytes and, on a terminal, ends synchronized output mode.
+    void end() noexcept;
+
+    TerminalOutput* _output = nullptr; ///< The guarded output, or nullptr for a no-op guard.
+    bool _bracketed = false;           ///< Whether the destination is a terminal, so the mode was begun.
 };
 
 /// @brief Handles styled terminal output, cursor control, and screen management.
@@ -215,7 +224,9 @@ class TerminalOutput
 
     /// @brief Creates a synchronized output guard.
     ///
-    /// While the guard is alive, output is batched to prevent tearing.
+    /// While the guard is alive, output is batched to prevent tearing. On a destination that is
+    /// not a terminal (@c isTerminal() is false) the guard writes no synchronized-output sequence,
+    /// and only flushes.
     /// @return An RAII SyncGuard object.
     [[nodiscard]] virtual auto syncGuard() -> SyncGuard;
 

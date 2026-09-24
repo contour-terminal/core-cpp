@@ -297,7 +297,11 @@ namespace
     constexpr auto EndSynchronizedOutput = "[?2026l"sv;
 } // namespace
 
-SyncGuard::SyncGuard(TerminalOutput& output): _output(&output)
+// Whether to bracket is the destination's answer, asked once, here: a pipe or a file gets the frame
+// without `CSI ? 2026 h` / `l` around it, as it gets text without colour. Every caller used to ask
+// isTerminal() itself and choose between a guard and none. The flushes stay unconditional, because
+// a caller that composed inside the region relies on the guard to write it out, on a pipe too.
+SyncGuard::SyncGuard(TerminalOutput& output): _output(&output), _bracketed(output.isTerminal())
 {
     // Flush first, as the destructor does: what was composed BEFORE the region belongs before it.
     // Left buffered, it would be emitted inside the synchronized region on the next flush -- the
@@ -305,22 +309,17 @@ SyncGuard::SyncGuard(TerminalOutput& output): _output(&output)
     // prevent, and the natural RAII spelling `auto guard = SyncGuard { output };` would be the one
     // that got it wrong.
     _output->flush();
-    _output->writeToDestination(BeginSynchronizedOutput);
+    if (_bracketed)
+        _output->writeToDestination(BeginSynchronizedOutput);
 }
 
 SyncGuard::~SyncGuard()
 {
-    if (_output != nullptr)
-    {
-        // Flush first: anything composed inside the region and still buffered would otherwise be
-        // emitted after the end sequence, landing outside the very region it was composed in.
-        // The constructor flushes on the way in for the same reason, so the two ends match.
-        _output->flush();
-        _output->writeToDestination(EndSynchronizedOutput);
-    }
+    end();
 }
 
-SyncGuard::SyncGuard(SyncGuard&& other) noexcept: _output(std::exchange(other._output, nullptr))
+SyncGuard::SyncGuard(SyncGuard&& other) noexcept:
+    _output(std::exchange(other._output, nullptr)), _bracketed(std::exchange(other._bracketed, false))
 {
 }
 
@@ -328,14 +327,23 @@ auto SyncGuard::operator=(SyncGuard&& other) noexcept -> SyncGuard&
 {
     if (this != &other)
     {
-        if (_output != nullptr)
-        {
-            _output->flush(); // As in the destructor: the region ends after its own bytes.
-            _output->writeToDestination(EndSynchronizedOutput);
-        }
+        end();
         _output = std::exchange(other._output, nullptr);
+        _bracketed = std::exchange(other._bracketed, false);
     }
     return *this;
+}
+
+void SyncGuard::end() noexcept
+{
+    if (_output == nullptr)
+        return;
+    // Flush first: anything composed inside the region and still buffered would otherwise be
+    // emitted after the end sequence, landing outside the very region it was composed in. The
+    // constructor flushes on the way in for the same reason, so the two ends match.
+    _output->flush();
+    if (_bracketed)
+        _output->writeToDestination(EndSynchronizedOutput);
 }
 
 } // namespace core::tui

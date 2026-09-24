@@ -46,7 +46,7 @@ class CapturingOutput: public core::tui::TerminalOutput
 
 TEST_CASE("tui.TerminalOutput: SyncGuard writes through writeToDestination")
 {
-    auto output = CapturingOutput { Destination::File };
+    auto output = CapturingOutput { Destination::Terminal };
     output.writeRaw("before");
 
     {
@@ -67,7 +67,7 @@ TEST_CASE("tui.TerminalOutput: SyncGuard writes through writeToDestination")
 
 TEST_CASE("tui.TerminalOutput: a directly constructed SyncGuard flushes what came before it")
 {
-    auto output = CapturingOutput { Destination::File };
+    auto output = CapturingOutput { Destination::Terminal };
     output.writeRaw("before"); // Composed, not yet flushed.
 
     {
@@ -86,7 +86,7 @@ TEST_CASE("tui.TerminalOutput: a directly constructed SyncGuard flushes what cam
 
 TEST_CASE("tui.TerminalOutput: ~SyncGuard flushes before it ends the synchronized region")
 {
-    auto output = CapturingOutput { Destination::File };
+    auto output = CapturingOutput { Destination::Terminal };
 
     {
         auto const guard = output.syncGuard();
@@ -102,8 +102,8 @@ TEST_CASE("tui.TerminalOutput: ~SyncGuard flushes before it ends the synchronize
 
 TEST_CASE("tui.TerminalOutput: move-assignment flushes the region it ends")
 {
-    auto first = CapturingOutput { Destination::File };
-    auto second = CapturingOutput { Destination::File };
+    auto first = CapturingOutput { Destination::Terminal };
+    auto second = CapturingOutput { Destination::Terminal };
 
     auto guard = first.syncGuard();
     first.writeRaw("inside");
@@ -116,7 +116,7 @@ TEST_CASE("tui.TerminalOutput: move-assignment flushes the region it ends")
 
 TEST_CASE("tui.TerminalOutput: a moved-from SyncGuard leaves the mode to its successor")
 {
-    auto output = CapturingOutput { Destination::File };
+    auto output = CapturingOutput { Destination::Terminal };
 
     {
         auto first = output.syncGuard();
@@ -129,6 +129,56 @@ TEST_CASE("tui.TerminalOutput: a moved-from SyncGuard leaves the mode to its suc
     // write at all, so no case can distinguish it from any other implementation of `~SyncGuard()`;
     // what the null check is actually for is the moved-from state exercised here.
     CHECK(output.captured() == "\033[?2026h\033[?2026l");
+}
+
+TEST_CASE("tui.TerminalOutput: syncGuard() on a destination that is not a terminal writes no markers")
+{
+    // Synchronized output is a property of where the bytes go, like colour: a pipe or a file gets
+    // the frame and not `CSI ? 2026 h` / `l` around it. Every caller used to have to ask
+    // isTerminal() first and choose between a guard and none; the guard asks instead.
+    auto output = CapturingOutput { Destination::File };
+    output.writeRaw("before");
+
+    {
+        auto const guard = output.syncGuard();
+        // It still flushes on the way in, so what was composed before the region is written
+        // before it, exactly as on a terminal -- only the begin sequence is missing.
+        CHECK(output.captured() == "before");
+        output.writeRaw("inside");
+    }
+
+    // And on the way out: a caller that composed inside the region and relied on the guard to
+    // flush it gets the bytes on a pipe too.
+    CHECK(output.captured() == "beforeinside");
+}
+
+TEST_CASE("tui.TerminalOutput: a directly constructed SyncGuard asks the destination too")
+{
+    // The same answer by either spelling, so no caller can get the markers onto a pipe by
+    // constructing the guard itself.
+    auto output = CapturingOutput { Destination::File };
+
+    {
+        auto const guard = core::tui::SyncGuard { output };
+        output.writeRaw("inside");
+    }
+
+    CHECK(output.captured() == "inside");
+}
+
+TEST_CASE("tui.TerminalOutput: move-assigning a non-terminal guard ends nothing it did not begin")
+{
+    auto file = CapturingOutput { Destination::File };
+    auto terminal = CapturingOutput { Destination::Terminal };
+
+    auto guard = file.syncGuard();
+    file.writeRaw("inside");
+    guard = terminal.syncGuard();
+
+    // The file's region is flushed as it is ended, and gets no end sequence it never had a begin
+    // for; the terminal's region has begun.
+    CHECK(file.captured() == "inside");
+    CHECK(terminal.captured() == "\033[?2026h");
 }
 
 TEST_CASE("tui.TerminalOutput: isTerminal() reflects the destination")
