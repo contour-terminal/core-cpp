@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/EventLoop.hpp>
 
+#include <core/net/SocketContract.hpp>
 #include <core/net/detail/ReadyBatch.hpp>
 #include <core/net/detail/ScopeGuard.hpp>
 
@@ -1003,23 +1004,23 @@ ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
 
     // The slot is taken once the park has its id. One read operation and one write operation per
     // socket: a slot that still names a live park is a second operation armed over the first, which
-    // the socket contract forbids and `contract::claimReadSlot` catches one level up -- in a Debug
-    // build. Under NDEBUG it reaches here, and the park it displaces is never woken by readiness
-    // again; what must not follow is a park still pointing at a watch no slot of which names it,
-    // because the close frees the watch clearing only the parks its slots name.
-    // `ParkTable::fileByHandle` takes the pointer away and files the park by handle, so the close
-    // finds and wakes it as any park on the handle.
+    // the socket contract forbids and `contract::claimReadSlot` catches one level up. A park filed
+    // through this function directly reaches here without that guard, and the park it would
+    // displace is never woken by readiness again -- a hang with no message -- so this ends the
+    // process in every build, naming the handle and the direction, as the socket's guard does
+    // (core/net/SocketContract.hpp says why neither refusing nor resolving is the answer).
+    // `ParkTable::fileByHandle` is then a no-op, kept so a slot is always released the same way.
     if (watch != nullptr && hasInterest(entry.interest, Interest::Read))
     {
-        assert(_parks.find(watch->reader) == nullptr
-               && "a second read park on one handle: one read operation per socket");
+        auto* displaced = _parks.find(watch->reader);
+        contract::claimReadSlot(displaced, entry.handle);
         _parks.fileByHandle(watch->reader);
         watch->reader = id;
     }
     if (watch != nullptr && hasInterest(entry.interest, Interest::Write))
     {
-        assert(_parks.find(watch->writer) == nullptr
-               && "a second write park on one handle: one write operation per socket");
+        auto* displaced = _parks.find(watch->writer);
+        contract::claimWriteSlot(displaced, entry.handle);
         _parks.fileByHandle(watch->writer);
         watch->writer = id;
     }

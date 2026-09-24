@@ -69,7 +69,7 @@ class ISocket
     /// **A socket has ONE read operation, and this shares it with @c readWithFd and
     /// @c waitReadable.** Arming any of them while another is parked drops the parked awaitable:
     /// that coroutine is never resumed and never freed, with no assertion, no error and no log.
-    /// Enforced by @c contract::claimReadSlot in Debug builds
+    /// Enforced by @c contract::claimReadSlot, which ends the process in every build
     /// ([fastcached#663](https://github.com/LASTRADA-Software/fastcached/issues/663)). What a
     /// caller must therefore do: hold at most one outstanding read per socket, and resolve or
     /// abandon a parked @c waitReadable through @c cancelRead before issuing a `read`.
@@ -99,7 +99,7 @@ class ISocket
     /// send window takes as many writable edges as it takes.
     ///
     /// A socket has ONE write operation; arming a second over a parked one drops it, exactly as on
-    /// the read side. Enforced by @c contract::claimWriteSlot in Debug builds
+    /// the read side. Enforced by @c contract::claimWriteSlot, which ends the process in every build
     /// ([fastcached#893](https://github.com/LASTRADA-Software/fastcached/issues/893)).
     /// @param buffer Source span; must outlive the operation.
     /// @return The byte count written (== `buffer.size()` on success), or a @c NetError.
@@ -240,7 +240,7 @@ class ISocket
     /// has resolved, so await it first. The precondition is the contract's own, not a decorator's
     /// convenience: a transport whose half-close is itself a write sends its `close_notify` through
     /// the inner socket's @c write, which claims that socket's single write-op slot, and
-    /// @c contract::claimWriteSlot refuses that over a parked write in Debug builds. A plain socket
+    /// @c contract::claimWriteSlot ends the process over a parked write. A plain socket
     /// claims no slot and so trips nothing, but that is not the call working: on POSIX the parked
     /// write's next attempt fails with `EPIPE`, so bytes the caller believed queued never leave.
     /// There is no `cancelWrite`, deliberately (see @c contract::claimWriteSlot), so a caller that

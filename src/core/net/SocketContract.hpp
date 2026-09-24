@@ -12,21 +12,37 @@
 /// test double) is under exactly the same rules as the ones shipped here, so it gets exactly the
 /// same tripwires.
 ///
-/// **All three are Debug-only, deliberately.** In a release build each is what it replaced: one
-/// store, or nothing. Refusing the operation instead would turn a silent leak into a broken
-/// connection on a path that is live right now, which is a worse trade than the leak — so the fix
-/// for a caller that trips one belongs at the caller, and what belongs here is the thing that names
-/// it. Each is watched refusing by a canary process that drives a REAL socket, because asserting
-/// the assertion would prove `assert` works and say nothing about whether a transport ever reaches
+/// **The two slot guards end the process in EVERY build; the other two are Debug-only.** A second
+/// operation armed over a parked one used to be an `assert` too, and under `NDEBUG` it displaced the
+/// parked one, which was then never resumed: a hang with no message, in exactly the builds that
+/// ship. A contract violation must not become a silent hang in any build, so the slot guards now
+/// terminate, naming the direction and the handle, in Debug and Release alike. Neither of the
+/// alternatives keeps a violation both loud and harmless: resolving the DISPLACED operation with an
+/// error fails a live, healthy operation for its caller's bug -- the socket cannot tell a stale
+/// parked wait from a live one at the arm site (see @c claimReadSlot) -- and refusing the NEW one
+/// needs every transport's every verb to grow a refusal path that exists only for a caller's bug.
+/// The fix for a caller that trips one belongs at the caller; what belongs here is the thing that
+/// names it, which a terminating guard does in every build and an `assert` did in one.
+/// `requireReadBuffer` (a false EOF, not a hang) and `assertTeardownIsSerialisedWithDispatch`
+/// remain assertions. Each is watched refusing by a canary process that drives a REAL socket, because
+/// asserting the assertion would prove `assert` works and say nothing about whether a transport ever reaches
 /// it. Each canary is judged on a marker naming its own mode, printed immediately before the
 /// guarded call -- see `SocketContractCanary.cpp` for why that, and not `WILL_FAIL`.
 ///
 /// Origin: fastcached `Net/ReadSlot.hpp`, `Net/WriteSlot.hpp` and `Net/ISocket.hpp`'s
 /// `Detail::RequireReadBuffer`, at `0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21`.
 
+#include <core/Assert.hpp>
+
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
+#include <format>
+#include <source_location>
 #include <span>
+#include <string>
+#include <string_view>
+#include <type_traits>
 
 namespace core::net
 {
@@ -84,6 +100,52 @@ inline void requireReadBuffer([[maybe_unused]] std::span<std::byte> buffer) noex
               "close that never happened (see core/net/SocketContract.hpp and fastcached#838)");
 }
 
+/// Which of a socket's two operation slots a guard is about.
+enum class SlotDirection : std::uint8_t
+{
+    Read,  ///< The read-op slot: `read`, `readWithFd` and `waitReadable`.
+    Write, ///< The write-op slot: `write` and `writeVectored`.
+};
+
+/// Ends the process: a second operation was armed over a parked one in @p direction. Goes through
+/// `core::detail::fail`, so a program's fail handler (`core::setFailHandler`) logs it before the
+/// abort.
+/// @param direction Which slot was taken twice.
+/// @param handle What the handle is, as text, or empty where the socket has none.
+/// @param where The guard's call site.
+[[noreturn]] inline void secondOperationArmed(SlotDirection direction,
+                                              std::string_view handle,
+                                              std::source_location where) noexcept
+{
+    auto const isRead = direction == SlotDirection::Read;
+    auto const verb = isRead ? std::string_view { "read" } : std::string_view { "write" };
+    auto const origin =
+        isRead ? std::string_view { "fastcached#663" } : std::string_view { "fastcached#893" };
+    core::detail::fail(
+        std::format("a second {} operation was armed over a parked one on {}: a socket has one "
+                    "{} operation at a time, and the parked one would never be resumed "
+                    "(see core/net/SocketContract.hpp and {})",
+                    verb,
+                    handle.empty() ? std::string_view { "a socket with no native handle" } : handle,
+                    verb,
+                    origin),
+        "Socket contract violated:",
+        where.file_name(),
+        static_cast<int>(where.line()));
+}
+
+/// @tparam Handle What the socket's native handle is; @c std::nullptr_t where it has none.
+/// @param handle The handle, or `nullptr`.
+/// @return @p handle as the text a guard names it by, or empty for `nullptr`.
+template <typename Handle>
+[[nodiscard]] std::string describeHandle(Handle handle)
+{
+    if constexpr (std::is_null_pointer_v<Handle>)
+        return {};
+    else
+        return std::format("handle {}", handle);
+}
+
 /// Takes a socket's single read-op slot for an operation that is about to park.
 ///
 /// **A socket has ONE read operation, and `read`, `readWithFd` and `waitReadable` share it.** Every
@@ -103,18 +165,24 @@ inline void requireReadBuffer([[maybe_unused]] std::span<std::byte> buffer) noex
 /// — which is why @c ISocket::cancelRead is a verb the caller spells and not something `read` does
 /// on its behalf.
 ///
-/// Watched refusing by `ctest -R read-slot-guard-canary`, which double-arms a REAL socket.
+/// **It ends the process in every build** (see the file comment for why neither refusing nor
+/// resolving is the answer), naming the direction and @p handle.
+///
+/// Watched refusing by `ctest -R socket-contract-canary.read-slot`, which double-arms a REAL socket,
+/// on Debug and Release legs alike.
 /// @tparam Slot What the socket keeps its parked read in. `void` where the two read verbs resolve
 ///         to different types and the socket tracks which one it armed.
+/// @tparam Handle The socket's native handle type, or @c std::nullptr_t where it has none.
 /// @param slot The socket's in-flight read pointer, cleared by this call.
-template <typename Slot>
-inline void claimReadSlot(Slot*& slot) noexcept
+/// @param handle The socket's native handle, for the message; `nullptr` where it has none.
+/// @param where The call site, for the message.
+template <typename Slot, typename Handle = std::nullptr_t>
+inline void claimReadSlot(Slot*& slot,
+                          Handle handle = nullptr,
+                          std::source_location where = std::source_location::current()) noexcept
 {
-    assert(slot == nullptr
-           && "a read operation was armed over a parked one: read, readWithFd and waitReadable "
-              "share the socket's single read-op slot, so this drops the parked coroutine, which "
-              "is then never resumed and never freed (see core/net/SocketContract.hpp and "
-              "fastcached#663)");
+    if (slot != nullptr)
+        secondOperationArmed(SlotDirection::Read, describeHandle(handle), where);
     slot = nullptr;
 }
 
@@ -132,16 +200,22 @@ inline void claimReadSlot(Slot*& slot) noexcept
 /// today, and inventing the verb before a caller needs it would be every transport writing `{}`
 /// with no reason beside it. This is the tripwire only.
 ///
-/// Watched refusing by `ctest -R write-slot-guard-canary`, which double-arms a REAL socket.
+/// Ends the process in every build, as @c claimReadSlot does.
+///
+/// Watched refusing by `ctest -R socket-contract-canary.write-slot`, which double-arms a REAL
+/// socket, on Debug and Release legs alike.
 /// @tparam Slot What the socket keeps its parked write in.
+/// @tparam Handle The socket's native handle type, or @c std::nullptr_t where it has none.
 /// @param slot The socket's in-flight write pointer, cleared by this call.
-template <typename Slot>
-inline void claimWriteSlot(Slot*& slot) noexcept
+/// @param handle The socket's native handle, for the message; `nullptr` where it has none.
+/// @param where The call site, for the message.
+template <typename Slot, typename Handle = std::nullptr_t>
+inline void claimWriteSlot(Slot*& slot,
+                           Handle handle = nullptr,
+                           std::source_location where = std::source_location::current()) noexcept
 {
-    assert(slot == nullptr
-           && "a write operation was armed over a parked one: a socket has a single write-op slot, "
-              "so this drops the parked coroutine, which is then never resumed and never freed "
-              "(see core/net/SocketContract.hpp and fastcached#893)");
+    if (slot != nullptr)
+        secondOperationArmed(SlotDirection::Write, describeHandle(handle), where);
     slot = nullptr;
 }
 

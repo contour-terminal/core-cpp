@@ -586,8 +586,11 @@ endif()
 # by whichever guard the process actually reached: a mode that fell into the wrong branch
 # would pass on another guard's marker.
 #
-# SKIP_RETURN_CODE is evaluated ahead of both, so a Release build abstains rather than failing for
-# want of a marker NDEBUG was never going to print. These run on Debug legs only.
+# The slot guards end the process in every build, so every mode but empty-read-buffer runs on the
+# Release legs too; that one is still an assertion, and SKIP_RETURN_CODE, evaluated ahead of both
+# expressions, lets a Release build abstain rather than fail for want of a marker NDEBUG never
+# prints. watch-read-slot and watch-write-slot are the loop's half of the rule: two parks on one
+# handle's lifetime registration, filed through EventLoop::registerPark.
 #
 # Windows too since Task B7b, where the default backend's socket is `IocpSocket`. The two write
 # modes need a write that PARKS, and a Windows non-blocking send takes 8MiB at once (measured), so
@@ -597,7 +600,8 @@ if(CORE_CPP_TESTING AND NOT EMSCRIPTEN)
     add_executable(core-cpp-socket-contract-canary SocketContractCanary.cpp)
     target_link_libraries(core-cpp-socket-contract-canary PRIVATE core::net core::testing_dialogs)
     core_cpp_apply_toolchain(core-cpp-socket-contract-canary)
-    foreach(guard IN ITEMS read-slot write-slot write-slot-inline empty-read-buffer)
+    foreach(guard IN ITEMS read-slot write-slot write-slot-inline watch-read-slot watch-write-slot
+                           empty-read-buffer)
         add_test(NAME core-cpp.socket-contract-canary.${guard}
                  COMMAND core-cpp-socket-contract-canary ${guard})
         set_tests_properties(core-cpp.socket-contract-canary.${guard} PROPERTIES

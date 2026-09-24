@@ -705,13 +705,19 @@ get right, and each one is a defect that has already happened.
   [fastcached#663](https://github.com/LASTRADA-Software/fastcached/issues/663) and
   [fastcached#893](https://github.com/LASTRADA-Software/fastcached/issues/893).
 
-- **The guards are Debug-only, and that is a decision rather than an omission.** In a release
-  build each is what it replaced: one store, or nothing. Refusing the operation instead would turn
-  today's silent leak into a broken connection on a live path, which is the worse trade — so the
-  fix for a caller that trips one belongs at the caller. Each is watched refusing by
-  `ctest -R socket-contract-canary`, which drives a REAL socket into the guard and must die:
-  asserting the assertion would prove `assert` works and say nothing about whether a transport
-  ever reaches it.
+- **The slot guards end the process in EVERY build; a contract violation is never a silent
+  hang.** They were Debug-only, and under `NDEBUG` a second operation displaced the parked one,
+  which then never resumed: a hang with no message in exactly the builds that ship (suspected in a
+  Release-only fastcached stall on v0.2.1). Now `claimReadSlot`, `claimWriteSlot` and the loop's own
+  watch slots in `EventLoop::registerPark` terminate through `core::detail::fail`, naming the
+  direction and the handle, in Debug and Release alike. Resolving the displaced operation with an
+  error was rejected because it fails a live, healthy operation for its caller's bug, and refusing
+  the new one because every transport's every verb would grow a path that exists only for a
+  caller's bug; the fix belongs at the caller either way. `requireReadBuffer` stays an assertion (a
+  false EOF, not a hang). Each is watched by `ctest -R socket-contract-canary`, which drives a REAL
+  socket (or, for the loop's slots, `registerPark`) into the guard and must die, on Release legs
+  too: asserting the assertion would prove `assert` works and say nothing about whether a
+  transport ever reaches it.
 
 - **The verb records the operation; the AWAIT arms it, and the gap between them is reachable.**
   `[[nodiscard]]` makes dropping a socket operation a warning, not an impossibility — and a

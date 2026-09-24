@@ -27,37 +27,44 @@
 /// the two are alternatives and never companions — `ctest` checks the fail expression first, which
 /// is what lets the pass marker sit on both paths.
 ///
-/// Skips (exit 77) where assertions are compiled out: with `NDEBUG` there is no refusal to observe.
-/// `SKIP_RETURN_CODE` is evaluated ahead of the expressions, so a Release run abstains rather than
-/// failing for want of a marker it was never going to reach. **These canaries are therefore
-/// exercised on Debug legs only** — `clang-debug`, `clang-asan-ubsan`, `clang-tsan`, `cl-debug`.
+/// **The slot modes run in every build, Release included.** A second operation armed over a parked
+/// one used to be refused by an `assert` alone, so under `NDEBUG` it displaced the parked one, which
+/// was then never resumed: a silent hang in exactly the builds that ship. The slot guards now end
+/// the process in every build, naming the direction (and the handle, where the socket has one), so
+/// a Release leg that reaches `SURVIVED` is the defect back. `empty-read-buffer` is still an
+/// assertion -- an empty read answers a false EOF rather than hanging -- and skips (exit 77) where
+/// assertions are compiled out; `SKIP_RETURN_CODE` is evaluated ahead of the expressions, so a
+/// Release run of that one mode abstains rather than failing for want of a marker.
 
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/IoBackend.hpp>
 #include <core/net/testing/InMemoryTransport.hpp>
+#include <core/net/testing/ScriptedBackend.hpp>
+#include <core/platform/Clock.hpp>
 
+#include <array>
 #include <csignal>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
+#include <ranges>
+#include <span>
 #include <tuple>
-
-// Everything below is what a build WITH assertions needs, and nothing else compiles it: with
-// `NDEBUG` there is no refusal to provoke, `main` skips, and a helper left visible there is an
-// unused function -- which is an error in this tree, as it should be.
-#ifndef NDEBUG
-
-    #include <array>
-    #include <cstddef>
-    #include <memory>
-    #include <ranges>
-    #include <span>
-    #include <vector>
+#include <vector>
 
 namespace
 {
+
+/// Whether this build compiled `assert` out, which only `empty-read-buffer` still depends on.
+#ifdef NDEBUG
+constexpr auto AssertionsCompiledOut = true;
+#else
+constexpr auto AssertionsCompiledOut = false;
+#endif
 
 /// What this process exits with once a guard has fired.
 ///
@@ -180,35 +187,75 @@ int noWindowToFill()
     return SkipExitCode;
 }
 
-} // namespace
+/// Counts the calls a frameless park's owner receives.
+/// @param state A @c std::size_t counter.
+/// @param wake Ignored.
+void countWake(void* state, core::net::ParkWake wake)
+{
+    std::ignore = wake;
+    ++*static_cast<std::size_t*>(state);
+}
 
-#endif
+/// Files two parks watching @p interest on one handle's lifetime registration, through the loop's
+/// own interface: the loop's half of the one-operation-per-direction rule, which a socket reaches
+/// only past its own slot guard and a consumer's awaitable reaches directly.
+/// @param mode Which mode is running, for the markers.
+/// @param interest The direction both parks watch.
+/// @return Never, where the guard fires; 0 after printing `SURVIVED` where it does not.
+int parkTwiceOnOneWatch(char const* mode, core::net::Interest interest)
+{
+    auto clock = core::platform::ManualClock {};
+    auto backend = core::net::testing::ScriptedBackend {};
+    auto loop = core::net::EventLoop { backend, clock };
+    // Value-initialised rather than InvalidHandle, so the park reaches the watch; the scripted
+    // backend asks the OS nothing about it.
+    auto const handle = core::platform::NativeHandle {};
+    auto wakes = std::size_t { 0 };
+    auto const park = [&] {
+        return loop.registerPark(
+            core::net::ParkEntry::onReadyCallback(&countWake,
+                                                  &wakes,
+                                                  handle,
+                                                  core::net::DefaultHandleKind,
+                                                  interest,
+                                                  core::net::RegistrationLifetime::UntilClosed));
+    };
+    auto const first = park();
+    if (!first)
+    {
+        std::fputs("socket-contract-canary: the first park was refused, so nothing was tested\n", stderr);
+        return 2;
+    }
+    announce(mode, "a second park on one handle's watch in one direction");
+    auto const second = park();
+    survived("a second park displaced the first from the handle's watch");
+    loop.unregisterPark(second);
+    loop.unregisterPark(first);
+    return 0;
+}
+
+} // namespace
 
 /// @param argc The argument count.
 /// @param argv `read-slot`, `write-slot`, `write-slot-inline` or `empty-read-buffer`,
 ///        naming which guard to provoke.
-/// @return Never, in a build with assertions: the guard aborts.
+/// @return Never, where the guard fires: it ends the process.
 int main(int argc, char** argv)
 {
-#ifdef NDEBUG
-    /// The exit code ctest is told to read as "this configuration could not run the case". The
-    /// namespace's own copy is compiled only where assertions are, which this branch is not.
-    constexpr auto SkipExitCode = 77;
-    std::ignore = argc;
-    std::ignore = argv;
-    std::fputs("socket-contract-canary: SKIPPED -- assertions are compiled out in this configuration\n",
-               stderr);
-    return SkipExitCode;
-#else
     if (argc != 2)
     {
-        std::fputs("usage: core-cpp-socket-contract-canary "
-                   "<read-slot|write-slot|write-slot-inline|empty-read-buffer>\n",
+        std::fputs("usage: core-cpp-socket-contract-canary <read-slot|write-slot|write-slot-inline|"
+                   "watch-read-slot|watch-write-slot|empty-read-buffer>\n",
                    stderr);
         return 2;
     }
 
     std::signal(SIGABRT, &onAbort);
+
+    if (std::strcmp(argv[1], "watch-read-slot") == 0)
+        return parkTwiceOnOneWatch("watch-read-slot", core::net::Interest::Read);
+    if (std::strcmp(argv[1], "watch-write-slot") == 0)
+        return parkTwiceOnOneWatch("watch-write-slot", core::net::Interest::Write);
 
     auto backend = core::net::makeDefaultBackend();
     if (!backend)
@@ -227,6 +274,13 @@ int main(int argc, char** argv)
 
     if (std::strcmp(argv[1], "empty-read-buffer") == 0)
     {
+        if (AssertionsCompiledOut)
+        {
+            std::fputs("socket-contract-canary: SKIPPED -- assertions are compiled out in this "
+                       "configuration, and this guard is an assertion\n",
+                       stderr);
+            return SkipExitCode;
+        }
         // No loop turn needed: the guard is at the top of the verb, before anything can park.
         announce("empty-read-buffer", "empty read buffer");
         auto const refused = sock->read(std::span<std::byte> {});
@@ -302,5 +356,4 @@ int main(int argc, char** argv)
 
     std::fputs("socket-contract-canary: unknown mode\n", stderr);
     return 2;
-#endif
 }

@@ -372,11 +372,7 @@ IoAwaitable IocpSocket::read(std::span<std::byte> buffer)
     // The verb's check is the early, friendlier diagnostic; the arm below checks again, because it
     // is where the slot is actually taken.
     auto* parked = _read ? _read->awaitable : nullptr;
-    contract::claimReadSlot(parked);
-    if (_read && _read->awaitable != nullptr)
-        // Release builds, where the guard above is gone: the orphan is kept reachable, so close()
-        // still settles it, rather than dropped with its park still naming it.
-        _settling.push_back(std::move(_read));
+    contract::claimReadSlot(parked, _socket);
 
     // Bytes already here are taken now, with no operation and no turn -- which is what every
     // other socket in this library does, and what keeps a caller's turn count the same on every
@@ -392,7 +388,7 @@ IoAwaitable IocpSocket::read(std::span<std::byte> buffer)
                             auto* const socket = static_cast<IocpSocket*>(owner);
                             auto const node = socket->_read;
                             auto* claimed = node ? node->awaitable : nullptr;
-                            contract::claimReadSlot(claimed);
+                            contract::claimReadSlot(claimed, socket->_socket);
                             if (!node)
                             {
                                 self.complete(
@@ -418,9 +414,7 @@ IoAwaitable IocpSocket::waitReadable()
         return IoAwaitable { std::unexpected(std::move(*error)) };
 
     auto* parked = _read ? _read->awaitable : nullptr;
-    contract::claimReadSlot(parked);
-    if (_read && _read->awaitable != nullptr)
-        _settling.push_back(std::move(_read));
+    contract::claimReadSlot(parked, _socket);
 
     if (auto done = tryPeek(); done.has_value())
         return IoAwaitable { std::move(*done) };
@@ -432,7 +426,7 @@ IoAwaitable IocpSocket::waitReadable()
                             auto* const socket = static_cast<IocpSocket*>(owner);
                             auto const node = socket->_read;
                             auto* claimed = node ? node->awaitable : nullptr;
-                            contract::claimReadSlot(claimed);
+                            contract::claimReadSlot(claimed, socket->_socket);
                             if (!node)
                             {
                                 self.complete(std::unexpected(
@@ -707,13 +701,11 @@ ResultAwaitable<void> IocpSocket::shutdownWrite()
 IoAwaitable IocpSocket::write(std::span<std::byte const> buffer)
 {
     auto* parked = _write ? _write->awaitable : nullptr;
-    contract::claimWriteSlot(parked);
+    contract::claimWriteSlot(parked, _socket);
     if (auto error = unusable("write"))
         return IoAwaitable { std::unexpected(std::move(*error)) };
     if (buffer.empty())
         return IoAwaitable { IoResult { std::size_t { 0 } } };
-
-    keepOrphanedWrite();
 
     auto node = std::make_shared<Node>();
     node->kind = Node::Kind::Write;
@@ -728,7 +720,7 @@ IoAwaitable IocpSocket::write(std::span<std::byte const> buffer)
                             auto* const socket = static_cast<IocpSocket*>(owner);
                             auto const node = socket->_write;
                             auto* claimed = node ? node->awaitable : nullptr;
-                            contract::claimWriteSlot(claimed);
+                            contract::claimWriteSlot(claimed, socket->_socket);
                             if (!node)
                             {
                                 self.complete(std::unexpected(
@@ -752,11 +744,9 @@ IoAwaitable IocpSocket::writeVectored(std::span<std::span<std::byte const> const
                                       std::shared_ptr<void const> keepAlive)
 {
     auto* parked = _write ? _write->awaitable : nullptr;
-    contract::claimWriteSlot(parked);
+    contract::claimWriteSlot(parked, _socket);
     if (auto error = unusable("write"))
         return IoAwaitable { std::unexpected(std::move(*error)) };
-
-    keepOrphanedWrite();
 
     auto node = std::make_shared<Node>();
     node->kind = Node::Kind::Write;
@@ -773,7 +763,7 @@ IoAwaitable IocpSocket::writeVectored(std::span<std::span<std::byte const> const
                             auto* const socket = static_cast<IocpSocket*>(owner);
                             auto const node = socket->_write;
                             auto* claimed = node ? node->awaitable : nullptr;
-                            contract::claimWriteSlot(claimed);
+                            contract::claimWriteSlot(claimed, socket->_socket);
                             if (!node)
                             {
                                 self.complete(std::unexpected(
@@ -791,17 +781,6 @@ IoAwaitable IocpSocket::writeVectored(std::span<std::span<std::byte const> const
                         },
                          &IocpSocket::retireWrite,
                          this };
-}
-
-void IocpSocket::keepOrphanedWrite()
-{
-    // Release builds, where the verb's guard is gone: the orphan is kept reachable, as the read
-    // side keeps one, rather than dropped while its park still names it. Dropped, it would live on
-    // the kernel's share alone, and its completion would free it in the dequeue and then be
-    // dispatched through it. Kept, its completion resumes its own flow and close() still settles
-    // it; the order the two writes reach the wire in is whatever the broken contract makes it.
-    if (_write && _write->awaitable != nullptr)
-        _settling.push_back(std::move(_write));
 }
 
 std::shared_ptr<IocpSocket::Node> IocpSocket::holding(Node const& node) const noexcept

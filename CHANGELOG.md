@@ -34,6 +34,21 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- **A second operation armed over a parked one ends the process in every build, instead of hanging
+  in Release.** One read and one write operation per socket is the contract, and
+  `contract::claimReadSlot`, `contract::claimWriteSlot` and the watch slots of
+  `EventLoop::registerPark` enforced it with `assert` alone: under `NDEBUG` the second operation
+  displaced the parked one, which was then never resumed -- a silent hang, and the leading suspect
+  in a Release-only fastcached stall on 0.2.1. All three now terminate through `core::detail::fail`
+  (so a program's `core::setFailHandler` logs it first), naming the direction and the socket's
+  native handle, in Debug and Release alike. `claimReadSlot` and `claimWriteSlot` take the handle
+  as an optional second argument. The `socket-contract-canary` slot modes, and two new ones for the
+  loop's own slots (`watch-read-slot`, `watch-write-slot`), now run on the Release legs as well.
+  - *Migration*: a caller that armed a second read or write over a parked one was already broken; in
+    a Release build it now fails loudly at the violation instead of hanging later. `IocpSocket`'s
+    Release-only handling of an orphaned write, and the two tests that drove displacement under
+    `NDEBUG`, are gone with the displacement.
+
 - **A host-driven loop may be destroyed while a pump is out with the host.** `HostDrivenBackend`
   handed `IHostScheduler::callAfter` its own address, and `emscripten_async_call` cannot be
   retracted: a `PlatformLoop` destroyed under Emscripten with a timer armed, or after any off-turn

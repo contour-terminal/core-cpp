@@ -179,10 +179,6 @@ class IocpSocket final: public ISocket
     /// @return Nothing, or why it could not be issued.
     [[nodiscard]] std::expected<void, NetError> issueWrite(std::shared_ptr<Node> const& node);
 
-    /// Moves a parked write out of the write slot into `_settling` before a second write takes the
-    /// slot -- reachable only where `contract::claimWriteSlot` is compiled out.
-    void keepOrphanedWrite();
-
     /// @param node An operation of this socket's.
     /// @return The share this socket holds of @p node, from whichever slot it is in; empty if none.
     [[nodiscard]] std::shared_ptr<Node> holding(Node const& node) const noexcept;

@@ -1249,59 +1249,6 @@ TEST_CASE("An overlapped write puts the caller's bytes on the wire exactly, in o
     CHECK(firstDifference == payload.size());
 }
 
-namespace
-{
-/// Whether this build compiled the socket contract's slot guards out (`SocketContract.hpp`).
-#ifdef NDEBUG
-constexpr auto SlotGuardsCompiledOut = true;
-#else
-constexpr auto SlotGuardsCompiledOut = false;
-#endif
-} // namespace
-
-TEST_CASE("A write armed over a parked one keeps the parked one reachable where the guard is compiled out",
-          "[net][iocp][socket][write]")
-{
-    // Arming a second write over a parked one breaks the contract, and a Debug build refuses it
-    // (`contract::claimWriteSlot`, watched by `write-slot-guard-canary`). Under NDEBUG the guard is
-    // gone, and what the socket does then is still its own business: it used to drop its share of
-    // the parked write's node while that node's park still named it, so the completion, dequeued,
-    // freed the node on the kernel's share and was then dispatched through it -- a use-after-free
-    // on the loop's thread. The read side has always kept such an orphan reachable; this pins the
-    // write side doing the same, which also means the parked write's flow is resumed rather than
-    // lost. Which bytes go first is not asserted: the contract was broken, and it says nothing.
-    if (!SlotGuardsCompiledOut)
-        SKIP("the write-slot guard refuses this sequence in a build without NDEBUG, before the socket "
-             "sees it; write-slot-guard-canary watches that, and the Release presets run this case");
-
-    auto harness = Harness {};
-    auto const filler = fillThePipe(harness);
-    REQUIRE(filler > 0);
-
-    constexpr auto WriteSize = std::size_t { 300'000 };
-    auto const first = std::vector<std::byte>(WriteSize, std::byte { 0xA1 });
-    auto const second = std::vector<std::byte>(WriteSize, std::byte { 0xB2 });
-    auto firstWrite = Outcome {};
-    auto secondWrite = Outcome {};
-    writeOnce(harness.socket.get(), first, &firstWrite);
-    REQUIRE_FALSE(firstWrite.resumed);
-    REQUIRE(harness.backend.issuedOperations() == 1);
-    writeOnce(harness.socket.get(), second, &secondWrite);
-    REQUIRE_FALSE(secondWrite.resumed);
-
-    auto const expected = filler + (2 * WriteSize);
-    auto received = std::vector<char> {};
-    auto peer = std::jthread { [client = harness.pair.client(), expected, &received] {
-        received = receiveExactly(client, expected);
-    } };
-    REQUIRE(pumpUntil(harness.loop, [&] { return firstWrite.resumed && secondWrite.resumed; }));
-    peer.join();
-
-    CHECK_FALSE(firstWrite.code.has_value());
-    CHECK(firstWrite.bytes == WriteSize);
-    CHECK_FALSE(secondWrite.code.has_value());
-    CHECK(secondWrite.bytes == WriteSize);
-    REQUIRE(received.size() == expected);
-    CHECK(std::ranges::count(received, static_cast<char>(0xA1)) == static_cast<std::ptrdiff_t>(WriteSize));
-    CHECK(std::ranges::count(received, static_cast<char>(0xB2)) == static_cast<std::ptrdiff_t>(WriteSize));
-}
+// A write armed over a parked one -- which the case that stood here drove under NDEBUG, where the
+// guard was compiled out and the socket kept the orphan reachable -- now ends the process in every
+// build (core/net/SocketContract.hpp): `core-cpp.socket-contract-canary.write-slot` watches it.

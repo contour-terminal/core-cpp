@@ -344,7 +344,7 @@ IoAwaitable PosixSocket::read(std::span<std::byte> buffer)
     if (auto const done = tryRead(buffer); done.has_value())
         return IoAwaitable { *done };
 
-    contract::claimReadSlot(_read.awaitable);
+    contract::claimReadSlot(_read.awaitable, _fd);
     _read.kind = ReadKind::Bytes;
     _read.buffer = buffer;
     return IoAwaitable { [](void* owner, IoAwaitable& self) {
@@ -355,7 +355,7 @@ IoAwaitable PosixSocket::read(std::span<std::byte> buffer)
                             // has armed when the second verb runs -- and the second arm then overwrites this
                             // slot and the park id, leaving the first park registered on a socket that will
                             // be freed under it.
-                            contract::claimReadSlot(socket->_read.awaitable);
+                            contract::claimReadSlot(socket->_read.awaitable, socket->_fd);
                             socket->_read.awaitable = &self;
                             if (!socket->armRead(Interest::Read))
                             {
@@ -378,12 +378,12 @@ ResultAwaitable<ReadWithFd> PosixSocket::readWithFd(std::span<std::byte> buffer)
     if (auto done = tryReadWithFd(buffer); done.has_value())
         return ResultAwaitable<ReadWithFd> { std::move(*done) };
 
-    contract::claimReadSlot(_read.awaitable);
+    contract::claimReadSlot(_read.awaitable, _fd);
     _read.kind = ReadKind::WithFd;
     _read.buffer = buffer;
     return ResultAwaitable<ReadWithFd> { [](void* owner, ResultAwaitable<ReadWithFd>& self) {
                                             auto* const socket = static_cast<PosixSocket*>(owner);
-                                            contract::claimReadSlot(socket->_read.awaitable);
+                                            contract::claimReadSlot(socket->_read.awaitable, socket->_fd);
                                             socket->_read.awaitable = &self;
                                             if (!socket->armRead(Interest::Read))
                                             {
@@ -405,12 +405,12 @@ IoAwaitable PosixSocket::waitReadable()
     if (auto const done = tryProbe(); done.has_value())
         return IoAwaitable { *done };
 
-    contract::claimReadSlot(_read.awaitable);
+    contract::claimReadSlot(_read.awaitable, _fd);
     _read.kind = ReadKind::Probe;
     _read.buffer = {};
     return IoAwaitable { [](void* owner, IoAwaitable& self) {
                             auto* const socket = static_cast<PosixSocket*>(owner);
-                            contract::claimReadSlot(socket->_read.awaitable);
+                            contract::claimReadSlot(socket->_read.awaitable, socket->_fd);
                             socket->_read.awaitable = &self;
                             if (!socket->armRead(Interest::Read))
                             {
@@ -699,7 +699,7 @@ IoAwaitable PosixSocket::write(std::span<std::byte const> buffer)
     // and returned success having silently dropped the parked awaitable and leaked its park, with
     // no assertion on that path in Debug or Release. Nothing owns `_write` until the operation is
     // known to park.
-    contract::claimWriteSlot(_write.awaitable);
+    contract::claimWriteSlot(_write.awaitable, _fd);
 
     if (_closed || _fd < 0)
         return IoAwaitable { std::unexpected(closedSocket("write")) };
@@ -716,7 +716,7 @@ IoAwaitable PosixSocket::write(std::span<std::byte const> buffer)
                             // verb's guard above is the early, friendlier diagnostic; it cannot see two
                             // operations created through `core::async::asTask` and awaited afterwards,
                             // because neither has armed when the second verb runs.
-                            contract::claimWriteSlot(socket->_write.awaitable);
+                            contract::claimWriteSlot(socket->_write.awaitable, socket->_fd);
                             socket->_write.awaitable = &self;
                             if (!socket->armWrite())
                             {
@@ -734,7 +734,7 @@ IoAwaitable PosixSocket::writeVectored(std::span<std::span<std::byte const> cons
                                        std::shared_ptr<void const> keepAlive)
 {
     // Guard first, attempt on a temporary -- see `write` above for what the other order cost.
-    contract::claimWriteSlot(_write.awaitable);
+    contract::claimWriteSlot(_write.awaitable, _fd);
 
     if (_closed || _fd < 0)
         return IoAwaitable { std::unexpected(closedSocket("write")) };
@@ -748,7 +748,7 @@ IoAwaitable PosixSocket::writeVectored(std::span<std::span<std::byte const> cons
     _write = std::move(pending);
     return IoAwaitable { [](void* owner, IoAwaitable& self) {
                             auto* const socket = static_cast<PosixSocket*>(owner);
-                            contract::claimWriteSlot(socket->_write.awaitable);
+                            contract::claimWriteSlot(socket->_write.awaitable, socket->_fd);
                             socket->_write.awaitable = &self;
                             if (!socket->armWrite())
                             {
