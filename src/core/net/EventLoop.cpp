@@ -852,7 +852,7 @@ bool EventLoop::cancelPending(std::coroutine_handle<> handle) noexcept
     // drain-step callback has queued, which joins the ready queue only when the callback returns.
     // An entry in a callback's range, or in the callback position, is marked taken rather than
     // erased: marks into those ranges stay valid, and the drain skips it.
-    auto const takeFrom = [this, handle](auto& queue, auto first, bool erase) {
+    auto const takeFrom = [this, handle](auto& queue, auto const& first, bool erase) {
         auto const found = std::find_if(first, queue.end(), [handle](ReadyEntry const& entry) {
             return entry.parked.handle() == handle;
         });
