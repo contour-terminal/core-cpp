@@ -1853,7 +1853,7 @@ TEST_CASE("A nested callback that takes back what an outer callback queued leave
     auto trace = Trace {};
     auto loop = core::net::testing::TestLoop { clock };
     trace.loop = &loop;
-    auto nested = NestedCancel { .loop = &loop };
+    auto nested = NestedCancel { .loop = &loop, .x = {}, .takenBack = false };
 
     auto x = waiterFlow(&trace);
     x.handle().resume(); // parks

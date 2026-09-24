@@ -165,7 +165,7 @@ TEST_CASE("A drain-step callback that resumes a parked waiter costs no allocatio
     auto clock = core::platform::ManualClock {};
     auto loop = core::net::testing::TestLoop { clock };
     auto resumes = std::size_t { 0 };
-    auto waking = Waking { .loop = &loop };
+    auto waking = Waking { .loop = &loop, .parked = {} };
     auto waiter = parkForever(&waking.parked, &resumes);
     waiter.handle().resume();
     REQUIRE(waking.parked);
