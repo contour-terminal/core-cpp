@@ -34,6 +34,17 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- **A spawned flow that completes inside a sub-task is released, instead of leaking until the
+  loop is destroyed.** `EventLoop::spawn` unlinked a finished flow by the frame its ready entry
+  named, and a flow parked inside a sub-task (`co_await leaf()`, with `leaf` on a socket read or a
+  delay) is resumed through the sub-task's frame: it ran to its end inside that resume, by
+  symmetric transfer, and stayed in the loop -- and in `spawnedCount()` -- until `~EventLoop`, on
+  normal completion and on `requestStop` alike. A long-lived loop spawning one flow per connection
+  grew without bound (found by the contour migration, measured on 0.2.1). `spawn` now runs the
+  flow inside a root coroutine owned by the loop; the root's final suspension files it for
+  release, and the drain destroys it after the resume that finished it returns, in O(1) and on
+  the loop's thread, whichever frame the resume named.
+
 - **A second operation armed over a parked one ends the process in every build, instead of hanging
   in Release.** One read and one write operation per socket is the contract, and
   `contract::claimReadSlot`, `contract::claimWriteSlot` and the watch slots of

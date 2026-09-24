@@ -910,14 +910,85 @@ class EventLoop: public async::IExecutor
     /// @c wakeReasonOf can tell the awaiter to unwind rather than resume.
     std::unordered_set<ParkId> _abandoned;
 
-    /// Live spawned background flows. A `std::list` because a completing flow unlinks ITSELF in
-    /// O(1) through the iterator below: a `vector` swept with `erase_if` every turn is O(n) per
-    /// turn, which a server spawning one flow per connection pays forever.
-    std::list<async::Task<void>> _roots;
+    /// The coroutine @c spawn runs a flow inside, so that the flow's COMPLETION is what unlinks it.
+    ///
+    /// The unlink used to key on the frame a ready entry named, and a flow that parks inside a
+    /// sub-task is resumed through the sub-task's frame: it completed inside that resume, by
+    /// symmetric transfer, and nothing unlinked it -- one frame held per such flow until
+    /// ~EventLoop. This root awaits the flow, so however the flow ends, the root reaches its
+    /// final suspension, and that is where it files itself for release. It stays SUSPENDED there:
+    /// its frame is destroyed by @c reapFinishedRoots after the `resume()` that finished it has
+    /// returned, on the loop's thread, never from inside its own final suspension.
+    class SpawnedRoot
+    {
+      public:
+        /// The root's promise: which loop holds it, and where.
+        struct promise_type
+        {
+            EventLoop* loop = nullptr;                ///< The loop that spawned it.
+            std::list<SpawnedRoot>::iterator slot {}; ///< Where it sits in @c _roots.
+            async::StopToken token;                   ///< The loop's root stop token.
 
-    /// Where each spawned flow's frame sits in @c _roots, so the turn that resumes it to
-    /// completion can unlink it without searching.
-    std::unordered_map<void*, std::list<async::Task<void>>::iterator> _rootByHandle;
+            /// Files the root for release, and stays suspended.
+            struct FinalAwaiter
+            {
+                [[nodiscard]] bool await_ready() const noexcept { return false; }
+                void await_suspend(std::coroutine_handle<promise_type> self) const noexcept
+                {
+                    auto& promise = self.promise();
+                    promise.loop->_finishedRoots.push_back(promise.slot);
+                }
+                void await_resume() const noexcept {}
+            };
+
+            [[nodiscard]] SpawnedRoot get_return_object() noexcept
+            {
+                return SpawnedRoot { std::coroutine_handle<promise_type>::from_promise(*this) };
+            }
+            [[nodiscard]] std::suspend_always initial_suspend() const noexcept { return {}; }
+            [[nodiscard]] FinalAwaiter final_suspend() const noexcept { return {}; }
+            void return_void() const noexcept {}
+            /// A spawned flow's exception ends the flow and goes no further, as it always has: the
+            /// root is owned by the loop, and there is nobody to rethrow it to.
+            void unhandled_exception() const noexcept {}
+            /// @return The token the awaited flow inherits: the loop's root stop token.
+            [[nodiscard]] async::StopToken const& stopToken() const noexcept { return token; }
+        };
+
+        explicit SpawnedRoot(std::coroutine_handle<promise_type> handle) noexcept: _handle(handle) {}
+        SpawnedRoot(SpawnedRoot&& other) noexcept: _handle(std::exchange(other._handle, {})) {}
+        SpawnedRoot(SpawnedRoot const&) = delete;
+        SpawnedRoot& operator=(SpawnedRoot const&) = delete;
+        SpawnedRoot& operator=(SpawnedRoot&&) = delete;
+        ~SpawnedRoot()
+        {
+            if (_handle)
+                _handle.destroy();
+        }
+
+        /// @return The root's frame.
+        [[nodiscard]] std::coroutine_handle<promise_type> handle() const noexcept { return _handle; }
+
+      private:
+        std::coroutine_handle<promise_type> _handle;
+    };
+
+    /// The root coroutine @c spawn wraps @p task in.
+    /// @param task The flow to await; by value, as every coroutine parameter here is.
+    /// @return The suspended root.
+    static SpawnedRoot runSpawned(async::Task<void> task);
+
+    /// Destroys every root that reached its final suspension, in O(1) apiece. Called by the drain
+    /// after each resume, which is where a root can finish, and before it.
+    void reapFinishedRoots() noexcept;
+
+    /// Live spawned background flows. A `std::list` because a completing flow unlinks ITSELF in
+    /// O(1) through the iterator its root holds: a `vector` swept with `erase_if` every turn is
+    /// O(n) per turn, which a server spawning one flow per connection pays forever.
+    std::list<SpawnedRoot> _roots;
+
+    /// Roots that have finished and wait for @c reapFinishedRoots.
+    std::vector<std::list<SpawnedRoot>::iterator> _finishedRoots;
 
     /// Whether a @c run() is what is driving the turn, which is what makes an idle turn block
     /// rather than return; see step 4. Loop thread only.

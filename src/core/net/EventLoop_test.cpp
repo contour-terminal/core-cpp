@@ -1360,3 +1360,114 @@ TEST_CASE("blockOn asks for an indefinite wait rather than polling", "[EventLoop
     // At least one indefinite wait. A poll-forever loop records only zeros.
     CHECK(std::ranges::any_of(asked, [](auto const& t) { return !t.has_value(); }));
 }
+
+namespace
+{
+
+/// The leaf of a nested flow: it parks in ITS OWN frame, so the ready entry that resumes the chain
+/// names this frame rather than the spawned root.
+/// @param loop The loop to park on.
+/// @param delay How long to park.
+Task<void> parkInLeaf(EventLoop* loop, std::chrono::milliseconds delay)
+{
+    co_await loop->sleepUntil(loop->clock().now() + delay);
+}
+
+/// A spawned flow that awaits a sub-task and ends when the sub-task does, inside the leaf's resume:
+/// the leaf's final_suspend transfers here, and this runs to its end in the same `resume()`.
+/// @param loop The loop to park on.
+/// @param delay How long the leaf parks.
+/// @param finished Incremented when this flow reaches its end, normally or by unwinding.
+Task<void> nestedFlow(EventLoop* loop, std::chrono::milliseconds delay, int* finished)
+{
+    struct Count
+    {
+        explicit Count(int* counter) noexcept: finished(counter) {}
+        int* finished;
+        Count(Count const&) = delete;
+        Count(Count&&) = delete;
+        Count& operator=(Count const&) = delete;
+        Count& operator=(Count&&) = delete;
+        ~Count() { ++*finished; }
+    };
+    auto const count = Count { finished };
+    co_await parkInLeaf(loop, delay);
+}
+
+} // namespace
+
+TEST_CASE("spawn releases a nested flow whose completion arrives through its sub-task's frame",
+          "[EventLoop][spawn]")
+{
+    // The unlink used to key on the frame a ready entry names. A flow that parks in a sub-task's
+    // frame is resumed through THAT frame, completes inside the same resume by symmetric transfer,
+    // and nothing unlinked it: it stayed in `_roots`, and in spawnedCount(), until ~EventLoop -- one
+    // leaked frame per connection for a daemon that spawns a flow per connection.
+    auto clock = ManualClock {};
+    auto finished = 0;
+    auto loop = core::net::testing::TestLoop { clock };
+
+    loop.spawn(nestedFlow(&loop, std::chrono::milliseconds { 10 }, &finished));
+    std::ignore = loop.runOnce();
+    REQUIRE(loop.spawnedCount() == 1);
+    REQUIRE(finished == 0);
+
+    clock.advance(std::chrono::milliseconds { 10 });
+    std::ignore = loop.runUntilIdle();
+    CHECK(finished == 1);
+    CHECK(loop.spawnedCount() == 0);
+}
+
+TEST_CASE("spawn releases a nested flow that requestStop unwinds", "[EventLoop][spawn]")
+{
+    auto clock = ManualClock {};
+    auto finished = 0;
+    auto loop = core::net::testing::TestLoop { clock };
+
+    loop.spawn(nestedFlow(&loop, std::chrono::hours { 1 }, &finished));
+    std::ignore = loop.runOnce();
+    REQUIRE(loop.spawnedCount() == 1);
+
+    loop.requestStop();
+    std::ignore = loop.runUntilIdle();
+    CHECK(finished == 1);
+    CHECK(loop.spawnedCount() == 0);
+}
+
+TEST_CASE("spawn at scale unlinks nested flows per completion", "[EventLoop][spawn]")
+{
+    // The per-completion property of "spawn at scale unlinks per completion rather than sweeping",
+    // for flows that complete through a sub-task's frame. One turn's drain releases exactly what it
+    // ran to completion; a sweep, or no unlink at all, leaves them all.
+    //
+    // **Ten thousand, not a hundred thousand, for the sibling case's reason.** At a hundred thousand
+    // this case alone took 26 of cl-debug's seconds -- two frames and a park per flow, under the
+    // Debug CRT's heap -- inside a binary bounded at 120, which the sanitizer legs run slower
+    // still. The per-turn assertion is what tells an unlink from a sweep, and it holds at any scale.
+    constexpr auto Flows = 10000;
+    constexpr auto Batch = std::size_t { 64 };
+
+    auto clock = ManualClock {};
+    auto finished = 0;
+    auto loop =
+        core::net::testing::TestLoop { clock, core::net::EventLoopOptions { .dispatchBatch = Batch } };
+
+    for ([[maybe_unused]] auto const index: std::views::iota(0, Flows))
+        loop.spawn(nestedFlow(&loop, std::chrono::milliseconds { 1 }, &finished));
+    std::ignore = loop.runUntilIdle();
+    REQUIRE(loop.spawnedCount() == Flows);
+    REQUIRE(finished == 0);
+
+    // The turn that finds the deadlines due queues the leaves; the next one drains a batch of them,
+    // and each resume runs its whole chain to the end.
+    clock.advance(std::chrono::milliseconds { 1 });
+    std::ignore = loop.runOnce();
+    auto const drainingTurn = loop.runOnce();
+    CHECK(drainingTurn.drained == Batch);
+    CHECK(finished == static_cast<int>(Batch));
+    CHECK(loop.spawnedCount() == static_cast<std::size_t>(Flows) - Batch);
+
+    std::ignore = loop.runUntilIdle();
+    CHECK(finished == Flows);
+    CHECK(loop.spawnedCount() == 0);
+}

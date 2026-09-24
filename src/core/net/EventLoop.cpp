@@ -131,7 +131,7 @@ EventLoop::~EventLoop()
     // ---- 5. Destroy the spawned roots. ----------------------------------------------------
     // After the abandonment, not before: a spawned flow's frame is owned HERE, so destroying it
     // first would pull the ground out from under anything still parked on it.
-    _rootByHandle.clear();
+    _finishedRoots.clear();
     _roots.clear();
 
     // ---- 6. Drain what destroying them queued, to a fixpoint. -----------------------------
@@ -458,6 +458,7 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
            && "EventLoop::drainReadyQueue reached from inside a backend dispatch: "
               "backend callbacks may only enqueue");
 
+    reapFinishedRoots();
     auto resumed = std::size_t { 0 };
     while (resumed < bound && !_ready.empty())
     {
@@ -480,16 +481,6 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
         auto entry = std::move(_ready.front());
         _ready.pop_front();
 
-        auto const handle = entry.parked.handle();
-
-        // Looked up BEFORE the resume. A spawned flow's frame is owned by _roots and survives its
-        // own completion, so asking it `done()` afterwards is safe -- but a DETACHED chain frees
-        // itself there, and an address freed and then reused would read as somebody else's root.
-        // The list iterator is stable across the resume; the map is not, because a flow may spawn.
-        auto const root = handle ? _rootByHandle.find(handle.address()) : _rootByHandle.end();
-        auto const wasRoot = root != _rootByHandle.end();
-        auto const slot = wasRoot ? root->second : _roots.end();
-
         // `resume()` disowns and resumes in one expression, so work that runs normally is never
         // also freed by the entry going out of scope here -- and a handle it DECLINES to resume
         // has its chain freed rather than dropped.
@@ -497,15 +488,25 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
         ++resumed;
 
         // O(1) self-unlink: the turn that runs a spawned flow to its end releases its frame there
-        // and then. A sweep over every spawned flow at the top of each turn is O(n) per turn,
-        // which a server spawning one flow per connection pays forever.
-        if (wasRoot && handle.done())
-        {
-            _rootByHandle.erase(handle.address());
-            _roots.erase(slot);
-        }
+        // and then, whichever frame this entry named -- the root's own, or a sub-task's whose
+        // completion transferred to the root inside this resume. A sweep over every spawned flow
+        // at the top of each turn is O(n) per turn, which a server spawning one flow per
+        // connection pays forever.
+        reapFinishedRoots();
     }
     return resumed;
+}
+
+void EventLoop::reapFinishedRoots() noexcept
+{
+    // Taken first: destroying a root destroys its flow's frames, whose destructors may spawn.
+    for (auto const slot: std::exchange(_finishedRoots, {}))
+        _roots.erase(slot);
+}
+
+EventLoop::SpawnedRoot EventLoop::runSpawned(async::Task<void> task)
+{
+    co_await std::move(task);
 }
 
 std::optional<platform::SteadyDuration> EventLoop::computeTimeout(
@@ -823,14 +824,15 @@ void EventLoop::spawn(async::Task<void> task)
     assert(teardownIsSerialisedWithDispatch()
            && "EventLoop::spawn from a second thread while another is driving this loop: "
               "post() a call to it instead");
-    auto const handle = task.handle();
-    if (!handle)
+    if (!task.handle())
         return;
-    handle.promise().setStopToken(_rootStop.get_token());
-    auto const slot = _roots.insert(_roots.end(), std::move(task));
-    _rootByHandle.emplace(handle.address(), slot);
-    // Borrowed, not owned: the frame belongs to the Task in _roots above, so the ready entry must
-    // not carry a claim on it. Step 5 of the teardown is what frees these.
+    auto const slot = _roots.insert(_roots.end(), runSpawned(std::move(task)));
+    auto const handle = slot->handle();
+    handle.promise().loop = this;
+    handle.promise().slot = slot;
+    handle.promise().token = _rootStop.get_token();
+    // Borrowed, not owned: the frame belongs to the root in _roots above, so the ready entry must
+    // not carry a claim on it. Its completion, or step 5 of the teardown, is what frees it.
     queueReady(async::ParkedWork { .resume = handle });
 
     // A spawn from outside a turn has to WAKE the loop, or a flow queued before anything drives it
