@@ -1563,20 +1563,195 @@ TEST_CASE("A waiter completed by a drain-step callback resumes in the callback's
     CHECK(trace.events == std::vector<std::string_view> { "A1", "C", "W", "A2" });
 }
 
-TEST_CASE("A callback's waiter that parks again is completed through the ordinary path",
+namespace
+{
+
+/// W, twice: it parks, is completed by one callback, records, parks again, and is completed by a
+/// second callback.
+Task<void> waiterTwice(Trace* trace)
+{
+    co_await ParkUntilCompleted { &trace->waiter };
+    trace->events.emplace_back("W1");
+    co_await ParkUntilCompleted { &trace->waiter };
+    trace->events.emplace_back("W2");
+}
+
+/// A, interleaved with both callbacks: each of its deadlines falls due just ahead of one callback,
+/// and after each it yields once.
+Task<void> yieldingTwice(Trace* trace,
+                         core::platform::SteadyTimePoint first,
+                         core::platform::SteadyTimePoint second)
+{
+    co_await trace->loop->sleepUntil(first);
+    trace->events.emplace_back("A1");
+    co_await YieldOnce { trace->loop };
+    trace->events.emplace_back("A2");
+    co_await trace->loop->sleepUntil(second);
+    trace->events.emplace_back("A3");
+    co_await YieldOnce { trace->loop };
+    trace->events.emplace_back("A4");
+}
+
+/// A callback that queues its waiter and then takes it back with `cancelPending`.
+/// @param state The @c Trace.
+void completeThenCancel(void* state)
+{
+    auto* const trace = static_cast<Trace*>(state);
+    auto const waiter = trace->waiter;
+    trace->loop->resumeSoon(core::async::ParkedWork { .resume = waiter });
+    trace->events.emplace_back(trace->loop->cancelPending(waiter) ? "taken back" : "not found");
+}
+
+/// A spawned flow that ends in an exception.
+Task<void> throwAtOnce()
+{
+    co_await std::suspend_never {};
+    throw std::runtime_error { "a spawned flow's own failure" };
+}
+
+/// A spawned flow that continues on @p pool and ends there, normally or by throwing.
+/// @param pool Where to end.
+/// @param ended Set on @p pool just before the flow ends.
+/// @param fail Whether to end by throwing.
+Task<void> endOnPool(core::async::ThreadPoolExecutor* pool, std::atomic<bool>* ended, bool fail)
+{
+    co_await core::async::ResumeOn { *pool };
+    ended->store(true, std::memory_order_release);
+    if (fail)
+        throw std::runtime_error { "ended on the pool by throwing" };
+}
+
+/// Waits, bounded, for @p flag.
+/// @param flag What to wait for.
+/// @return Whether it was set within five seconds.
+[[nodiscard]] bool waitFor(std::atomic<bool> const& flag)
+{
+    for ([[maybe_unused]] auto const attempt: std::views::iota(0, 5000))
+    {
+        if (flag.load(std::memory_order_acquire))
+            return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds { 1 });
+    }
+    return false;
+}
+
+} // namespace
+
+TEST_CASE("A waiter completed by two callbacks in turn resumes in each one's position",
           "[EventLoop][turn][ordering]")
 {
-    // No recursion through the callback's position: a waiter that re-parks is completed again
-    // only by a LATER callback, which queues it in that callback's position in turn.
+    // W parks again after the first completion and is completed by a SECOND callback, through the
+    // ordinary path: no recursion through the first callback's position, and the second puts it in
+    // its own. A interleaves with both, yielding once after each of its deadlines.
     auto clock = ManualClock {};
     auto trace = Trace {};
     auto loop = core::net::testing::TestLoop { clock };
     trace.loop = &loop;
 
-    loop.spawn(waiterFlow(&trace));
+    auto const start = clock.now();
+    loop.spawn(waiterTwice(&trace));
+    loop.spawn(yieldingTwice(
+        &trace, start + std::chrono::milliseconds { 1 }, start + std::chrono::milliseconds { 3 }));
+    std::ignore = loop.addTimer(start + std::chrono::milliseconds { 2 }, &completeWaiter, &trace);
+    std::ignore = loop.addTimer(start + std::chrono::milliseconds { 4 }, &completeWaiter, &trace);
     std::ignore = loop.runUntilIdle();
-    std::ignore = loop.addTimer(clock.now(), &completeWaiter, &trace);
+    REQUIRE(trace.events.empty());
+
+    clock.advance(std::chrono::milliseconds { 2 });
     std::ignore = loop.runUntilIdle();
-    CHECK(trace.events == std::vector<std::string_view> { "C", "W" });
+    clock.advance(std::chrono::milliseconds { 2 });
+    std::ignore = loop.runUntilIdle();
+
+    CHECK(trace.events == std::vector<std::string_view> { "A1", "C", "W1", "A2", "A3", "C", "W2", "A4" });
     CHECK_FALSE(trace.waiter);
+}
+
+TEST_CASE("cancelPending finds a waiter a callback queued, before the callback returns",
+          "[EventLoop][turn][ordering]")
+{
+    // What a callback queues sits apart from the ready queue until the callback returns, so the
+    // search that takes a queued handle back has to look there too, or it answers "not queued" for
+    // a waiter that is about to run.
+    auto clock = ManualClock {};
+    auto trace = Trace {};
+    auto loop = core::net::testing::TestLoop { clock };
+    trace.loop = &loop;
+
+    auto waiter = waiterFlow(&trace);
+    waiter.handle().resume(); // parks, and records its handle
+    REQUIRE(trace.waiter);
+
+    std::ignore = loop.addTimer(clock.now(), &completeThenCancel, &trace);
+    std::ignore = loop.runUntilIdle();
+    CHECK(trace.events == std::vector<std::string_view> { "taken back" });
+    CHECK_FALSE(waiter.handle().done()); // taken back, so never resumed
+}
+
+TEST_CASE("spawn releases a flow that ends in an exception, and contains it", "[EventLoop][spawn]")
+{
+    auto clock = ManualClock {};
+    auto loop = core::net::testing::TestLoop { clock };
+    loop.spawn(throwAtOnce());
+    REQUIRE(loop.spawnedCount() == 1);
+    CHECK_NOTHROW(loop.runUntilIdle());
+    CHECK(loop.spawnedCount() == 0);
+}
+
+TEST_CASE("spawn releases a flow that ends on another thread", "[EventLoop][spawn][threads]")
+{
+    // A spawned flow may END anywhere: `co_await ResumeOn { pool }` and return, or throw, there.
+    // Its root's final suspension then runs on the pool thread, so it hands its slot to the loop
+    // through the inbound queue rather than writing the loop's own list beside a turn -- and the
+    // loop reaps it on its own thread, in the next turn's first step.
+    auto fail = false;
+    SECTION("returning there")
+    {
+    }
+    SECTION("throwing there")
+    {
+        fail = true;
+    }
+    auto pool = core::async::ThreadPoolExecutor { 1 };
+    auto clock = ManualClock {};
+    auto ended = std::atomic<bool> { false };
+    auto loop = core::net::testing::TestLoop { clock };
+
+    loop.spawn(endOnPool(&pool, &ended, fail));
+    std::ignore = loop.runOnce(); // starts it; it leaves for the pool
+    REQUIRE(waitFor(ended));
+
+    auto turns = 0;
+    while (loop.spawnedCount() > 0 && turns < 5000)
+    {
+        std::ignore = loop.runOnce();
+        std::this_thread::sleep_for(std::chrono::milliseconds { 1 });
+        ++turns;
+    }
+    CHECK(loop.spawnedCount() == 0);
+}
+
+TEST_CASE("A loop destroyed with a finished root it has not reaped frees it", "[EventLoop][spawn][threads]")
+{
+    // The root finished on the pool and handed its slot over; no turn ran after that. The
+    // destructor frees the root with the rest, and forgets the hand-off rather than reaping
+    // through it later.
+    auto pool = core::async::ThreadPoolExecutor { 1 };
+    auto clock = ManualClock {};
+    auto ended = std::atomic<bool> { false };
+    {
+        auto loop = core::net::testing::TestLoop { clock };
+        loop.spawn(endOnPool(&pool, &ended, false));
+        std::ignore = loop.runOnce();
+        REQUIRE(waitFor(ended));
+        // Wait, bounded, for the hand-off itself, which follows `ended` on the pool thread.
+        auto waited = 0;
+        while (loop.inboundFinishedRootCount() == 0 && waited < 5000)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds { 1 });
+            ++waited;
+        }
+        REQUIRE(loop.inboundFinishedRootCount() == 1);
+        REQUIRE(loop.spawnedCount() == 1);
+    }
+    CHECK(ended.load());
 }

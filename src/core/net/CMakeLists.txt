@@ -294,6 +294,12 @@ core_cpp_add_test(net NAME net_backend
     SOURCES ${_coreCppNetSubsetTests}
     SOURCES_EMSCRIPTEN ${_coreCppNetSubsetTests})
 
+# What a drain-step callback costs in allocations: a binary of its own because it replaces the
+# global allocation functions, which would reach every case linked beside it.
+core_cpp_add_test(net NAME net_alloc
+    SOURCES CallbackAllocation_test.cpp
+    SOURCES_EMSCRIPTEN CallbackAllocation_test.cpp)
+
 # Everything that needs a loop, a socket or a descriptor, and so nothing that builds under
 # Emscripten yet. Asked here rather than left to an empty SOURCES_EMSCRIPTEN, which
 # core_cpp_add_test reads as a mistake and refuses: a binary named after the module follows the

@@ -6,6 +6,7 @@
 #include <core/net/detail/ScopeGuard.hpp>
 
 #include <algorithm>
+#include <exception>
 #include <initializer_list>
 #include <iterator>
 #include <limits>
@@ -132,6 +133,12 @@ EventLoop::~EventLoop()
     // ---- 5. Destroy the spawned roots. ----------------------------------------------------
     // After the abandonment, not before: a spawned flow's frame is owned HERE, so destroying it
     // first would pull the ground out from under anything still parked on it.
+    // A root that finished off the loop's thread and was handed over is freed with the rest; the
+    // hand-off is forgotten, not reaped through later.
+    {
+        auto const lock = std::scoped_lock { _inboundMutex };
+        _inbound.finishedRoots.clear();
+    }
     _finishedRoots.clear();
     _roots.clear();
 
@@ -427,9 +434,14 @@ bool EventLoop::runInbound()
         pending.submissions.swap(_inbound.submissions);
         pending.scheduled.swap(_inbound.scheduled);
         pending.cancels.swap(_inbound.cancels);
+        pending.finishedRoots.swap(_inbound.finishedRoots);
     }
     if (pending.empty())
         return false;
+
+    // Spawned flows that ended on another thread, released here on the loop's own.
+    _finishedRoots.insert(_finishedRoots.end(), pending.finishedRoots.begin(), pending.finishedRoots.end());
+    reapFinishedRoots();
 
     for (auto const& callback: pending.posts)
         callback();
@@ -481,13 +493,20 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
             // callback yield past the waiter and read state the waiter had not updated yet. A
             // waiter that re-parks is completed by a later callback, in that one's position, so
             // nothing here recurses.
-            auto queuedByCallback = std::deque<ReadyEntry> {};
-            _queuedByCallback = &queuedByCallback;
-            auto const inPosition = detail::ScopeGuard { [this, &queuedByCallback]() noexcept {
-                _queuedByCallback = nullptr;
+            //
+            // The scratch is a member whose capacity survives, so a callback that queues nothing
+            // -- or one waiter -- allocates nothing once it has grown. Each callback owns the range
+            // from `mark`, and the previous target is restored, so a callback that drives a nested
+            // drain leaves the outer one's entries where they are.
+            auto const mark = _callbackScratch.size();
+            auto* const previous = std::exchange(_queuedByCallback, &_callbackScratch);
+            auto const inPosition = detail::ScopeGuard { [this, mark, previous]() noexcept {
+                _queuedByCallback = previous;
+                auto const first = _callbackScratch.begin() + static_cast<std::ptrdiff_t>(mark);
                 _ready.insert(_ready.begin(),
-                              std::make_move_iterator(queuedByCallback.begin()),
-                              std::make_move_iterator(queuedByCallback.end()));
+                              std::make_move_iterator(first),
+                              std::make_move_iterator(_callbackScratch.end()));
+                _callbackScratch.erase(first, _callbackScratch.end());
             } };
             runDueCallback(callback, wake);
             ++resumed;
@@ -515,14 +534,60 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
 
 void EventLoop::reapFinishedRoots() noexcept
 {
-    // Taken first: destroying a root destroys its flow's frames, whose destructors may spawn.
-    for (auto const& slot: std::exchange(_finishedRoots, {}))
+    // One at a time from the back, keeping the capacity: a loop that spawns a flow per connection
+    // reaps on every completion. Popped before the erase, because destroying a root destroys its
+    // flow's frames, whose destructors may spawn -- and a spawn ending at once files here.
+    while (!_finishedRoots.empty())
+    {
+        auto const slot = _finishedRoots.back();
+        _finishedRoots.pop_back();
         _roots.erase(slot);
+    }
 }
+
+void EventLoop::handOverFinishedRoot(std::list<SpawnedRoot>::iterator slot) noexcept
+{
+    {
+        auto const lock = std::scoped_lock { _inboundMutex };
+        _inbound.finishedRoots.push_back(slot);
+        _inboundPending.store(true, std::memory_order_release);
+    }
+    _backend.wake();
+}
+
+namespace
+{
+    /// How a spawned root awaits its flow: as `Task`'s own awaiter does -- the flow's continuation
+    /// is the root, and it inherits the root's stop token -- except that an exception the flow ended
+    /// in is TAKEN rather than rethrown. `co_await task` rethrew it into the root only for the
+    /// root's promise to catch it, which is a second throw of every failing flow.
+    struct AwaitSpawnedFlow
+    {
+        async::Task<void>& flow; ///< The flow; owned by the root's frame.
+
+        [[nodiscard]] bool await_ready() const noexcept { return false; }
+
+        template <typename Promise>
+        [[nodiscard]] std::coroutine_handle<> await_suspend(
+            std::coroutine_handle<Promise> root) const noexcept
+        {
+            auto& promise = flow.handle().promise();
+            promise.continuation = root;
+            promise.setStopToken(root.promise().stopToken());
+            return flow.handle();
+        }
+
+        /// @return The exception the flow ended in, or none; the root drops it.
+        [[nodiscard]] std::exception_ptr await_resume() const noexcept
+        {
+            return flow.handle().promise().exception;
+        }
+    };
+} // namespace
 
 EventLoop::SpawnedRoot EventLoop::runSpawned(async::Task<void> task)
 {
-    co_await std::move(task);
+    std::ignore = co_await AwaitSpawnedFlow { task };
 }
 
 std::optional<platform::SteadyDuration> EventLoop::computeTimeout(
@@ -570,7 +635,7 @@ std::size_t EventLoop::fireExpiredTimers()
         // rather than an artefact of which mechanism got to fire first.
         auto const* const entry = _parks.find(park);
         if (entry != nullptr && entry->onExpired != nullptr)
-            _ready.push_back(ReadyEntry { .parked = {}, .ownedByLoop = false, .callbackPark = park });
+            queueEntry(ReadyEntry { .parked = {}, .ownedByLoop = false, .callbackPark = park });
         else
             queueParkedWaiter(park);
         ++fired;
@@ -724,18 +789,20 @@ bool EventLoop::cancelPending(std::coroutine_handle<> handle) noexcept
     if (!handle)
         return false;
 
-    // The ready queue first: a handle submitted and not yet resumed.
-    auto const found = std::ranges::find_if(
-        _ready, [handle](ReadyEntry const& entry) { return entry.parked.handle() == handle; });
-    if (found != _ready.end())
-    {
+    // The ready queue first: a handle submitted and not yet resumed -- and what a running
+    // drain-step callback has queued, which joins the ready queue only when the callback returns.
+    auto const takeFrom = [this, handle](auto& queue) {
+        auto const found = std::ranges::find_if(
+            queue, [handle](ReadyEntry const& entry) { return entry.parked.handle() == handle; });
+        if (found == queue.end())
+            return false;
         // Taken rather than only erased: the caller becomes the only one who may resume or destroy
         // it, so this entry must do neither on its way out. And the chain is DISARMED rather than
         // released -- releasing the last claim would free the very frame the caller has just been
         // handed, which is the opposite of an ownership transfer.
         auto const source = found->sourcePark;
         found->parked.take().abandon.disarm();
-        _ready.erase(found);
+        queue.erase(found);
         // **The park it was queued from comes down with it** -- the two structures answer "is it
         // queued" and "is it parked", and a waiter dispatched by readiness is BOTH until its
         // `await_resume` runs. This frame will never run it, so what `await_resume` would have
@@ -744,7 +811,9 @@ bool EventLoop::cancelPending(std::coroutine_handle<> handle) noexcept
         // (core-cpp#41). A stale or invalid id is a no-op, which is the generation check.
         unregisterPark(source);
         return true;
-    }
+    };
+    if (takeFrom(_ready) || takeFrom(_callbackScratch))
+        return true;
 
     if (auto const id = _parks.byWaiter(handle))
     {
@@ -928,10 +997,17 @@ void EventLoop::resumeSoon(async::ParkedWork work)
 void EventLoop::queueReady(async::ParkedWork work, ParkId sourcePark)
 {
     auto const owned = static_cast<bool>(work.abandon);
-    auto& queue = _queuedByCallback != nullptr ? *_queuedByCallback : _ready;
-    queue.push_back(ReadyEntry { .parked = async::detail::Parked { std::move(work) },
-                                 .ownedByLoop = owned,
-                                 .sourcePark = sourcePark });
+    queueEntry(ReadyEntry { .parked = async::detail::Parked { std::move(work) },
+                            .ownedByLoop = owned,
+                            .sourcePark = sourcePark });
+}
+
+void EventLoop::queueEntry(ReadyEntry entry)
+{
+    if (_queuedByCallback != nullptr)
+        _queuedByCallback->push_back(std::move(entry));
+    else
+        _ready.push_back(std::move(entry));
 }
 
 ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
@@ -1347,8 +1423,7 @@ void EventLoop::queueParkedWaiter(ParkId park, ParkWake wake)
         // mark a COROUTINE park's awaiter is owed, because this branch is only reached for a park
         // that has no coroutine at all.
         auto const closing = wakeReasonOf(park) == FdWakeReason::Abandoned ? ParkWake::Abandoned : wake;
-        _ready.push_back(
-            ReadyEntry { .parked = {}, .ownedByLoop = false, .callbackPark = park, .wake = closing });
+        queueEntry(ReadyEntry { .parked = {}, .ownedByLoop = false, .callbackPark = park, .wake = closing });
         return;
     }
 

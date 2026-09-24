@@ -385,13 +385,21 @@ class EventLoop: public async::IExecutor
     void post(std::function<void()> callback);
 
     /// Starts a background flow that runs alongside the root flow. Its frame is kept alive by the
-    /// loop and released the instant the flow completes — the turn that resumes it to completion
-    /// unlinks it, in O(1), rather than a later sweep over every spawned flow.
+    /// loop and released once the flow completes -- in O(1), rather than by a later sweep over
+    /// every spawned flow. The flow runs inside a root coroutine the loop owns (one more frame
+    /// allocation per spawn), and the root's completion is what releases it, whichever frame of the
+    /// flow was resumed last.
+    ///
+    /// **A flow may END on any thread** -- `co_await core::async::ResumeOn { pool }` and return,
+    /// or throw, there. Ended on the loop's thread inside a turn, it is released in that turn's
+    /// drain, right after the resume that ended it; ended anywhere else, it hands itself over
+    /// through the inbound queue and is released in step 1 of the next turn, on the loop's thread.
+    /// An exception that ends a flow ends it and goes no further, as it always has.
     ///
     /// **Loop thread only**, or before anything drives the loop. Unlike @c submit, this writes the
     /// loop's own containers directly and there is no inbound queue to hand it to: a spawn from an
-    /// acceptor thread while a turn is running splices a `std::list` and rehashes an
-    /// `unordered_map` underneath that turn. `post()` a call to it instead. It is the one
+    /// acceptor thread while a turn is running splices the `std::list` of roots underneath that
+    /// turn. `post()` a call to it instead. It is the one
     /// difference from @c submit that migrating a flow to `spawn` — for the frame lifetime, which
     /// is why anyone does — does not otherwise announce.
     /// @param task The flow to run.
@@ -486,6 +494,15 @@ class EventLoop: public async::IExecutor
     {
         auto const lock = std::scoped_lock { _inboundMutex };
         return _inbound.scheduled.size();
+    }
+
+    /// @return How many spawned flows ended off the loop's thread and wait for turn step 1 to
+    ///         release them; @c spawnedCount still counts them until then. Read under the inbound
+    ///         lock, so any thread may ask.
+    [[nodiscard]] std::size_t inboundFinishedRootCount() const
+    {
+        auto const lock = std::scoped_lock { _inboundMutex };
+        return _inbound.finishedRoots.size();
     }
 
     /// @return The monotonic clock backing every deadline. Awaiters read deadlines through this so
@@ -661,6 +678,8 @@ class EventLoop: public async::IExecutor
     /// @}
 
   private:
+    class SpawnedRoot;
+
     /// A deadline handed over from another thread, waiting to be armed on the loop's own.
     struct TimedWork
     {
@@ -675,11 +694,14 @@ class EventLoop: public async::IExecutor
         std::vector<async::ParkedWork> submissions; ///< Coroutines to queue for the next drain.
         std::vector<TimedWork> scheduled;           ///< Deadlines to arm.
         std::vector<ParkId> cancels;                ///< Parks to unpark and resume for cancellation.
+        /// Spawned flows that ended off the loop's thread, to release on it.
+        std::vector<std::list<SpawnedRoot>::iterator> finishedRoots;
 
         /// @return Whether anything is waiting.
         [[nodiscard]] bool empty() const noexcept
         {
-            return posts.empty() && submissions.empty() && scheduled.empty() && cancels.empty();
+            return posts.empty() && submissions.empty() && scheduled.empty() && cancels.empty()
+                   && finishedRoots.empty();
         }
     };
 
@@ -903,7 +925,13 @@ class EventLoop: public async::IExecutor
     /// the callback -- the order 0.2.0 had by resuming inline, kept without resuming inside the
     /// callback (G2). Queued at the back instead, a flow queued ahead of the callback that yields
     /// once to let reported readiness run found the waiter not yet resumed.
-    std::deque<ReadyEntry>* _queuedByCallback = nullptr;
+    std::vector<ReadyEntry>* _queuedByCallback = nullptr;
+
+    /// Where what a drain-step callback queues waits until the callback returns. A member, and
+    /// cleared rather than freed, so a readiness completion -- the hot path -- costs no
+    /// allocation once it has grown; each callback owns the range from where it began, so a
+    /// callback that drives a nested drain does not take the outer one's entries.
+    std::vector<ReadyEntry> _callbackScratch;
 
     detail::ParkTable _parks; ///< Every park, by id, with its reverse indices.
 
@@ -951,7 +979,12 @@ class EventLoop: public async::IExecutor
                 void await_suspend(std::coroutine_handle<promise_type> self) const noexcept
                 {
                     auto& promise = self.promise();
-                    promise.loop->_finishedRoots.push_back(promise.slot);
+                    // Off the loop's thread -- a flow that ended on a pool -- the loop's own list
+                    // is not this thread's to write: hand the slot over, as a submission is.
+                    if (promise.loop->isOnWorkerThread())
+                        promise.loop->_finishedRoots.push_back(promise.slot);
+                    else
+                        promise.loop->handOverFinishedRoot(promise.slot);
                 }
                 void await_resume() const noexcept {}
             };
@@ -994,8 +1027,18 @@ class EventLoop: public async::IExecutor
     static SpawnedRoot runSpawned(async::Task<void> task);
 
     /// Destroys every root that reached its final suspension, in O(1) apiece. Called by the drain
-    /// after each resume, which is where a root can finish, and before it.
+    /// after each resume, which is where a root can finish, and before it, and by turn step 1 for
+    /// the roots that finished off the loop's thread.
     void reapFinishedRoots() noexcept;
+
+    /// Hands a root that finished off the loop's thread to turn step 1. Safe from any thread.
+    /// @param slot Where the root sits in @c _roots.
+    void handOverFinishedRoot(std::list<SpawnedRoot>::iterator slot) noexcept;
+
+    /// Files @p entry at the back of the ready queue, or -- while a drain-step callback runs -- in
+    /// that callback's position (@c _queuedByCallback). Every @c ReadyEntry goes through here.
+    /// @param entry What to queue.
+    void queueEntry(ReadyEntry entry);
 
     /// Live spawned background flows. A `std::list` because a completing flow unlinks ITSELF in
     /// O(1) through the iterator its root holds: a `vector` swept with `erase_if` every turn is
