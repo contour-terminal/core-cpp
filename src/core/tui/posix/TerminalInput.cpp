@@ -39,6 +39,12 @@ namespace
     /// But an end of file on a terminal is also what a raw-mode read (VMIN 0, VTIME 0) returns when
     /// nothing is pending, and what canonical mode returns for Ctrl+D, so on a terminal it counts
     /// only when poll(2) confirms the hangup.
+    ///
+    /// EIO is also what a read from a BACKGROUND process group answers when `SIGTTIN` is ignored or
+    /// blocked, and it would latch the end for good although the terminal is alive. A process that
+    /// leaves `SIGTTIN` at its default is stopped instead and never sees it -- endo and tuidu do,
+    /// and `core::platform::SignalHandler` ignores only `SIGTTOU` -- so a consumer that ignores
+    /// `SIGTTIN` and reads from the background must not rely on this.
     [[nodiscard]] bool inputHasEnded(int fd, ssize_t count, int error) noexcept
     {
         if (count > 0)

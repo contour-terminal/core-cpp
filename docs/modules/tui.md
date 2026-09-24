@@ -3,7 +3,9 @@
 The terminal UI. Namespace `core::tui`, directory `src/core/tui/`, targets `core::tui_output`
 (with `CORE_CPP_WITH_TUI_OUTPUT`) and `core::tui` (with `CORE_CPP_WITH_TUI`). Both are on by
 default and off under Emscripten; `CORE_CPP_WITH_TUI` forces `CORE_CPP_WITH_TUI_OUTPUT` on, and
-`CORE_CPP_WITH_TUI_OUTPUT` defaults to whatever `CORE_CPP_WITH_TUI` is.
+`CORE_CPP_WITH_TUI_OUTPUT` defaults to whatever `CORE_CPP_WITH_TUI` is on a first configure (a
+cache entry keeps its value after that, so turning the TUI off in an existing tree leaves the leaf
+on).
 
 Imported from endo's `src/tui` at `f774a210`, which includes the coroutine-runtime work fastcached
 upstreamed there. The runtime has since been rewritten onto [`core::net::EventLoop`](net.md).

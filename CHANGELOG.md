@@ -9,31 +9,9 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
-### Changed
-
-- **`close()`, `cancelRead()` and a destructor's abandonment resume a parked flow on a later drain
-  step, never before they return.** The operation is still settled at once, with the same value
-  (`Cancelled`, or the data that won); only the RESUMPTION moved into the loop (see *Fixed*). A
-  caller that asserted a parked flow's outcome right after `close()` or `cancelRead()` now runs one
-  loop turn first (`runOnce`, `runUntilIdle`, a `blockOn`). Two `cancelRead()` calls in a row no
-  longer retire the read the first victim arms when it runs: the second finds the slot empty
-  (fastcached#1233's shape). `testing::InMemorySocket` and `testing::ParkingReadableSocket`, which
-  have no loop, still resume inline.
-- **For contour, missing from 0.1.0's per-consumer summary:** from 0.1.0 until this release,
-  core-cpp's sockets resumed a parked read INSIDE `close()`. Code that closes two sockets in a row
-  through an object the read flow owns -- contour's `NativeClient::detach` -- was exposed to it.
-  0.1.0 is released, so the note is recorded here rather than there.
-
-- **`SyncGuard` brackets only a terminal.** `TerminalOutput::syncGuard()`, and a `SyncGuard`
-  constructed directly, ask the output's `isTerminal()` once and write `CSI ? 2026 h` / `l` only
-  when it answers true; on a pipe, a file or a capture that is not a terminal the guard still
-  flushes at both ends and writes no sequence. A caller that needs the sequences on a capture
-  answers `isTerminal()` true from its subclass, as a terminal-emulating capture already should.
-- **`TuiRuntime`'s input waits end once the terminal's input has.** `nextEvent()`,
-  `nextEventFor()` and `nextActivity()` throw `core::async::OperationCancelled` without parking
-  after `TuiRuntime::inputClosed()` turns true, where they used to wait (and the runtime spun,
-  see *Fixed*). An application that catches the cancellation and waits again in a loop must ask
-  `inputClosed()` and exit, or that loop never waits.
+Every behaviour change in this section is a defect fixed, and each entry says which guarantee it
+restores and what a caller that depended on the defect changes. None of them is a break of a
+documented promise, which is why they are under *Fixed* in a patch release.
 
 ### Added
 
@@ -45,23 +23,54 @@ workflow refuses one without a section here.
   everywhere else -- so a caller no longer converts `initialize()`'s `int`, which on Windows is the
   wrong type for a handle. `initialize()` keeps its `int` for compatibility (found by the endo
   migration).
-- **`ResultAwaitable::resumeThrough(EventLoop&)`**, for an owner with no park to hand
-  `cancelThrough`: it names the loop `complete()` resumes the awaiting flow on. An owner that names
-  no loop at all is resumed inline, as before.
 - **The end of a terminal's input is reported.** `TerminalInput::inputClosed()`, the virtual
   `runtime::InputSource::inputClosed()` (false by default, so an existing source still compiles),
   `TerminalInputSource`'s forward of it, `TuiRuntime::inputClosed()`, and
   `runtime::testing::ScriptedInputSource::closeInput()` to script it. See *Fixed*.
 - **`CORE_CPP_WITH_TUI_OUTPUT`**, an option of `core::tui_output`'s own. With `CORE_CPP_WITH_TUI`
   off and this on, core-cpp builds the styled-output leaf by itself and neither finds nor fetches
-  libunicode. It defaults to `CORE_CPP_WITH_TUI`, is forced on by it (`core::tui` links the leaf),
-  and is forced off under Emscripten. A module's own row switching off no longer takes a target
-  with a row of its own down with it: `core_cpp_add_modules()` enters the directory for that target
-  alone, as the module table always said a row of its own would. `tests/consumer-tui-output` and a
-  `consumer-smoke (tui-output)` CI leg assert the configuration.
+  libunicode. It defaults to `CORE_CPP_WITH_TUI` on a first configure, is forced on by it
+  (`core::tui` links the leaf), and is forced off under Emscripten. A module's own row switching
+  off no longer takes a target with a row of its own down with it: `core_cpp_add_modules()` enters
+  the directory for that target alone, as the module table always said a row of its own would.
+  `tests/consumer-tui-output` and a `consumer-smoke (tui-output)` CI leg assert the configuration.
 
 ### Fixed
 
+- **A parked flow is never resumed inside the call that settled it** -- restores guarantee G2,
+  every resumption happens in the loop's drain step (`.agent/rules/async-and-net.md`, "a resource
+  never resumes its consumer inline"). `ResultAwaitable::complete()` resumed the waiter on the
+  spot, so `PosixSocket::close()` -- and `cancelRead()`, `IocpSocket`'s,
+  `WindowsSocket::cancelRead()`, and `CompletionWait::close()` under an IOCP listener -- ran the
+  closed read's flow before returning. That flow could run to its end and destroy the object still executing `close()`'s
+  caller: contour crashed on it deterministically, in `NativeClient::detach` (`_writer.close();
+  _connection->close();`, where the first close resumed `runClient`, which destroyed the client).
+  Each now settles the operation at once, with the same value (`Cancelled`, or the data that won),
+  and hands the waiter to `EventLoop::resumeSoon`; an awaiter whose frame is destroyed while its
+  waiter is queued takes it back with `cancelPending`. The listeners already deferred through the
+  loop's closed-park list, and TLS's `SerialGate` since Task B11. `CloseResumesThroughLoop_test.cpp`
+  holds it over `BackendMatrix`, contour's crash included.
+  - *Migration*: a caller that asserted a parked flow's outcome right after `close()` or
+    `cancelRead()` runs one loop turn first (`runOnce`, `runUntilIdle`, a `blockOn`). Two
+    `cancelRead()` calls in a row no longer retire the read the first victim arms when it runs: the
+    second finds the slot empty (fastcached#1233's shape). `testing::InMemorySocket` and
+    `testing::ParkingReadableSocket`, which have no loop, still resume inline.
+  - *The socket may be gone when the flow runs*: the waiter resumes on a later turn, so an owner
+    that destroys the socket in the same turn as `close()` or `cancelRead()` -- `conn->close();
+    connections.erase(id);` -- has destroyed it before the flow sees its `Cancelled` result. A flow
+    must not touch a socket it does not own after such a result (`ISocket::close` says so). The
+    transports touch nothing of it: the frame-free ones settled a value that does not refer to the
+    socket, and `WindowsSocket`, whose read is a coroutine, now asks its lifetime token on the
+    normal path as well as the unwinding one, and unwinds with `OperationCancelled` where it used
+    to write into the freed socket (WFMO only; a heap-use-after-free under AddressSanitizer).
+  - *Teardown*: `~EventLoop` drains what destroying the spawned roots queued -- a borrowed flow
+    whose socket or listener a root owned -- so no flow is left suspended with an operation naming
+    a destroyed loop; and a chain nobody owns (a `DetachedTask`) that a socket queued is freed at
+    teardown as the loop's own, where it used to be resumed and run on.
+  - *For contour, missing from 0.1.0's per-consumer summary*: from 0.1.0 until this release,
+    core-cpp's sockets resumed a parked read INSIDE `close()`, so code that closes two sockets in a
+    row through an object the read flow owns -- contour's `NativeClient::detach` -- was exposed to
+    it. 0.1.0 is released, so the note is recorded here rather than there.
 - **On Windows, `listenUnix` and `connectUnix` belong to the loop's transport** (found through
   contour). `listenUnix` built the WFMO `WindowsListener` whatever the loop was, and `connectUnix` a
   `WindowsSocket`, while `listen` and `adoptListener` branch to IOCP -- so an IOCP loop, the Windows
@@ -70,6 +79,36 @@ workflow refuses one without a section here.
   asserted in CI) and hands out `IocpSocket`, and `connectUnix` adopts its socket onto the loop's
   transport. A WFMO loop is unchanged. The socket-path claim both listeners make moved into a shared
   `windows/UnixSocketPath.cpp`.
+- **A hung-up terminal no longer spins the TUI at 100% CPU**
+  ([core-cpp#49](https://github.com/contour-terminal/core-cpp/issues/49), found by the tuidu
+  migration) -- restores the input wait's promise that it waits: with `SIGHUP` ignored, a terminal
+  that hangs up leaves its input readable for ever, each read answering EIO or an end of file; the
+  runtime's input flow read nothing, re-parked, and was resumed at once, every turn, and the
+  process never exited. `TerminalInput::readReadyInput()` now tells the end from "nothing yet" -- a
+  read error other than `EAGAIN`, an end of file on a pipe or a file, an end of file on a terminal
+  that `poll(2)` reports hung up, a Windows console input handle that can no longer be read -- and
+  the runtime then stops watching the handle, delivers what was already read, and ends its input:
+  `nextEvent()`, `nextEventFor()` and `nextActivity()` throw `core::async::OperationCancelled`
+  without parking once `TuiRuntime::inputClosed()` is true. The same applies when the loop refuses
+  the input handle (`FdRegistrationFailed`), where the input flow used to return and leave a
+  `nextEvent()` waiting for ever. tuidu fixed the POSIX half in its own copy (tuidu `c20bcac`) and
+  it never reached endo, so core-cpp did not have it.
+  - *Migration*: **a consumer that treats a cancelled or empty read as "try again" must treat the
+    end of input as final**, or the spin moves from the runtime into its own loop: it asks
+    `inputClosed()` and exits. endo's `Prompt::read` is the example -- it catches
+    `OperationCancelled` and returns an empty line, and its REPL reads again for as long as the
+    prompt is ready.
+  - `TerminalInput::poll()` records the end in `inputClosed()` too (a hangup with nothing to read on
+    POSIX, a failed wait on Windows), but a loop driven by `poll()` itself must ask it; nothing ends
+    that loop for it.
+- **Piped output no longer carries synchronized-output sequences** -- restores `SyncGuard`'s
+  purpose, bracketing a frame for the TERMINAL that renders it. `TerminalOutput::syncGuard()`, and
+  a `SyncGuard` constructed directly, wrote `CSI ? 2026 h` / `l` whatever the destination was, so
+  every caller had to test `isTerminal()` and choose between a guard and none, and one that did not
+  wrote escape sequences into a pipe or a file. The guard now asks the output's `isTerminal()` once
+  and writes the sequences only when it answers true; it still flushes at both ends.
+  - *Migration*: a capture that wants the sequences answers `isTerminal()` true from its subclass,
+    as a terminal-emulating capture already should.
 - **`tools/migrate/rewrite.py` rewrites the code after a character literal holding a `"`** (found by
   the contour migration). Its scanner read `'"'` as opening a string, so in
   `os << '"' << crispy::escape(s) << '"'` the symbol was masked as data and left unrewritten. A
@@ -82,18 +121,6 @@ workflow refuses one without a section here.
   switched on. `tests/` is now added when it exists; a copy without it registers the module suites
   and says so. `docs/vendoring.md` says the same, and the `consumer-smoke (vendored)` CI leg builds
   and runs the exported copy's module suites.
-- **A parked flow is never resumed inside the call that settled it** (guarantee G2: every
-  resumption happens in the loop's drain step; `.agent/rules/async-and-net.md`, "a resource never
-  resumes its consumer inline"). `ResultAwaitable::complete()` resumed the waiter on the spot, so
-  `PosixSocket::close()` -- and `cancelRead()`, `IocpSocket`'s, `WindowsSocket::cancelRead()`, and
-  `CompletionWait::close()` under an IOCP listener -- ran the closed read's flow before returning.
-  That flow could run to its end and destroy the object still executing `close()`'s caller: contour
-  crashed on it deterministically, in `NativeClient::detach` (`_writer.close();
-  _connection->close();`, where the first close resumed `runClient`, which destroyed the client).
-  Each now hands the waiter to `EventLoop::resumeSoon`, and an awaiter whose frame is destroyed
-  while its waiter is queued takes it back with `cancelPending`. The listeners already deferred
-  through the loop's closed-park list, and TLS's `SerialGate` since Task B11.
-  `CloseResumesThroughLoop_test.cpp` holds it over `BackendMatrix`, contour's crash included.
 - **The migration table sends the completion types to `core::tui::completer::`**
   ([core-cpp#48](https://github.com/contour-terminal/core-cpp/issues/48), found by the endo
   migration). endo and tuidu declare `CompletionItem`, `CompletionProvider`, `Completer`,
@@ -103,25 +130,6 @@ workflow refuses one without a section here.
   now, and `check_renames_test.py` fails without them. The provenance record of
   `src/core/testing/SuppressWindowsDialogsAtStartup.cpp` no longer calls it a verbatim copy of
   endo's: endo's product variant, which suppressed only under ctest, was dropped.
-- **A hung-up terminal no longer spins the TUI at 100% CPU**
-  ([core-cpp#49](https://github.com/contour-terminal/core-cpp/issues/49), found by the tuidu
-  migration). With `SIGHUP` ignored, a terminal that hangs up leaves its input readable for ever,
-  each read answering EIO or an end of file; the runtime's input flow read nothing, re-parked, and
-  was resumed at once, every turn, and the process never exited. `TerminalInput::readReadyInput()`
-  now tells the end from "nothing yet" -- a read error other than `EAGAIN`, an end of file on a pipe
-  or a file, an end of file on a terminal that `poll(2)` reports hung up, a Windows console input
-  handle that can no longer be read -- and the runtime then stops watching the handle, delivers what
-  was already read, and ends its input: `nextEvent()`, `nextEventFor()` and `nextActivity()` throw
-  `core::async::OperationCancelled` without parking, and `TuiRuntime::inputClosed()` says why. The
-  same applies when the loop refuses the input handle (`FdRegistrationFailed`), where the input
-  flow used to return and leave a `nextEvent()` waiting for ever. `TerminalInput::poll()` records a
-  hangup with nothing to read on POSIX and a failed wait on Windows the same way. tuidu fixed the
-  POSIX half in its own copy (tuidu `c20bcac`) and it never reached endo, so core-cpp did not have
-  it.
-- **Piped output no longer carries synchronized-output sequences.** `TerminalOutput::syncGuard()`
-  wrote `CSI ? 2026 h` / `l` whatever the destination was, so every caller had to test
-  `isTerminal()` and choose between a guard and none, and one that did not wrote escape sequences
-  into a pipe or a file. See *Changed*.
 - **A consumer of `core::tui_output` alone no longer fetches libunicode** (found by Lightweight's
   `dbtool`). The leaf was gated on `CORE_CPP_WITH_TUI`, the same option as the libunicode row, so
   the only configuration that built it also fetched libunicode and, through libunicode's own

@@ -19,7 +19,8 @@ option(CORE_CPP_WITH_TUI "Build core::tui, and core::tui_output with it" ON)
 # (Lightweight's dbtool) turns CORE_CPP_WITH_TUI off and this on, and gets neither libunicode nor the
 # event loop. It defaults to CORE_CPP_WITH_TUI rather than to ON so that a consumer which already
 # turns the TUI off -- contour, whose vendored copy leaves src/core/tui out -- keeps building
-# nothing there.
+# nothing there. The default is read once, when the cache entry is made: turning CORE_CPP_WITH_TUI
+# off in an existing tree leaves this on, which costs a leaf with no dependency and nothing else.
 option(CORE_CPP_WITH_TUI_OUTPUT "Build core::tui_output, the styled-output leaf that links core::base alone"
        ${CORE_CPP_WITH_TUI})
 cmake_dependent_option(CORE_CPP_WITH_IMAGES "Decode images in core::tui (stb_image)" ON

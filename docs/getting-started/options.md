@@ -14,7 +14,7 @@ core-cpp never writes to the parent's cache.
 | `CORE_CPP_BUILD_EXAMPLES` | ON when top-level | Build the examples |
 | `CORE_CPP_FETCH_DEPS` | ON | Fetch a dependency with CPM when neither the parent project nor `find_package` provides it. OFF stops the configure instead, naming the option that needed it |
 | `CORE_CPP_WITH_TUI` | ON | Build `core::tui`, which needs libunicode. Forces `CORE_CPP_WITH_TUI_OUTPUT` on |
-| `CORE_CPP_WITH_TUI_OUTPUT` | `CORE_CPP_WITH_TUI` | Build `core::tui_output`, the styled-output leaf that links `core::base` alone. On with `CORE_CPP_WITH_TUI` off builds the leaf by itself, and fetches no libunicode |
+| `CORE_CPP_WITH_TUI_OUTPUT` | `CORE_CPP_WITH_TUI`, on a first configure | Build `core::tui_output`, the styled-output leaf that links `core::base` alone. On with `CORE_CPP_WITH_TUI` off builds the leaf by itself, and fetches no libunicode. The default is taken once, when the cache entry is created: turning `CORE_CPP_WITH_TUI` off in an existing build tree leaves this on |
 | `CORE_CPP_WITH_IMAGES` | ON, when `CORE_CPP_WITH_TUI` is | Decode images in `core::tui` (stb_image) |
 | `CORE_CPP_WITH_TLS` | OFF | Build `core::net_tls` (OpenSSL, from the system) |
 | `CORE_CPP_WITH_TRACY` | OFF | Instrument core-cpp for the Tracy profiler |
