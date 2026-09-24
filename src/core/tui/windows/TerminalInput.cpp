@@ -107,8 +107,13 @@ auto TerminalInput::poll(int timeoutMs) -> std::vector<InputEvent>
     if (waitResult == WAIT_TIMEOUT)
         return parserTimeout();
 
+    // The wait refused its handles: the console input handle is no longer valid (the console was
+    // closed or this process detached from it). Every later wait would fail the same way at once.
     if (waitResult == WAIT_FAILED)
+    {
+        _inputClosed = true;
         return {};
+    }
 
     auto events = std::vector<InputEvent> {};
 
@@ -153,15 +158,27 @@ auto TerminalInput::readReadyInput() -> std::vector<InputEvent>
 {
     auto events = std::vector<InputEvent> {};
 
-    // Process console input records
+    // Process console input records. A console handle that can no longer be asked is the POSIX
+    // hangup's equivalent (core-cpp#49): the console was closed, or this process detached from it
+    // with FreeConsole(), and the handle it held is invalid. The wait on it fails at once rather
+    // than blocking, and the backend reports that failure as readiness, so a caller that did not
+    // stop here would be woken for it every turn.
     DWORD numEvents = 0;
-    if (!GetNumberOfConsoleInputEvents(_native->stdinHandle, &numEvents) || numEvents == 0)
+    if (!GetNumberOfConsoleInputEvents(_native->stdinHandle, &numEvents))
+    {
+        _inputClosed = true;
+        return events;
+    }
+    if (numEvents == 0)
         return events;
 
     auto inputRecords = std::vector<INPUT_RECORD>(numEvents);
     DWORD eventsRead = 0;
     if (!ReadConsoleInput(_native->stdinHandle, inputRecords.data(), numEvents, &eventsRead))
+    {
+        _inputClosed = true;
         return events;
+    }
 
     // Accumulate character data from KEY_EVENT records, then feed to VT parser.
     // With ENABLE_VIRTUAL_TERMINAL_INPUT, Windows Terminal sends CSI escape sequences

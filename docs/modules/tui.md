@@ -79,8 +79,19 @@ and on stb when `CORE_CPP_WITH_IMAGES` is on. Native only: there is no terminal 
   and decodes what is ready behind them; `TerminalInputSource` is that over a `Terminal`, and
   `TuiRuntime(loop, terminal)` makes one for you. `runModal()` drives a modal to its result; for a
   deadline use `core::net::withTimeout(&runtime.loop(), …)`.
+- **The end of the input.** When the input handle reaches its end -- a terminal that hung up (EIO,
+  or an end of file that `poll(2)` confirms as a hangup), a pipe whose writer closed, a Windows
+  console that was closed or detached, or a handle the loop refuses to watch -- the source's
+  `inputClosed()` answers true, the runtime stops watching the handle, and `runtime.inputClosed()`
+  answers true from then on. The input waits deliver what was read before the end (and a pending
+  agent message, for `nextActivity()`), and then throw `core::async::OperationCancelled` without
+  parking. An application that catches that cancellation asks `inputClosed()` to tell "the
+  terminal is gone, exit" from an interrupt. Before 0.2.1 the runtime re-parked on a handle at its
+  end, which answers at once and yields nothing, so with `SIGHUP` ignored a hung-up terminal spun
+  the process at 100% CPU ([core-cpp#49](https://github.com/contour-terminal/core-cpp/issues/49)).
 - **Test doubles.** `MockTerminalOutput` records what a renderer did semantically instead of
-  emitting VT, `runtime::testing::ScriptedInputSource` scripts the decoding (readiness comes from
+  emitting VT, `runtime::testing::ScriptedInputSource` scripts the decoding and, with
+  `closeInput()`, the end of the input (readiness comes from
   `core::net::testing::ScriptedBackend` or from a real `core::platform::SystemPipe`), and
   `TestHelpers.hpp` reads a rendered `Buffer` back as text.
 

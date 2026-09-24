@@ -16,9 +16,18 @@ workflow refuses one without a section here.
   when it answers true; on a pipe, a file or a capture that is not a terminal the guard still
   flushes at both ends and writes no sequence. A caller that needs the sequences on a capture
   answers `isTerminal()` true from its subclass, as a terminal-emulating capture already should.
+- **`TuiRuntime`'s input waits end once the terminal's input has.** `nextEvent()`,
+  `nextEventFor()` and `nextActivity()` throw `core::async::OperationCancelled` without parking
+  after `TuiRuntime::inputClosed()` turns true, where they used to wait (and the runtime spun,
+  see *Fixed*). An application that catches the cancellation and waits again in a loop must ask
+  `inputClosed()` and exit, or that loop never waits.
 
 ### Added
 
+- **The end of a terminal's input is reported.** `TerminalInput::inputClosed()`, the virtual
+  `runtime::InputSource::inputClosed()` (false by default, so an existing source still compiles),
+  `TerminalInputSource`'s forward of it, `TuiRuntime::inputClosed()`, and
+  `runtime::testing::ScriptedInputSource::closeInput()` to script it. See *Fixed*.
 - **`CORE_CPP_WITH_TUI_OUTPUT`**, an option of `core::tui_output`'s own. With `CORE_CPP_WITH_TUI`
   off and this on, core-cpp builds the styled-output leaf by itself and neither finds nor fetches
   libunicode. It defaults to `CORE_CPP_WITH_TUI`, is forced on by it (`core::tui` links the leaf),
@@ -29,6 +38,21 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- **A hung-up terminal no longer spins the TUI at 100% CPU**
+  ([core-cpp#49](https://github.com/contour-terminal/core-cpp/issues/49), found by the tuidu
+  migration). With `SIGHUP` ignored, a terminal that hangs up leaves its input readable for ever,
+  each read answering EIO or an end of file; the runtime's input flow read nothing, re-parked, and
+  was resumed at once, every turn, and the process never exited. `TerminalInput::readReadyInput()`
+  now tells the end from "nothing yet" -- a read error other than `EAGAIN`, an end of file on a pipe
+  or a file, an end of file on a terminal that `poll(2)` reports hung up, a Windows console input
+  handle that can no longer be read -- and the runtime then stops watching the handle, delivers what
+  was already read, and ends its input: `nextEvent()`, `nextEventFor()` and `nextActivity()` throw
+  `core::async::OperationCancelled` without parking, and `TuiRuntime::inputClosed()` says why. The
+  same applies when the loop refuses the input handle (`FdRegistrationFailed`), where the input
+  flow used to return and leave a `nextEvent()` waiting for ever. `TerminalInput::poll()` records a
+  hangup with nothing to read on POSIX and a failed wait on Windows the same way. tuidu fixed the
+  POSIX half in its own copy (tuidu `c20bcac`) and it never reached endo, so core-cpp did not have
+  it.
 - **Piped output no longer carries synchronized-output sequences.** `TerminalOutput::syncGuard()`
   wrote `CSI ? 2026 h` / `l` whatever the destination was, so every caller had to test
   `isTerminal()` and choose between a guard and none, and one that did not wrote escape sequences

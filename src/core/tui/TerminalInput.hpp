@@ -87,8 +87,22 @@ class TerminalInput
     [[nodiscard]] auto resizeNativeHandle() const noexcept -> core::platform::NativeHandle;
 
     /// @brief Reads and parses input currently ready on the input handle (non-blocking).
+    ///
+    /// A read that finds the handle at its END rather than empty sets @c inputClosed(): on POSIX
+    /// a read error other than "nothing yet" (EIO from a terminal that hung up), or an end of file
+    /// on a pipe or a file, or on a terminal that @c poll(2) reports hung up; on Windows a console
+    /// input handle that can no longer be read (the console was closed or detached).
     /// @return Parsed events (may be empty if no decodable input was ready).
     [[nodiscard]] auto readReadyInput() -> std::vector<InputEvent>;
+
+    /// @brief Whether the input handle has reached its end, as a read or a wait has found it.
+    ///
+    /// Sticky: nothing more will be read from a handle at its end, and it stays readable for ever,
+    /// so a caller that waits for readiness again after this answers true is waiting on a handle
+    /// that answers at once and yields nothing -- the 100% CPU spin of
+    /// [core-cpp#49](https://github.com/contour-terminal/core-cpp/issues/49).
+    /// @return true once the input handle has hung up, closed or been detached.
+    [[nodiscard]] auto inputClosed() const noexcept -> bool { return _inputClosed; }
 
     /// @brief Drains a pending resize notification and queries the new size.
     /// @return The resize event if one was pending, else std::nullopt.
@@ -142,6 +156,7 @@ class TerminalInput
     VtParser _parser;
     bool _rawMode = false;
     bool _suspended = false;         ///< True when suspended for external command execution.
+    bool _inputClosed = false;       ///< True once the input handle was found at its end.
     bool _anyMotionTracking = false; ///< True when any-motion tracking (mode 1003) should be enabled.
 
     std::unique_ptr<NativeState> _native;      ///< Never null; the platform's own state.

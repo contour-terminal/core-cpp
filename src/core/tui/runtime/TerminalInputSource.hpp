@@ -59,6 +59,8 @@ class TerminalInputSource: public InputSource
 
     [[nodiscard]] std::vector<InputEvent> readReady() override { return _terminal.input().readReadyInput(); }
 
+    [[nodiscard]] bool inputClosed() const noexcept override { return _terminal.input().inputClosed(); }
+
     [[nodiscard]] std::optional<InputEvent> readResize() override
     {
         auto const resize = _terminal.input().drainResize();

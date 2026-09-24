@@ -22,6 +22,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <ranges>
@@ -744,6 +745,209 @@ TEST_CASE("A waiter released after a sibling took the input slot leaves the sibl
 // ---------------------------------------------------------------------------------------------
 // Handle waits, which are the loop's too.
 // ---------------------------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------------------------
+// core-cpp#49: an input handle at its end ends the input stream.
+//
+// These cases drive the loop a bounded number of turns rather than through blockOn(): the defect
+// is a flow that never finishes, and blockOn() would run the script out (a throw out of a parked
+// flow) where a turn count reports it.
+// ---------------------------------------------------------------------------------------------
+
+namespace
+{
+
+constexpr auto EndedSentinel = -1;
+
+/// More hangups than @c TurnBound turns can consume, so a runtime that re-parks after reading the
+/// end reads once per turn for the whole bound instead of running the script out.
+constexpr auto HangupScript = std::uint64_t { 12 };
+
+/// How many turns a runtime gets to report the end. A correct one needs three: park, dispatch the
+/// hangup, and resume the waiter it woke.
+constexpr auto TurnBound = std::size_t { 8 };
+
+/// Scripts a hangup on each of the input handle's first @c HangupScript registrations. A handle at
+/// its end is reported on every wait, whoever is parked on it, and the runtime re-registers on
+/// every re-park, so registration N is HandlerId{N}.
+void scriptHangups(ScriptedBackend& backend)
+{
+    for (auto const id: std::views::iota(std::uint64_t { 1 }, HangupScript + 1))
+        backend.pushFailure(HandlerId { id });
+}
+
+/// What a spawned flow produced, and whether it has finished.
+struct Outcome
+{
+    bool done = false;
+    int value = 0;
+};
+
+/// Runs @p work to completion and records its result in @p outcome.
+Task<void> record(Task<int> work, Outcome* outcome)
+{
+    outcome->value = co_await std::move(work);
+    outcome->done = true;
+}
+
+/// Runs turns until @p outcome is done or @c TurnBound turns have run.
+/// @return How many turns ran.
+std::size_t turnUntilDone(EventLoop& loop, Outcome const& outcome)
+{
+    auto turns = std::size_t { 0 };
+    while (!outcome.done && turns < TurnBound)
+    {
+        std::ignore = loop.runOnce(0ms);
+        ++turns;
+    }
+    return turns;
+}
+
+/// Awaits nextEventFor; returns the key's codepoint, 0 for "nothing", or @c EndedSentinel.
+Task<int> awaitEventForOrCancel(TuiRuntime* runtime, int timeoutMs)
+{
+    try
+    {
+        auto const event = co_await runtime->nextEventFor(std::chrono::milliseconds { timeoutMs });
+        co_return event ? static_cast<int>(std::get<KeyEvent>(*event).codepoint) : 0;
+    }
+    catch (OperationCancelled const&)
+    {
+        co_return EndedSentinel;
+    }
+}
+
+/// Awaits nextActivity; returns the activity kind's value, or @c EndedSentinel.
+Task<int> awaitActivityOrCancel(TuiRuntime* runtime, int timeoutMs)
+{
+    try
+    {
+        auto const activity = co_await runtime->nextActivity(std::chrono::milliseconds { timeoutMs });
+        co_return static_cast<int>(activity.kind);
+    }
+    catch (OperationCancelled const&)
+    {
+        co_return EndedSentinel;
+    }
+}
+
+} // namespace
+
+TEST_CASE("core-cpp#49: an input handle at its end cancels nextEvent instead of spinning",
+          "[TuiRuntime][hangup]")
+{
+    auto first = Outcome {};
+    auto second = Outcome {};
+    auto clock = ManualClock {};
+    auto backend = ScriptedBackend {};
+    auto loop = EventLoop { backend, clock };
+    auto source = ScriptedInputSource { nullptr, nullptr, HandleFor::Input };
+    source.closeInput();
+    auto runtime = TuiRuntime { loop, source };
+    scriptHangups(backend);
+
+    loop.spawn(record(awaitKeyOrCancel(&runtime, EndedSentinel), &first));
+    auto const turns = turnUntilDone(loop, first);
+    INFO("turns: " << turns << ", reads: " << source.readCount());
+    CHECK(first.done);
+    CHECK(first.value == EndedSentinel);
+    CHECK(runtime.inputClosed());
+    // One read found the end, and the handle was not watched again. A runtime that re-parked read
+    // once per turn: the spin, bounded here by the turn count instead of by nothing.
+    CHECK(source.readCount() == 1);
+
+    // A wait after the end does not park: nothing is left that could wake it. (Only once the first
+    // wait has ended: the runtime holds one input waiter, and asserts it.)
+    REQUIRE(first.done);
+    loop.spawn(record(awaitKeyOrCancel(&runtime, EndedSentinel), &second));
+    std::ignore = loop.runOnce(0ms);
+    CHECK(second.done);
+    CHECK(second.value == EndedSentinel);
+    CHECK(source.readCount() == 1);
+}
+
+TEST_CASE("core-cpp#49: input read before the end is delivered before the stream ends",
+          "[TuiRuntime][hangup]")
+{
+    auto key = Outcome {};
+    auto after = Outcome {};
+    auto clock = ManualClock {};
+    auto backend = ScriptedBackend {};
+    auto loop = EventLoop { backend, clock };
+    auto source = ScriptedInputSource { nullptr, nullptr, HandleFor::Input };
+    source.pushEvents({ InputEvent { keyOf(U'k') } });
+    source.closeInput();
+    auto runtime = TuiRuntime { loop, source };
+    backend.pushReadable(HandlerId { 1 }); // the key
+    scriptHangups(backend);                // registration 1 is gone by then; 2 is the re-park
+
+    loop.spawn(record(awaitKeyOrCancel(&runtime, EndedSentinel), &key));
+    std::ignore = turnUntilDone(loop, key);
+    loop.spawn(record(awaitKeyOrCancel(&runtime, EndedSentinel), &after));
+    auto const turns = turnUntilDone(loop, after);
+    INFO("turns: " << turns << ", reads: " << source.readCount());
+    CHECK(key.value == 'k');
+    CHECK(after.done);
+    CHECK(after.value == EndedSentinel);
+    CHECK(runtime.inputClosed());
+    CHECK(source.readCount() == 2);
+}
+
+TEST_CASE("core-cpp#49: the timed waits end with the input stream too", "[TuiRuntime][hangup]")
+{
+    auto outcome = Outcome {};
+    auto clock = ManualClock {};
+    auto backend = ScriptedBackend {};
+    auto loop = EventLoop { backend, clock };
+    auto source = ScriptedInputSource { nullptr, nullptr, HandleFor::Input };
+    source.closeInput();
+    auto runtime = TuiRuntime { loop, source };
+    scriptHangups(backend);
+
+    // A deadline the manual clock, which nothing advances, cannot reach: what resolves these waits
+    // has to be the end of the input.
+    SECTION("nextEventFor")
+    {
+        loop.spawn(record(awaitEventForOrCancel(&runtime, 60'000), &outcome));
+    }
+    SECTION("nextActivity")
+    {
+        loop.spawn(record(awaitActivityOrCancel(&runtime, 60'000), &outcome));
+    }
+    auto const turns = turnUntilDone(loop, outcome);
+    INFO("turns: " << turns << ", reads: " << source.readCount());
+    CHECK(outcome.done);
+    CHECK(outcome.value == EndedSentinel);
+    CHECK(runtime.inputClosed());
+    CHECK(source.readCount() == 1);
+}
+
+TEST_CASE("core-cpp#49: nextActivity reports a pending agent message before the end",
+          "[TuiRuntime][hangup][agent]")
+{
+    auto ended = Outcome {};
+    auto agent = Outcome {};
+    auto after = Outcome {};
+    auto clock = ManualClock {};
+    auto backend = ScriptedBackend {};
+    auto loop = EventLoop { backend, clock };
+    auto source = ScriptedInputSource { nullptr, nullptr, HandleFor::Input };
+    source.closeInput();
+    auto runtime = TuiRuntime { loop, source };
+    scriptHangups(backend);
+
+    loop.spawn(record(awaitKeyOrCancel(&runtime, EndedSentinel), &ended));
+    std::ignore = turnUntilDone(loop, ended);
+    REQUIRE(runtime.inputClosed());
+
+    runtime.notifyAgentReady();
+    loop.spawn(record(awaitActivityOrCancel(&runtime, 60'000), &agent));
+    std::ignore = turnUntilDone(loop, agent);
+    loop.spawn(record(awaitActivityOrCancel(&runtime, 60'000), &after));
+    std::ignore = turnUntilDone(loop, after);
+    CHECK(agent.value == static_cast<int>(ActivityKind::AgentReady));
+    CHECK(after.value == EndedSentinel);
+}
 
 TEST_CASE("waitReadable resolves over a real SystemPipe", "[TuiRuntime][fd]")
 {

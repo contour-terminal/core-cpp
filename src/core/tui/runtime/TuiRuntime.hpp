@@ -224,23 +224,41 @@ class TuiRuntime
     /// @{
 
     /// @return An awaitable yielding the next input event. It throws
-    ///         @c core::async::OperationCancelled if the flow is cancelled while parked, and
-    ///         resumes for nothing else — a focus change or an elapsed deadline cannot reach a
-    ///         waiter that has no way to report them.
+    ///         @c core::async::OperationCancelled if the flow is cancelled while parked, or once
+    ///         the input has ended (@c inputClosed) and nothing is buffered, and resumes for
+    ///         nothing else — a focus change or an elapsed deadline cannot reach a waiter that has
+    ///         no way to report them.
     [[nodiscard]] NextInputEventAwaiter nextEvent() noexcept;
 
     /// @param timeout How long to wait for an event before giving up.
     /// @return An awaitable yielding the next input event, or std::nullopt if @p timeout elapses
-    ///         or non-input activity occurs (so the caller can run idle ticks).
+    ///         or non-input activity occurs (so the caller can run idle ticks). Once the input has
+    ///         ended (@c inputClosed) and nothing is buffered, it throws
+    ///         @c core::async::OperationCancelled instead of waiting.
     [[nodiscard]] NextEventForAwaiter nextEventFor(std::chrono::milliseconds timeout) noexcept;
 
     /// Waits for input, an agent message, or a timeout — whichever happens first.
     /// @param timeout How long to wait before reporting ActivityKind::Timeout.
-    /// @return An awaitable yielding the first activity observed.
+    /// @return An awaitable yielding the first activity observed. Once the input has ended
+    ///         (@c inputClosed), buffered events and a pending agent message are still reported,
+    ///         and then it throws @c core::async::OperationCancelled instead of waiting.
     [[nodiscard]] NextActivityAwaiter nextActivity(std::chrono::milliseconds timeout) noexcept;
 
     /// @return An awaitable that resumes when an agent message is pending.
     [[nodiscard]] NextAgentReadyAwaiter nextAgentReady() noexcept;
+
+    /// Whether the terminal's input has ended: its handle hung up, closed, or could no longer be
+    /// watched ([core-cpp#49](https://github.com/contour-terminal/core-cpp/issues/49)).
+    ///
+    /// Once it has, the runtime has stopped watching the handle, and every input wait --
+    /// @c nextEvent, @c nextEventFor and @c nextActivity -- still delivers what was read before
+    /// the end and then throws @c core::async::OperationCancelled, without parking, for as long as
+    /// the runtime lives; @c nextActivity reports a pending agent message first. This is what an
+    /// application asks after such a cancellation to tell "the terminal is gone, exit" from an
+    /// interrupt or a cancelled flow. A loop that catches the cancellation and waits again without
+    /// asking is a loop that never waits.
+    /// @return true once the input stream has ended.
+    [[nodiscard]] bool inputClosed() const noexcept { return _inputClosed; }
 
     /// Records that the agent worker has a message, and resumes whoever is waiting for one.
     ///
@@ -362,6 +380,10 @@ class TuiRuntime
     /// @param events The decoded events (consumed).
     void routeDecoded(std::vector<InputEvent> events);
 
+    /// Records that the input has ended and resumes the input waiter, if one is parked, so that it
+    /// takes what is buffered or ends in a cancellation.
+    void endInput();
+
     /// Queues @p waiter for resumption on the loop, and remembers that it is out there.
     ///
     /// **The remembering is not bookkeeping for its own sake.** Both of the things that happen to
@@ -445,6 +467,10 @@ class TuiRuntime
     /// is what stops that resumption from re-entering the body of a runtime that is going away.
     bool _stopping = false;
 
+    /// Set once the input source reported its end, or the loop refused its handle. From then on
+    /// the input flow has returned, and the input awaiters decline to park.
+    bool _inputClosed = false;
+
     /// Whether this runtime is currently running code it does not own -- the interrupt handler, or
     /// an @c InputSource member. Read only by the destructor's precondition; see @c CalloutScope.
     bool _inCallout = false;
@@ -524,7 +550,7 @@ class NextInputEventAwaiter
             return false;
         if constexpr (requires { awaiting.promise().stopToken(); })
             _token = awaiting.promise().stopToken();
-        if (_token.stop_requested() || _runtime.isStopping())
+        if (_token.stop_requested() || _runtime.isStopping() || _runtime.inputClosed())
             return false;
         _waiter = awaiting;
         _runtime.parkOnInput(awaiting, InputWake::EventOnly, std::nullopt);
@@ -553,7 +579,8 @@ class NextInputEventAwaiter
     }
 
     /// @return The next buffered input event.
-    /// @throws core::async::OperationCancelled if the flow was cancelled while parked.
+    /// @throws core::async::OperationCancelled if the flow was cancelled while parked, or the
+    ///         input has ended (@c TuiRuntime::inputClosed) with nothing buffered.
     [[nodiscard]] InputEvent await_resume()
     {
         _cancelReg.reset();
@@ -597,7 +624,7 @@ class NextEventForAwaiter
             return false;
         if constexpr (requires { awaiting.promise().stopToken(); })
             _token = awaiting.promise().stopToken();
-        if (_token.stop_requested() || _runtime.isStopping())
+        if (_token.stop_requested() || _runtime.isStopping() || _runtime.inputClosed())
             return false;
         _waiter = awaiting;
         _runtime.parkOnInput(awaiting, InputWake::OrNothing, _deadline);
@@ -607,7 +634,8 @@ class NextEventForAwaiter
     }
 
     /// @return The next buffered input event, or std::nullopt where the wait produced none.
-    /// @throws core::async::OperationCancelled if the flow was cancelled while parked.
+    /// @throws core::async::OperationCancelled if the flow was cancelled while parked, or the
+    ///         input has ended (@c TuiRuntime::inputClosed) with nothing buffered.
     [[nodiscard]] std::optional<InputEvent> await_resume()
     {
         _cancelReg.reset();
@@ -616,6 +644,8 @@ class NextEventForAwaiter
             throw async::OperationCancelled {};
         if (_runtime.hasBufferedInput())
             return _runtime.popBufferedInput();
+        if (_runtime.inputClosed())
+            throw async::OperationCancelled {};
         return std::nullopt;
     }
 
@@ -654,7 +684,7 @@ class NextActivityAwaiter
             return false;
         if constexpr (requires { awaiting.promise().stopToken(); })
             _token = awaiting.promise().stopToken();
-        if (_token.stop_requested() || _runtime.isStopping())
+        if (_token.stop_requested() || _runtime.isStopping() || _runtime.inputClosed())
             return false;
         _waiter = awaiting;
         _runtime.parkOnInput(awaiting, InputWake::OrAgent, _deadline);
@@ -664,7 +694,8 @@ class NextActivityAwaiter
     }
 
     /// @return The first activity observed (event, agent-ready, or timeout).
-    /// @throws core::async::OperationCancelled if the flow was cancelled while parked.
+    /// @throws core::async::OperationCancelled if the flow was cancelled while parked, or the
+    ///         input has ended (@c TuiRuntime::inputClosed) with nothing buffered.
     [[nodiscard]] Activity await_resume()
     {
         _cancelReg.reset();
@@ -678,6 +709,8 @@ class NextActivityAwaiter
             _runtime.consumeAgentPending();
             return Activity { .kind = ActivityKind::AgentReady, .event = std::nullopt };
         }
+        if (_runtime.inputClosed())
+            throw async::OperationCancelled {};
         return Activity { .kind = ActivityKind::Timeout, .event = std::nullopt };
     }
 

@@ -173,13 +173,28 @@ async::Task<void> TuiRuntime::inputFlow()
         {
             // The backend will not watch this handle -- it is closed, or the kernel refused the
             // filter. Returning is the only option that does not spin: re-parking would ask the
-            // same refused question on every turn, forever.
+            // same refused question on every turn, forever. And it is the end of the input as
+            // much as a hangup is: without saying so, a flow parked on nextEvent() would wait for
+            // input that can no longer arrive.
+            endInput();
             co_return;
         }
         if (_stopping)
             co_return;
 
         auto decoded = callOut([this] { return _input.readReady(); });
+        if (callOut([this] { return _input.inputClosed(); }))
+        {
+            // The handle is at its end: a terminal that hung up, a pipe whose writer closed, a
+            // console that went away. It stays readable for ever and yields nothing, so parking on
+            // it again resumes at once, every turn -- 100% CPU, and with SIGHUP ignored nothing
+            // else ends the process (core-cpp#49). Deliver what this read decoded and what a
+            // partial sequence completes to, since no continuation is coming, then end.
+            routeDecoded(std::move(decoded));
+            routeDecoded(callOut([this] { return _input.flushPartial(); }));
+            endInput();
+            co_return;
+        }
         if (decoded.empty())
             // Bytes arrived and decoded to nothing: either a partial escape sequence, or a console
             // record that is not input. Arm the flush so a lone ESC is eventually delivered as
@@ -189,6 +204,16 @@ async::Task<void> TuiRuntime::inputFlow()
             retireTimer(_escapeFlush);
         routeDecoded(std::move(decoded));
     }
+}
+
+void TuiRuntime::endInput()
+{
+    _inputClosed = true;
+    retireTimer(_escapeFlush);
+    // Whatever the waiter may be resumed for, the end is news to it: an event it can take, or the
+    // cancellation its await_resume now throws. Left parked, a nextEvent() would never resume.
+    if (_inputWaiter)
+        handToLoop(takeInputWaiter());
 }
 
 async::Task<void> TuiRuntime::resizeFlow()

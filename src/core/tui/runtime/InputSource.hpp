@@ -67,6 +67,20 @@ class InputSource
     ///         escape sequence, or a console record that is not input).
     [[nodiscard]] virtual std::vector<InputEvent> readReady() = 0;
 
+    /// Whether the input has ended for good: the last @c readReady found the handle at its end
+    /// (a terminal that hung up, a pipe whose writer closed, a console that went away) rather than
+    /// merely empty.
+    ///
+    /// The runtime asks after every @c readReady and, on true, stops watching the handle and ends
+    /// its input stream. A handle at its end stays readable for ever, so a runtime that could not
+    /// tell "ended" from "nothing yet" re-parked on it every turn and spun at 100% CPU
+    /// ([core-cpp#49](https://github.com/contour-terminal/core-cpp/issues/49)).
+    ///
+    /// Not pure, and false by default, so a source written before 0.2.1 still compiles -- and
+    /// still spins on a hung-up handle until it answers.
+    /// @return true once the input handle has reached its end.
+    [[nodiscard]] virtual bool inputClosed() const noexcept { return false; }
+
     /// Drains a pending resize notification and reports the new size. Never blocks.
     /// @return The resize event, or nothing where none was pending.
     [[nodiscard]] virtual std::optional<InputEvent> readResize() = 0;

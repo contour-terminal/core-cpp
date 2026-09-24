@@ -21,6 +21,7 @@
 #include <core/tui/InputEvent.hpp>
 #include <core/tui/runtime/InputSource.hpp>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -120,6 +121,20 @@ class ScriptedInputSource: public InputSource
         _flushes.push_back(std::move(events));
     }
 
+    /// Ends the input: the first read that finds no scripted read left finds the handle at its end
+    /// instead, as a terminal that hung up does, and @c inputClosed answers true from then on.
+    /// Reads scripted before this are still delivered first, in order. With a pipe, it also makes
+    /// the input handle readable, so the runtime reads; over a scripted backend, script the
+    /// readiness (or the failure a hangup is) yourself.
+    void closeInput()
+    {
+        {
+            auto const lock = std::scoped_lock { _mutex };
+            _closing = true;
+        }
+        signal(_input);
+    }
+
     /// @}
 
     /// @name Observation
@@ -165,10 +180,19 @@ class ScriptedInputSource: public InputSource
         auto const lock = std::scoped_lock { _mutex };
         ++_readCount;
         if (_reads.empty())
+        {
+            if (_closing)
+                _closed.store(true, std::memory_order_relaxed);
             return {};
+        }
         auto events = std::move(_reads.front());
         _reads.pop_front();
         return events;
+    }
+
+    [[nodiscard]] bool inputClosed() const noexcept override
+    {
+        return _closed.load(std::memory_order_relaxed);
     }
 
     [[nodiscard]] std::optional<InputEvent> readResize() override
@@ -255,6 +279,9 @@ class ScriptedInputSource: public InputSource
 
     std::size_t _readCount = 0;  ///< How many reads happened.
     std::size_t _flushCount = 0; ///< How many flushes happened.
+
+    bool _closing = false;             ///< @c closeInput was called; the reads left are the last.
+    std::atomic<bool> _closed = false; ///< A read found the end; atomic so the query can be noexcept.
 };
 
 } // namespace core::tui::runtime::testing

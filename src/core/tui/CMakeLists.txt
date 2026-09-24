@@ -202,7 +202,7 @@ core_cpp_add_test(tui NAME tui_output
 
 # One binary for the module. windows/TerminalInput_test.cpp is Windows-only: it drives the console
 # API directly, and serialises its cases on a named mutex because they share the one console the
-# test process has.
+# test process has. posix/TerminalHangup_test.cpp is POSIX-only: it hangs up a pseudo-terminal.
 core_cpp_add_test(tui
     SOURCES
         ${_coreCppTuiImageTests}
@@ -234,5 +234,7 @@ core_cpp_add_test(tui
         VtParser_test.cpp
         runtime/Modal_test.cpp
         runtime/TuiRuntime_test.cpp
+    SOURCES_POSIX
+        posix/TerminalHangup_test.cpp
     SOURCES_WINDOWS
         windows/TerminalInput_test.cpp)

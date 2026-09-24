@@ -351,3 +351,42 @@ TEST_CASE("On Windows a DECRQM that nothing answers is NoReply at the deadline, 
 
     CHECK(answer == DecModeStatus::NoReply);
 }
+
+TEST_CASE("On Windows a console input handle that went away ends the input", "[TerminalInput][hangup]")
+{
+    // core-cpp#49's Windows arm. A console that is closed, or that the process detaches from with
+    // FreeConsole(), leaves the input holding a handle that is no longer valid, and every wait on it
+    // fails at once. The equivalent state is reached here without taking the console away from the
+    // test runner: the input is initialized on a duplicate of the console input handle, and the
+    // duplicate is then closed underneath it.
+    auto const console = ConsoleStandardHandles {};
+    REQUIRE(console.locked());
+    if (!console.available())
+        SKIP("this process is attached to no console, so CONIN$ cannot be opened");
+
+    auto savedMode = DWORD { 0 };
+    REQUIRE(GetConsoleMode(console.input(), &savedMode) != 0);
+    auto doomed = HANDLE { nullptr };
+    REQUIRE(DuplicateHandle(GetCurrentProcess(),
+                            console.input(),
+                            GetCurrentProcess(),
+                            &doomed,
+                            0,
+                            FALSE,
+                            DUPLICATE_SAME_ACCESS)
+            != 0);
+    SetStdHandle(STD_INPUT_HANDLE, doomed);
+
+    auto input = TerminalInput {};
+    auto const initialized = input.initialize().has_value();
+    CloseHandle(doomed); // the handle the input holds is gone
+    auto const readBeforeEnd = input.inputClosed();
+    std::ignore = input.readReadyInput();
+    auto const readAfterEnd = input.inputClosed();
+    input.shutdown();                           // cannot restore a mode through a closed handle ...
+    SetConsoleMode(console.input(), savedMode); // ... so the console gets its own back here
+
+    REQUIRE(initialized);
+    CHECK_FALSE(readBeforeEnd);
+    CHECK(readAfterEnd);
+}

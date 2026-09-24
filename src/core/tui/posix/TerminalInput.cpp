@@ -7,7 +7,9 @@
 
 #include <sys/ioctl.h>
 
+#include <algorithm>
 #include <array>
+#include <cerrno>
 #include <string_view>
 
 #include <fcntl.h>
@@ -22,6 +24,33 @@
 
 namespace core::tui
 {
+
+namespace
+{
+    /// The errors a non-blocking read answers "nothing yet" with. Every other one is the handle's
+    /// end: the next read would fail the same way, and so would every read after it.
+    constexpr auto NothingYet = std::array { EAGAIN, EWOULDBLOCK };
+
+    /// Whether a read of @p fd that returned @p count, with @p error when it failed, found the
+    /// handle at its end rather than merely empty.
+    ///
+    /// A terminal that hung up answers EIO (a pty whose master closed, on Linux) or an end of file
+    /// (a hung-up controlling terminal), and a pipe whose writer closed answers an end of file.
+    /// But an end of file on a terminal is also what a raw-mode read (VMIN 0, VTIME 0) returns when
+    /// nothing is pending, and what canonical mode returns for Ctrl+D, so on a terminal it counts
+    /// only when poll(2) confirms the hangup.
+    [[nodiscard]] bool inputHasEnded(int fd, ssize_t count, int error) noexcept
+    {
+        if (count > 0)
+            return false;
+        if (count < 0)
+            return !std::ranges::contains(NothingYet, error);
+        if (::isatty(fd) == 0)
+            return true;
+        auto watch = pollfd { .fd = fd, .events = POLLIN, .revents = 0 };
+        return ::poll(&watch, 1, 0) > 0 && (watch.revents & (POLLHUP | POLLERR | POLLNVAL)) != 0;
+    }
+} // namespace
 
 /// The descriptors, the saved terminal attributes and the self-pipe a size change is announced on.
 struct TerminalInput::NativeState
@@ -102,6 +131,12 @@ auto TerminalInput::poll(int timeoutMs) -> std::vector<InputEvent>
 
     auto const pollResult = ::poll(fds.data(), nfds, timeoutMs);
 
+    // A hangup with nothing to read beside it: the read below would not run, and the caller would
+    // poll again and be answered at once, for ever (core-cpp#49).
+    if (pollResult > 0 && (fds[0].revents & (POLLHUP | POLLERR | POLLNVAL)) != 0
+        && (fds[0].revents & POLLIN) == 0)
+        _inputClosed = true;
+
     if (pollResult <= 0)
     {
         // Timeout or error — check for pending partial sequences
@@ -153,6 +188,8 @@ auto TerminalInput::readReadyInput() -> std::vector<InputEvent>
         events.insert(
             events.end(), std::make_move_iterator(parsed.begin()), std::make_move_iterator(parsed.end()));
     }
+    else if (inputHasEnded(_native->fd, n, errno))
+        _inputClosed = true;
     return events;
 }
 

@@ -74,6 +74,14 @@ a handle the loop is already watching.
   Windows backend -- Task B7b is what changes that -- so do not write that the console handle
   "goes through IOCP"; it goes through whichever backend `makeDefaultBackend()` returned, and the
   runtime is tested against every one the platform builds.
+- **A handle at its end is never waited on again.** A terminal that hung up, a pipe whose
+  writer closed, a console that went away: each stays readable for ever and yields nothing, so a
+  flow that re-parks on it is resumed every turn -- 100% CPU, and with `SIGHUP` ignored nothing
+  else ends the process ([core-cpp#49](https://github.com/contour-terminal/core-cpp/issues/49)).
+  The source says so through `InputSource::inputClosed()`, and the runtime then stops watching
+  and ends its input. "Read nothing" and "read the end" are different answers, and a read that
+  cannot tell them apart is the bug: on a terminal an end of file is also what raw mode returns
+  when nothing is pending, so it counts only when `poll(2)` confirms the hangup.
 - **Only a waiter that can say "nothing happened" may be resumed with nothing.** `nextEvent()`
   yields an event or throws, so waking it for a focus change reports that change as a
   cancellation -- and `runModal` closes on a cancellation. `InputWake` is where that distinction
