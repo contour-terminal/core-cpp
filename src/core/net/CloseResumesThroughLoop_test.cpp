@@ -9,6 +9,8 @@
 // INSIDE `close()`; that flow ran to its end and destroyed the client, and the second statement
 // then called through a destroyed `_connection`. Deterministic, and an ASan report in the loop's
 // own guarantees rather than in contour's code.
+#include <core/async/Cancellation.hpp>
+#include <core/async/DetachedTask.hpp>
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/ISocket.hpp>
@@ -26,6 +28,7 @@
 #include <initializer_list>
 #include <memory>
 #include <span>
+#include <string_view>
 #include <tuple>
 #include <utility>
 
@@ -141,6 +144,78 @@ Task<void> detach(std::unique_ptr<Client>* client, bool const* destroyed, bool* 
     co_return;
 }
 
+/// How a read ended, when it may end by unwinding rather than with an answer.
+struct EndOutcome
+{
+    ReadOutcome read;     ///< Filled in when the read answered.
+    bool unwound = false; ///< Whether it ended in `OperationCancelled` instead.
+    bool ended = false;   ///< Whether the flow ran to its end either way.
+};
+
+/// Parks one read, and ends whether the read answers or unwinds.
+Task<void> readUntilEnded(ISocket* sock, EndOutcome* out)
+{
+    try
+    {
+        co_await readOnce(sock, &out->read);
+    }
+    catch (core::async::OperationCancelled const&)
+    {
+        out->unwound = true;
+    }
+    out->ended = true;
+}
+
+/// Retires the parked read and destroys the socket in the same turn: the owner's
+/// `conn->close(); connections.erase(id);`.
+Task<void> retireAndDestroy(std::unique_ptr<ISocket>* sock, Retire verb)
+{
+    if (verb == Retire::Close)
+        (*sock)->close();
+    else
+        (*sock)->cancelRead();
+    sock->reset();
+    co_return;
+}
+
+/// A spawned root owning both ends of a pair, parked on a read of the second until teardown
+/// destroys it -- and with it the first end, which a borrowed flow is reading.
+Task<void> holdUntilTeardown(std::unique_ptr<ISocket> held, std::unique_ptr<ISocket> parkedOn)
+{
+    auto buffer = std::array<std::byte, 8> {};
+    std::ignore = co_await parkedOn->read(buffer);
+    std::ignore = held;
+}
+
+/// Sets a flag when the frame holding it is destroyed, however that happens.
+class MarkOnDestroy
+{
+  public:
+    explicit MarkOnDestroy(bool* flag) noexcept: _flag(flag) {}
+    MarkOnDestroy(MarkOnDestroy const&) = delete;
+    MarkOnDestroy& operator=(MarkOnDestroy const&) = delete;
+    MarkOnDestroy(MarkOnDestroy&&) = delete;
+    MarkOnDestroy& operator=(MarkOnDestroy&&) = delete;
+    ~MarkOnDestroy() { *_flag = true; }
+
+  private:
+    bool* _flag;
+};
+
+/// A chain nobody owns -- the loop's to free -- parked on one read.
+core::async::DetachedTask readDetached(ISocket* sock, bool* resumed, bool* destroyed)
+{
+    auto const mark = MarkOnDestroy { destroyed };
+    auto buffer = std::array<std::byte, 8> {};
+    std::ignore = co_await sock->read(buffer);
+    *resumed = true;
+}
+
+[[nodiscard]] char const* nameOf(Retire verb) noexcept
+{
+    return verb == Retire::Close ? "close" : "cancelRead";
+}
+
 } // namespace
 
 TEST_CASE("close() and cancelRead() settle a parked read at once and resume it through the loop",
@@ -225,6 +300,185 @@ TEST_CASE("A flow resumed by close() may destroy the socket's owner without clos
             CHECK(destroyed);         // and then its reader destroyed it, on the loop
             CHECK(reader.resolved);
             CHECK(client == nullptr);
+        }
+    }
+}
+
+TEST_CASE(
+    "A socket destroyed between close() or cancelRead() and the next turn is not touched by its resumed flow",
+    "[net][socket][resume]")
+{
+    // The owner's `conn->close(); connections.erase(id);` in one turn. The waiter is queued by the
+    // verb and resumed a turn later, after the socket is gone, so nothing on its way back may read
+    // the socket: a frame-free transport settled a value that does not refer to it, and a
+    // coroutine-shaped one (WindowsSocket) must see that the socket is gone and unwind. Before the
+    // fix, WFMO's `parkUntilReady` resumed on its normal path and wrote into the freed socket --
+    // silent here, a heap-use-after-free under AddressSanitizer.
+    for (auto const& backend: BackendMatrix)
+    {
+        auto source = core::net::makeBackend(backend.kind);
+        if (!source)
+            continue;
+        for (auto const verb: { Retire::Close, Retire::CancelRead })
+        {
+            DYNAMIC_SECTION("backend=" << backend.name << " verb=" << nameOf(verb))
+            {
+                auto loop = EventLoop { *source };
+                auto pair = core::net::testing::makeSocketPair(loop);
+                REQUIRE(pair.has_value());
+
+                auto outcome = EndOutcome {};
+                loop.spawn(readUntilEnded(pair->first.get(), &outcome));
+                REQUIRE(turnUntilParked(loop, 8));
+
+                loop.spawn(retireAndDestroy(&pair->first, verb));
+                auto const turns = turnUntil(loop, outcome.ended, 8);
+
+                INFO("turns: " << turns << " unwound: " << outcome.unwound);
+                REQUIRE(outcome.ended); // or it waited 8 turns for a resume that never came
+                CHECK(pair->first == nullptr);
+                // Either answer is honest -- a Cancelled VALUE settled before the socket went, or
+                // an unwind because it went -- and neither is a byte count.
+                CHECK_FALSE(outcome.read.hasValue);
+                if (!outcome.unwound)
+                    CHECK(outcome.read.code == NetErrorCode::Cancelled);
+            }
+        }
+    }
+}
+
+TEST_CASE(
+    "A frame destroyed while close() or cancelRead() has its waiter queued is taken out of the ready queue",
+    "[net][socket][resume]")
+{
+    // `ResultAwaitable`'s destructor branch: settled, handed to the loop, and the awaiting frame
+    // destroyed before the loop reached it. The ready queue must lose the handle with the frame,
+    // or the next drain resumes freed storage.
+    //
+    // WFMO is not in this case, and the reason is not this branch: its read is coroutine-shaped,
+    // so its park is a `waitReadable` coroutine park, and destroying a frame parked on one is not
+    // supported on any path (the park names the frame, and `WaitHandleAwaiter` has no destructor).
+    for (auto const& backend: BackendMatrix)
+    {
+        auto source = core::net::makeBackend(backend.kind);
+        if (!source || backend.name == "wfmo")
+            continue;
+        for (auto const verb: { Retire::Close, Retire::CancelRead })
+        {
+            DYNAMIC_SECTION("backend=" << backend.name << " verb=" << nameOf(verb))
+            {
+                auto loop = EventLoop { *source };
+                auto pair = core::net::testing::makeSocketPair(loop);
+                REQUIRE(pair.has_value());
+
+                // BORROWED: the case holds the frame, so the case may destroy it.
+                auto reader = ReadOutcome {};
+                auto flow = readOnce(pair->first.get(), &reader);
+                flow.handle().resume();
+                REQUIRE_FALSE(flow.handle().done());
+
+                auto const before = loop.readyCount();
+                if (verb == Retire::Close)
+                    pair->first->close();
+                else
+                    pair->first->cancelRead();
+                auto const queued = loop.readyCount() - before;
+                INFO("queued by the verb: " << queued);
+                // The verb settles and queues at once -- except IOCP's `cancelRead`, which asks the
+                // kernel for the read back and settles when the abort is dequeued, in a drain; that
+                // shape has no queued window and its frame, destroyed here, is retired instead.
+                auto const settlesAtTheVerb = verb == Retire::Close || backend.name != "iocp";
+                REQUIRE(queued == (settlesAtTheVerb ? 1U : 0U));
+
+                flow = {};
+                CHECK(loop.readyCount() == before); // taken out with the frame
+
+                for ([[maybe_unused]] auto const turn: { 0, 1, 2 })
+                    std::ignore = loop.runOnce(std::chrono::milliseconds { 10 });
+                CHECK_FALSE(reader.resolved); // nothing resumed the destroyed frame
+            }
+        }
+    }
+}
+
+TEST_CASE("Teardown resumes a borrowed flow whose socket destroying a spawned root abandoned",
+          "[net][socket][resume][teardown]")
+{
+    // `~EventLoop` step 5 destroys the spawned roots; a root owning a socket abandons the
+    // operation a BORROWED flow has parked on it, which settles and queues that flow. Nothing
+    // drained after step 5, so the flow stayed suspended with its operation still naming the loop,
+    // and destroying it after the loop called into freed storage. The fix drains what step 5
+    // queues: the flow unwinds (an abandoned operation throws) before the loop is gone.
+    //
+    // WFMO is not in this case: its read parks a `waitReadable` COROUTINE park, which step 2 queues
+    // and step 3 resumes before any root is destroyed. A borrowed flow's token is its own, so it
+    // re-parks, and step 4 drops that park; the frame is left suspended, as it was before 0.2.1,
+    // but nothing in it names the loop, so its owner may destroy it afterwards.
+    for (auto const& backend: BackendMatrix)
+    {
+        auto source = core::net::makeBackend(backend.kind);
+        if (!source || backend.name == "wfmo")
+            continue;
+        DYNAMIC_SECTION("backend=" << backend.name)
+        {
+            // Declared before the loop, so it outlives it, as a fixture's member would.
+            auto outcome = EndOutcome {};
+            auto flow = Task<void> {};
+            {
+                auto loop = EventLoop { *source };
+                auto pair = core::net::testing::makeSocketPair(loop);
+                REQUIRE(pair.has_value());
+
+                flow = readUntilEnded(pair->first.get(), &outcome);
+                flow.handle().resume();
+                REQUIRE_FALSE(flow.handle().done());
+
+                loop.spawn(holdUntilTeardown(std::move(pair->first), std::move(pair->second)));
+                for ([[maybe_unused]] auto const turn: { 0, 1, 2 })
+                    std::ignore = loop.runOnce(std::chrono::milliseconds { 0 });
+                REQUIRE_FALSE(outcome.ended);
+            }
+            auto const done = flow.handle().done();
+            CHECK(done);
+            CHECK(outcome.ended);
+            CHECK(outcome.unwound);
+            // Leaked rather than destroyed where the teardown left it suspended: its destructor
+            // would call into the destroyed loop, the defect the CHECKs above report.
+            if (!done)
+                std::ignore = flow.release();
+        }
+    }
+}
+
+TEST_CASE("A detached flow close() queued is freed by teardown, not resumed",
+          "[net][socket][resume][teardown]")
+{
+    // A socket settles the operation and hands its waiter to the loop. The loop has to know whether
+    // that chain is its own: at teardown it FREES what it owns -- a `DetachedTask`, which has no
+    // stop token, so resuming it would run the rest of its body on a dying loop -- and resumes what
+    // it borrows. Handed over as a bare handle, every such chain was filed as borrowed and resumed.
+    for (auto const& backend: BackendMatrix)
+    {
+        auto source = core::net::makeBackend(backend.kind);
+        if (!source)
+            continue;
+        DYNAMIC_SECTION("backend=" << backend.name)
+        {
+            auto resumed = false;
+            auto destroyed = false;
+            {
+                auto loop = EventLoop { *source };
+                auto pair = core::net::testing::makeSocketPair(loop);
+                REQUIRE(pair.has_value());
+
+                readDetached(pair->first.get(), &resumed, &destroyed);
+                REQUIRE(turnUntilParked(loop, 8));
+                REQUIRE_FALSE(destroyed);
+
+                pair->first->close(); // settled and queued; no turn runs it
+            }
+            CHECK(destroyed);     // freed with the loop, as the loop's own chain
+            CHECK_FALSE(resumed); // and never run past its `co_await`
         }
     }
 }

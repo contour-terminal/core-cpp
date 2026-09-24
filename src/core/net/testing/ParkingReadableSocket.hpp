@@ -54,8 +54,10 @@ inline void completeCancelled(IoAwaitable& parked) noexcept
 /// one resolves only when the test says so, and counts the orphan instead of aborting. It is the
 /// instrument for a case whose subject is the CALLER's handling of a parked watch.
 ///
-/// Single-threaded, like @c InMemorySocket, and with the same limit on a flow's stop token: there is
-/// no loop to route one through, so a parked watch answers the test, @c cancelRead or @c close.
+/// Single-threaded, like @c InMemorySocket, and with the same limits: there is no loop to route a
+/// flow's stop token through, so a parked watch answers the test, @c cancelRead or @c close -- and
+/// those two resume the watching flow INSIDE the call, where a real transport's loop resumes it on
+/// a later drain step (G2).
 class ParkingReadableSocket final: public SocketDecorator
 {
   public:

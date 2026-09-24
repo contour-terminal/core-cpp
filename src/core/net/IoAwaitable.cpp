@@ -13,6 +13,7 @@
 #include <core/net/EventLoop.hpp>
 
 #include <tuple>
+#include <utility>
 
 namespace core::net
 {
@@ -22,9 +23,9 @@ void requestCancelOn(EventLoop& loop, ParkId park) noexcept
     loop.requestCancel(park);
 }
 
-void resumeSoonOn(EventLoop& loop, std::coroutine_handle<> waiter) noexcept
+void resumeSoonOn(EventLoop& loop, async::ParkedWork waiter) noexcept
 {
-    loop.resumeSoon(async::ParkedWork { .resume = waiter });
+    loop.resumeSoon(std::move(waiter));
 }
 
 void cancelPendingOn(EventLoop& loop, std::coroutine_handle<> waiter) noexcept

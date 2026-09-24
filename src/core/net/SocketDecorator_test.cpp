@@ -4,11 +4,14 @@
 // verb does may be in its way.
 //
 // Since 0.2.1 the verb SETTLES the operation and the LOOP resumes the coroutine, in a later drain
-// step (G2): so the socket is still alive when `close()` or `cancelRead()` returns, and gone after
-// one turn. Before 0.2.1 the coroutine was resumed inside the verb, destroyed the socket there, and
-// the rule "detach first, complete last, touch no member afterwards" was all that stood between a
-// transport and a write through freed storage. The rule still holds -- a destructor abandons, and a
-// loop-less double still resumes inline -- but it is no longer what these cases measure.
+// step (G2): so in these cases the socket is still alive when `close()` or `cancelRead()` returns,
+// and the resumed coroutine destroys it a turn later. (That is these cases' order, not a promise to
+// an owner: an owner may destroy the socket before the turn, and the resumed flow must then not
+// touch it -- `CloseResumesThroughLoop_test.cpp` and `ISocket::close` hold that side.) Before 0.2.1
+// the coroutine was resumed inside the verb, destroyed the socket there, and the rule "detach
+// first, complete last, touch no member afterwards" was all that stood between a transport and a
+// write through freed storage. The rule still holds -- a destructor abandons, and a loop-less
+// double still resumes inline -- but it is no longer what these cases measure.
 //
 // The coroutine the completion resumes is the socket's only owner, and it drops it from inside the
 // resumption. Each case watches the destruction through a `weak_ptr`, so the assertion is a

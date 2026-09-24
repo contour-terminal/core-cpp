@@ -173,6 +173,12 @@ class InMemoryPipe
 ///     default documents as safe: a weaker bound, never a wrong one.
 ///   - **Delivery latency.** Everything a write does to its peer — bytes, a FIN, a reset — has
 ///     happened by the time the write returns; on a real socket it lands a round trip later.
+///   - **The loop's deferred resume.** @c close and @c cancelRead resume a parked flow INSIDE the
+///     call here, because there is no loop to hand it to; every real transport settles it there and
+///     its loop resumes it on a later drain step (G2, since 0.2.1). A case built on this double
+///     therefore cannot see a flow that destroys the socket's owner under the verb's caller --
+///     contour's `NativeClient::detach` shape -- and crashes on it where a real socket does not.
+///     Such a case runs over @c makeSocketPair and a loop instead.
 ///
 /// **Completion is inline, on the calling thread.** A peer's @c write that fills a parked read
 /// resumes the reader before the write returns, so a case can assert on the reader immediately

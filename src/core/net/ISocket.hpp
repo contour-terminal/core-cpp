@@ -197,7 +197,8 @@ class ISocket
     /// at once on every transport.
     ///
     /// **Settled here, resumed by the loop** (since 0.2.1, as @c close): the retired flow runs in a
-    /// later drain step, never before this call returns.
+    /// later drain step, never before this call returns -- and so possibly after the socket's owner
+    /// has destroyed the socket, which @c close spells out.
     ///
     /// **It retires whatever is parked NOW**
     /// ([fastcached#1233](https://github.com/LASTRADA-Software/fastcached/issues/1233)). The flow it
@@ -306,6 +307,15 @@ class ISocket
     /// next statement -- contour's `_writer.close(); _connection->close();` did, deterministically.
     /// So a caller that asserts the parked flow's outcome right after `close()` runs a loop turn
     /// first.
+    ///
+    /// **The flow may run after the SOCKET is gone.** It resumes on a later turn with the value
+    /// settled here, and an owner that destroys the socket in the same turn -- `conn->close();
+    /// connections.erase(id);` -- has destroyed it by then. The transports touch nothing of it on
+    /// the way back (a coroutine-shaped one that finds its socket gone unwinds the flow with
+    /// @c async::OperationCancelled instead of answering), but the flow must not either: **after a
+    /// @c NetErrorCode::Cancelled or closed result, a flow touches no socket it does not own** --
+    /// no `isClosed()`, no `close()` in its cleanup, no retry. One that owns the socket, or knows
+    /// its owner outlives the next turn, may.
     ///
     /// **The order is still load-bearing: detach the operation FIRST, complete it LAST, and touch
     /// no member afterwards.** A test double with no loop (@c testing::InMemorySocket) still

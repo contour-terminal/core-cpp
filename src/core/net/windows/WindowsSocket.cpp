@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/windows/WindowsSocket.hpp>
 
+#include <core/async/Cancellation.hpp>
 #include <core/net/SocketContract.hpp>
 #include <core/net/windows/InvalidSocket.hpp>
 #include <core/net/windows/NetworkEvents.hpp>
@@ -167,6 +168,15 @@ async::Task<WindowsSocket::ParkEnd> WindowsSocket::parkUntilReady(Ready kind)
         // Nothing latched: park. An indication raised between the syscall that returned
         // WSAEWOULDBLOCK and this point has left the event SIGNALLED, so the wait resolves on the
         // next pump rather than being lost — which is why the event is never reset before a park.
+        //
+        // **Whichever way this frame comes back, it asks the lifetime token before it touches
+        // `this`.** `close()` and `cancelRead()` hand the frame to the loop and it resumes a turn
+        // later (G2), so an owner running `sock->cancelRead(); sock.reset();` -- or `close()` and
+        // then the destructor, which finds nothing left to abandon -- in one turn has freed the
+        // socket before this frame runs. It resumes on its NORMAL path then, and unwinds rather
+        // than read a member: the flow's read ends in `OperationCancelled`, as a destroyed socket's
+        // does.
+        auto const lifetime = std::weak_ptr<void const> { _lifetime };
         if (kind == Ready::Read)
         {
             // Published for `cancelRead` for exactly as long as this frame is parked, and cleared on
@@ -181,7 +191,6 @@ async::Task<WindowsSocket::ParkEnd> WindowsSocket::parkUntilReady(Ready kind)
             // `cancelRead` could hand `cancelPending` an address a newer frame now occupies. The
             // lifetime token tells the two apart without reading freed storage.
             co_await PublishSelf { &_readWaiter };
-            auto const lifetime = std::weak_ptr<void const> { _lifetime };
             try
             {
                 co_await _loop.waitReadable(_event);
@@ -198,12 +207,18 @@ async::Task<WindowsSocket::ParkEnd> WindowsSocket::parkUntilReady(Ready kind)
                 }
                 throw;
             }
+            if (lifetime.expired())
+                throw async::OperationCancelled {};
             _readWaiter = {};
             if (std::exchange(_readRetired, false))
                 co_return ParkEnd::Retired;
         }
         else
+        {
             co_await _loop.waitWritable(_event);
+            if (lifetime.expired())
+                throw async::OperationCancelled {};
+        }
 
         // Woken. Both directions wake together (they share the event), so read-and-clear it into
         // the per-direction latches: whichever gets there first RECORDS the other's indication for

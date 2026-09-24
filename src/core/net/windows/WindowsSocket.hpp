@@ -213,9 +213,10 @@ class WindowsSocket final: public ISocket
     /// resumption whichever way it leaves the park: consumed on the normal path, dropped on the
     /// unwinding one.
     bool _readRetired = false;
-    /// Expires with this socket. A parked read unwinding through `OperationCancelled` may run after
-    /// the destructor (which closes with @c FdWakePolicy::Cancel), and asks this -- never `this` --
-    /// whether there is still a socket to tidy.
+    /// Expires with this socket. A parked frame may run after the destructor -- unwinding through
+    /// `OperationCancelled` (the destructor closes with @c FdWakePolicy::Cancel), or resuming
+    /// normally after a `close()` or `cancelRead()` queued it and its owner destroyed the socket
+    /// in the same turn -- and asks this, never `this`, whether there is still a socket to touch.
     std::shared_ptr<void const> _lifetime = std::make_shared<char const>('\0');
 };
 

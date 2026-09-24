@@ -452,13 +452,21 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
 - **A resource SETTLES a parked operation at once and the LOOP resumes its waiter** -- `close()`,
   `cancelRead()`, a destructor's abandonment, a `CompletionWait` closed under an IOCP listener:
   every one of them. `ResultAwaitable::complete` hands the waiter to `EventLoop::resumeSoon` (the
-  loop named through `cancelThrough` or `resumeThrough`), and only an owner that named no loop -- a
-  loop-less test double -- still resumes inline. Resumed inside the verb, the flow ran to its end
+  loop named through `cancelThrough`, with the chain's claim, so a `DetachedTask` is still the
+  loop's to free at teardown), and only an owner that named no loop -- a loop-less test double --
+  still resumes inline. Resumed inside the verb, the flow ran to its end
   and could destroy whatever was executing the caller's next statement: contour's
   `_writer.close(); _connection->close();` did, deterministically, because the first close resumed
   the read flow that destroyed the client. `CloseResumesThroughLoop_test.cpp` holds it over
-  `BackendMatrix`. Nothing but the loop's drain step calls a waiter's `resume()`; a frame destroyed
-  while its waiter is queued takes it back with `cancelPending` in its awaiter's destructor.
+  `BackendMatrix`. No resource with a loop resumes a waiter anywhere but the loop's drain step (a
+  loop-less double, and `~TuiRuntime`'s deliberate unwind, are the resumptions outside it); a frame
+  destroyed while its waiter is queued takes it back with `cancelPending` in its awaiter's
+  destructor. **A deferred resume can outlive the resource**: an owner may destroy the socket in
+  the turn it closed it, so a coroutine-shaped transport asks a lifetime token before touching
+  `this` on EVERY way back from a park, not only the unwinding one (`WindowsSocket::parkUntilReady`
+  wrote into a freed socket on the normal path until it did). And `~EventLoop` drains what
+  destroying the spawned roots queues, because that is where a root's socket settles a borrowed
+  flow.
 - **A queue or a resource never resumes its consumer inline.** `AsyncQueue::push()` and `close()`
   hand the parked handle to `IExecutor::submit` and return. A producer commonly pushes while
   holding a lock of its own, and a queue that resumed inline would run the consumer's next step

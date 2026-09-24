@@ -354,6 +354,13 @@ Task<void> acceptReporting(core::net::IListener* listener,
     }
 }
 
+/// A spawned root that owns a listener and keeps an accept of its own parked on it, until
+/// teardown destroys the root and the listener with it.
+Task<void> holdListener(std::unique_ptr<IocpListener> listener)
+{
+    std::ignore = co_await listener->accept();
+}
+
 /// The byte the pipe is filled with, which the payload under test never is at a filler offset.
 constexpr auto FillerByte = 'f';
 
@@ -1093,6 +1100,80 @@ TEST_CASE("A stop of the accepting flow takes the AcceptEx back, and the listene
     answer.reset();
     listener.reset();
     CHECK(drainOwnerOperations(loop, backend));
+}
+
+TEST_CASE("An accepting frame destroyed while close() has its waiter queued is taken out of the ready queue",
+          "[net][iocp][listener][resume]")
+{
+    // `CompletionWait`'s destructor branch. `close()` settles the wait and hands its frame to the
+    // loop; the frame's owner destroys it before the loop gets there. The ready queue must lose the
+    // handle with the frame, or the next drain resumes freed storage.
+    auto backend = IocpBackend {};
+    auto loop = EventLoop { backend };
+    auto bound = IocpListener::bind(loop, "127.0.0.1", 0);
+    REQUIRE(bound.has_value());
+    auto listener = std::move(*bound);
+
+    // BORROWED: the case holds the frame, so the case may destroy it.
+    auto answer = std::optional<core::net::AcceptResult> {};
+    auto abandoned = false;
+    auto flow = acceptReporting(listener.get(), &answer, &abandoned);
+    flow.handle().resume();
+    REQUIRE_FALSE(flow.handle().done());
+
+    auto const before = loop.readyCount();
+    listener->close();
+    REQUIRE(loop.readyCount() == before + 1); // settled Closed, and queued rather than resumed
+
+    flow = {};
+    CHECK(loop.readyCount() == before); // taken out with the frame
+
+    for ([[maybe_unused]] auto const turn: { 0, 1, 2 })
+        std::ignore = loop.runOnce(std::chrono::milliseconds { 10 });
+    CHECK_FALSE(answer.has_value()); // nothing resumed the destroyed frame
+    CHECK_FALSE(abandoned);
+
+    listener.reset();
+    CHECK(drainOwnerOperations(loop, backend));
+}
+
+TEST_CASE("Teardown resumes a borrowed accept whose listener destroying a spawned root closed",
+          "[net][iocp][listener][resume][teardown]")
+{
+    // `~EventLoop` step 5 destroys the spawned roots. A root owning the listener closes it on the
+    // way out, which settles a BORROWED accept's `CompletionWait` and queues its frame -- after the
+    // last drain, so it stayed suspended with the wait still naming the loop, and destroying it
+    // after the loop called `cancelPending` on freed storage. The fix drains what step 5 queues.
+    auto backend = IocpBackend {};
+    // Declared before the loop, so it outlives it, as a fixture's member would.
+    auto answer = std::optional<core::net::AcceptResult> {};
+    auto abandoned = false;
+    auto flow = Task<void> {};
+    {
+        auto loop = EventLoop { backend };
+        auto bound = IocpListener::bind(loop, "127.0.0.1", 0);
+        REQUIRE(bound.has_value());
+
+        flow = acceptReporting(bound->get(), &answer, &abandoned);
+        flow.handle().resume();
+        REQUIRE_FALSE(flow.handle().done());
+
+        loop.spawn(holdListener(std::move(*bound)));
+        for ([[maybe_unused]] auto const turn: { 0, 1, 2 })
+            std::ignore = loop.runOnce(std::chrono::milliseconds { 0 });
+        REQUIRE_FALSE(answer.has_value());
+    }
+    auto const done = flow.handle().done();
+    CHECK(done);
+    // Leaked rather than destroyed where the teardown left it suspended: its destructor would call
+    // into the destroyed loop, the defect the CHECK above reports.
+    if (!done)
+        std::ignore = flow.release();
+    // The listener was closed under it: the Cancelled VALUE `IListener::close` promises.
+    REQUIRE(answer.has_value());
+    REQUIRE_FALSE(answer->has_value());
+    CHECK(answer->error().code == NetErrorCode::Cancelled);
+    CHECK_FALSE(abandoned);
 }
 
 TEST_CASE("An overlapped write puts the caller's bytes on the wire exactly, in order, across the copy bound",

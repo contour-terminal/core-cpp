@@ -873,6 +873,14 @@ class EventLoop: public async::IExecutor
         ParkId sourcePark {};
     };
 
+    /// Teardown: takes what the loop OWNS out of the ready queue, to be freed rather than resumed,
+    /// and drops the due timer callbacks; what it borrows stays queued, to be resumed.
+    /// @return The owned entries.
+    [[nodiscard]] std::deque<ReadyEntry> setAsideOwnedReady();
+
+    /// Teardown steps 3 and 6: drains what is queued, a bounded number of passes.
+    void drainForTeardown();
+
     /// Coroutines ready to resume now, each owning whatever chain nothing else can free.
     ///
     /// Declared BEFORE @c _parks so it is destroyed after it: freeing a chain re-enters the loop

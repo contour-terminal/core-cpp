@@ -83,15 +83,7 @@ EventLoop::~EventLoop()
     // frame to free -- it is a call into a `DeadlineTimer`'s owner, and that owner is being
     // destroyed with this loop or is already gone. Running it here would be the one path on which
     // a callback reaches an object whose loop has stopped existing.
-    auto ownedQueue = std::deque<ReadyEntry> {};
-    auto borrowedQueue = std::deque<ReadyEntry> {};
-    for (auto& entry: _ready)
-    {
-        if (entry.callbackPark)
-            continue;
-        (entry.ownedByLoop ? ownedQueue : borrowedQueue).push_back(std::move(entry));
-    }
-    _ready = std::move(borrowedQueue);
+    auto ownedQueue = setAsideOwnedReady();
 
     // **The inbound queue is NOT swept, and that is a decision rather than an omission.** Work
     // handed over and not yet accepted by a turn is DROPPED: never resumed, never unwound.
@@ -127,15 +119,7 @@ EventLoop::~EventLoop()
     unparkEverything();
 
     // ---- 3. Bounded drain passes. ---------------------------------------------------------
-    // Cancelled re-awaits resume synchronously (await_suspend returns false when stop is
-    // requested), so one pass usually converges; the bound is what stops a flow that re-parks
-    // from spinning here forever. See TeardownDrainPasses.
-    for ([[maybe_unused]] auto const pass: std::views::iota(std::size_t { 0 }, TeardownDrainPasses))
-    {
-        if (_ready.empty())
-            break;
-        std::ignore = drainReadyQueue(UnboundedDrain);
-    }
+    drainForTeardown();
 
     // ---- 4. Abandon to a fixpoint. --------------------------------------------------------
     // Step 2's owned queue entries go first: freeing a chain can park again, and the fixpoint
@@ -149,6 +133,25 @@ EventLoop::~EventLoop()
     _rootByHandle.clear();
     _roots.clear();
 
+    // ---- 6. Drain what destroying them queued, to a fixpoint. -----------------------------
+    // A root that owned a socket or a listener closed it on the way out, and a BORROWED flow parked
+    // there -- a `Task` somebody else holds -- had its operation abandoned or closed: settled and
+    // QUEUED, because a resource never resumes a waiter inline (G2). Nothing after this point
+    // drains, so without this the flow stayed suspended with its operation still naming this loop,
+    // and its owner, destroying it afterwards, took it out of a ready queue that no longer existed.
+    // Resumed here it unwinds -- an abandoned operation throws whatever the token says -- or
+    // answers the Cancelled value a close promises, while the loop still exists. Whatever that
+    // parks or queues again is freed or dropped as in step 4, until a pass finds nothing.
+    for ([[maybe_unused]] auto const pass: std::views::iota(std::size_t { 0 }, TeardownDrainPasses))
+    {
+        if (_ready.empty())
+            break;
+        auto owned = setAsideOwnedReady();
+        drainForTeardown();
+        owned.clear();
+        abandonParkedWork();
+    }
+
     // And the registrations kept for a handle's life. After the roots, because a socket destroyed
     // with its flow announces its own close and takes its watch with it, while the handle is still
     // open; what is left here is a handle whose owner never announced one, and the backend holds
@@ -157,12 +160,39 @@ EventLoop::~EventLoop()
         _backend.detach(watch->handler);
     _watches.clear();
 
-    // ---- 6. Unregister the wake. ----------------------------------------------------------
+    // ---- 7. Unregister the wake. ----------------------------------------------------------
     // A host-driven backend holds a pointer to this loop and an armed host timer; either one
     // outliving the loop is a call into freed storage on the host's next turn. Every other
     // backend ignores both.
     _backend.setPump(nullptr, nullptr);
     _backend.armWakeAt(std::nullopt);
+}
+
+std::deque<EventLoop::ReadyEntry> EventLoop::setAsideOwnedReady()
+{
+    auto owned = std::deque<ReadyEntry> {};
+    auto borrowed = std::deque<ReadyEntry> {};
+    for (auto& entry: _ready)
+    {
+        if (entry.callbackPark)
+            continue;
+        (entry.ownedByLoop ? owned : borrowed).push_back(std::move(entry));
+    }
+    _ready = std::move(borrowed);
+    return owned;
+}
+
+void EventLoop::drainForTeardown()
+{
+    // Cancelled re-awaits resume synchronously (await_suspend returns false when stop is
+    // requested), so one pass usually converges; the bound is what stops a flow that re-parks
+    // from spinning here forever. See TeardownDrainPasses.
+    for ([[maybe_unused]] auto const pass: std::views::iota(std::size_t { 0 }, TeardownDrainPasses))
+    {
+        if (_ready.empty())
+            break;
+        std::ignore = drainReadyQueue(UnboundedDrain);
+    }
 }
 
 void EventLoop::abandonParkedWork() noexcept
