@@ -6,6 +6,15 @@
 // `WindowsListener` and `WindowsSocket`. `listenUnix` used to build the WFMO listener whatever the
 // loop was, so an IOCP loop served AF_UNIX through readiness and handed out `WindowsSocket`s --
 // found through contour, whose daemon listens on a unix socket.
+
+// winsock2.h MUST precede windows.h / ws2tcpip.h, and afunix.h needs what they declare.
+// clang-format off
+#include <winsock2.h>
+#include <windows.h>
+#include <ws2tcpip.h>
+#include <afunix.h>
+// clang-format on
+
 #include <core/async/Task.hpp>
 #include <core/async/WhenAll.hpp>
 #include <core/net/EventLoop.hpp>
@@ -17,6 +26,7 @@
 #include <core/net/windows/IocpSocket.hpp>
 #include <core/net/windows/WindowsListener.hpp>
 #include <core/net/windows/WindowsSocket.hpp>
+#include <core/platform/WinsockInit.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -24,6 +34,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <memory>
@@ -119,7 +130,95 @@ Task<void> echoOnce(EventLoop* loop, IListener* listener, std::string path, Echo
     co_await core::async::whenAll(serve(listener, echo), dial(loop, listener, std::move(path), echo));
 }
 
+/// @param path A path.
+/// @return Whether something is there. Asked of the entry itself: a bound AF_UNIX socket is a
+///         reparse point, which `std::filesystem::exists` follows and then cannot answer for.
+[[nodiscard]] bool entryExists(std::string const& path)
+{
+    return ::GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
+/// Leaves a STALE socket file at @p path: a socket bound there and closed, as a crashed server's.
+/// @return Whether the file is there.
+[[nodiscard]] bool leaveStaleSocketFile(std::string const& path)
+{
+    core::platform::ensureWinsockInitialized();
+    auto const sock = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sock == INVALID_SOCKET)
+        return false;
+    auto address = sockaddr_un {};
+    address.sun_family = AF_UNIX;
+    std::memcpy(address.sun_path, path.data(), path.size());
+    auto const bound =
+        ::bind(sock, reinterpret_cast<sockaddr const*>(&address), static_cast<int>(sizeof(address))) == 0;
+    ::closesocket(sock);
+    return bound && entryExists(path);
+}
+
+/// A fresh directory under the temp directory, removed with this.
+class TempDirectory
+{
+  public:
+    TempDirectory():
+        _path(std::filesystem::temp_directory_path()
+              / std::format("core-cpp-unix-{}", std::random_device {}()))
+    {
+        std::filesystem::create_directories(_path);
+    }
+    TempDirectory(TempDirectory const&) = delete;
+    TempDirectory& operator=(TempDirectory const&) = delete;
+    TempDirectory(TempDirectory&&) = delete;
+    TempDirectory& operator=(TempDirectory&&) = delete;
+    ~TempDirectory()
+    {
+        auto ec = std::error_code {};
+        std::filesystem::remove_all(_path, ec);
+    }
+
+    /// @param name A file name.
+    /// @return Its path inside this directory.
+    [[nodiscard]] std::string file(std::string_view name) const { return (_path / name).string(); }
+
+  private:
+    std::filesystem::path _path;
+};
+
 } // namespace
+
+TEST_CASE("A unix listener's socket file goes with it, a stale one is reclaimed and a live one refused",
+          "[net][afunix][iocp]")
+{
+    // The path claim both listeners share (`UnixSocketPath.cpp`), through each transport's
+    // listener: `IocpListener::bindUnix` claims a path and deletes its file on close as
+    // `WindowsListener` does.
+    for (auto const& backend: BackendMatrix)
+    {
+        auto source = core::net::makeBackend(backend.kind);
+        if (!source)
+            continue;
+        DYNAMIC_SECTION("backend=" << backend.name)
+        {
+            auto loop = EventLoop { *source };
+            auto const directory = TempDirectory {};
+            auto const path = directory.file("claimed.sock");
+
+            REQUIRE(leaveStaleSocketFile(path));
+            auto listener = core::net::listenUnix(loop, path);
+            if (!listener.has_value() && listener.error().code == core::net::NetErrorCode::Unsupported)
+                SKIP("AF_UNIX not supported on this platform");
+            REQUIRE(listener.has_value()); // the stale file was reclaimed
+            CHECK(entryExists(path));
+
+            auto second = core::net::listenUnix(loop, path);
+            REQUIRE_FALSE(second.has_value()); // a live server keeps its path
+            CHECK(second.error().code == core::net::NetErrorCode::AddressInUse);
+            CHECK(entryExists(path)); // and its file
+
+            listener->reset();
+            CHECK_FALSE(entryExists(path)); // the file went with the listener
+        }
+    }
+}
 
 TEST_CASE("listenUnix and connectUnix belong to the loop's transport family", "[net][afunix][iocp]")
 {

@@ -1270,21 +1270,33 @@ std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::bindUnix(Ev
     if (socket == detail::InvalidSocket)
         return std::unexpected(
             makeNetError(NetErrorCode::Unsupported, ::WSAGetLastError(), "socket(AF_UNIX)"));
-    if (::bind(socket, reinterpret_cast<sockaddr const*>(&*claimed), static_cast<int>(sizeof(*claimed))) != 0
-        || ::listen(socket, backlog) != 0)
+    if (::bind(socket, reinterpret_cast<sockaddr const*>(&*claimed), static_cast<int>(sizeof(*claimed))) != 0)
     {
         auto const err = ::WSAGetLastError();
         ::closesocket(socket);
-        return std::unexpected(
-            makeNetError(err == WSAEADDRINUSE ? NetErrorCode::AddressInUse : NetErrorCode::SystemError,
-                         err,
-                         "bind/listen unix"));
+        return std::unexpected(makeNetError(
+            err == WSAEADDRINUSE ? NetErrorCode::AddressInUse : NetErrorCode::SystemError, err, "bind unix"));
+    }
+
+    // Bound, so the socket FILE exists now, and it is this call's: every way out below that does
+    // not hand it to a listener -- whose close deletes it -- deletes it here, or the next bind of
+    // the path finds a stale file to reclaim for a listener that never existed.
+    auto const pathString = std::string { path };
+    if (::listen(socket, backlog) != 0)
+    {
+        auto const err = ::WSAGetLastError();
+        ::closesocket(socket);
+        ::DeleteFileA(pathString.c_str());
+        return std::unexpected(makeNetError(NetErrorCode::SystemError, err, "listen unix"));
     }
 
     auto acceptEx = LPFN_ACCEPTEX { nullptr };
     auto acceptAddresses = LPFN_GETACCEPTEXSOCKADDRS { nullptr };
     if (auto prepared = prepareListening(loop, socket, acceptEx, acceptAddresses); !prepared)
+    {
+        ::DeleteFileA(pathString.c_str()); // `prepareListening` has closed the socket
         return std::unexpected(std::move(prepared.error()));
+    }
 
     auto listener =
         std::unique_ptr<IocpListener> { new IocpListener(loop,
@@ -1293,7 +1305,7 @@ std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::bindUnix(Ev
                                                          /*boundPort=*/0,
                                                          reinterpret_cast<void*>(acceptEx),
                                                          reinterpret_cast<void*>(acceptAddresses)) };
-    listener->_path = std::string { path };
+    listener->_path = pathString;
     return listener;
 }
 
