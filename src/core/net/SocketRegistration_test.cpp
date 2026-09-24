@@ -378,3 +378,116 @@ TEST_CASE("a socket that stays readable does not starve its parked write", "[net
     }
     ::close(peer);
 }
+
+namespace
+{
+/// Whether this build compiled the loop's assertion on a watch slot out.
+#ifdef NDEBUG
+constexpr auto SlotGuardsCompiledOut = true;
+#else
+constexpr auto SlotGuardsCompiledOut = false;
+#endif
+
+/// Counts the calls a frameless park's owner receives.
+void countWake(void* state, core::net::ParkWake /*wake*/)
+{
+    ++*static_cast<std::size_t*>(state);
+}
+} // namespace
+
+TEST_CASE("a park displaced from its watch slot is found by the close and names no freed watch",
+          "[net][socket][registration]")
+{
+    // Two read parks on one handle's lifetime registration break the socket contract, and a Debug
+    // build refuses the second -- `contract::claimReadSlot` in the socket, an assertion on the watch
+    // slot here. Under NDEBUG the second takes the watch's read slot and the first is named by no
+    // slot. It still pointed at the watch, and the close freed the watch clearing only the parks
+    // its slots named, so retiring the first park -- here, and in `~EventLoop` for one nobody
+    // retires -- released its slot through freed memory: clang-asan-ubsan reports a
+    // heap-use-after-free when this case runs in a build with NDEBUG. It was not woken by the close
+    // either: a watched park is not in the handle index. Now a displaced park lets go of the watch
+    // and is filed by handle, so the close wakes it and retiring it touches nothing freed.
+    //
+    // Parked through the loop's own interface rather than two reads on a `PosixSocket`, because a
+    // socket keeps ONE read operation, and the first read's awaitable, displaced there too, would
+    // reach the socket after it is gone: a fault of the broken contract that is the socket's, not
+    // the loop's, and one that would hide this one.
+    if (!SlotGuardsCompiledOut)
+        SKIP("the watch-slot assertion refuses this sequence in a build without NDEBUG; the Release "
+             "presets run this case");
+
+    auto fds = std::array<int, 2> { -1, -1 };
+    REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds.data()) == 0);
+
+    auto clock = core::platform::ManualClock {};
+    auto backend = core::net::testing::ScriptedBackend {};
+    auto loop =
+        EventLoop { backend, clock, core::net::EventLoopOptions { .idle = core::net::IdlePolicy::Return } };
+    auto firstWakes = std::size_t { 0 };
+    auto secondWakes = std::size_t { 0 };
+    auto const park = [&](std::size_t* count) {
+        return loop.registerPark(
+            core::net::ParkEntry::onReadyCallback(&countWake,
+                                                  count,
+                                                  fds[0],
+                                                  core::net::DefaultHandleKind,
+                                                  Interest::Read,
+                                                  core::net::RegistrationLifetime::UntilClosed));
+    };
+    auto const first = park(&firstWakes);
+    auto const second = park(&secondWakes);
+    REQUIRE(first);
+    REQUIRE(second);
+
+    loop.notifyHandleClosing(fds[0], core::net::FdWakePolicy::Resume);
+    for ([[maybe_unused]] auto const turn: std::views::iota(0, 4))
+    {
+        backend.pushTimeout();
+        std::ignore = loop.runOnce(core::platform::SteadyDuration::zero());
+    }
+    CHECK(firstWakes > 0);
+    CHECK(secondWakes > 0);
+
+    // A frameless park is its owner's to retire, the displaced one included.
+    loop.unregisterPark(first);
+    loop.unregisterPark(second);
+    for (auto const fd: fds)
+        ::close(fd);
+}
+
+TEST_CASE("a lifetime park asking for neither direction is found by the close and names no freed watch",
+          "[net][socket][registration]")
+{
+    // The same shape as a displaced park, reached without breaking any contract: a public
+    // `ParkEntry` for `RegistrationLifetime::UntilClosed` whose interest has neither Read nor Write
+    // takes no slot on the watch. It pointed at the watch all the same, so the close neither woke it
+    // nor cleared the pointer, and retiring it released a slot through the freed watch.
+    auto fds = std::array<int, 2> { -1, -1 };
+    REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds.data()) == 0);
+
+    auto clock = core::platform::ManualClock {};
+    auto backend = core::net::testing::ScriptedBackend {};
+    auto loop =
+        EventLoop { backend, clock, core::net::EventLoopOptions { .idle = core::net::IdlePolicy::Return } };
+    auto wakes = std::size_t { 0 };
+    auto const park = loop.registerPark(
+        core::net::ParkEntry::onReadyCallback(&countWake,
+                                              &wakes,
+                                              fds[0],
+                                              core::net::DefaultHandleKind,
+                                              Interest::None,
+                                              core::net::RegistrationLifetime::UntilClosed));
+    REQUIRE(park);
+
+    loop.notifyHandleClosing(fds[0], core::net::FdWakePolicy::Resume);
+    for ([[maybe_unused]] auto const turn: std::views::iota(0, 4))
+    {
+        backend.pushTimeout();
+        std::ignore = loop.runOnce(core::platform::SteadyDuration::zero());
+    }
+    CHECK(wakes > 0);
+
+    loop.unregisterPark(park);
+    for (auto const fd: fds)
+        ::close(fd);
+}

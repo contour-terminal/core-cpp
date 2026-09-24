@@ -923,7 +923,13 @@ ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
             return ParkId::invalid();
         }
         watch = *watched;
-        park->watch = watch;
+        // A park takes a slot only for a direction it asks for, and `watch` is set only on a park a
+        // slot will name: one asking for neither is filed by handle like a park with a registration
+        // of its own, so a close still finds it, and the watch never has a park it cannot clear.
+        if (hasInterest(entry.interest, Interest::Read) || hasInterest(entry.interest, Interest::Write))
+            park->watch = watch;
+        else
+            watch = nullptr;
     }
     else if (entry.handle != platform::InvalidHandle)
     {
@@ -965,18 +971,24 @@ ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
 
     // The slot is taken once the park has its id. One read operation and one write operation per
     // socket: a slot that still names a live park is a second operation armed over the first, which
-    // the socket contract forbids and `contract::claimReadSlot` catches one level up. The
-    // registration would stay sound; the park it overwrote would never be woken again.
+    // the socket contract forbids and `contract::claimReadSlot` catches one level up -- in a Debug
+    // build. Under NDEBUG it reaches here, and the park it displaces is never woken by readiness
+    // again; what must not follow is a park still pointing at a watch no slot of which names it,
+    // because the close frees the watch clearing only the parks its slots name.
+    // `ParkTable::fileByHandle` takes the pointer away and files the park by handle, so the close
+    // finds and wakes it as any park on the handle.
     if (watch != nullptr && hasInterest(entry.interest, Interest::Read))
     {
         assert(_parks.find(watch->reader) == nullptr
                && "a second read park on one handle: one read operation per socket");
+        _parks.fileByHandle(watch->reader);
         watch->reader = id;
     }
     if (watch != nullptr && hasInterest(entry.interest, Interest::Write))
     {
         assert(_parks.find(watch->writer) == nullptr
                && "a second write park on one handle: one write operation per socket");
+        _parks.fileByHandle(watch->writer);
         watch->writer = id;
     }
 

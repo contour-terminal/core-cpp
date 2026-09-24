@@ -299,8 +299,13 @@ namespace detail
 
         /// The @c HandleWatch this park holds a slot on, rather than a registration of its own
         /// (@c RegistrationLifetime::UntilClosed), or null. Such a park never sets @c attached: the
-        /// registration is the watch's, and taking the park only frees the slot. The loop clears it
-        /// in every park the watch names before the watch goes, so it never dangles.
+        /// registration is the watch's, and taking the park only frees the slot.
+        ///
+        /// **Non-null only while one of the watch's slots names this park**, and that is what keeps
+        /// it from dangling: the loop clears it in every park the slots name before the watch goes.
+        /// So a park asking for neither direction never gets one, and a park whose slot a second
+        /// operation takes -- which the socket contract forbids, and only a Debug build refuses --
+        /// loses it to @c ParkTable::fileByHandle before the slot changes hands.
         HandleWatch* watch = nullptr;
 
         /// Whether @c ParkTable filed this park in its handle index. A watched park is not: its
@@ -522,6 +527,10 @@ namespace detail
     class ParkTable
     {
       public:
+        /// Reserves the spare list up front, so that @c recycle, which is `noexcept`, never grows
+        /// it: a `push_back` that had to allocate could only throw there, and that terminates.
+        ParkTable() { _spare.reserve(MaxSpareParks); }
+
         /// @return A park to fill in: one recycled by @c recycle, or a new one. Every field holds
         ///         its default.
         [[nodiscard]] std::unique_ptr<Park> acquire()
@@ -594,6 +603,25 @@ namespace detail
             }
             _parks.insert(id, std::move(park));
             return id;
+        }
+
+        /// Takes @p id off its handle's watch and files it in the handle index instead, as a park
+        /// with a registration of its own is filed. For a park whose watch slot another park has
+        /// taken: nothing names it through the watch any more, so it must stop pointing at the
+        /// watch, and a close still has to find it. Nothing for an id no longer here, or for a park
+        /// on no watch.
+        /// @param id The displaced park.
+        void fileByHandle(ParkId id)
+        {
+            auto* const park = _parks.find(id);
+            if (park == nullptr || park->watch == nullptr)
+                return;
+            park->watch = nullptr;
+            if (!park->handleIndexed)
+            {
+                _byHandle.emplace(park->handle, id);
+                park->handleIndexed = true;
+            }
         }
 
         /// @param id The park to look up.

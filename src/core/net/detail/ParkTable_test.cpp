@@ -9,6 +9,7 @@
 // callers make. A first version matched zero against the first empty slot on the probe, counted a
 // removal and shifted live entries out of their runs: a park then vanished from the table while its
 // flow still waited, and a TLS case hung on a timer nobody could fire.
+#include <core/async/ParkedWork.hpp>
 #include <core/net/detail/ParkTable.hpp>
 #include <core/net/testing/TestLoop.hpp>
 #include <core/platform/Clock.hpp>
@@ -16,6 +17,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <coroutine>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -122,8 +124,7 @@ TEST_CASE("ParkMap agrees with an unordered_map over a long random run", "[net][
     }
 }
 
-TEST_CASE("ParkTable hands a recycled park back reset, and keeps no park that still holds work",
-          "[net][parktable]")
+TEST_CASE("ParkTable hands a recycled park back reset", "[net][parktable]")
 {
     // Every field but `parked` set to something other than its default: `recycle` resets a park
     // field by field, and a field it forgets reaches the next operation's park.
@@ -171,4 +172,20 @@ TEST_CASE("ParkTable hands a recycled park back reset, and keeps no park that st
     CHECK(!again->ownedByLoop);
     CHECK(!again->deadline.has_value());
     CHECK(again->sequence == 0);
+}
+
+TEST_CASE("ParkTable does not hand out again a park recycled while it still holds work", "[net][parktable]")
+{
+    // `recycle` is told a park is empty; one that is not must be freed rather than kept, or the next
+    // operation's park would arrive holding the previous one's coroutine. The work here is a handle
+    // with no claim, so freeing it frees nothing further.
+    auto table = ParkTable {};
+    auto park = table.acquire();
+    park->parked = core::async::detail::Parked { core::async::ParkedWork { .resume = std::noop_coroutine(),
+                                                                           .abandon = {} } };
+    REQUIRE(park->parked);
+
+    table.recycle(std::move(park));
+    auto again = table.acquire();
+    CHECK_FALSE(again->parked);
 }
