@@ -9,7 +9,42 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Breaking
+
+Each of these is a defect fixed or a contract made explicit, and each changes what a caller can
+observe; the migration is under each.
+
+- **A second read or write armed over a parked one ends the process in every build** (see
+  *Fixed*). A Release process that used to hang there now aborts at the violation.
+  - *Migration*: audit every path that re-arms a read or write on a socket without the previous
+    operation having resolved -- in particular a retry or timeout path that starts a new read
+    without `cancelRead()` or awaiting the old one. Install `core::setFailHandler` to route the
+    message ("Socket contract violated: ...", naming the direction and the handle) to your logger,
+    and to take a stack trace there before the abort.
+- **A waiter completed by a drain-step callback resumes in the callback's position**, not at the
+  back of the ready queue as in 0.2.1 (see *Fixed*); 0.2.0's order, without resuming inline.
+  - *Migration*: code written against 0.2.1 that relied on a flow queued ahead of a readiness
+    callback running again -- after a yield -- BEFORE that callback's waiter now sees the waiter
+    run first. Code written against 0.2.0 needs nothing.
+- **`IHostScheduler::callAfter` must deliver every request it accepts exactly once**, because
+  `HostDrivenBackend` now hands it a ticket only the callback frees.
+  - *Migration*: a host that dropped pending callbacks at shutdown leaks one small ticket per
+    request dropped; deliver them (a late pump finds its backend gone and runs nothing) or accept
+    the leak. A host that delivered one twice must stop.
+- **`testing::ManualHostScheduler` is neither copyable nor movable, and `clear()` is no longer
+  `noexcept`.** Its destructor delivers what is still pending, cleared requests included.
+  - *Migration*: hold one per test by value or by reference, and destroy it after the backends it
+    serves -- declare it first.
+
 ### Added
+
+- **`core::net::contract::SlotDirection`, `contract::secondOperationArmed()` and
+  `contract::describeHandle()`** in `<core/net/SocketContract.hpp>`, and an optional handle argument
+  (plus a defaulted `std::source_location`) on `contract::claimReadSlot` and
+  `contract::claimWriteSlot`, which name it when they end the process. A transport outside
+  core-cpp passes its own handle to get it in the message.
+- **`EventLoop::inboundFinishedRootCount()`**: how many spawned flows ended off the loop's thread
+  and wait for the next turn to release them.
 
 - **core-cpp installs as the CMake package `core-cpp`** (core-cpp#5): `find_package(core-cpp 0.3
   CONFIG REQUIRED)` and `target_link_libraries(app PRIVATE core::net)`, the same names as a source
@@ -41,7 +76,9 @@ workflow refuses one without a section here.
   readiness run -- fastcached's `AbandonIfPeerGone` -- then resumed before the waiter and read stale
   state. The drain now puts what a callback queued at the front once the callback returns: the
   waiter resumes before anything queued after the callback, still in the drain step and never
-  inside the callback (G2). `resumeSoon` from outside a drain-step callback stays FIFO.
+  inside the callback (G2). `resumeSoon` from outside a drain-step callback stays FIFO. The
+  callback's queue is a member reused across callbacks, so a readiness completion allocates
+  nothing for it, and `cancelPending` finds a waiter a callback has queued.
 
 - **A spawned flow that completes inside a sub-task is released, instead of leaking until the
   loop is destroyed.** `EventLoop::spawn` unlinked a finished flow by the frame its ready entry
@@ -50,9 +87,12 @@ workflow refuses one without a section here.
   symmetric transfer, and stayed in the loop -- and in `spawnedCount()` -- until `~EventLoop`, on
   normal completion and on `requestStop` alike. A long-lived loop spawning one flow per connection
   grew without bound (found by the contour migration, measured on 0.2.1). `spawn` now runs the
-  flow inside a root coroutine owned by the loop; the root's final suspension files it for
-  release, and the drain destroys it after the resume that finished it returns, in O(1) and on
-  the loop's thread, whichever frame the resume named.
+  flow inside a root coroutine owned by the loop -- one more frame allocation per spawn -- whose
+  final suspension files it for release; the drain destroys it after the resume that finished it
+  returns, in O(1) and on the loop's thread, whichever frame the resume named. A flow that ends on
+  another thread (after `co_await ResumeOn { pool }`) hands itself over through the inbound queue
+  and is released in the next turn's first step. A flow's exception ends it without being
+  rethrown into the root.
 
 - **A second operation armed over a parked one ends the process in every build, instead of hanging
   in Release.** One read and one write operation per socket is the contract, and

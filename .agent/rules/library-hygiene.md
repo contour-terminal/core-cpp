@@ -190,6 +190,10 @@ packagers get no new dependency. The contract is in
   `$<BUILD_INTERFACE:...>`, or it becomes a link dependency no installed package can re-find. A
   target linking a dependency the build fetched is left out with a status line, never silently.
   `core-cpp.install` installs and consumes the build (core-cpp#5).
+  - **`CORE_CPP_INSTALL=ON` in a subproject creates cache variables core-cpp does not name**:
+    `include(GNUInstallDirs)` defines the `CMAKE_INSTALL_*` directories in the parent's cache. It
+    is the one unprefixed state core-cpp can create as a subproject, it happens only when the
+    parent opts in, and a parent exporting its own targets includes GNUInstallDirs anyway.
 
 ## Open work
 
