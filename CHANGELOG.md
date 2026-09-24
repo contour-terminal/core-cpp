@@ -62,6 +62,12 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- **`tools/migrate/rewrite.py` rewrites the code after a character literal holding a `"`** (found by
+  the contour migration). Its scanner read `'"'` as opening a string, so in
+  `os << '"' << crispy::escape(s) << '"'` the symbol was masked as data and left unrewritten. A
+  character literal is now one character or one escape sequence, which also keeps a digit
+  separator's quotes (`1'000'000`) from being read as one. `renames.json` gains the
+  `crispy::Overloaded` -> `core::Overloaded` row the migration guide already listed (contour).
 - **A vendored copy configures with `CORE_CPP_TESTING` on** (found by the contour migration). The
   top-level `CMakeLists.txt` added `tests/` unconditionally, and the vendoring file set leaves
   `tests/` out, so the module suites the copy carries (`src/core/**/*_test.cpp`) could never be

@@ -721,5 +721,27 @@ class TheCompleterTypesHaveRowsOfTheirOwn(unittest.TestCase):
                 self.assertEqual(rewritten, expected)
 
 
+class CrispyOverloadedHasARow(unittest.TestCase):
+    """contour's `crispy::Overloaded` (of `<crispy/Utils.hpp>`) is `core::Overloaded`.
+
+    The migration guide lists it, and the table had only the manual row for the unqualified global
+    `Overloaded`, so the qualified spelling -- which IS mechanical -- was left to a human.
+    """
+
+    def test_the_row_exists_for_contour(self) -> None:
+        rows = {row.source: row for row in renames.load(TABLE).rows if row.kind == "symbol"}
+        row = rows.get("crispy::Overloaded")
+        self.assertIsNotNone(row, "no symbol row for crispy::Overloaded")
+        self.assertEqual(row.target, "core::Overloaded")
+        self.assertIn("contour", row.profiles)
+        self.assertEqual(row.delivers.symbol, "core::Overloaded")
+
+    def test_the_rewrite_applies_it(self) -> None:
+        rewritten, _ = rewrite.rewrite_text(
+            "std::visit(crispy::Overloaded { f, g }, v);\n", renames.load(TABLE).text_rows("contour")
+        )
+        self.assertEqual(rewritten, "std::visit(core::Overloaded { f, g }, v);\n")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -66,6 +66,12 @@ SKIPPED_DIRECTORY_PREFIXES = ("cmake-build",)
 #   rawstring  before code, so a line-initial #include *inside* embedded C++ test data is part of
 #              the literal and is left alone (finding I1). A highlighter or parser suite is full of
 #              these, and rewriting one changes what the program sends.
+#   char       ONE character or one escape sequence between the quotes, and nothing longer. It used
+#              to take any run of characters but a `"`, so `'"'` did not match it, the `"` opened a
+#              string that ran to the next `"`, and the code in between -- contour's
+#              `os << '"' << crispy::escape(s) << '"'` -- was masked as data. Allowing the `"`
+#              without the length bound would let a literal span a digit separator's quotes
+#              (`1'000'000`) and mask whatever lay between; a single character cannot.
 #
 # Whatever the scan does not match is code. Code and comments are rewritten; a directive takes the
 # include rows only; a string, character or raw-string literal is never touched.
@@ -74,7 +80,7 @@ SPANS = re.compile(
       | (?P<comment>//[^\n]*|/\*.*?\*/)
       | (?P<rawstring>R"(?P<delim>[^()\\\s]{0,16})\(.*?\)(?P=delim)")
       | (?P<string>"(?:[^"\\\n]|\\.)*")
-      | (?P<char>'(?:[^'"\\\n]|\\.)*')""",
+      | (?P<char>'(?:[^'\\\n]|\\(?:[xX][0-9A-Fa-f]+|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|[0-7]{1,3}|.))')""",
     re.VERBOSE | re.DOTALL | re.MULTILINE,
 )
 

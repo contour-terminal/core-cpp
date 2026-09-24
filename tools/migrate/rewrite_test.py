@@ -126,6 +126,31 @@ class TheNamespaceRegexIsAnchored(unittest.TestCase):
         result, _ = rewrite.rewrite_text(source, rows_for("contour"))
         self.assertEqual(result, source, "a codemod may change what the code says, never what it sends")
 
+    def test_a_char_literal_holding_a_double_quote_opens_no_string(self) -> None:
+        # contour writes `os << '"' << crispy::escape(...) << '"'`. The char alternative refused a
+        # `"` inside the quotes, so the scan read that `"` as opening a string that ran to the next
+        # one, and the symbol between them was masked as data and left unrewritten.
+        source = "os << '\"' << crispy::escape(text) << '\"';\n"
+        result, _ = rewrite.rewrite_text(source, rows_for("contour"))
+        self.assertEqual(result, "os << '\"' << core::escape(text) << '\"';\n")
+
+    def test_an_escaped_char_literal_is_one_literal(self) -> None:
+        # A quote or a backslash escaped inside the quotes, and the hex and octal forms, each end at
+        # their own closing quote; the code after them is still code.
+        for literal in ("'\\''", "'\\\\'", "'\\x22'", "'\\042'"):
+            with self.subTest(literal=literal):
+                source = f"auto c = {literal}; crispy::escape(s);\n"
+                result, _ = rewrite.rewrite_text(source, rows_for("contour"))
+                self.assertEqual(result, f"auto c = {literal}; core::escape(s);\n")
+
+    def test_a_digit_separator_is_not_a_char_literal(self) -> None:
+        # The reason the char alternative was narrow: `1'000'000` holds quotes that open nothing,
+        # and a literal free to span them would mask whatever came between -- here a string, which
+        # must stay data, and a symbol after it, which must not.
+        source = "auto n = 1'000'000; auto s = \"crispy::escape\"; crispy::escape(s);\n"
+        result, _ = rewrite.rewrite_text(source, rows_for("contour"))
+        self.assertEqual(result, "auto n = 1'000'000; auto s = \"crispy::escape\"; core::escape(s);\n")
+
     def test_a_comment_follows_the_code_it_documents(self) -> None:
         source = "// net::EventLoop drives it.\n/* net::ISocket too. */\nnet::EventLoop loop;\n"
         result, _ = rewrite.rewrite_text(source, rows_for("contour"))

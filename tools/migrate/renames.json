@@ -6354,6 +6354,19 @@
     },
     {
       "kind": "symbol",
+      "from": "crispy::Overloaded",
+      "to": "core::Overloaded",
+      "profiles": [
+        "contour"
+      ],
+      "target": {
+        "header": "core/Overloaded.hpp",
+        "symbol": "core::Overloaded"
+      },
+      "note": "the crispy::Overloaded of <crispy/Utils.hpp>; <core/Utils.hpp> includes <core/Overloaded.hpp>"
+    },
+    {
+      "kind": "symbol",
       "from": "Overloaded",
       "to": "core::Overloaded",
       "apply": "manual",
