@@ -27,6 +27,7 @@
 #include <stdexcept>
 #include <thread>
 #include <tuple>
+#include <utility>
 
 using core::async::OperationCancelled;
 using core::async::Task;
@@ -1464,7 +1465,7 @@ TEST_CASE("spawn at scale unlinks nested flows per completion", "[EventLoop][spa
     std::ignore = loop.runOnce();
     auto const drainingTurn = loop.runOnce();
     CHECK(drainingTurn.drained == Batch);
-    CHECK(finished == static_cast<int>(Batch));
+    CHECK(std::cmp_equal(finished, Batch));
     CHECK(loop.spawnedCount() == static_cast<std::size_t>(Flows) - Batch);
 
     std::ignore = loop.runUntilIdle();

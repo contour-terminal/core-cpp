@@ -500,7 +500,7 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
 void EventLoop::reapFinishedRoots() noexcept
 {
     // Taken first: destroying a root destroys its flow's frames, whose destructors may spawn.
-    for (auto const slot: std::exchange(_finishedRoots, {}))
+    for (auto const& slot: std::exchange(_finishedRoots, {}))
         _roots.erase(slot);
 }
 
