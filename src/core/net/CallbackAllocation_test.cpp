@@ -73,7 +73,7 @@ struct ParkHere
 /// @param resumes Counts its resumptions.
 core::async::Task<void> parkForever(std::coroutine_handle<>* parked, std::size_t* resumes)
 {
-    for (;;)
+    while (true)
     {
         co_await ParkHere { parked };
         ++*resumes;
