@@ -96,7 +96,8 @@ TEST_CASE("ParkMap agrees with an unordered_map over a long random run", "[net][
         }
         else if (choice == 1)
         {
-            auto const index = rng() % live.size();
+            // Narrowed explicitly: `std::size_t` is 32 bits under WebAssembly.
+            auto const index = static_cast<std::size_t>(rng() % live.size());
             auto const id = live[index];
             auto const taken = map.erase(ParkId { id });
             REQUIRE(taken.get() == reference.at(id));

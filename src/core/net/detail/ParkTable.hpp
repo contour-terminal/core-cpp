@@ -25,7 +25,6 @@
 #include <core/platform/Types.hpp>
 
 #include <algorithm>
-#include <bit>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
@@ -486,11 +485,15 @@ namespace detail
             std::unique_ptr<Park> park;
         };
 
-        /// Where @p key's probe sequence starts: Fibonacci hashing, so the sequential ids a loop
-        /// hands out spread over the table rather than filling one run.
+        /// Where @p key's probe sequence starts: a multiplicative (Fibonacci) hash, so the
+        /// sequential ids a loop hands out spread over the table rather than filling one run. The
+        /// product's upper half, masked to the table, rather than its top bits shifted down by a
+        /// width that depends on the table: the shift is a constant, so it is never the full 64
+        /// bits an empty table would ask for, and nothing here depends on `std::size_t` being 64
+        /// bits wide, which it is not under WebAssembly.
         [[nodiscard]] std::size_t home(std::uint64_t key) const noexcept
         {
-            return static_cast<std::size_t>((key * 0x9E37'79B9'7F4A'7C15ULL) >> _shift);
+            return static_cast<std::size_t>((key * 0x9E37'79B9'7F4A'7C15ULL) >> 32U) & mask();
         }
 
         [[nodiscard]] std::size_t mask() const noexcept { return _entries.size() - 1; }
@@ -500,7 +503,6 @@ namespace detail
         {
             auto old =
                 std::exchange(_entries, std::vector<Entry>(_entries.empty() ? 16 : _entries.size() * 2));
-            _shift = 64 - static_cast<unsigned>(std::countr_zero(_entries.size()));
             _size = 0;
             for (auto& entry: old)
                 if (entry.key != 0)
@@ -509,7 +511,6 @@ namespace detail
 
         std::vector<Entry> _entries;
         std::size_t _size = 0;
-        unsigned _shift = 64;
     };
 
     /// The parks one loop holds, by id, with the reverse indices every resolution path needs.
