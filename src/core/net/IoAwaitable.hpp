@@ -68,8 +68,13 @@ void requestCancelOn(EventLoop& loop, ParkId park) noexcept;
 /// Hands @p waiter to @p loop's ready queue, to be resumed in its drain step, out of line for the
 /// same reason as @c requestCancelOn. Loop thread only, as @c EventLoop::resumeSoon.
 /// @param loop The loop to resume on.
-/// @param waiter The suspended coroutine, with the claim on its chain where the loop is to free it.
-void resumeSoonOn(EventLoop& loop, async::ParkedWork waiter) noexcept;
+/// @param waiter The suspended coroutine.
+/// @param workFor Makes the loop's work item for @p waiter: the handle, with the claim on its chain
+///        where the loop is to free it. Called here rather than by the caller, so the work item --
+///        and the claim's release -- is built and destroyed out of line.
+void resumeSoonOn(EventLoop& loop,
+                  std::coroutine_handle<> waiter,
+                  async::ParkedWork (*workFor)(std::coroutine_handle<>)) noexcept;
 
 /// Takes @p waiter back out of @p loop's ready queue, where @c resumeSoonOn put it, because its
 /// frame is being destroyed before the loop reached it. Loop thread only.
@@ -363,7 +368,7 @@ class ResultAwaitable
         if (_loop != nullptr)
         {
             _queued = waiter;
-            resumeSoonOn(*_loop, _workFor(waiter));
+            resumeSoonOn(*_loop, waiter, _workFor);
             return;
         }
         waiter.resume();

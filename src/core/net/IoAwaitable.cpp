@@ -23,9 +23,11 @@ void requestCancelOn(EventLoop& loop, ParkId park) noexcept
     loop.requestCancel(park);
 }
 
-void resumeSoonOn(EventLoop& loop, async::ParkedWork waiter) noexcept
+void resumeSoonOn(EventLoop& loop,
+                  std::coroutine_handle<> waiter,
+                  async::ParkedWork (*workFor)(std::coroutine_handle<>)) noexcept
 {
-    loop.resumeSoon(std::move(waiter));
+    loop.resumeSoon(workFor(waiter));
 }
 
 void cancelPendingOn(EventLoop& loop, std::coroutine_handle<> waiter) noexcept
