@@ -11,22 +11,19 @@
 /// immediately before it, never on `WILL_FAIL`: `SocketContractCanary.cpp` says at length why a
 /// canary that dies early must not read as one whose guard fired.
 ///
-/// Skips (exit 77) where assertions are compiled out: with `NDEBUG` there is no refusal to observe.
+/// Runs in every build: the slot guards end the process in Release too (`core/net/SocketContract.hpp`).
 
 #include <core/async/Task.hpp>
 #include <core/net/testing/InMemorySocket.hpp>
 
+#include <array>
 #include <csignal>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <span>
 #include <tuple>
-
-#ifndef NDEBUG
-
-    #include <array>
-    #include <cstddef>
-    #include <span>
 
 namespace
 {
@@ -112,22 +109,11 @@ int provokeWriteSlot(char const* mode)
 
 } // namespace
 
-#endif
-
 /// @param argc The argument count.
 /// @param argv `fake-read-slot` or `fake-write-slot`.
-/// @return Never, in a build with assertions: the guard aborts.
+/// @return Never, where the guard fires: it ends the process.
 int main(int argc, char** argv)
 {
-#ifdef NDEBUG
-    std::ignore = argc;
-    std::ignore = argv;
-    /// The exit code ctest is told to read as "this configuration could not run the case".
-    constexpr auto SkipExitCode = 77;
-    std::fputs("inmemory-socket-canary: SKIPPED -- assertions are compiled out in this configuration\n",
-               stderr);
-    return SkipExitCode;
-#else
     std::ignore = std::signal(SIGABRT, &onAbort);
     if (argc != 2)
     {
@@ -140,5 +126,4 @@ int main(int argc, char** argv)
         return provokeWriteSlot(argv[1]);
     std::fputs("inmemory-socket-canary: unknown mode\n", stderr);
     return 2;
-#endif
 }

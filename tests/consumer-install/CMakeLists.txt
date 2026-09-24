@@ -17,19 +17,22 @@ endif()
 set(expectedMajor "${CMAKE_MATCH_1}")
 set(expectedMinor "${CMAKE_MATCH_2}")
 
+find_package(core-cpp "${expectedMajor}.${expectedMinor}" CONFIG REQUIRED)
+if(NOT core-cpp_VERSION STREQUAL EXPECTED_VERSION)
+    message(FATAL_ERROR "consumer-install: found core-cpp ${core-cpp_VERSION}, expected ${EXPECTED_VERSION}")
+endif()
+
 # While core-cpp is 0.x a minor release may break the API, so the package accepts a request for its
-# own major.minor and refuses the next one: SameMinorVersion, asked from outside.
+# own major.minor and refuses the next one: SameMinorVersion, asked from outside. After the real
+# lookup, not before: a refusal resets core-cpp_DIR, and under a cross toolchain that variable is the
+# only way to the prefix (tests/cmake/check-install.cmake). A refused version loads no config, so
+# the targets found above stay as they are.
 math(EXPR nextMinor "${expectedMinor} + 1")
 find_package(core-cpp "${expectedMajor}.${nextMinor}" CONFIG QUIET)
 if(core-cpp_FOUND)
     message(FATAL_ERROR
         "consumer-install: core-cpp ${core-cpp_VERSION} accepted a request for ${expectedMajor}.${nextMinor}; "
         "a 0.x package is compatible within its own minor version only")
-endif()
-
-find_package(core-cpp "${expectedMajor}.${expectedMinor}" CONFIG REQUIRED)
-if(NOT core-cpp_VERSION STREQUAL EXPECTED_VERSION)
-    message(FATAL_ERROR "consumer-install: found core-cpp ${core-cpp_VERSION}, expected ${EXPECTED_VERSION}")
 endif()
 
 # The installed names are the aliases a source build has, so a consumer's link line does not

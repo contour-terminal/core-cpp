@@ -427,20 +427,6 @@ std::byte patternAt(std::size_t offset)
     return static_cast<std::byte>(((offset * 31) + 7) % 251);
 }
 
-/// Parks a flow on one `write` and records how it ends.
-DetachedTask writeOnce(core::net::ISocket* socket, std::span<std::byte const> bytes, Outcome* out)
-{
-    try
-    {
-        out->record(co_await socket->write(bytes));
-    }
-    catch (core::async::OperationCancelled const&)
-    {
-        out->resumed = true;
-        out->abandoned = true;
-    }
-}
-
 } // namespace
 
 TEST_CASE("On Windows the default backend is the completion port, and the factories follow the loop",
