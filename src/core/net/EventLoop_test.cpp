@@ -2,7 +2,9 @@
 #include <core/async/AsyncQueue.hpp>
 #include <core/async/Awaitable.hpp>
 #include <core/async/Cancellation.hpp>
+#include <core/async/DetachedTask.hpp>
 #include <core/async/IExecutor.hpp>
+#include <core/async/ParkedWork.hpp>
 #include <core/async/ResumeOn.hpp>
 #include <core/async/Task.hpp>
 #include <core/async/ThreadPoolExecutor.hpp>
@@ -1866,4 +1868,95 @@ TEST_CASE("A nested callback that takes back what an outer callback queued leave
     CHECK(nested.takenBack);
     CHECK_FALSE(x.handle().done()); // taken back, so never resumed
     CHECK(trace.events.empty());
+}
+
+namespace
+{
+
+/// Touches the loop's park table when destroyed -- as a flow owning a timer does when it unwinds.
+struct CancelsTimerOnDestroy
+{
+    CancelsTimerOnDestroy(EventLoop* owner, core::net::TimerId armed, bool* answer) noexcept:
+        loop(owner), timer(armed), cancelled(answer)
+    {
+    }
+    EventLoop* loop;
+    core::net::TimerId timer;
+    bool* cancelled;
+    CancelsTimerOnDestroy(CancelsTimerOnDestroy const&) = delete;
+    CancelsTimerOnDestroy(CancelsTimerOnDestroy&&) = delete;
+    CancelsTimerOnDestroy& operator=(CancelsTimerOnDestroy const&) = delete;
+    CancelsTimerOnDestroy& operator=(CancelsTimerOnDestroy&&) = delete;
+    ~CancelsTimerOnDestroy() { *cancelled = loop->cancelTimer(timer); }
+};
+
+/// Parks the awaiting flow and hands over its work WITH the chain's claim, as an awaitable does.
+struct ParkWithClaim
+{
+    core::async::ParkedWork* parked;
+    [[nodiscard]] bool await_ready() const noexcept { return false; }
+    template <typename Promise>
+    void await_suspend(std::coroutine_handle<Promise> self) const
+    {
+        *parked = core::async::detail::parkedWorkFor(self);
+    }
+    void await_resume() const noexcept {}
+};
+
+/// An owned chain -- nobody holds it -- that parks, and whose frame touches the loop when freed.
+core::async::DetachedTask ownedWaiter(EventLoop* loop,
+                                      core::net::TimerId timer,
+                                      core::async::ParkedWork* parked,
+                                      bool* cancelled)
+{
+    auto const touch = CancelsTimerOnDestroy { loop, timer, cancelled };
+    co_await ParkWithClaim { parked };
+}
+
+/// What the throwing callback needs.
+struct ThrowingCompletion
+{
+    EventLoop* loop = nullptr;
+    core::async::ParkedWork* parked = nullptr;
+};
+
+/// Completes the waiter, and then throws.
+/// @param state The @c ThrowingCompletion.
+void completeThenThrow(void* state)
+{
+    auto* const completion = static_cast<ThrowingCompletion*>(state);
+    completion->loop->resumeSoon(std::move(*completion->parked));
+    throw std::runtime_error { "a callback that fails after completing its waiter" };
+}
+
+/// A timer callback that does nothing.
+void doNothing(void* /*state*/)
+{
+}
+
+} // namespace
+
+TEST_CASE("A waiter a throwing callback completed is still the loop's to free at teardown",
+          "[EventLoop][turn][ordering]")
+{
+    // What a callback queued moves into the callback position when it returns -- and, until this
+    // was a scope guard, only when it returned: a callback that queued its waiter and THREW left it
+    // in `_resumeFirst`, which no teardown step reads. The owned chain was then freed with the
+    // loop's members, after the park table it touches on the way out: a use-after-free under ASan.
+    auto clock = ManualClock {};
+    auto parked = core::async::ParkedWork {};
+    auto cancelled = false;
+    {
+        auto loop = core::net::testing::TestLoop { clock };
+        auto const timer = loop.addTimer(clock.now() + std::chrono::hours { 1 }, &doNothing, nullptr);
+        ownedWaiter(&loop, timer, &parked, &cancelled);
+        REQUIRE(parked.resume);
+
+        auto completion = ThrowingCompletion { .loop = &loop, .parked = &parked };
+        std::ignore = loop.addTimer(clock.now(), &completeThenThrow, &completion);
+        CHECK_THROWS_AS(loop.runUntilIdle(), std::runtime_error);
+        CHECK(loop.readyCount() == 1); // the waiter, spilled to the ready queue by the guard
+    }
+    // The chain was freed by the teardown, while the park table was still there to answer.
+    CHECK(cancelled);
 }

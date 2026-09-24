@@ -13,30 +13,6 @@
 namespace core::testing
 {
 
-#ifdef _WIN32
-namespace
-{
-    /// Asks Windows Error Reporting to show no UI for a fault in this process, where the OS has the
-    /// function. Looked up rather than linked: `WerSetFlags` lives in kernel32 on every Windows this
-    /// builds for, and a link against wer.lib would be a dependency of every consumer's test binary
-    /// for one call. Per process, and it needs no privilege.
-    void suppressErrorReportingUi() noexcept
-    {
-        auto* const kernel = GetModuleHandleW(L"kernel32.dll");
-        if (kernel == nullptr)
-            return;
-        auto* const found = GetProcAddress(kernel, "WerSetFlags");
-        if (found == nullptr)
-            return;
-        using SetFlags = HRESULT(WINAPI*)(DWORD);
-        // Through `void (*)()`, the one function pointer type a cast from FARPROC is not warned
-        // about as a signature mismatch.
-        auto const setFlags = reinterpret_cast<SetFlags>(reinterpret_cast<void (*)()>(found));
-        static_cast<void>(setFlags(WER_FAULT_REPORTING_NO_UI));
-    }
-} // namespace
-#endif
-
 void suppressWindowsDialogs() noexcept
 {
 #ifdef _WIN32
@@ -63,8 +39,10 @@ void suppressWindowsDialogs() noexcept
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
 
     // An unhandled structured exception in a process whose error mode something later reset would
-    // still reach Windows Error Reporting's dialog; this asks WER itself for no UI.
-    suppressErrorReportingUi();
+    // still reach Windows Error Reporting's dialog; this asks WER itself for no UI. Per process, it
+    // needs no privilege, and it is in kernel32, which every Windows program links. A failure
+    // leaves the other suppressions in place, so its HRESULT has nowhere better to go.
+    static_cast<void>(WerSetFlags(WER_FAULT_REPORTING_NO_UI));
 #endif
 }
 

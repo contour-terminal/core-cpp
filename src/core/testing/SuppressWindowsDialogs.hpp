@@ -27,8 +27,8 @@ namespace core::testing
 /// - CRT assert, error and warning reports go to stderr instead of a dialog.
 /// - abort() writes its message to stderr (a Debug CRT's; a Release UCRT writes none), shows no
 ///   message box and asks Windows Error Reporting for nothing.
-/// - Windows Error Reporting shows no UI for a fault in this process (`WerSetFlags`, looked up at
-///   run time, so nothing links wer.lib).
+/// - Windows Error Reporting is asked for no UI for a fault in this process
+///   (`WerSetFlags(WER_FAULT_REPORTING_NO_UI)`).
 /// - An invalid argument to a CRT function returns an error instead of opening a dialog.
 /// - General-protection faults, critical errors and open-file errors show no OS dialog.
 ///

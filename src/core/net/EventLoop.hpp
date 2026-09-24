@@ -477,10 +477,7 @@ class EventLoop: public async::IExecutor
     ///         turn's batch bound was reached. The ready queue only: what another thread -- or this
     ///         one, outside a turn -- submitted waits in the inbound queue until turn step 1, and
     ///         @c inboundSubmissionCount counts that.
-    [[nodiscard]] std::size_t readyCount() const noexcept
-    {
-        return _ready.size() + (_resumeFirst.size() - _resumeFirstHead);
-    }
+    [[nodiscard]] std::size_t readyCount() const noexcept;
 
     /// @return How many coroutines were submitted from off the loop's worker thread and are waiting
     ///         for turn step 1 to queue them. Read under the inbound lock, so any thread may ask.
@@ -938,7 +935,8 @@ class EventLoop: public async::IExecutor
 
     /// The callback position itself: what a callback queued, taken by the drain before anything in
     /// @c _ready from @c _resumeFirstHead on, emptied (keeping its capacity) once consumed, and moved
-    /// to the front of @c _ready if the drain's bound ends it early. Empty outside a drain.
+    /// to the front of @c _ready, less what was taken back, however the drain ends -- its bound, or
+    /// a throw. Empty outside a drain, which is why no teardown step has to read it.
     std::vector<ReadyEntry> _resumeFirst;
     std::size_t _resumeFirstHead = 0; ///< The next entry of @c _resumeFirst to take.
 
@@ -1038,6 +1036,13 @@ class EventLoop: public async::IExecutor
     /// @return The next entry the drain runs: the callback position first, then the ready queue;
     ///         nothing when both are empty.
     [[nodiscard]] std::optional<ReadyEntry> takeNextReady();
+
+    /// @param entry An entry of the callback position or of a callback's range.
+    /// @return Whether @c cancelPending took it back, leaving it with nothing to run.
+    [[nodiscard]] static bool isTakenBack(ReadyEntry const& entry) noexcept
+    {
+        return !entry.callbackPark && !entry.parked.handle();
+    }
 
     /// Destroys every root that reached its final suspension, in O(1) apiece. Called by the drain
     /// after each resume, which is where a root can finish, and before it, and by turn step 1 for

@@ -472,6 +472,24 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
               "backend callbacks may only enqueue");
 
     reapFinishedRoots();
+
+    // Whatever ends the drain -- its bound, an empty queue, or a callback or a flow that THROWS --
+    // a callback's waiters still in its position move to the front of the ready queue, ahead of
+    // everything else, for the next drain. A guard, because the throw path is the one that used to
+    // miss it: the waiters stayed in `_resumeFirst`, which no teardown step reads, and an owned
+    // chain there was freed with the loop's members, after the park table it touches. Taken-back
+    // entries are left out. The one path here that can allocate, and only where a drain ends in the
+    // middle of a callback's work.
+    auto const spill = detail::ScopeGuard { [this]() noexcept {
+        auto const head = static_cast<std::ptrdiff_t>(_resumeFirstHead);
+        for (auto& entry:
+             std::ranges::subrange(_resumeFirst.begin() + head, _resumeFirst.end()) | std::views::reverse)
+            if (!isTakenBack(entry))
+                _ready.push_front(std::move(entry));
+        _resumeFirst.clear();
+        _resumeFirstHead = 0;
+    } };
+
     auto resumed = std::size_t { 0 };
     while (resumed < bound)
     {
@@ -479,7 +497,7 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
         if (!next)
             break;
         // Taken back by `cancelPending` while it waited in a callback's position: nothing to run.
-        if (!next->callbackPark && !next->parked.handle())
+        if (isTakenBack(*next))
             continue;
 
         // A due timer callback runs HERE, where a coroutine resumption runs, and nowhere else.
@@ -537,20 +555,17 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
         // connection pays forever.
         reapFinishedRoots();
     }
-
-    // The bound stopped the drain with a callback's waiters still in its position: they stay ahead
-    // of everything else, at the front of the ready queue, for the next drain. The one path here
-    // that can allocate, and only where a turn's batch ends in the middle of a callback's work.
-    if (_resumeFirstHead < _resumeFirst.size())
-    {
-        _ready.insert(
-            _ready.begin(),
-            std::make_move_iterator(_resumeFirst.begin() + static_cast<std::ptrdiff_t>(_resumeFirstHead)),
-            std::make_move_iterator(_resumeFirst.end()));
-        _resumeFirst.clear();
-        _resumeFirstHead = 0;
-    }
     return resumed;
+}
+
+std::size_t EventLoop::readyCount() const noexcept
+{
+    auto const head = static_cast<std::ptrdiff_t>(_resumeFirstHead);
+    return _ready.size()
+           + static_cast<std::size_t>(std::ranges::count_if(
+               _resumeFirst.begin() + head, _resumeFirst.end(), [](ReadyEntry const& entry) {
+                   return !isTakenBack(entry);
+               }));
 }
 
 std::optional<EventLoop::ReadyEntry> EventLoop::takeNextReady()

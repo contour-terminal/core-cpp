@@ -496,6 +496,9 @@ void IocpBackend::wake() noexcept
     if (PostQueuedCompletionStatus(_port, 0, KeyWake, nullptr) == 0)
     {
         _wakePending.store(false, std::memory_order_release);
+        // The sink can run with the loop's inbound lock held: `EventLoop::handOverFinishedRoot`
+        // wakes under it. So a diagnostic sink must not `post()` to this loop -- that takes the same
+        // lock, on the same thread -- and should only record.
         reportDiagnostic(
             std::format("IocpBackend::wake: PostQueuedCompletionStatus failed: {}", GetLastError()));
     }

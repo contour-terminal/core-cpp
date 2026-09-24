@@ -50,7 +50,9 @@ core_cpp_add_test(testing SOURCES
     EnvHelper_test.cpp
     ExitCode_test.cpp
     ScopedTempDir_test.cpp
-    ScopedWorkingDirectory_test.cpp)
+    ScopedWorkingDirectory_test.cpp
+    SOURCES_WINDOWS
+    windows/SuppressWindowsDialogs_test.cpp)
 if(TEST core-cpp.testing)
     # CatchMain_test.cpp asserts what main() makes of it.
     set_tests_properties(core-cpp.testing PROPERTIES ENVIRONMENT "LOG=net")
