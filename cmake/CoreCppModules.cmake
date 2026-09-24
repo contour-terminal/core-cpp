@@ -153,32 +153,49 @@ endfunction()
 
 ## @brief Enters the directory of every module the configuration enables, in table order.
 ##
-## A module whose WHEN option is OFF is skipped. So is a module that builds nothing on
-## this platform: one that is native-only in an Emscripten build, unless a target of it
-## has a row of its own that builds there, in which case only that target is created.
-## An enabled module whose DEPS include a skipped one stops the configure.
+## A module whose own row does not build here -- its WHEN option is OFF, or it is native-only
+## in an Emscripten build -- is skipped, unless a target of it has a row of its own that does
+## build, in which case the directory is entered and only those targets are created. That is
+## what a row of its own promises: its PLATFORMS and WHEN apply to it alone, so the module's
+## row switching off must not take the target with it (core::tui_output, whose module is off
+## with CORE_CPP_WITH_TUI while the leaf is on with CORE_CPP_WITH_TUI_OUTPUT).
+##
+## An enabled module whose DEPS include a skipped one stops the configure. For a module entered
+## for some of its targets only, the DEPS checked are those targets' rows', not the module's.
 function(core_cpp_add_modules)
     set(enabled "")
     foreach(module IN LISTS CORE_CPP_MODULES)
         set(when "${CORE_CPP_MODULE_${module}_WHEN}")
-        if(when AND NOT ${when})
-            message(STATUS "[core-cpp] module ${module}: off (${when}=OFF)")
-            continue()
-        endif()
+        core_cpp_row_builds("${CORE_CPP_MODULE_${module}_PLATFORMS}" "${when}" moduleBuilds)
         set(only "")
-        if(EMSCRIPTEN AND CORE_CPP_MODULE_${module}_PLATFORMS STREQUAL "native")
+        set(deps ${CORE_CPP_MODULE_${module}_DEPS})
+        if(NOT moduleBuilds)
+            if(when AND NOT ${when})
+                set(reason "${when}=OFF")
+            else()
+                set(reason "native only, and this is Emscripten")
+            endif()
+            set(deps "")
             foreach(target IN LISTS CORE_CPP_MODULE_${module}_TARGETS)
                 core_cpp_row_builds("${CORE_CPP_TARGET_${target}_PLATFORMS}" "${CORE_CPP_TARGET_${target}_WHEN}" builds)
-                if(builds)
-                    list(APPEND only core::${target})
+                if(NOT builds)
+                    continue()
                 endif()
+                list(APPEND only core::${target})
+                # A row's DEPS name modules and targets of its own module; only the modules are
+                # entered by this function, so only they can be missing.
+                foreach(dep IN LISTS CORE_CPP_TARGET_${target}_DEPS)
+                    if(dep IN_LIST CORE_CPP_MODULES AND NOT dep STREQUAL module)
+                        list(APPEND deps ${dep})
+                    endif()
+                endforeach()
             endforeach()
             if(NOT only)
-                message(STATUS "[core-cpp] module ${module}: off (native only, and this is Emscripten)")
+                message(STATUS "[core-cpp] module ${module}: off (${reason})")
                 continue()
             endif()
         endif()
-        foreach(dep IN LISTS CORE_CPP_MODULE_${module}_DEPS)
+        foreach(dep IN LISTS deps)
             if(NOT dep IN_LIST enabled)
                 message(FATAL_ERROR
                     "[core-cpp] module ${module} is enabled but depends on module ${dep}, which is not. "
@@ -192,7 +209,7 @@ function(core_cpp_add_modules)
         list(APPEND enabled ${module})
         if(only)
             list(JOIN only ", " only)
-            message(STATUS "[core-cpp] module ${module}: ${only} only (the rest is native only, and this is Emscripten)")
+            message(STATUS "[core-cpp] module ${module}: ${only} only (the rest is off: ${reason})")
         else()
             message(STATUS "[core-cpp] module ${module}: on")
         endif()
@@ -239,5 +256,11 @@ core_cpp_module_target(NAME net_tls MODULE net KIND STATIC DEPS net PLATFORMS na
 # the whole reason it has a row of its own -- dbtool takes none of this.
 core_cpp_module(NAME tui KIND STATIC DEPS base platform async net PLATFORMS native
                 WHEN CORE_CPP_WITH_TUI)
+#
+# tui_output has an option of its own for the same reason it has a row of its own. Gated on
+# CORE_CPP_WITH_TUI it existed only in the configuration that also fetched libunicode (and, through
+# libunicode's configure, UCD.zip), so the one consumer it was split off for could not have it
+# without everything it was split off from. With CORE_CPP_WITH_TUI off and CORE_CPP_WITH_TUI_OUTPUT
+# on, core_cpp_add_modules() enters this directory for the leaf alone.
 core_cpp_module_target(NAME tui_output MODULE tui KIND STATIC DEPS base
-                       PLATFORMS native WHEN CORE_CPP_WITH_TUI)
+                       PLATFORMS native WHEN CORE_CPP_WITH_TUI_OUTPUT)

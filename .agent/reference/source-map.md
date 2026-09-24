@@ -65,7 +65,8 @@ src/core/
                             HostDrivenBackend and EventLoop with PlatformLoop and TestLoop over
                             it; IOCP, sockets and dialling (planned, B6-B11)
   tui/                      core::tui_output (endo: TerminalOutput, SyncGuard, SgrBuilder,
-                            TerminalProtocols, CursorShape, Error; links base alone), and
+                            TerminalProtocols, CursorShape, Error; links base alone; with
+                            CORE_CPP_WITH_TUI_OUTPUT, which the full TUI forces on), and
                             core::tui (TerminalInput, VtParser, Terminal, Buffer, Canvas,
                             Screen, the components and popups, completer/, MarkdownRenderer,
                             GenericSyntaxHighlighter, Sixel, images behind

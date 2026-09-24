@@ -16,7 +16,12 @@ Its consumers are endo, tuidu, fastcached's console tools and Lightweight's `dbt
   a leaf file is a layering violation even if it links.
 - **`core::tui` is everything else** and may depend on `platform`, `async`, `net`, libunicode,
   and stb when `CORE_CPP_WITH_IMAGES` is on.
-- **The TUI never builds under Emscripten.** `CORE_CPP_WITH_TUI` is forced off there.
+- **The leaf has an option of its own, `CORE_CPP_WITH_TUI_OUTPUT`, and that is load-bearing.**
+  Gated on `CORE_CPP_WITH_TUI` like the libunicode row, the leaf existed only in the configuration
+  that fetched libunicode and `UCD.zip`, so dbtool could not have it without what it was split off
+  from. `tests/consumer-tui-output` asserts the leaf-only configuration fetches nothing.
+- **The TUI never builds under Emscripten.** `CORE_CPP_WITH_TUI` and `CORE_CPP_WITH_TUI_OUTPUT`
+  are forced off there.
 
 ## Output goes through the destination, never to a file descriptor
 

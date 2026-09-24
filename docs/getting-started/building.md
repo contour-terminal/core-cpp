@@ -29,7 +29,8 @@ cmake --workflow --preset ci-clang-debug     # the same three steps in one comma
   project. libunicode's own configure then downloads `UCD.zip` from `www.unicode.org`, which is
   the one fetch core-cpp's build makes outside GitHub. An installed Catch2 or libunicode is
   found and used instead, and `-DCORE_CPP_WITH_TUI=OFF` drops libunicode and the Unicode
-  download with it.
+  download with it (add `-DCORE_CPP_WITH_TUI_OUTPUT=ON` to keep `core::tui_output`, which does not
+  need them).
 
 ## Presets
 

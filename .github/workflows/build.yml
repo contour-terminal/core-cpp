@@ -972,6 +972,9 @@ jobs:
   #             packager's build has; the copy's own verbatim check runs there as a test.
   #   wasm      morph builds core-cpp for WebAssembly. The subset configures with CORE_CPP_WITH_TUI
   #             and CORE_CPP_FETCH_DEPS off, links no pthread, and the program runs under node.
+  #   tui-output  Lightweight's dbtool links core::tui_output alone, with CORE_CPP_WITH_TUI off and
+  #             CORE_CPP_WITH_TUI_OUTPUT on. The project asserts that the leaf exists, that core::tui
+  #             does not, and that libunicode was neither found nor fetched.
   consumer-smoke:
     name: consumer-smoke (${{ matrix.leg }})
     runs-on: ubuntu-24.04
@@ -979,7 +982,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        leg: [cpm, vendored, wasm]
+        leg: [cpm, vendored, wasm, tui-output]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -1000,7 +1003,7 @@ jobs:
 
       # --- cpm ---------------------------------------------------------------------------------
       - name: Install clang ${{ env.LLVM_VERSION }}
-        if: matrix.leg == 'cpm'
+        if: matrix.leg == 'cpm' || matrix.leg == 'tui-output'
         run: |
           scripts/ci-retry.sh wget -q https://apt.llvm.org/llvm.sh
           scripts/ci-retry.sh sudo bash llvm.sh "$LLVM_VERSION"
@@ -1013,6 +1016,16 @@ jobs:
             -DCORE_CPP_SOURCE_DIR="$GITHUB_WORKSPACE"
           cmake --build "$RUNNER_TEMP/consumer-cpm"
           ctest --test-dir "$RUNNER_TEMP/consumer-cpm" --output-on-failure
+
+      # --- tui-output --------------------------------------------------------------------------
+      - name: A consumer of core::tui_output alone fetches no libunicode
+        if: matrix.leg == 'tui-output'
+        run: |
+          cmake -S tests/consumer-tui-output -B "$RUNNER_TEMP/consumer-tui-output" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER="clang++-$LLVM_VERSION" \
+            -DCORE_CPP_SOURCE_DIR="$GITHUB_WORKSPACE"
+          cmake --build "$RUNNER_TEMP/consumer-tui-output"
+          ctest --test-dir "$RUNNER_TEMP/consumer-tui-output" --output-on-failure
 
       # --- vendored ----------------------------------------------------------------------------
       - name: Export a verbatim copy of this commit

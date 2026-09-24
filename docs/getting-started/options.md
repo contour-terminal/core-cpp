@@ -13,7 +13,8 @@ core-cpp never writes to the parent's cache.
 | `CORE_CPP_CATCH2_MAIN` | `CORE_CPP_TESTING` | Build `core::testing_main`, the Catch2 `main()` with core-cpp's exit-code contract (needs Catch2) |
 | `CORE_CPP_BUILD_EXAMPLES` | ON when top-level | Build the examples |
 | `CORE_CPP_FETCH_DEPS` | ON | Fetch a dependency with CPM when neither the parent project nor `find_package` provides it. OFF stops the configure instead, naming the option that needed it |
-| `CORE_CPP_WITH_TUI` | ON | Build `core::tui_output` and `core::tui` |
+| `CORE_CPP_WITH_TUI` | ON | Build `core::tui`, which needs libunicode. Forces `CORE_CPP_WITH_TUI_OUTPUT` on |
+| `CORE_CPP_WITH_TUI_OUTPUT` | `CORE_CPP_WITH_TUI` | Build `core::tui_output`, the styled-output leaf that links `core::base` alone. On with `CORE_CPP_WITH_TUI` off builds the leaf by itself, and fetches no libunicode |
 | `CORE_CPP_WITH_IMAGES` | ON, when `CORE_CPP_WITH_TUI` is | Decode images in `core::tui` (stb_image) |
 | `CORE_CPP_WITH_TLS` | OFF | Build `core::net_tls` (OpenSSL, from the system) |
 | `CORE_CPP_WITH_TRACY` | OFF | Instrument core-cpp for the Tracy profiler |
@@ -32,8 +33,8 @@ Every flag these options add is private to core-cpp's own targets.
 
 ## Under Emscripten
 
-Only the WebAssembly subset builds, and `CORE_CPP_WITH_TUI`, `CORE_CPP_WITH_IMAGES` and
-`CORE_CPP_WITH_TLS` are forced off, by a normal variable that leaves the parent's cache
+Only the WebAssembly subset builds, and `CORE_CPP_WITH_TUI`, `CORE_CPP_WITH_TUI_OUTPUT`,
+`CORE_CPP_WITH_IMAGES` and `CORE_CPP_WITH_TLS` are forced off, by a normal variable that leaves the parent's cache
 untouched. Without pthreads, Threads is not linked.
 
 ## Compiler-cache options (top-level builds only)

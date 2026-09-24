@@ -196,7 +196,8 @@ core_cpp_dependency(OpenSSL
     NO_FETCH)
 
 # libunicode, for core::tui: grapheme segmentation, east-asian width and the codepoint property
-# tables. 0.9.3 is what endo pins (f774a210), and its scan_text() fix (a zero-width codepoint after
+# tables. For core::tui alone: core::tui_output includes none of it, and CORE_CPP_WITH_TUI_OUTPUT
+# builds that leaf with this row off (tests/consumer-tui-output asserts nothing here is fetched). 0.9.3 is what endo pins (f774a210), and its scan_text() fix (a zero-width codepoint after
 # an ASCII base) is what core::tui's grapheme handling is written against; it is also at or above
 # contour's LIBUNICODE_MINIMAL_VERSION, so a consumer that has both gets one library.
 #

@@ -9,6 +9,24 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Added
+
+- **`CORE_CPP_WITH_TUI_OUTPUT`**, an option of `core::tui_output`'s own. With `CORE_CPP_WITH_TUI`
+  off and this on, core-cpp builds the styled-output leaf by itself and neither finds nor fetches
+  libunicode. It defaults to `CORE_CPP_WITH_TUI`, is forced on by it (`core::tui` links the leaf),
+  and is forced off under Emscripten. A module's own row switching off no longer takes a target
+  with a row of its own down with it: `core_cpp_add_modules()` enters the directory for that target
+  alone, as the module table always said a row of its own would. `tests/consumer-tui-output` and a
+  `consumer-smoke (tui-output)` CI leg assert the configuration.
+
+### Fixed
+
+- **A consumer of `core::tui_output` alone no longer fetches libunicode** (found by Lightweight's
+  `dbtool`). The leaf was gated on `CORE_CPP_WITH_TUI`, the same option as the libunicode row, so
+  the only configuration that built it also fetched libunicode and, through libunicode's own
+  configure, `UCD.zip` from `www.unicode.org` -- for a target that links `core::base` alone.
+  `CORE_CPP_WITH_TUI=OFF` with `CORE_CPP_WITH_TUI_OUTPUT=ON` is the configuration `dbtool` wants.
+
 ## [0.2.0] - 2026-09-24
 
 ### Breaking

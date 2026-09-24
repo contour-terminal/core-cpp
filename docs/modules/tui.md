@@ -1,7 +1,9 @@
 # tui
 
-The terminal UI. Namespace `core::tui`, directory `src/core/tui/`, targets `core::tui_output` and
-`core::tui` (only with `CORE_CPP_WITH_TUI`, which is on by default and off under Emscripten).
+The terminal UI. Namespace `core::tui`, directory `src/core/tui/`, targets `core::tui_output`
+(with `CORE_CPP_WITH_TUI_OUTPUT`) and `core::tui` (with `CORE_CPP_WITH_TUI`). Both are on by
+default and off under Emscripten; `CORE_CPP_WITH_TUI` forces `CORE_CPP_WITH_TUI_OUTPUT` on, and
+`CORE_CPP_WITH_TUI_OUTPUT` defaults to whatever `CORE_CPP_WITH_TUI` is.
 
 Imported from endo's `src/tui` at `f774a210`, which includes the coroutine-runtime work fastcached
 upstreamed there. The runtime has since been rewritten onto [`core::net::EventLoop`](net.md).
@@ -15,7 +17,11 @@ upstreamed there. The runtime has since been rewritten onto [`core::net::EventLo
 A static library that links [base](base.md) and nothing else: no libunicode, no coroutines, not
 even [platform](platform.md). Its row in the module table says `DEPS base`, so the configure
 refuses any other link from it. A program that only prints styled text and progress — Lightweight's
-`dbtool` — links this and takes nothing else with it.
+`dbtool` — links this and takes nothing else with it: configured with `CORE_CPP_WITH_TUI` off and
+`CORE_CPP_WITH_TUI_OUTPUT` on, core-cpp builds the leaf alone and neither finds nor fetches
+libunicode. Before 0.2.1 the leaf had no option of its own and came only with `CORE_CPP_WITH_TUI`,
+which fetches libunicode and, through libunicode's configure, `UCD.zip`.
+`tests/consumer-tui-output` is that consumer, and CI's `consumer-smoke (tui-output)` builds it.
 
 - `TerminalOutput` buffers escape sequences and flushes them: styled text (`Style`, `RgbColor`,
   `UnderlineStyle`), cursor movement, erasing, the alternate screen, the scroll region,

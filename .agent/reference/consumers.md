@@ -29,4 +29,6 @@ pull request settles its row.
   verbatim file core-cpp carries; as a subproject core-cpp sets no launcher and its targets use
   the parent's.
 - **Lightweight links only `core::tui_output`**, so that leaf must never gain a dependency on
-  libunicode, coroutines or the event loop.
+  libunicode, coroutines or the event loop. It configures core-cpp with `CORE_CPP_WITH_TUI OFF`
+  and `CORE_CPP_WITH_TUI_OUTPUT ON` (0.2.1 and later); before 0.2.1 the leaf came only with the
+  full TUI and its libunicode fetch. `tests/consumer-tui-output` is that configuration.
