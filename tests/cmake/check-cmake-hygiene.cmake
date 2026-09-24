@@ -165,6 +165,8 @@ core_cpp_hygiene_allow(source-glob tests/cmake/check-layering.cmake
     "enumerates each module's files to read their includes; it is not a source list")
 core_cpp_hygiene_allow(source-glob tests/cmake/check-cancel-read-declared.cmake
     "derives the set of transports from the tree it scans; it is not a source list")
+core_cpp_hygiene_allow(source-glob tests/cmake/check-install.cmake
+    "enumerates the headers an install produced, to resolve their includes; it is not a source list")
 core_cpp_hygiene_allow(source-glob tests/cmake/check-read-buffer-guard.cmake
     "derives the set of ISocket::read definitions from the tree it scans; it is not a source list")
 

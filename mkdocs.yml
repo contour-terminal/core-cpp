@@ -97,6 +97,7 @@ nav:
   - Getting started:
     - Using core-cpp with CPM: getting-started/cpm.md
     - Vendoring: vendoring.md
+    - Installing: getting-started/install.md
     - Building: getting-started/building.md
     - Options: getting-started/options.md
   - Modules:

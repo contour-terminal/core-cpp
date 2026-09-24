@@ -312,6 +312,9 @@ function(core_cpp_add_module name)
     endif()
     add_library(core::${name} ALIAS ${target})
     set_target_properties(${target} PROPERTIES CORE_CPP_MODULE "${module}" EXPORT_NAME "${name}")
+    # Every target of the table, INTERFACE and OBJECT ones included and static-CRT twins not, in the
+    # table's order: what core_cpp_install() installs (cmake/CoreCppInstall.cmake).
+    set_property(GLOBAL APPEND PROPERTY CORE_CPP_MODULE_TARGETS ${target})
 
     if(sources)
         target_sources(${target} PRIVATE ${sources})

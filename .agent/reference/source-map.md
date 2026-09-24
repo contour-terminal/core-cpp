@@ -20,6 +20,9 @@ cmake/
   CoreCppDependencies.cmake the dependency table: parent target, find_package, then CPM
   CoreCppModules.cmake      the module table, in dependency order, the rows of targets whose
                             platforms, option or links differ from their module's, and the walker
+  CoreCppInstall.cmake      core_cpp_install(): installs the module targets as the package
+                            core-cpp (CORE_CPP_INSTALL), leaving out what links a fetched dependency
+  core-cppConfig.cmake.in   the package config: find_dependency() per table row in use, then targets
   CPM.cmake                 CPM 0.40.8, bounded and hash-checked download
   FetchTransferBound.cmake  verbatim from fastcached: bounds every dependency transfer
   portable/
@@ -101,6 +104,8 @@ tests/
     check-release-selftest.cmake    proves each refusal of check-release.cmake
     check-vendor-selftest.cmake     proves each refusal of cmake/CoreCppVendor.cmake, against git
                                     repositories it builds for the purpose
+    check-install.cmake             installs the build, consumes the package, and exports from a
+                                    parent with CORE_CPP_INSTALL on and off
   consumer-shared/          ConsumerSmoke.hpp: the loopback echo and the core::log line the CPM
                             and vendored consumer programs both run, so neither carries a copy
   consumer-cpm/             a consumer's own project, added to core-cpp with CPM: asserts that
@@ -109,6 +114,9 @@ tests/
                             in a container with no network and no git
   consumer-wasm/            the same for the WebAssembly subset behind one INTERFACE library,
                             run under node
+  consumer-install/         a consumer of the INSTALLED package: find_package(core-cpp), core::net,
+                            and core::testing_main where the build installed it
+  consumer-install-nested/  a parent exporting a target that links core-cpp's, as morph does
 scripts/
   tool-versions.py          prints, installs or checks the pinned clang-format/clang-tidy
   clang-format.py           formats or checks the C++ sources named, or --all, with the pinned build

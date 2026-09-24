@@ -9,6 +9,29 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Added
+
+- **core-cpp installs as the CMake package `core-cpp`** (core-cpp#5): `find_package(core-cpp 0.3
+  CONFIG REQUIRED)` and `target_link_libraries(app PRIVATE core::net)`, the same names as a source
+  build's aliases. Every module target is installed with its `HEADERS` file set (the generated
+  `core/Config.hpp` included) in the install component `core-cpp`, with a
+  `core-cppConfigVersion.cmake` that is `SameMinorVersion` while core-cpp is 0.x. The package
+  config calls `find_dependency()` for exactly the dependency-table rows its installed targets
+  link. A target that links a dependency the build fetched rather than found (libunicode, Catch2 or
+  Tracy through CPM) cannot be re-found by an installed package and is left out, with a status line
+  saying so. See docs/getting-started/install.md.
+  - *`CORE_CPP_INSTALL`*, default `PROJECT_IS_TOP_LEVEL`: a vendoring or CPM consumer installs
+    nothing of core-cpp's unless it asks. A parent that exports a target of its own linking
+    core-cpp's turns it on, or CMake refuses the export as "not in any export set" (found by morph).
+  - `core::net`'s `detail/ReadyBatch.hpp` and `detail/ScopeGuard.hpp` joined its `HEADERS` file
+    set: `EventLoop.hpp` and `testing/ScriptedBackend.hpp` include them, so the installed headers
+    could not compile without them. `core::tui` links stb_image as `$<BUILD_INTERFACE:...>`, and
+    `core::testing_main` names its dialog object through the installed `core::testing_dialogs`.
+  - `core-cpp.install` installs the build under test into an empty prefix, builds and runs a
+    consumer of the package (`tests/consumer-install`), checks that every core-cpp header an
+    installed header includes was installed, and configures a parent exporting a target that links
+    core-cpp's (`tests/consumer-install-nested`) with `CORE_CPP_INSTALL` on and off.
+
 ### Fixed
 
 - **A host-driven loop may be destroyed while a pump is out with the host.** `HostDrivenBackend`

@@ -47,7 +47,9 @@ if(CORE_CPP_WITH_IMAGES)
     set(_coreCppTuiImagePosix posix/ImageLoader.cpp)
     set(_coreCppTuiImageWindows windows/ImageLoader.cpp)
     set(_coreCppTuiImageTests ImageLoader_test.cpp MarkdownImage_test.cpp)
-    set(_coreCppTuiImageLibs stb_image)
+    # Header-only and needed only to compile StbImageImpl.cpp, so it stays out of the link interface:
+    # an installed core::tui would otherwise export a dependency on this build's own stb_image target.
+    set(_coreCppTuiImageLibs "$<BUILD_INTERFACE:stb_image>")
 
     # StbImageImpl.cpp is the one translation unit that compiles stb's implementations. It contains
     # no code of core-cpp's, so core-cpp's warning set says nothing about it and its findings are

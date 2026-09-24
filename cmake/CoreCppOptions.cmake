@@ -10,6 +10,10 @@ option(CORE_CPP_TESTING "Build core-cpp's own tests" ${PROJECT_IS_TOP_LEVEL})
 option(CORE_CPP_CATCH2_MAIN
        "Build core::testing_main, the Catch2 main() with core-cpp's exit-code contract (needs Catch2)"
        ${CORE_CPP_TESTING})
+# A parent that exports targets of its own linking core-cpp's turns this on: CMake refuses an export
+# whose targets link one in no export set (cmake/CoreCppInstall.cmake).
+option(CORE_CPP_INSTALL "Install core-cpp's targets and export them as the CMake package core-cpp"
+       ${PROJECT_IS_TOP_LEVEL})
 option(CORE_CPP_BUILD_EXAMPLES "Build core-cpp's examples" ${PROJECT_IS_TOP_LEVEL})
 option(CORE_CPP_FETCH_DEPS
        "Fetch a dependency with CPM when neither the parent project nor find_package() provides it"

@@ -150,6 +150,8 @@ core_cpp_add_module(net KIND STATIC
         detail/ParkId.hpp
         detail/ParkTable.hpp
         detail/ReadinessSlot.hpp
+        detail/ReadyBatch.hpp
+        detail/ScopeGuard.hpp
         detail/StreamSocketOptions.hpp
         detail/WorkerIdentity.hpp
         testing/BackendMatrix.hpp

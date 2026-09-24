@@ -181,13 +181,20 @@ packagers get no new dependency. The contract is in
   workflow refuses a tag that does not equal it.
 - **Consumers pin a tag, or temporarily a full SHA; never a branch.** A branch pin is a
   dependency that changes under a consumer's CI without a commit in its repository.
-- **No `install()` in 0.1.0.** Targets are install-ready through their file sets; exporting
-  them is [core-cpp#5](https://github.com/contour-terminal/core-cpp/issues/5).
+- **Installing is `core_cpp_install()`'s, and nothing else calls `install()`.**
+  `cmake/CoreCppInstall.cmake` installs what `core_cpp_add_module()` created, in the component
+  `core-cpp`, behind `CORE_CPP_INSTALL` (default `PROJECT_IS_TOP_LEVEL`, so a vendoring or CPM
+  consumer's install is unchanged). A module adds nothing to install: a public header goes in its
+  `HEADERS` file set -- including a `detail/` header a public one includes, or the installed header
+  cannot compile -- and a header-only dependency needed only to compile is linked as
+  `$<BUILD_INTERFACE:...>`, or it becomes a link dependency no installed package can re-find. A
+  target linking a dependency the build fetched is left out with a status line, never silently.
+  `core-cpp.install` installs and consumes the build (core-cpp#5).
 
 ## Open work
 
-- **[core-cpp#5](https://github.com/contour-terminal/core-cpp/issues/5)** — `install()` and an
-  exported package config for distro unbundling, then a vcpkg port.
+- **[core-cpp#5](https://github.com/contour-terminal/core-cpp/issues/5)** — a vcpkg port, now
+  that a release exports its targets.
 - **[core-cpp#8](https://github.com/contour-terminal/core-cpp/issues/8)** — graduate
   fastcached's Logger, Base64/Sha256, Cli Options and EnumTable when a second consumer needs
   them.

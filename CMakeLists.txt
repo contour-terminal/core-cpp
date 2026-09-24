@@ -26,6 +26,7 @@ include("${CORE_CPP_SOURCE_DIR}/cmake/CoreCppTargets.cmake")
 include("${CORE_CPP_SOURCE_DIR}/cmake/CoreCppDependencies.cmake")
 include("${CORE_CPP_SOURCE_DIR}/cmake/CoreCppModules.cmake")
 include("${CORE_CPP_SOURCE_DIR}/cmake/CoreCppHeaderSelfCheck.cmake")
+include("${CORE_CPP_SOURCE_DIR}/cmake/CoreCppInstall.cmake")
 
 configure_file("${CORE_CPP_SOURCE_DIR}/src/core/Config.hpp.in"
                "${CORE_CPP_GENERATED_INCLUDE_DIR}/core/Config.hpp" @ONLY)
@@ -41,6 +42,10 @@ core_cpp_add_modules()
 # After every module, because it reads their FILE_SET HEADERS; before tests/, so a header that
 # cannot stand alone fails the build rather than a test binary that includes it sideways.
 core_cpp_add_header_self_check()
+
+# After every module, because it installs what they created; before tests/, whose install check
+# reads what it decided.
+core_cpp_install()
 
 # tests/ holds the checks over the tree and the build contract (hygiene, exit codes, canaries), not
 # the module suites: those are src/core/**/*_test.cpp, registered by core_cpp_add_modules() above.

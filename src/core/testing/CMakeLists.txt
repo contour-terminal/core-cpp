@@ -30,12 +30,19 @@ if(CORE_CPP_CATCH2_MAIN)
         HEADERS ExitCode.hpp
         SOURCES CatchMain.cpp ExitCode.cpp
         PUBLIC_LIBS core::testing core::log Catch2::Catch2)
-    set_target_properties(core-cpp-testing_main PROPERTIES CORE_CPP_SKIP_EXIT_CODE ${CORE_CPP_SKIP_EXIT_CODE})
+    set_target_properties(core-cpp-testing_main PROPERTIES
+        CORE_CPP_SKIP_EXIT_CODE ${CORE_CPP_SKIP_EXIT_CODE}
+        EXPORT_PROPERTIES CORE_CPP_SKIP_EXIT_CODE)
 
     # The dialog suppression's object goes onto the link line of every executable that links
     # core::testing_main, as an interface link item. Inside this archive nothing would pull it in.
+    # Spelled twice because an export copies $<TARGET_OBJECTS:...> without renaming the target in it:
+    # an installed package names the imported core::testing_dialogs, which carries the installed
+    # object (cmake/CoreCppInstall.cmake).
     target_link_libraries(core-cpp-testing_main INTERFACE
-        core::testing_dialogs "$<TARGET_OBJECTS:core-cpp-testing_dialogs>")
+        core::testing_dialogs
+        "$<BUILD_INTERFACE:$<TARGET_OBJECTS:core-cpp-testing_dialogs>>"
+        "$<INSTALL_INTERFACE:$<TARGET_OBJECTS:core::testing_dialogs>>")
 endif()
 
 core_cpp_add_test(testing SOURCES

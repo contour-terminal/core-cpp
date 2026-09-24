@@ -189,6 +189,61 @@ add_test(NAME core-cpp.header-self-check-selftest
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-header-self-check-selftest.cmake")
 set_tests_properties(core-cpp.header-self-check-selftest PROPERTIES LABELS "core-cpp;hygiene" TIMEOUT 120)
 
+# core-cpp installs as a CMake package a consumer finds and links, and a parent adding it as a
+# subproject can export a target of its own that links it (core-cpp#5): tests/cmake/check-install.cmake
+# says how. NOT `tree-level`: it compiles and links against what this build installed.
+#
+# It needs core::net installed, and says why not where it is not: CORE_CPP_INSTALL off, or a target
+# cmake/CoreCppInstall.cmake left out because it links a dependency this build fetched.
+set(_coreCppInstallSkip "")
+get_property(_coreCppInstalled GLOBAL PROPERTY CORE_CPP_INSTALLED_TARGETS)
+get_property(_coreCppInstallSkipped GLOBAL PROPERTY CORE_CPP_INSTALL_SKIPPED)
+if(NOT CORE_CPP_INSTALL)
+    set(_coreCppInstallSkip "CORE_CPP_INSTALL is OFF in this build")
+elseif(NOT "core-cpp-net" IN_LIST _coreCppInstalled)
+    set(_coreCppInstallSkip "core::net is not installed by this build: ${_coreCppInstallSkipped}")
+endif()
+# An instrumented core-cpp needs its runtime on the consumer's link too. link.exe takes neither
+# flag: on the MSVC driver the compiler embeds what the linker needs (cmake/CoreCppToolchain.cmake).
+set(_coreCppInstrumentFlags ${CORE_CPP_SANITIZER_FLAGS} ${CORE_CPP_COVERAGE_FLAGS})
+list(JOIN _coreCppInstrumentFlags "|" _coreCppInstrumentCompile)
+set(_coreCppInstrumentLink "${_coreCppInstrumentCompile}")
+if(CORE_CPP_MSVC_DRIVER)
+    set(_coreCppInstrumentLink "")
+endif()
+list(JOIN _coreCppInstalled "|" _coreCppInstalledJoined)
+string(REPLACE ";" "|" _coreCppBuildPrefixPath "${CMAKE_PREFIX_PATH}")
+string(REPLACE ";" "," _coreCppInstallSkip "${_coreCppInstallSkip}")
+# Bound from measurement: 7.7s on cl-debug, 25s on cl-release, 115s under WSL clang-debug on a
+# loaded machine. It installs, builds a consumer and configures core-cpp twice as a subproject, so
+# its time is CMake's and the compiler's startup, which is what a cold runner stretches.
+add_test(NAME core-cpp.install
+         COMMAND "${CMAKE_COMMAND}"
+                 "-DBUILD_DIR=${CORE_CPP_BINARY_DIR}"
+                 "-DSOURCE_DIR=${CORE_CPP_SOURCE_DIR}"
+                 "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/install-check"
+                 "-DLIBDIR=${CMAKE_INSTALL_LIBDIR}"
+                 "-DINCLUDEDIR=${CMAKE_INSTALL_INCLUDEDIR}"
+                 "-DEXPECTED_VERSION=${core-cpp_VERSION}"
+                 "-DINSTALLED=${_coreCppInstalledJoined}"
+                 "-DSKIP_REASON=${_coreCppInstallSkip}"
+                 "-DCONFIG=$<CONFIG>"
+                 "-DGENERATOR=${CMAKE_GENERATOR}"
+                 "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+                 "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                 "-DBUILD_TYPE=${CMAKE_BUILD_TYPE}"
+                 "-DTOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}"
+                 "-DBUILD_PREFIX_PATH=${_coreCppBuildPrefixPath}"
+                 "-DINSTRUMENT_COMPILE_FLAGS=${_coreCppInstrumentCompile}"
+                 "-DINSTRUMENT_LINK_FLAGS=${_coreCppInstrumentLink}"
+                 "-DSKIP_EXIT_CODE=${CORE_CPP_SKIP_EXIT_CODE}"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-install.cmake")
+set_tests_properties(core-cpp.install PROPERTIES
+    SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
+    SKIP_REGULAR_EXPRESSION "check-install: SKIPPED"
+    LABELS "core-cpp;hygiene"
+    TIMEOUT 600)
+
 # The vendoring tool exports the file set of Part I §5 byte for byte, and refuses each way a copy
 # can stop being verbatim. Every case builds a git repository of its own; the tool's MODE=check
 # needs no git, and one case proves that by running it with an empty PATH.
