@@ -859,7 +859,10 @@ get right, and each one is a defect that has already happened.
   queues a browser timer each and the page spends its frame budget in the scheduler; a request
   earlier than the pump already out is scheduled BESIDE it, because a host's timer cannot be
   retracted and a spurious pump costs one empty turn where a missed one is a hang. The schedule is
-  cleared before a pump runs, not after, or the turn it drives cannot arm the next one. It is
+  cleared before a pump runs, not after, or the turn it drives cannot arm the next one. **The
+  host's `void*` is a ticket, never the backend**: the pump cannot be retracted, so it arrives
+  after a `PlatformLoop` destroyed with a deadline armed has freed its backend, and a `this` there
+  was a heap-use-after-free (found by morph). It is
   portable and tested on every platform over `testing::ManualHostScheduler`: the browser is one of
   its hosts, not its definition, and a behaviour observable only in a node run is one nobody reads.
 - **The wakeup channel belongs to the backend, not to the loop.** `IoBackend::wake()` is the one

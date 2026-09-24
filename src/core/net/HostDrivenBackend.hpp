@@ -22,6 +22,7 @@
 
 #include <cstddef>
 #include <expected>
+#include <memory>
 #include <optional>
 
 namespace core::net
@@ -130,7 +131,13 @@ class HostDrivenBackend final: public IoBackend
   private:
     /// What @c IHostScheduler calls back. Static and `noexcept`, because that is what
     /// a @c HostCallback is.
-    /// @param state The backend, as a `void*`.
+    ///
+    /// Its state is a ticket, not the backend: a host's timer cannot be retracted, so a
+    /// pump can arrive after the backend is gone — a `PlatformLoop` destroyed with a
+    /// deadline armed frees the backend it owns. The ticket names the backend through
+    /// @c _liveness, which has expired by then, and is freed here whichever way this
+    /// returns. Each pump out with the host owns exactly one.
+    /// @param state The pump's ticket, which this takes ownership of.
     static void onHostPump(void* state) noexcept;
 
     /// Asks the host for a pump due at @p when, unless one is already scheduled no
@@ -146,6 +153,9 @@ class HostDrivenBackend final: public IoBackend
     /// flag, because a deadline armed for later must not swallow a wake wanted now.
     std::optional<platform::SteadyTimePoint> _scheduledAt;
     std::size_t _pumpCount = 0; ///< Pumps the host has delivered.
+    /// The one owner of a cell holding this backend's address; a pump's ticket holds a
+    /// weak reference to it, so it expires with the backend and a late pump runs nothing.
+    std::shared_ptr<HostDrivenBackend*> _liveness;
 };
 
 } // namespace core::net

@@ -43,6 +43,12 @@ class IHostScheduler
     /// @param delay How long to wait. Zero means the next turn of the host's loop.
     /// @param fn The callback; it must not throw, because a host's loop cannot catch.
     /// @param state Passed to @p fn untouched.
+    ///
+    /// **Every request accepted is delivered exactly once**, even one that arrives after
+    /// whatever asked for it is gone: @p state may own storage that only @p fn frees, as a
+    /// @c HostDrivenBackend's pump does, so a host that drops a request leaks it and a
+    /// host that delivers one twice frees it twice. There is no retraction, because
+    /// `emscripten_async_call` has none.
     virtual void callAfter(std::chrono::milliseconds delay, HostCallback fn, void* state) = 0;
 
   protected:

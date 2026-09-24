@@ -19,6 +19,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <memory>
 #include <optional>
 
 using core::net::HostDrivenBackend;
@@ -246,4 +247,41 @@ TEST_CASE("the default backend on a host-driven platform is the host-driven one"
     // take from.
     CHECK(core::net::makeBackend(core::net::BackendKind::HostDriven) == nullptr);
 #endif
+}
+
+TEST_CASE("a pump that arrives after its backend is gone runs nothing", "[net][backend][hostdriven]")
+{
+    // A host's timer cannot be retracted, so a backend destroyed with a pump out leaves that pump
+    // to arrive later. It used to arrive with the backend's address and write into freed storage.
+    auto host = ManualHostScheduler {};
+    auto clock = ManualClock {};
+    auto counter = PumpCounter {};
+    auto backend = std::make_unique<HostDrivenBackend>(host, clock);
+    backend->setPump(&PumpCounter::onPump, &counter);
+    backend->wake();
+    backend->armWakeAt(clock.now());                              // coalesced into the wake's pump
+    backend->armWakeAt(clock.now() + std::chrono::seconds { 5 }); // coalesced as well
+    REQUIRE(host.pendingCount() == 1);
+
+    backend.reset();
+    host.pump();
+    CHECK(counter.pumps == 0);
+    CHECK(host.pendingCount() == 0);
+}
+
+TEST_CASE("a host destroyed with pumps pending delivers them rather than leaking what they own",
+          "[net][backend][hostdriven]")
+{
+    // What a pump carries is freed by the pump. A test double that dropped its pending requests on
+    // destruction would leak one per case that ends with a pump out, which is most of them.
+    auto counter = PumpCounter {};
+    {
+        auto host = ManualHostScheduler {};
+        auto clock = ManualClock {};
+        auto backend = HostDrivenBackend { host, clock };
+        backend.setPump(&PumpCounter::onPump, &counter);
+        backend.wake();
+        REQUIRE(host.pendingCount() == 1);
+    }
+    CHECK(counter.pumps == 0);
 }

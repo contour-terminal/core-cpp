@@ -32,6 +32,26 @@ class ManualHostScheduler final: public IHostScheduler
         void* state = nullptr;              ///< What to call it with.
     };
 
+    ManualHostScheduler() = default;
+    ManualHostScheduler(ManualHostScheduler const&) = delete;
+    ManualHostScheduler(ManualHostScheduler&&) = delete;
+    ManualHostScheduler& operator=(ManualHostScheduler const&) = delete;
+    ManualHostScheduler& operator=(ManualHostScheduler&&) = delete;
+
+    /// Delivers everything still pending, cleared requests included, as a browser
+    /// eventually delivers every timer it accepted.
+    ///
+    /// A callback's state may be something only the callback frees — a
+    /// @c HostDrivenBackend's pump ticket is — so dropping it here would leak one per
+    /// case that ends with a pump out. Safe because the host outlives every backend it
+    /// serves: what fires here finds its backend gone and runs nothing.
+    ~ManualHostScheduler()
+    {
+        _pending.insert(_pending.end(), _cleared.begin(), _cleared.end());
+        _cleared.clear();
+        pump();
+    }
+
     void callAfter(std::chrono::milliseconds delay, HostCallback fn, void* state) override
     {
         ++_requestCount;
@@ -64,12 +84,19 @@ class ManualHostScheduler final: public IHostScheduler
                 request.fn(request.state);
     }
 
-    /// Drops everything pending without firing it — for a case that has finished with
-    /// the backend and does not want its teardown to run a turn.
-    void clear() noexcept { _pending.clear(); }
+    /// Takes everything pending out of @c pending() without firing it now — for a case
+    /// that has finished with the backend and does not want its teardown to run a turn.
+    /// What was cleared is delivered at destruction, when its backend is gone, because
+    /// its state may be something only the callback frees.
+    void clear()
+    {
+        _cleared.insert(_cleared.end(), _pending.begin(), _pending.end());
+        _pending.clear();
+    }
 
   private:
     std::vector<Request> _pending;
+    std::vector<Request> _cleared; ///< Taken out by @c clear(), delivered at destruction.
     std::size_t _requestCount = 0;
 };
 

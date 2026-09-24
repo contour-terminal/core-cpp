@@ -161,9 +161,11 @@ EventLoop::~EventLoop()
     _watches.clear();
 
     // ---- 7. Unregister the wake. ----------------------------------------------------------
-    // A host-driven backend holds a pointer to this loop and an armed host timer; either one
-    // outliving the loop is a call into freed storage on the host's next turn. Every other
-    // backend ignores both.
+    // A host-driven backend holds a pointer to this loop, and a pump it still has out with the
+    // host would call through it into freed storage on the host's next turn. That pump cannot be
+    // retracted, so it still arrives, and finds no loop to run; once the backend is gone too, it
+    // finds no backend either and runs nothing (its ticket expired with it). Every other backend
+    // ignores both calls.
     _backend.setPump(nullptr, nullptr);
     _backend.armWakeAt(std::nullopt);
 }

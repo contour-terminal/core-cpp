@@ -194,7 +194,10 @@ From contour's `src/net/README.md` at `6777ff05`, as far as they hold here:
   requests before the host gets a turn become ONE pump, or a burst of `post()`s would queue a
   browser timer each; a request EARLIER than the one already out is scheduled beside it, because a
   host's timer cannot be retracted and a spurious pump costs an empty turn where a missed one is a
-  hang.
+  hang. For the same reason a pump can arrive after its loop and its backend are destroyed, so what
+  the host is handed is a ticket that outlives the backend, not the backend's address: a late pump
+  finds the backend gone, runs nothing and frees its ticket. A host must therefore deliver every
+  request it accepts exactly once.
 
 ## Limits
 

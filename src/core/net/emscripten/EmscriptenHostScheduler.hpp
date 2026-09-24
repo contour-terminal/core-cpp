@@ -19,7 +19,9 @@ namespace core::net
 ///
 /// Stateless, because `emscripten_async_call` is: every request carries its own
 /// callback and its own state, and there is nothing to cancel — which is exactly why
-/// @c HostDrivenBackend coalesces on its own side rather than retracting a timer.
+/// @c HostDrivenBackend coalesces on its own side rather than retracting a timer, and
+/// why what it hands this as state is a ticket that outlives the backend rather than the
+/// backend's own address. Nothing here outlives a request, so nothing here can dangle.
 class EmscriptenHostScheduler final: public IHostScheduler
 {
   public:

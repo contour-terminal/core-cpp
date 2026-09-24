@@ -7,6 +7,23 @@ release may break the API; every break is listed under **Breaking** with a migra
 release tag `vX.Y.Z` equals the version in `project(core-cpp VERSION X.Y.Z)`, and the release
 workflow refuses one without a section here.
 
+## [Unreleased]
+
+### Fixed
+
+- **A host-driven loop may be destroyed while a pump is out with the host.** `HostDrivenBackend`
+  handed `IHostScheduler::callAfter` its own address, and `emscripten_async_call` cannot be
+  retracted: a `PlatformLoop` destroyed under Emscripten with a timer armed, or after any off-turn
+  `addTimer`, `post` or wake, freed the backend it owns, and the browser's timer then wrote into
+  it -- a heap-use-after-free (found by morph's timeout scheduler). Each pump now carries a small
+  ticket holding a weak reference to the backend; a late pump finds it expired, runs nothing and
+  frees the ticket. Coalescing is unchanged.
+  - *`IHostScheduler` states its contract*: every request accepted is delivered exactly once, since
+    its state may own storage only the callback frees. A host that drops a request leaks a ticket.
+  - *`testing::ManualHostScheduler`* delivers whatever is still pending when it is destroyed,
+    including what `clear()` took out, which is no longer `noexcept`; it is no longer copyable or
+    movable, since a copy would deliver a ticket twice.
+
 ## [0.2.1] - 2026-09-24
 
 Every behaviour change in this section is a defect fixed, and each entry says which guarantee it

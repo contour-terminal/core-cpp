@@ -3,12 +3,24 @@
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
 
 namespace core::net
 {
 
+namespace
+{
+    /// What one pump out with the host owns: a weak reference to the backend that asked
+    /// for it. Heap-allocated per request and handed to the host as its `void*`, because
+    /// the host is the only thing that knows when the pump has been delivered.
+    struct PumpTicket
+    {
+        std::weak_ptr<HostDrivenBackend*> backend; ///< Expired once the backend is destroyed.
+    };
+} // namespace
+
 HostDrivenBackend::HostDrivenBackend(IHostScheduler& host, platform::IClock& clock) noexcept:
-    _host(host), _clock(clock)
+    _host(host), _clock(clock), _liveness(std::make_shared<HostDrivenBackend*>(this))
 {
 }
 
@@ -55,7 +67,9 @@ void HostDrivenBackend::scheduleAt(platform::SteadyTimePoint when) noexcept
     auto const delay = std::max(std::chrono::duration_cast<std::chrono::milliseconds>(when - now),
                                 std::chrono::milliseconds { 0 });
     _scheduledAt = when;
-    _host.callAfter(delay, &HostDrivenBackend::onHostPump, this);
+    // The host owns the ticket until it delivers the pump; `onHostPump` adopts it back.
+    auto ticket = std::make_unique<PumpTicket>(PumpTicket { .backend = _liveness });
+    _host.callAfter(delay, &HostDrivenBackend::onHostPump, ticket.release());
 }
 
 void HostDrivenBackend::wake() noexcept
@@ -75,7 +89,13 @@ void HostDrivenBackend::armWakeAt(std::optional<platform::SteadyTimePoint> deadl
 
 void HostDrivenBackend::onHostPump(void* state) noexcept
 {
-    auto* const self = static_cast<HostDrivenBackend*>(state);
+    auto const ticket = std::unique_ptr<PumpTicket> { static_cast<PumpTicket*>(state) };
+    auto const alive = ticket->backend.lock();
+    // The backend was destroyed with this pump out, and it was the host's to deliver
+    // anyway: there is nobody to pump.
+    if (alive == nullptr)
+        return;
+    auto* const self = *alive;
     // Cleared BEFORE the pump runs, not after: the turn it drives will arm the next
     // deadline and may wake for work it queues, and neither may be dropped as "one is
     // already scheduled" when the one scheduled is the pump that is running.

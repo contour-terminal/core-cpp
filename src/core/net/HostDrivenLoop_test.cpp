@@ -25,6 +25,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <memory>
 #include <string_view>
 #include <tuple>
 
@@ -554,4 +555,42 @@ TEST_CASE("Every member that files work asks a quiescent host-driven loop for th
             }
         }
     }
+}
+
+TEST_CASE("A host-driven loop and its backend may be destroyed while a pump is out with the host",
+          "[EventLoop][hostdriven]")
+{
+    // The browser's timer cannot be retracted: a pump the backend asked for arrives whether or not
+    // the backend still exists. `~EventLoop` unregisters its pump and arms nothing, and
+    // `PlatformLoop` then frees the backend it owns -- so the late pump used to write the backend's
+    // schedule into freed storage, a heap-use-after-free on the host's next turn. Found by morph,
+    // whose timeout scheduler destroys its loop with a deadline armed. The host outlives both, as
+    // `IHostScheduler` requires, and fires what is left afterwards; under ASan the defect is a
+    // report here, and without it the case still proves the late pump runs nothing.
+    auto clock = ManualClock {};
+    auto host = ManualHostScheduler {};
+    auto fired = std::size_t { 0 };
+    auto backend = std::make_unique<HostDrivenBackend>(host, clock);
+    auto loop = std::make_unique<EventLoop>(*backend, clock);
+
+    SECTION("a timer added off-turn and cancelled: the wake it asked for is still out")
+    {
+        auto const id = loop->addTimer(clock.now() + 30s, &countCall, &fired);
+        std::ignore = loop->cancelTimer(id);
+    }
+
+    SECTION("a timer still armed: the deadline's pump is out as well")
+    {
+        std::ignore = loop->addTimer(clock.now() + 30s, &countCall, &fired);
+        host.pump(); // the wake's turn, which arms the host at the deadline
+    }
+
+    REQUIRE(host.pendingCount() >= 1);
+    loop.reset();
+    backend.reset(); // what `PlatformLoop` does next: the backend it owns goes with it
+
+    clock.advance(1min);
+    host.pump();
+    CHECK(fired == 0);
+    CHECK(host.pendingCount() == 0);
 }
