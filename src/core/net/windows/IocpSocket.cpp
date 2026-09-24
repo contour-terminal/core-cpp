@@ -18,6 +18,7 @@
 #include <core/net/detail/StreamSocketOptions.hpp>
 #include <core/net/windows/InvalidSocket.hpp>
 #include <core/net/windows/IocpOperation.hpp>
+#include <core/net/windows/UnixSocketPath.hpp>
 #include <core/net/windows/WinsockError.hpp>
 #include <core/platform/WinsockInit.hpp>
 
@@ -28,6 +29,8 @@
 #include <cstring>
 #include <limits>
 #include <ranges>
+#include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 
@@ -1112,6 +1115,10 @@ void IocpListener::close() noexcept
         ::closesocket(shared->socket);
         shared->socket = detail::InvalidSocket;
     }
+    // The socket FILE goes with the socket, as `WindowsListener::close` and `UnixListener::close`
+    // do; "" for a TCP listener. DeleteFileA, because this is noexcept.
+    if (!_path.empty())
+        ::DeleteFileA(_path.c_str());
     for (auto* const wait: accepting)
         wait->close();
 }
@@ -1249,6 +1256,47 @@ std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::bind(EventL
                                                             reinterpret_cast<void*>(acceptAddresses)) };
 }
 
+std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::bindUnix(EventLoop& loop,
+                                                                              std::string_view path,
+                                                                              int backlog)
+{
+    platform::ensureWinsockInitialized();
+    auto const claimed = detail::claimUnixSocketPath(path);
+    if (!claimed)
+        return std::unexpected(claimed.error());
+
+    auto const socket =
+        ::WSASocketW(AF_UNIX, SOCK_STREAM, 0, nullptr, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
+    if (socket == detail::InvalidSocket)
+        return std::unexpected(
+            makeNetError(NetErrorCode::Unsupported, ::WSAGetLastError(), "socket(AF_UNIX)"));
+    if (::bind(socket, reinterpret_cast<sockaddr const*>(&*claimed), static_cast<int>(sizeof(*claimed))) != 0
+        || ::listen(socket, backlog) != 0)
+    {
+        auto const err = ::WSAGetLastError();
+        ::closesocket(socket);
+        return std::unexpected(
+            makeNetError(err == WSAEADDRINUSE ? NetErrorCode::AddressInUse : NetErrorCode::SystemError,
+                         err,
+                         "bind/listen unix"));
+    }
+
+    auto acceptEx = LPFN_ACCEPTEX { nullptr };
+    auto acceptAddresses = LPFN_GETACCEPTEXSOCKADDRS { nullptr };
+    if (auto prepared = prepareListening(loop, socket, acceptEx, acceptAddresses); !prepared)
+        return std::unexpected(std::move(prepared.error()));
+
+    auto listener =
+        std::unique_ptr<IocpListener> { new IocpListener(loop,
+                                                         socket,
+                                                         AF_UNIX,
+                                                         /*boundPort=*/0,
+                                                         reinterpret_cast<void*>(acceptEx),
+                                                         reinterpret_cast<void*>(acceptAddresses)) };
+    listener->_path = std::string { path };
+    return listener;
+}
+
 std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::adopt(EventLoop& loop, SOCKET socket)
 {
     platform::ensureWinsockInitialized();
@@ -1284,8 +1332,10 @@ async::Task<AcceptResult> IocpListener::accept()
     auto* const acceptEx = reinterpret_cast<LPFN_ACCEPTEX>(_acceptEx);
     auto* const acceptAddresses = reinterpret_cast<LPFN_GETACCEPTEXSOCKADDRS>(_acceptAddresses);
 
+    // AF_UNIX takes protocol 0; IPPROTO_TCP is refused for it.
+    auto const protocol = _family == AF_UNIX ? 0 : IPPROTO_TCP;
     auto accepted = ::WSASocketW(
-        _family, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
+        _family, SOCK_STREAM, protocol, nullptr, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
     if (accepted == detail::InvalidSocket)
         co_return std::unexpected(detail::fromWinsockError(::WSAGetLastError(), "socket(accept)"));
     // Closed on every way out but the hand-off to `IocpSocket` -- a frame destroyed while parked

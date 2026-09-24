@@ -62,6 +62,14 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- **On Windows, `listenUnix` and `connectUnix` belong to the loop's transport** (found through
+  contour). `listenUnix` built the WFMO `WindowsListener` whatever the loop was, and `connectUnix` a
+  `WindowsSocket`, while `listen` and `adoptListener` branch to IOCP -- so an IOCP loop, the Windows
+  default, served AF_UNIX through readiness and handed out readiness sockets. It now gets the new
+  `IocpListener::bindUnix`, whose `AcceptEx` accepts AF_UNIX connections (measured on Windows 11,
+  asserted in CI) and hands out `IocpSocket`, and `connectUnix` adopts its socket onto the loop's
+  transport. A WFMO loop is unchanged. The socket-path claim both listeners make moved into a shared
+  `windows/UnixSocketPath.cpp`.
 - **`tools/migrate/rewrite.py` rewrites the code after a character literal holding a `"`** (found by
   the contour migration). Its scanner read `'"'` as opening a string, so in
   `os << '"' << crispy::escape(s) << '"'` the symbol was masked as data and left unrewritten. A

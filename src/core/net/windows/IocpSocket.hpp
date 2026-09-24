@@ -325,6 +325,20 @@ class IocpListener final: public IListener
         int backlog = 128,
         SocketBufferSizes acceptedBuffers = {});
 
+    /// Binds and listens on the AF_UNIX socket file @p path, claiming it as `WindowsListener`
+    /// does: a stale socket file is reclaimed, a live server's is refused, anything else at the
+    /// path is never touched. The file goes with the listener when it closes.
+    ///
+    /// **AcceptEx accepts AF_UNIX connections**, measured on Windows 11 (26200) and asserted by
+    /// `windows/UnixListener_test.cpp` on every CI run, so an IOCP loop serves a unix socket
+    /// through its completion port like any other listener, and hands out @c IocpSocket.
+    /// @param loop The loop whose backend's port completes the accepts (not owned).
+    /// @param path The socket file path.
+    /// @param backlog The listen backlog.
+    /// @return The listener, or why the path could not be bound.
+    [[nodiscard]] static std::expected<std::unique_ptr<IocpListener>, NetError> bindUnix(
+        EventLoop& loop, std::string_view path, int backlog = 128);
+
     /// Adopts an already-bound, already-listening socket; @see core::net::adoptListener.
     /// @param loop The loop whose backend's port completes the accepts (not owned).
     /// @param socket The listening socket; ownership transfers.
@@ -370,6 +384,7 @@ class IocpListener final: public IListener
     std::uint16_t _boundPort;
     void* _acceptEx;
     void* _acceptAddresses;
+    std::string _path; ///< The socket file of an AF_UNIX listener, deleted on close; "" for TCP.
     bool _closed = false;
 };
 

@@ -161,7 +161,10 @@ struct ListenOptions
 /// @param loop The loop whose reactor drives accept readiness (not owned).
 /// @param path The socket file path.
 /// @param backlog The listen backlog.
-/// @return The bound listener; @c NetErrorCode::Unsupported on Windows (for now).
+/// On Windows the listener belongs to the loop's transport, as @c listen's does: an
+/// @c IocpListener handing out @c IocpSocket on an IOCP loop (the default; since 0.2.1), a
+/// @c WindowsListener handing out @c WindowsSocket on a WFMO one.
+/// @return The bound listener; @c NetErrorCode::Unsupported where AF_UNIX is not available.
 [[nodiscard]] std::expected<std::unique_ptr<IListener>, NetError> listenUnix(EventLoop& loop,
                                                                              std::string_view path,
                                                                              int backlog = 128);
@@ -176,9 +179,10 @@ struct ListenOptions
 /// @param loop The loop whose reactor drives connect readiness (not owned; a
 ///        pointer, since coroutine reference parameters can dangle).
 /// @param path The socket file path.
-/// @return A task resolving to the connected socket; a @c NetError on failure,
+/// @return A task resolving to the connected socket -- on Windows an @c IocpSocket on an IOCP loop
+///         and a @c WindowsSocket on a WFMO one (since 0.2.1) --; a @c NetError on failure,
 ///         @c NetErrorCode::Cancelled if the flow was stopped while it waited,
-///         @c NetErrorCode::Unsupported on Windows (for now).
+///         @c NetErrorCode::Unsupported where AF_UNIX is not available.
 [[nodiscard]] async::Task<std::expected<std::unique_ptr<ISocket>, NetError>> connectUnix(
     EventLoop* loop, std::string_view path);
 

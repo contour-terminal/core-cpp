@@ -241,6 +241,8 @@ core_cpp_add_module(net KIND STATIC
         windows/SocketsWin32.cpp
         windows/StreamSocketOptions.cpp
         windows/UdpSocket.cpp
+        windows/UnixSocketPath.cpp
+        windows/UnixSocketPath.hpp
         windows/WaitCompletionPacket.cpp
         windows/WaitCompletionPacket.hpp
         windows/WfmoBackend.cpp
@@ -365,6 +367,7 @@ core_cpp_add_test(net
         windows/NetworkEvents_test.cpp
         windows/PortSharing_test.cpp
         windows/SocketErrors_test.cpp
+        windows/UnixListener_test.cpp
         windows/WfmoBackend_test.cpp
         windows/WindowsSocket_test.cpp
     LABELS loopback

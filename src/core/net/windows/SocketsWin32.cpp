@@ -81,6 +81,14 @@ std::expected<std::unique_ptr<IListener>, NetError> listenUnix(EventLoop& loop,
     // (the user's profile/temp tree) govern access, not POSIX mode bits.
     auto ec = std::error_code {};
     std::filesystem::create_directories(std::filesystem::path { std::string { path } }.parent_path(), ec);
+    // The loop's question, as `listen` and `adoptListener` ask it: an IOCP loop -- the default --
+    // serves the socket through its completion port and hands out IocpSockets. This built the WFMO
+    // listener whatever the loop was until 0.2.1.
+    if (loop.completionPort() != nullptr)
+        return IocpListener::bindUnix(loop, path, backlog)
+            .transform([](std::unique_ptr<IocpListener> listener) -> std::unique_ptr<IListener> {
+                return listener;
+            });
     return WindowsListener::bindUnix(loop, path, backlog)
         .transform(
             [](std::unique_ptr<WindowsListener> listener) -> std::unique_ptr<IListener> { return listener; });
@@ -112,7 +120,10 @@ async::Task<std::expected<std::unique_ptr<ISocket>, NetError>> connectUnix(Event
                          err,
                          "connect unix"));
     }
-    co_return std::unique_ptr<ISocket>(new WindowsSocket(*loop, sock));
+    // Adopted, so the loop decides the transport as it does for every other socket: an
+    // IocpSocket on an IOCP loop, a WindowsSocket on a WFMO one. It used to be a WindowsSocket
+    // whatever the loop was. `adoptSocket` closes the socket on failure.
+    co_return adoptSocket(*loop, reinterpret_cast<platform::NativeHandle>(sock), std::string {});
 }
 
 std::expected<std::unique_ptr<ISocket>, NetError> adoptSocket(EventLoop& loop,
