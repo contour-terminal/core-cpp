@@ -201,6 +201,10 @@ class TerminalOutput
     /// The terminal responds with CSI ? p1 ; p2 ; ... c (DeviceAttributesReport).
     virtual void requestDeviceAttributes();
 
+    /// @brief Resets every SGR attribute to the terminal's default (`CSI m`), as
+    ///        @c writeText does after styled text; the bytes are @c buildSgrReset's.
+    virtual void resetStyle();
+
     /// @brief Clears the entire current line.
     virtual void clearLine();
 

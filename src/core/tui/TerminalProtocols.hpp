@@ -27,6 +27,8 @@ constexpr auto EnableCsiU =
     "\033[>13u"sv; ///< Enable Kitty keyboard protocol (disambiguate + alternate + all keys).
 constexpr auto DisableCsiU = "\033[<u"sv; ///< Pop Kitty keyboard protocol.
 
+constexpr auto SgrReset = "\033[m"sv; ///< Reset every SGR attribute to the default (SGR 0).
+
 constexpr auto EnableBracketedPaste = "\033[?2004h"sv;  ///< Enable bracketed paste mode.
 constexpr auto DisableBracketedPaste = "\033[?2004l"sv; ///< Disable bracketed paste mode.
 

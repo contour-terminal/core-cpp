@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/Environment.hpp>
+#include <core/tui/SgrBuilder.hpp>
 #include <core/tui/TerminalOutput.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -217,4 +218,24 @@ TEST_CASE("tui.TerminalOutput: copyToClipboard emits OSC 52 with the base64 of t
     output.flush();
 
     CHECK(output.captured() == "\033]52;c;bWFu\033\\\033]52;c;bWE=\033\\\033]52;c;bQ==\033\\");
+}
+
+TEST_CASE("tui.TerminalOutput: a bare SGR reset is public, and is the one writeText ends a style with")
+{
+    // dbtool had no way to ask for it and hardcoded "\033[0m". buildSgrReset() is the string and
+    // resetStyle() the verb, and both must be what writeText itself writes after styled text --
+    // a second spelling of the same reset is how the two drift apart.
+    auto styled = CapturingOutput { Destination::Terminal };
+    auto style = core::tui::Style {};
+    style.bold = true;
+    styled.writeText("x", style);
+    styled.flush();
+
+    CHECK(core::tui::buildSgrReset() == "\033[m");
+    CHECK(styled.captured().ends_with(core::tui::buildSgrReset()));
+
+    auto reset = CapturingOutput { Destination::Terminal };
+    reset.resetStyle();
+    reset.flush();
+    CHECK(reset.captured() == core::tui::buildSgrReset());
 }

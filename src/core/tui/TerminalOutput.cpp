@@ -281,7 +281,12 @@ void TerminalOutput::appendSgr(Style const& style)
 
 void TerminalOutput::appendSgrReset()
 {
-    _buffer += "\033[m";
+    _buffer += protocols::SgrReset;
+}
+
+void TerminalOutput::resetStyle()
+{
+    appendSgrReset();
 }
 
 // --- SyncGuard ---

@@ -37,6 +37,9 @@ workflow refuses one without a section here.
 
 ### Added
 
+- **A public SGR reset in `core::tui_output`**: `buildSgrReset()` beside `buildSgrSequence()`,
+  `TerminalOutput::resetStyle()`, and `protocols::SgrReset`. They are the bytes `writeText` already
+  ended styled text with, which were private, so Lightweight's dbtool spelled `"\033[0m"` itself.
 - **`core::platform::SignalHandler::nativeHandle()`**: the signal fd as the `NativeHandle`
   `TuiRuntimeOptions::signalFd` takes -- the signalfd on Linux while initialized, `InvalidHandle`
   everywhere else -- so a caller no longer converts `initialize()`'s `int`, which on Windows is the

@@ -1,12 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/tui/SgrBuilder.hpp>
 
+#include <core/tui/TerminalProtocols.hpp>
+
 #include <cstdint>
 #include <format>
+#include <string>
 #include <variant>
 
 namespace core::tui
 {
+
+std::string buildSgrReset()
+{
+    return std::string { protocols::SgrReset };
+}
 
 std::string buildSgrSequence(Style const& style)
 {

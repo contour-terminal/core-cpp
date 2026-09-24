@@ -21,4 +21,13 @@ namespace core::tui
 /// @return The SGR escape sequence string, or empty if no attributes are set.
 [[nodiscard]] std::string buildSgrSequence(Style const& style);
 
+/// Builds the bare SGR reset, `CSI m`, which returns every attribute to the terminal's default.
+///
+/// The counterpart of @c buildSgrSequence for a caller that composes its own output: the same
+/// bytes @c TerminalOutput::writeText ends styled text with, and @c TerminalOutput::resetStyle
+/// writes. Before it existed the reset was private to @c TerminalOutput, and a caller that needed
+/// one spelled it itself.
+/// @return The SGR reset sequence.
+[[nodiscard]] std::string buildSgrReset();
+
 } // namespace core::tui
