@@ -612,6 +612,14 @@ if(WIN32)
         # made `invalid-parameter` fail, which is how this difference was found.
         set(_coreCppDialogPass "failing by ${mode}")
         set(_coreCppDialogFail "CONTINUED AFTER FAILURE")
+        # `abort` must also SAY so, in a Debug build: the CRT's own "abort() has been called", on
+        # stderr and not in a dialog. Clearing `_WRITE_ABORT_MSG` along with `_CALL_REPORTFAULT`
+        # made abort() silent, which passed on the marker alone; the marker is printed before the
+        # abort, the message only by it. A Release UCRT writes no abort message whatever the flag
+        # (measured on cl-release), so there the marker is all there is to match.
+        if(mode STREQUAL "abort" AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+            set(_coreCppDialogPass "abort\\(\\) has been called")
+        endif()
         if(mode STREQUAL "invalid-parameter")
             set(_coreCppDialogPass "CONTINUED AFTER FAILURE")
             set(_coreCppDialogFail "")

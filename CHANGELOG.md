@@ -69,6 +69,14 @@ observe; the migration is under each.
 
 ### Fixed
 
+- **`core::testing::suppressWindowsDialogs()` keeps abort()'s message and turns off Windows Error
+  Reporting's UI.** It cleared `_WRITE_ABORT_MSG` with `_CALL_REPORTFAULT`, so an aborting test
+  printed nothing; only the fault report is off now, and the message goes to stderr, not a dialog.
+  It also calls `WerSetFlags(WER_FAULT_REPORTING_NO_UI)` -- looked up in kernel32, so there is no
+  new link dependency -- for an unhandled structured exception in a process whose error mode was
+  reset (found by morph). `windows-dialog-canary.abort` now requires the message in a Debug build;
+  a Release UCRT writes none.
+
 - **A waiter completed by a readiness callback resumes in the callback's position again.** 0.2.1
   made a completion from a callback (`ResultAwaitable::complete()`, and anything a drain-step
   callback hands to `EventLoop::resumeSoon`) join the BACK of the ready queue, where 0.2.0 had

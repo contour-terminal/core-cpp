@@ -25,7 +25,10 @@ namespace core::testing
 /// @brief Suppresses every Windows dialog that can block an unattended run.
 ///
 /// - CRT assert, error and warning reports go to stderr instead of a dialog.
-/// - abort() shows no message box and asks Windows Error Reporting for nothing.
+/// - abort() writes its message to stderr (a Debug CRT's; a Release UCRT writes none), shows no
+///   message box and asks Windows Error Reporting for nothing.
+/// - Windows Error Reporting shows no UI for a fault in this process (`WerSetFlags`, looked up at
+///   run time, so nothing links wer.lib).
 /// - An invalid argument to a CRT function returns an error instead of opening a dialog.
 /// - General-protection faults, critical errors and open-file errors show no OS dialog.
 ///
