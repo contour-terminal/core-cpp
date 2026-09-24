@@ -24,6 +24,8 @@
 #include <cstring>
 #include <span>
 #include <tuple>
+#include <utility>
+#include <vector>
 
 namespace
 {
@@ -56,6 +58,30 @@ void survived(char const* what)
     std::fflush(stderr);
 }
 
+/// Every flow this canary drives, kept on the heap for the process's life.
+///
+/// **Held here rather than in locals, because two local tasks crashed under MSVC's Release build**:
+/// the second flow's handle was a stack address, and its body faulted (0xC0000005) before it reached
+/// the verb -- a canary dying for its own reason rather than the guard's, and the reading is that
+/// the compiler elided the frames onto the caller's stack. A task moved into this container escapes
+/// the caller, so its frame cannot be elided, and the mode then reaches its guard (cl-release,
+/// clang-cl alike).
+std::vector<core::async::Task<void>>& flows()
+{
+    static auto held = std::vector<core::async::Task<void>> {};
+    return held;
+}
+
+/// Starts @p task, keeping it in @c flows().
+/// @param task The flow to run until it first suspends.
+/// @return The flow, as held.
+core::async::Task<void>& start(core::async::Task<void> task)
+{
+    auto& held = flows().emplace_back(std::move(task));
+    held.handle().resume();
+    return held;
+}
+
 core::async::Task<void> readOnce(core::net::ISocket* socket, std::span<std::byte> buffer)
 {
     std::ignore = co_await socket->read(buffer);
@@ -70,9 +96,9 @@ core::async::Task<void> writeOnce(core::net::ISocket* socket, std::span<std::byt
 int provokeReadSlot(char const* mode)
 {
     auto pair = core::net::testing::InMemorySocketPair::create();
+    flows().reserve(2);
     auto first = std::array<std::byte, 4> {};
-    auto parked = readOnce(pair.server.get(), first);
-    parked.handle().resume();
+    auto const& parked = start(readOnce(pair.server.get(), first));
     if (parked.done())
     {
         survived("the first read did not park, so nothing was provoked");
@@ -81,8 +107,7 @@ int provokeReadSlot(char const* mode)
 
     auto second = std::array<std::byte, 4> {};
     announce(mode);
-    auto rival = readOnce(pair.server.get(), second);
-    rival.handle().resume();
+    std::ignore = start(readOnce(pair.server.get(), second));
     survived("a second read was armed over a parked one");
     return 1;
 }
@@ -92,8 +117,8 @@ int provokeWriteSlot(char const* mode)
 {
     auto pair = core::net::testing::InMemorySocketPair::create(2);
     auto const payload = std::array<std::byte, 8> {};
-    auto parked = writeOnce(pair.client.get(), payload);
-    parked.handle().resume();
+    flows().reserve(2);
+    auto const& parked = start(writeOnce(pair.client.get(), payload));
     if (parked.done())
     {
         survived("the first write did not park, so nothing was provoked");
@@ -101,8 +126,7 @@ int provokeWriteSlot(char const* mode)
     }
 
     announce(mode);
-    auto rival = writeOnce(pair.client.get(), payload);
-    rival.handle().resume();
+    std::ignore = start(writeOnce(pair.client.get(), payload));
     survived("a second write was armed over a parked one");
     return 1;
 }
