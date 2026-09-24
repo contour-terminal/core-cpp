@@ -71,15 +71,20 @@ class UnixListener final: public IListener
     /// so a parked accept is resumed rather than left waiting on a descriptor the
     /// poller can no longer report.
     /// @param policy How a parked accept observes the close. @c close() passes
-    ///        @c Resume — this listener is alive, so acceptOne may safely re-read
-    ///        the @c _fd / @c _closed it holds pointers to. The destructor passes
-    ///        @c Cancel, since those pointers are about to dangle.
+    ///        @c Resume — this listener is alive, so acceptOne may re-read the @c _fd /
+    ///        @c _closed it holds pointers to, once its lifetime token says the listener
+    ///        still exists (an owner may destroy it before the loop resumes the accept).
+    ///        The destructor passes @c Cancel, since those pointers are about to dangle.
     void close(FdWakePolicy policy) noexcept;
 
     EventLoop& _loop;
     int _fd;
     std::filesystem::path _path;
     bool _closed = false;
+    /// Expires with this listener. A parked accept is resumed by the loop a turn after `close()`,
+    /// and an owner may destroy the listener in between (`listener->close(); listener.reset();`),
+    /// so the accept asks this -- never the listener -- whether there is still one to read.
+    std::shared_ptr<void const> _lifetime = std::make_shared<char const>('\0');
 };
 
 } // namespace core::net

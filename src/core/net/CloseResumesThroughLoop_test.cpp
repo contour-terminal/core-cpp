@@ -13,9 +13,11 @@
 #include <core/async/DetachedTask.hpp>
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
+#include <core/net/IListener.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/IoBackend.hpp>
 #include <core/net/NetError.hpp>
+#include <core/net/Sockets.hpp>
 #include <core/net/testing/BackendMatrix.hpp>
 #include <core/net/testing/InMemoryTransport.hpp>
 
@@ -25,9 +27,14 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <format>
 #include <initializer_list>
 #include <memory>
+#include <optional>
+#include <random>
 #include <span>
+#include <string>
 #include <string_view>
 #include <tuple>
 #include <utility>
@@ -211,6 +218,43 @@ core::async::DetachedTask readDetached(ISocket* sock, bool* resumed, bool* destr
     *resumed = true;
 }
 
+/// How an accept ended.
+struct AcceptOutcome
+{
+    std::optional<core::net::AcceptResult> result; ///< What it answered, where it answered.
+    bool unwound = false;                          ///< Whether it ended in `OperationCancelled`.
+    bool ended = false;                            ///< Whether the flow ran to its end either way.
+};
+
+/// Parks one accept, and ends whether the accept answers or unwinds.
+Task<void> acceptUntilEnded(core::net::IListener* listener, AcceptOutcome* out)
+{
+    try
+    {
+        out->result = co_await listener->accept();
+    }
+    catch (core::async::OperationCancelled const&)
+    {
+        out->unwound = true;
+    }
+    out->ended = true;
+}
+
+/// Closes the listener and destroys it in one turn: `listener->close(); listener.reset();`.
+Task<void> closeAndDestroy(std::unique_ptr<core::net::IListener>* listener)
+{
+    (*listener)->close();
+    listener->reset();
+    co_return;
+}
+
+/// Which listener a case makes.
+enum class ListenerKind : std::uint8_t
+{
+    Tcp,
+    Unix,
+};
+
 [[nodiscard]] char const* nameOf(Retire verb) noexcept
 {
     return verb == Retire::Close ? "close" : "cancelRead";
@@ -342,6 +386,11 @@ TEST_CASE(
                 CHECK_FALSE(outcome.read.hasValue);
                 if (!outcome.unwound)
                     CHECK(outcome.read.code == NetErrorCode::Cancelled);
+                // WFMO's read is a coroutine that runs AFTER the socket went, so it must unwind: an
+                // answer means it read `_readRetired` from the freed socket -- a failure without a
+                // sanitizer, which no Windows CI job runs.
+                if (backend.name == "wfmo")
+                    CHECK(outcome.unwound);
             }
         }
     }
@@ -479,6 +528,59 @@ TEST_CASE("A detached flow close() queued is freed by teardown, not resumed",
             }
             CHECK(destroyed);     // freed with the loop, as the loop's own chain
             CHECK_FALSE(resumed); // and never run past its `co_await`
+        }
+    }
+}
+
+TEST_CASE("A listener closed and destroyed in one turn is not touched by its resumed accept",
+          "[net][listener][resume]")
+{
+    // `close()` wakes the parked accept through the loop, a turn later; the owner destroys the
+    // listener before that turn. The accept then resumed on its NORMAL path and read the listener's
+    // `_closed` and descriptor from freed storage -- `PosixListener`, `UnixListener` and WFMO's
+    // `WindowsListener` alike; an IOCP accept answers from state it shares. It must see the
+    // listener is gone and answer without it.
+    for (auto const& backend: BackendMatrix)
+    {
+        auto source = core::net::makeBackend(backend.kind);
+        if (!source)
+            continue;
+        for (auto const kind: { ListenerKind::Tcp, ListenerKind::Unix })
+        {
+            DYNAMIC_SECTION("backend=" << backend.name
+                                       << " listener=" << (kind == ListenerKind::Tcp ? "tcp" : "unix"))
+            {
+                auto loop = EventLoop { *source };
+                auto const directory = std::filesystem::temp_directory_path()
+                                       / std::format("core-cpp-accept-{}", std::random_device {}());
+                auto bound = kind == ListenerKind::Tcp
+                                 ? core::net::listen(loop, "127.0.0.1", 0)
+                                 : core::net::listenUnix(loop, (directory / "accept.sock").string());
+                REQUIRE(bound.has_value());
+                auto listener = std::move(*bound);
+
+                auto outcome = AcceptOutcome {};
+                loop.spawn(acceptUntilEnded(listener.get(), &outcome));
+                REQUIRE(turnUntilParked(loop, 8));
+
+                loop.spawn(closeAndDestroy(&listener));
+                auto const turns = turnUntil(loop, outcome.ended, 8);
+                auto ec = std::error_code {};
+                std::filesystem::remove_all(directory, ec);
+
+                INFO("turns: " << turns << " unwound: " << outcome.unwound);
+                REQUIRE(outcome.ended);
+                CHECK(listener == nullptr);
+                // `IListener::close` answers a parked accept with a Cancelled VALUE.
+                REQUIRE_FALSE(outcome.unwound);
+                REQUIRE(outcome.result.has_value());
+                REQUIRE_FALSE(outcome.result->has_value());
+                CHECK(outcome.result->error().code == NetErrorCode::Cancelled);
+                // And it said so from the lifetime token, not from the freed `_closed` -- which is
+                // what tells the fix apart where no sanitizer is watching.
+                if (backend.name != "iocp")
+                    CHECK(outcome.result->error().context == "the listener was destroyed");
+            }
         }
     }
 }

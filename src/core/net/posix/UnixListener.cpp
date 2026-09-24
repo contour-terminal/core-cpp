@@ -207,7 +207,7 @@ async::Task<AcceptResult> UnixListener::accept()
 {
     // The AF_UNIX peer has no printable host, so the shared loop's formatPeer
     // yields "" here -- exactly what this listener reported before.
-    return acceptOne(&_loop, &_fd, &_closed);
+    return acceptOne(&_loop, &_fd, &_closed, _lifetime);
 }
 
 } // namespace core::net

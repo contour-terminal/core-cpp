@@ -18,7 +18,10 @@
 namespace core::net
 {
 
-async::Task<AcceptResult> acceptOne(EventLoop* loop, int const* fd, bool const* closed)
+async::Task<AcceptResult> acceptOne(EventLoop* loop,
+                                    int const* fd,
+                                    bool const* closed,
+                                    std::weak_ptr<void const> listener)
 {
     while (true)
     {
@@ -62,6 +65,11 @@ async::Task<AcceptResult> acceptOne(EventLoop* loop, int const* fd, bool const* 
             {
                 co_return std::unexpected(makeNetError(NetErrorCode::Cancelled, 0, "accept cancelled"));
             }
+            // Asked before `*closed` and `*fd` are: the listener's `close()` woke this park, and
+            // its owner may have destroyed it before the loop got here.
+            if (listener.expired())
+                co_return std::unexpected(
+                    makeNetError(NetErrorCode::Cancelled, 0, "the listener was destroyed"));
             continue;
         }
         if (err == EINTR || err == ECONNABORTED)

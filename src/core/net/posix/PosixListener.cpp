@@ -208,7 +208,7 @@ std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::adopt(Eve
 async::Task<AcceptResult> PosixListener::accept()
 {
     // The shared loop records the TCP peer's printable host via formatPeer.
-    return acceptOne(&_loop, &_fd, &_closed);
+    return acceptOne(&_loop, &_fd, &_closed, _lifetime);
 }
 
 } // namespace core::net

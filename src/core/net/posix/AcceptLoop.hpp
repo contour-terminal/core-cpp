@@ -9,6 +9,8 @@
 #include <core/async/Task.hpp>
 #include <core/net/IListener.hpp>
 
+#include <memory>
+
 namespace core::net
 {
 
@@ -25,6 +27,12 @@ class EventLoop;
 /// @param fd The listening fd (already non-blocking); read live so the owner's
 ///        close() (which drops it below 0) is observed between turns.
 /// @param closed The owning listener's closed flag, read live.
-[[nodiscard]] async::Task<AcceptResult> acceptOne(EventLoop* loop, int const* fd, bool const* closed);
+/// @param listener The owning listener's lifetime token. `close()` wakes a parked accept through
+///        the loop, a turn later, and the owner may destroy the listener in between: once this has
+///        expired, @p fd and @p closed dangle, and the accept answers Cancelled without them.
+[[nodiscard]] async::Task<AcceptResult> acceptOne(EventLoop* loop,
+                                                  int const* fd,
+                                                  bool const* closed,
+                                                  std::weak_ptr<void const> listener);
 
 } // namespace core::net

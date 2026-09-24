@@ -103,6 +103,10 @@ class WindowsListener final: public IListener
     /// listener, which owns no path.
     std::string _path;
     bool _closed = false;
+    /// Expires with this listener. A parked accept is resumed by the loop a turn after `close()`,
+    /// and an owner may destroy the listener in between (`listener->close(); listener.reset();`),
+    /// so the accept asks this -- never the listener -- whether there is still one to read.
+    std::shared_ptr<void const> _lifetime = std::make_shared<char const>('\0');
 };
 
 } // namespace core::net

@@ -246,6 +246,7 @@ std::expected<std::unique_ptr<WindowsListener>, NetError> WindowsListener::bindU
 
 async::Task<AcceptResult> WindowsListener::accept()
 {
+    auto const lifetime = std::weak_ptr<void const> { _lifetime };
     while (true)
     {
         if (_closed || _socket == detail::InvalidSocket)
@@ -283,6 +284,11 @@ async::Task<AcceptResult> WindowsListener::accept()
             {
                 co_return std::unexpected(makeNetError(NetErrorCode::Cancelled, 0, "accept cancelled"));
             }
+            // Asked before any member is: `close()` woke this park, and the owner may have
+            // destroyed the listener before the loop got here.
+            if (lifetime.expired())
+                co_return std::unexpected(
+                    makeNetError(NetErrorCode::Cancelled, 0, "the listener was destroyed"));
             continue;
         }
         co_return std::unexpected(makeNetError(NetErrorCode::SystemError, err, "accept"));
