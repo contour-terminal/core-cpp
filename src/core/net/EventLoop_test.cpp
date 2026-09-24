@@ -25,9 +25,11 @@
 #include <optional>
 #include <ranges>
 #include <stdexcept>
+#include <string_view>
 #include <thread>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 using core::async::OperationCancelled;
 using core::async::Task;
@@ -1471,4 +1473,110 @@ TEST_CASE("spawn at scale unlinks nested flows per completion", "[EventLoop][spa
     std::ignore = loop.runUntilIdle();
     CHECK(finished == Flows);
     CHECK(loop.spawnedCount() == 0);
+}
+
+namespace
+{
+
+/// Hands the awaiting flow to the back of the ready queue, the way a flow yields.
+struct YieldOnce
+{
+    EventLoop* loop;
+    [[nodiscard]] bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> self) const
+    {
+        loop->resumeSoon(core::async::ParkedWork { .resume = self });
+    }
+    void await_resume() const noexcept {}
+};
+
+/// Parks the awaiting flow until somebody hands its handle to @c EventLoop::resumeSoon.
+struct ParkUntilCompleted
+{
+    std::coroutine_handle<>* parked;
+    [[nodiscard]] bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> self) const noexcept { *parked = self; }
+    void await_resume() const noexcept {}
+};
+
+/// What the ordering case observed, in order.
+struct Trace
+{
+    std::vector<std::string_view> events;
+    std::coroutine_handle<> waiter;
+    EventLoop* loop = nullptr;
+};
+
+/// The waiter W: parks until the callback completes it, then records that it ran.
+Task<void> waiterFlow(Trace* trace)
+{
+    co_await ParkUntilCompleted { &trace->waiter };
+    trace->events.emplace_back("W");
+}
+
+/// The flow A: its deadline falls due ahead of the callback's, so the turn that finds both due
+/// queues A first; A then yields once to let "readiness that was already reported" run, and
+/// records what it finds after the yield.
+Task<void> yieldingFlow(Trace* trace, core::platform::SteadyTimePoint deadline)
+{
+    co_await trace->loop->sleepUntil(deadline);
+    trace->events.emplace_back("A1");
+    co_await YieldOnce { trace->loop }; // the yield that must come AFTER the callback's waiter
+    trace->events.emplace_back("A2");
+}
+
+/// The callback C: completes the waiter, as a readiness callback completes a socket operation.
+/// @param state The @c Trace.
+void completeWaiter(void* state)
+{
+    auto* const trace = static_cast<Trace*>(state);
+    trace->events.emplace_back("C");
+    trace->loop->resumeSoon(core::async::ParkedWork { .resume = std::exchange(trace->waiter, {}) });
+}
+
+} // namespace
+
+TEST_CASE("A waiter completed by a drain-step callback resumes in the callback's position",
+          "[EventLoop][turn][ordering]")
+{
+    // 0.2.1 made a completion from a callback go through `resumeSoon`, onto the BACK of the ready
+    // queue. So with A queued ahead of callback C, the drain ran A, C, then A's own yield, and only
+    // then C's waiter W: a flow that yields once to let already-reported readiness run -- fastcached's
+    // AbandonIfPeerGone -- read state W had not updated yet. 0.2.0 resumed W inline, in C's position.
+    // The order restored, without resuming inside the callback (G2): W runs right after C returns.
+    auto clock = ManualClock {};
+    auto trace = Trace {};
+    auto loop = core::net::testing::TestLoop { clock };
+    trace.loop = &loop;
+
+    auto const start = clock.now();
+    loop.spawn(waiterFlow(&trace));
+    loop.spawn(yieldingFlow(&trace, start + std::chrono::milliseconds { 1 }));
+    std::ignore = loop.addTimer(start + std::chrono::milliseconds { 2 }, &completeWaiter, &trace);
+    std::ignore = loop.runUntilIdle(); // W parks on its completion, A on its deadline
+    REQUIRE(trace.events.empty());
+
+    // Both due in one turn, queued in deadline order: A ahead of C.
+    clock.advance(std::chrono::milliseconds { 2 });
+    std::ignore = loop.runUntilIdle();
+
+    CHECK(trace.events == std::vector<std::string_view> { "A1", "C", "W", "A2" });
+}
+
+TEST_CASE("A callback's waiter that parks again is completed through the ordinary path",
+          "[EventLoop][turn][ordering]")
+{
+    // No recursion through the callback's position: a waiter that re-parks is completed again
+    // only by a LATER callback, which queues it in that callback's position in turn.
+    auto clock = ManualClock {};
+    auto trace = Trace {};
+    auto loop = core::net::testing::TestLoop { clock };
+    trace.loop = &loop;
+
+    loop.spawn(waiterFlow(&trace));
+    std::ignore = loop.runUntilIdle();
+    std::ignore = loop.addTimer(clock.now(), &completeWaiter, &trace);
+    std::ignore = loop.runUntilIdle();
+    CHECK(trace.events == std::vector<std::string_view> { "C", "W" });
+    CHECK_FALSE(trace.waiter);
 }

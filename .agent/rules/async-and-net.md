@@ -705,6 +705,14 @@ get right, and each one is a defect that has already happened.
   [fastcached#663](https://github.com/LASTRADA-Software/fastcached/issues/663) and
   [fastcached#893](https://github.com/LASTRADA-Software/fastcached/issues/893).
 
+- **A readiness completion resumes its waiter before anything queued after the readiness
+  callback.** A callback the drain step runs (a readiness park's owner, a timer) completes its
+  waiter through `resumeSoon`, and the drain puts what the callback queued at the FRONT of the
+  ready queue once it returns -- the callback's position, which 0.2.0 had by resuming inline, kept
+  without resuming inside the callback (G2). At the back, as 0.2.1 had it, a flow queued ahead of
+  the callback that yields once to let reported readiness run (fastcached's `AbandonIfPeerGone`)
+  read state the waiter had not updated. `resumeSoon` from anywhere else stays FIFO at the back.
+
 - **The slot guards end the process in EVERY build; a contract violation is never a silent
   hang.** They were Debug-only, and under `NDEBUG` a second operation displaced the parked one,
   which then never resumed: a hang with no message in exactly the builds that ship (suspected in a

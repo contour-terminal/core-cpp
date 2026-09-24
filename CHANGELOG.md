@@ -34,6 +34,15 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- **A waiter completed by a readiness callback resumes in the callback's position again.** 0.2.1
+  made a completion from a callback (`ResultAwaitable::complete()`, and anything a drain-step
+  callback hands to `EventLoop::resumeSoon`) join the BACK of the ready queue, where 0.2.0 had
+  resumed it inline. A flow queued ahead of the callback that yields once to let already-reported
+  readiness run -- fastcached's `AbandonIfPeerGone` -- then resumed before the waiter and read stale
+  state. The drain now puts what a callback queued at the front once the callback returns: the
+  waiter resumes before anything queued after the callback, still in the drain step and never
+  inside the callback (G2). `resumeSoon` from outside a drain-step callback stays FIFO.
+
 - **A spawned flow that completes inside a sub-task is released, instead of leaking until the
   loop is destroyed.** `EventLoop::spawn` unlinked a finished flow by the frame its ready entry
   named, and a flow parked inside a sub-task (`co_await leaf()`, with `leaf` on a socket read or a

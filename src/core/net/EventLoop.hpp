@@ -583,6 +583,12 @@ class EventLoop: public async::IExecutor
 
     /// Queues @p work for resumption in the next drain. It ENQUEUES — it never resumes.
     ///
+    /// **A readiness completion resumes its waiter before anything queued after the readiness
+    /// callback.** Called from a callback the drain step runs -- a readiness park's owner, a timer
+    /// -- @p work resumes immediately after that callback returns, in the same drain, ahead of
+    /// whatever was queued behind the callback, still on the loop's thread and never inside the
+    /// callback. Called from anywhere else it joins the back of the queue.
+    ///
     /// **Loop thread only, and the assert enforces it.** An earlier version of this line named
     /// "thread-pool callback" among its callers, which the assert aborts: a pool thread must use
     /// @c submit(async::ParkedWork), which is this operation plus the hand-off through the
@@ -889,6 +895,15 @@ class EventLoop: public async::IExecutor
     /// never relied upon. It is stated here because the day somebody deletes the destructor body,
     /// the order is what decides whether the failure is a crash or silence.
     std::deque<ReadyEntry> _ready;
+
+    /// Where @c queueReady files work while a drain-step callback runs, or null outside one.
+    ///
+    /// A waiter a callback completes resumes in the CALLBACK'S position: the drain puts what the
+    /// callback queued at the front of @c _ready once it returns, ahead of everything queued after
+    /// the callback -- the order 0.2.0 had by resuming inline, kept without resuming inside the
+    /// callback (G2). Queued at the back instead, a flow queued ahead of the callback that yields
+    /// once to let reported readiness run found the waiter not yet resumed.
+    std::deque<ReadyEntry>* _queuedByCallback = nullptr;
 
     detail::ParkTable _parks; ///< Every park, by id, with its reverse indices.
 

@@ -355,6 +355,10 @@ class ResultAwaitable
     /// loop-less test double such as @c testing::InMemorySocket, or a transport written before
     /// 0.2.1 -- has nowhere to defer to, and its waiter is resumed here as before, which is why
     /// such an owner still detaches the operation first and calls this last.
+    ///
+    /// **A readiness completion resumes its waiter before anything queued after the readiness
+    /// callback**: called from a callback the loop's drain step runs, the waiter resumes right after
+    /// that callback returns, in the same drain (see @c EventLoop::resumeSoon).
     /// @param result What the operation produced.
     void complete(Result result) noexcept
     {

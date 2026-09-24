@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <initializer_list>
+#include <iterator>
 #include <limits>
 #include <ranges>
 #include <tuple>
@@ -473,6 +474,21 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
         {
             auto const wake = _ready.front().wake;
             _ready.pop_front();
+            // What the callback queues -- the waiter its completion hands to `resumeSoon` -- runs
+            // in the callback's position: put at the FRONT once the callback returns, in the order
+            // queued, so it resumes before anything that was queued after the callback. Not inside
+            // the callback, which is G2, and not at the back, which let a flow queued ahead of the
+            // callback yield past the waiter and read state the waiter had not updated yet. A
+            // waiter that re-parks is completed by a later callback, in that one's position, so
+            // nothing here recurses.
+            auto queuedByCallback = std::deque<ReadyEntry> {};
+            _queuedByCallback = &queuedByCallback;
+            auto const inPosition = detail::ScopeGuard { [this, &queuedByCallback]() noexcept {
+                _queuedByCallback = nullptr;
+                _ready.insert(_ready.begin(),
+                              std::make_move_iterator(queuedByCallback.begin()),
+                              std::make_move_iterator(queuedByCallback.end()));
+            } };
             runDueCallback(callback, wake);
             ++resumed;
             continue;
@@ -912,9 +928,10 @@ void EventLoop::resumeSoon(async::ParkedWork work)
 void EventLoop::queueReady(async::ParkedWork work, ParkId sourcePark)
 {
     auto const owned = static_cast<bool>(work.abandon);
-    _ready.push_back(ReadyEntry { .parked = async::detail::Parked { std::move(work) },
-                                  .ownedByLoop = owned,
-                                  .sourcePark = sourcePark });
+    auto& queue = _queuedByCallback != nullptr ? *_queuedByCallback : _ready;
+    queue.push_back(ReadyEntry { .parked = async::detail::Parked { std::move(work) },
+                                 .ownedByLoop = owned,
+                                 .sourcePark = sourcePark });
 }
 
 ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
