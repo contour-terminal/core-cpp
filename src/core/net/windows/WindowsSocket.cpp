@@ -141,9 +141,11 @@ void WindowsSocket::cancelRead() noexcept
     if (!_loop.cancelPending(waiter))
         return;
     _readRetired = true;
-    // INLINE, as `PosixSocket` settles a retired read: the flow is resumed before this returns, so
-    // a flow that arms its next read there leaves a NEW waiter, and a second call retires that one.
-    waiter.resume();
+    // Settled now (`_readRetired`) and resumed by the LOOP, as `PosixSocket` settles a retired
+    // read: resuming here would run the flow before this returns, and a flow that destroys the
+    // socket's owner would do it under the caller's next statement (G2). The frame is this call's
+    // to hand on -- `cancelPending` answered true -- and handing it to the ready queue is that.
+    _loop.resumeSoon(async::ParkedWork { .resume = waiter });
 }
 
 async::Task<WindowsSocket::ParkEnd> WindowsSocket::parkUntilReady(Ready kind)

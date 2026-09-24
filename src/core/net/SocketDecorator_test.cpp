@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The ordering rule every transport is held to: **retiring a parked operation completes it LAST.**
+// A retired operation's coroutine may destroy the socket it belonged to, and nothing the retiring
+// verb does may be in its way.
 //
-// Detach the operation from the socket first, complete it last, and touch no member afterwards.
-// That is not tidiness. Completing RESUMES the parked coroutine, and a coroutine that OWNS the
-// socket — a connection handler holding it in a by-value `unique_ptr` parameter — runs to its end
-// and destroys it before the completion returns. A transport that read one of its own members
-// afterwards would write through a freed object, which only a sanitizer build reports.
+// Since 0.2.1 the verb SETTLES the operation and the LOOP resumes the coroutine, in a later drain
+// step (G2): so the socket is still alive when `close()` or `cancelRead()` returns, and gone after
+// one turn. Before 0.2.1 the coroutine was resumed inside the verb, destroyed the socket there, and
+// the rule "detach first, complete last, touch no member afterwards" was all that stood between a
+// transport and a write through freed storage. The rule still holds -- a destructor abandons, and a
+// loop-less double still resumes inline -- but it is no longer what these cases measure.
 //
-// The cases below are the shape that makes the rule bite: the coroutine the completion resumes is
-// the socket's only owner, and it drops it from inside the resumption. Each watches the
-// destruction through a `weak_ptr`, so the assertion is a deterministic value on every platform
-// rather than an ASan report once in N runs.
+// The coroutine the completion resumes is the socket's only owner, and it drops it from inside the
+// resumption. Each case watches the destruction through a `weak_ptr`, so the assertion is a
+// deterministic value on every platform rather than an ASan report once in N runs.
 //
 // It is named for decorators because they are where the rule is easiest to lose: a decorator
 // forwards the verb and may hold state of its own around it. `SplitSocket` is exercised here for
@@ -26,6 +27,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <memory>
 #include <span>
@@ -93,7 +95,9 @@ TEST_CASE("A retired operation may destroy the socket it belonged to", "[net][so
                 REQUIRE_FALSE(watched.expired());
 
                 socket->close();
-                CHECK(watched.expired()); // the resumption destroyed it, from inside close()
+                CHECK_FALSE(watched.expired()); // settled, not resumed: the socket outlives close()
+                std::ignore = loop.runOnce(std::chrono::milliseconds { 0 });
+                CHECK(watched.expired()); // the loop resumed it, and the resumption destroyed it
             }
 
             SECTION("a readability watch retired by cancelRead()")
@@ -112,6 +116,8 @@ TEST_CASE("A retired operation may destroy the socket it belonged to", "[net][so
                 REQUIRE_FALSE(watched.expired());
 
                 socket->cancelRead();
+                CHECK_FALSE(watched.expired());
+                std::ignore = loop.runOnce(std::chrono::milliseconds { 0 });
                 CHECK(watched.expired());
             }
 
@@ -132,6 +138,8 @@ TEST_CASE("A retired operation may destroy the socket it belonged to", "[net][so
                 REQUIRE_FALSE(watched.expired());
 
                 socket->close();
+                CHECK_FALSE(watched.expired());
+                std::ignore = loop.runOnce(std::chrono::milliseconds { 0 });
                 CHECK(watched.expired());
             }
         }
@@ -168,7 +176,9 @@ TEST_CASE("A decorator forwards the rule along with the verb", "[net][socket][de
             REQUIRE(loop.parkedWaiterCount() > 0);
             REQUIRE_FALSE(watched.expired());
 
-            socket->cancelRead(); // forwarded to the read half, which retires and resumes
+            socket->cancelRead(); // forwarded to the read half, which retires; the loop resumes
+            CHECK_FALSE(watched.expired());
+            std::ignore = loop.runOnce(std::chrono::milliseconds { 0 });
             CHECK(watched.expired());
         }
     }
@@ -208,7 +218,9 @@ TEST_CASE("A decorator's close() touches nothing once a completion has run", "[n
             REQUIRE(loop.parkedWaiterCount() > 0);
             REQUIRE_FALSE(watched.expired());
 
-            socket->close(); // retires the read half's watch, whose resumption destroys the decorator
+            socket->close(); // retires both halves; the read half's watch will destroy the decorator
+            CHECK_FALSE(watched.expired());
+            std::ignore = loop.runOnce(std::chrono::milliseconds { 0 });
             CHECK(watched.expired());
         }
     }

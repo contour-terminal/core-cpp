@@ -449,6 +449,16 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   longer compiles in this tree; it proves the concept discriminates rather than accepting
   everything. Origin:
   [fastcached#1041](https://github.com/LASTRADA-Software/fastcached/issues/1041).
+- **A resource SETTLES a parked operation at once and the LOOP resumes its waiter** -- `close()`,
+  `cancelRead()`, a destructor's abandonment, a `CompletionWait` closed under an IOCP listener:
+  every one of them. `ResultAwaitable::complete` hands the waiter to `EventLoop::resumeSoon` (the
+  loop named through `cancelThrough` or `resumeThrough`), and only an owner that named no loop -- a
+  loop-less test double -- still resumes inline. Resumed inside the verb, the flow ran to its end
+  and could destroy whatever was executing the caller's next statement: contour's
+  `_writer.close(); _connection->close();` did, deterministically, because the first close resumed
+  the read flow that destroyed the client. `CloseResumesThroughLoop_test.cpp` holds it over
+  `BackendMatrix`. Nothing but the loop's drain step calls a waiter's `resume()`; a frame destroyed
+  while its waiter is queued takes it back with `cancelPending` in its awaiter's destructor.
 - **A queue or a resource never resumes its consumer inline.** `AsyncQueue::push()` and `close()`
   hand the parked handle to `IExecutor::submit` and return. A producer commonly pushes while
   holding a lock of its own, and a queue that resumed inline would run the consumer's next step
@@ -711,11 +721,11 @@ get right, and each one is a defect that has already happened.
   gone. Origin:
   [fastcached#677](https://github.com/LASTRADA-Software/fastcached/issues/677).
 
-- **`cancelRead` retires whatever is parked NOW, which is not the same as being idempotent.** A
-  retirement that completes its victim inline resumes that coroutine before the call returns, so a
-  flow that arms its next read there leaves a NEW operation in the slot and a second call retires
-  THAT one. The declaration once claimed the stronger word. Origin:
-  [fastcached#1233](https://github.com/LASTRADA-Software/fastcached/issues/1233).
+- **`cancelRead` retires whatever is parked NOW.** Until 0.2.1 a retirement resumed its victim
+  inline, so a flow that armed its next read there left a NEW operation in the slot and a second
+  call in a row retired THAT one. The victim now runs on the loop after the call returns, so a
+  second call in a row is a no-op, and the read the victim arms is retired only by a later call.
+  Origin: [fastcached#1233](https://github.com/LASTRADA-Software/fastcached/issues/1233).
 
 - **A receive deadline is a consumer of the loop's timers, never a wake of its own.**
   `setReceiveDeadline` arms an `EventLoop::addTimer` on the one deadline heap `computeTimeout` and
@@ -1032,8 +1042,9 @@ get right, and each one is a defect that has already happened.
   out declares it**, because the interface's default is a no-op and a transport whose reads park
   cannot retire them with one; `core-cpp.cancel-read-declared` refuses a class that inherits it.
   `WindowsSocket`'s read is an ordinary coroutine parked on the loop, so its `cancelRead` takes that
-  frame back with `EventLoop::cancelPending` and resumes it inline to complete with `Cancelled` --
-  the detach-then-complete order `PosixSocket` uses. Origin:
+  frame back with `EventLoop::cancelPending` and hands it back to the loop's ready queue to
+  complete with `Cancelled` -- the detach-then-complete order `PosixSocket` uses, resumed by the
+  loop rather than inside the call. Origin:
   [fastcached#710](https://github.com/LASTRADA-Software/fastcached/issues/710),
   [fastcached#884](https://github.com/LASTRADA-Software/fastcached/issues/884).
 - **`read`'s buffer must be non-empty**, because `0` already means "the peer finished sending"

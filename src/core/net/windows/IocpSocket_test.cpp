@@ -64,6 +64,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -571,7 +572,10 @@ TEST_CASE("An IocpSocket destroyed with a WSARecv in flight survives the complet
     harness.socket.reset();
 
     // The destructor ABANDONS the parked read -- the flow unwinds, because a socket that is gone
-    // has nothing for it to look at -- and the receive completes later into its own node.
+    // has nothing for it to look at -- and the receive completes later into its own node. The
+    // loop resumes the flow, not the destructor (G2), so it has not run yet.
+    CHECK_FALSE(read.resumed);
+    std::ignore = harness.loop.runOnce(std::chrono::milliseconds { 0 });
     CHECK(read.abandoned);
     CHECK(drainOwnerOperations(harness.loop, harness.backend));
 }
@@ -617,7 +621,9 @@ TEST_CASE("An IocpSocket destroyed mid-write holds the payload until the kernel 
 
     harness.socket.reset();
 
-    // The moment that matters: the socket is gone and the kernel may still be reading.
+    // The moment that matters: the socket is gone and the kernel may still be reading. The loop
+    // resumes the abandoned flow on its next drain.
+    std::ignore = harness.loop.runOnce(std::chrono::milliseconds { 0 });
     CHECK(written.abandoned);
     REQUIRE_FALSE(observer.expired());
 
@@ -627,10 +633,11 @@ TEST_CASE("An IocpSocket destroyed mid-write holds the payload until the kernel 
     CHECK(observer.expired());
 }
 
-TEST_CASE("cancelRead retires a parked probe before it returns", "[net][iocp][socket][cancelread]")
+TEST_CASE("cancelRead settles a parked probe before it returns", "[net][iocp][socket][cancelread]")
 {
-    // A probe is a ZERO-byte receive: it carries nothing, so it is retired inline, which is what
-    // ISocket::cancelRead describes. No turn stands between the call and the assertion.
+    // A probe is a ZERO-byte receive: it carries nothing, so it is settled at once, which is what
+    // ISocket::cancelRead describes -- and its flow is resumed by the loop, on the next drain, not
+    // inside the call (G2). No kernel completion stands between the call and the resumption.
     auto harness = Harness {};
     auto watch = Outcome {};
     parkOnProbe(harness.socket.get(), &watch);
@@ -638,6 +645,8 @@ TEST_CASE("cancelRead retires a parked probe before it returns", "[net][iocp][so
 
     harness.socket->cancelRead();
 
+    CHECK_FALSE(watch.resumed);
+    std::ignore = harness.loop.runOnce(std::chrono::milliseconds { 0 });
     CHECK(watch.resumed);
     REQUIRE(watch.code.has_value());
     CHECK(*watch.code == NetErrorCode::Cancelled);
@@ -815,6 +824,7 @@ TEST_CASE("An abandoned read never lets the kernel write into the caller's buffe
         parkOnRead(harness.socket.get(), &buffer, &read);
         REQUIRE(harness.backend.issuedOperations() == 1);
         harness.socket.reset();
+        std::ignore = harness.loop.runOnce(std::chrono::milliseconds { 0 });
         CHECK(read.abandoned);
         // The peer's send may be refused outright here -- the close has already reset the
         // connection -- and that is fine: what matters is that nothing lands in the buffer.
@@ -825,11 +835,12 @@ TEST_CASE("An abandoned read never lets the kernel write into the caller's buffe
     CHECK(bytesWritten(buffer) == 0);
 }
 
-TEST_CASE("close() resolves a parked read with a Cancelled VALUE, at once", "[net][iocp][socket]")
+TEST_CASE("close() settles a parked read with a Cancelled VALUE, at once", "[net][iocp][socket]")
 {
     // ISocket::close's contract, which the completion model does not relax: the operation is
-    // retrieved HERE, not when its abort comes back, because the socket is gone and there is
-    // nothing left for the kernel to hand the buffer to.
+    // settled HERE, not when its abort comes back, because the socket is gone and there is
+    // nothing left for the kernel to hand the buffer to. Its flow is resumed by the loop's next
+    // drain, not inside close() (G2), and without waiting for the abort.
     auto harness = Harness {};
     auto buffer = std::array<std::byte, 64> {};
     auto read = Outcome {};
@@ -838,6 +849,8 @@ TEST_CASE("close() resolves a parked read with a Cancelled VALUE, at once", "[ne
 
     harness.socket->close();
 
+    CHECK_FALSE(read.resumed);
+    std::ignore = harness.loop.runOnce(std::chrono::milliseconds { 0 });
     CHECK(read.resumed);
     CHECK_FALSE(read.abandoned);
     REQUIRE(read.code.has_value());

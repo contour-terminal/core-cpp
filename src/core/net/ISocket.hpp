@@ -193,14 +193,18 @@ class ISocket
     /// the call can tell, so its waiter resolves on a later turn with whatever the receive did
     /// (those bytes, or `Cancelled`)
     /// ([fastcached#884](https://github.com/LASTRADA-Software/fastcached/issues/884)). The slot is free at
-    /// once on every transport, and a `waitReadable` probe, which carries nothing to lose, is completed
-    /// inline on every transport.
+    /// once on every transport, and a `waitReadable` probe, which carries nothing to lose, is settled
+    /// at once on every transport.
     ///
-    /// **It retires whatever is parked NOW, which is not the same as being idempotent**
-    /// ([fastcached#1233](https://github.com/LASTRADA-Software/fastcached/issues/1233)). A
-    /// retirement that completes its victim INLINE resumes that coroutine before this call returns,
-    /// so a coroutine that arms its next read there leaves a NEW read in the slot and a second call
-    /// retires THAT one. A call with the slot EMPTY is a no-op.
+    /// **Settled here, resumed by the loop** (since 0.2.1, as @c close): the retired flow runs in a
+    /// later drain step, never before this call returns.
+    ///
+    /// **It retires whatever is parked NOW**
+    /// ([fastcached#1233](https://github.com/LASTRADA-Software/fastcached/issues/1233)). The flow it
+    /// retires runs after it returns, so a second call in a row finds the slot empty and is a
+    /// no-op; a read that flow arms when it does run is a NEW read, which only a later call
+    /// retires. (Until 0.2.1 the victim was resumed inside the first call, and a second call
+    /// retired the read its resumption had armed.)
     ///
     /// **The default does nothing, and that is for FAKES** — a scripted double whose reads resolve
     /// inline has no frame to free. **It is NOT a safe default for a transport whose reads park**,
@@ -296,10 +300,16 @@ class ISocket
     /// such an operation with @c NetErrorCode::Cancelled, as a VALUE: the flow is alive and asked
     /// about a socket that has gone away.
     ///
-    /// **The order is load-bearing: detach the operation FIRST, complete it LAST, and touch no
-    /// member afterwards.** Completing resumes the awaiting coroutine, and a coroutine that OWNS
-    /// the socket runs to its end and destroys it before the completion returns — a
-    /// heap-use-after-free this lineage has already had.
+    /// **The operation is SETTLED here and its flow is RESUMED by the loop**, in a later drain step
+    /// of the same turn, never before this returns (guarantee G2; since 0.2.1). A flow resumed
+    /// inside `close()` could run to its end and destroy whatever was still executing the caller's
+    /// next statement -- contour's `_writer.close(); _connection->close();` did, deterministically.
+    /// So a caller that asserts the parked flow's outcome right after `close()` runs a loop turn
+    /// first.
+    ///
+    /// **The order is still load-bearing: detach the operation FIRST, complete it LAST, and touch
+    /// no member afterwards.** A test double with no loop (@c testing::InMemorySocket) still
+    /// resumes inline, and a destructor's abandonment is its own caller's last act either way.
     virtual void close() noexcept = 0;
 
     /// @return True once @c close has been called, or a read observed the peer's EOF.

@@ -64,6 +64,18 @@ class EventLoop;
 /// @param park The park to cancel.
 void requestCancelOn(EventLoop& loop, ParkId park) noexcept;
 
+/// Hands @p waiter to @p loop's ready queue, to be resumed in its drain step, out of line for the
+/// same reason as @c requestCancelOn. Loop thread only, as @c EventLoop::resumeSoon.
+/// @param loop The loop to resume on.
+/// @param waiter The suspended coroutine.
+void resumeSoonOn(EventLoop& loop, std::coroutine_handle<> waiter) noexcept;
+
+/// Takes @p waiter back out of @p loop's ready queue, where @c resumeSoonOn put it, because its
+/// frame is being destroyed before the loop reached it. Loop thread only.
+/// @param loop The loop it was queued on.
+/// @param waiter The coroutine to take back.
+void cancelPendingOn(EventLoop& loop, std::coroutine_handle<> waiter) noexcept;
+
 /// The result of one socket operation: a value, or why it could not be produced.
 ///
 /// @tparam R What the operation produces — `std::size_t` for a byte transfer, `void` for a
@@ -184,6 +196,11 @@ class ResultAwaitable
     {
         if (!_settled)
             retireNow();
+        // Settled and handed to the loop, and the frame is going away before the loop resumed it
+        // -- the only way this object can be destroyed with `_queued` set, since `await_resume`
+        // clears it. The ready queue must not keep a handle to a frame that no longer exists.
+        if (_queued && _loop != nullptr)
+            cancelPendingOn(*_loop, std::exchange(_queued, {}));
     }
 
     /// @return True when the operation already has its answer, so no suspension is needed.
@@ -283,6 +300,9 @@ class ResultAwaitable
         if (_task.has_value())
             return _task->await_resume();
 
+        // The loop has resumed this frame, so the queue entry `complete` filed is gone.
+        _queued = {};
+
         // Dropped first: it blocks until a callback running on another thread has finished, so
         // nothing below can race one, and the owner hooks below must not be reached from it.
         _cancelReg.reset();
@@ -305,16 +325,23 @@ class ResultAwaitable
         return std::move(_result);
     }
 
-    /// Publishes the operation's answer and resumes the awaiting flow.
+    /// Publishes the operation's answer at once, and hands the awaiting flow to the loop.
     ///
     /// **Called by the owner, on the loop's thread**, from its readiness callback, from `close()`,
-    /// or from its destructor.
+    /// `cancelRead()` or its destructor.
     ///
-    /// **It resumes, so it must be the LAST thing the caller does.** The resumed coroutine may own
-    /// the socket and may run to its end before this returns, destroying it — so an owner detaches
-    /// the operation from itself FIRST, calls this LAST, and touches no member of its own
-    /// afterwards (`.agent/rules/async-and-net.md`; the ASan report that established it is
-    /// recorded on fastcached's `EpollSocket::Close`).
+    /// **It settles now and resumes LATER, in the loop's drain step** -- guarantee G2, and the rule
+    /// that a resource never resumes its consumer inline. Until 0.2.1 it resumed the waiter right
+    /// here, so a `close()` ran the closed read's flow before `close()` returned; that flow could
+    /// run to its end and destroy whatever was still calling `close()`. contour did exactly that:
+    /// `NativeClient::detach` is `_writer.close(); _connection->close();`, the first close resumed
+    /// the client's read flow, the flow destroyed the client, and the second statement called
+    /// through freed storage.
+    ///
+    /// The loop is the one the owner named through @c cancelThrough or @c resumeThrough. An owner
+    /// that named none -- a loop-less test double such as @c testing::InMemorySocket, or a
+    /// transport written before 0.2.1 -- has nowhere to defer to, and its waiter is resumed here as
+    /// before, which is why such an owner still detaches the operation first and calls this last.
     /// @param result What the operation produced.
     void complete(Result result) noexcept
     {
@@ -323,8 +350,15 @@ class ResultAwaitable
         if (_arming)
             return; // inline completion; `await_suspend` transfers back and resumes normally
         auto const waiter = std::exchange(_waiter, {});
-        if (waiter && !waiter.done())
-            waiter.resume();
+        if (!waiter || waiter.done())
+            return;
+        if (_loop != nullptr)
+        {
+            _queued = waiter;
+            resumeSoonOn(*_loop, waiter);
+            return;
+        }
+        waiter.resume();
     }
 
     /// Publishes that the operation's OWNER is going away, and resumes the awaiting flow so it
@@ -364,6 +398,14 @@ class ResultAwaitable
         _loop = &loop;
         _park = park;
     }
+
+    /// Names the loop @c complete resumes the awaiting flow on, for an owner that has no park to
+    /// hand @c cancelThrough -- which names the loop as well, so an owner calling that need not
+    /// call this.
+    ///
+    /// **Called by the owner from its arm hook**, on the loop's thread.
+    /// @param loop The loop whose drain step resumes the waiter; must outlive the operation.
+    void resumeThrough(EventLoop& loop) noexcept { _loop = &loop; }
 
     /// @return Whether the operation has already produced its answer. An owner asks before
     ///         completing a second time, and a stop path asks before cancelling something that
@@ -418,6 +460,10 @@ class ResultAwaitable
 
     std::optional<async::StopCallback<std::function<void()>>> _cancelReg;
     std::coroutine_handle<> _waiter {};
+
+    /// The waiter @c complete handed to the loop, until `await_resume` runs; the destructor takes it
+    /// back if the frame is destroyed first.
+    std::coroutine_handle<> _queued {};
     async::StopToken _token;
     ArmCallback _arm = nullptr;
     RetireCallback _retire = nullptr;

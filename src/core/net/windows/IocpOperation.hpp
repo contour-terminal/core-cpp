@@ -215,6 +215,10 @@ class CompletionWait
         _timer.reset();
         if (_park)
             _loop.unregisterPark(std::exchange(_park, ParkId {}));
+        // Finished and handed to the loop, and the frame is going away before the loop resumed
+        // it: the ready queue must not keep a handle to it.
+        if (_queued)
+            std::ignore = _loop.cancelPending(std::exchange(_queued, {}));
     }
 
     [[nodiscard]] bool await_ready() const noexcept { return false; }
@@ -256,19 +260,21 @@ class CompletionWait
 
     void await_resume() noexcept
     {
+        // The loop has resumed this frame, so the queue entry `finish` filed is gone.
+        _queued = {};
         // Dropped first: it blocks until a callback running on another thread has finished.
         _cancelReg.reset();
         _timer.reset();
     }
 
-    /// Ends the wait because the owner closed the resource the operation was issued on, and
-    /// resumes the waiting coroutine NOW, as `ISocket::close` does for a parked read.
+    /// Ends the wait because the owner closed the resource the operation was issued on: settled
+    /// NOW, and the waiting coroutine handed to the loop, as `ISocket::close` does for a parked
+    /// read -- never resumed inside the owner's `close()` (G2).
     ///
     /// The completion is not the single writer here, and that is the one exception to the rule
     /// above, for the reason `close` is allowed it everywhere: closing IS what aborts the
     /// operation, the operation's storage outlives the wait on its own share, and there is no
-    /// value left for the kernel to hand back that the owner would still accept. It resumes, so
-    /// it is the last thing its caller does to this wait.
+    /// value left for the kernel to hand back that the owner would still accept.
     void close() noexcept
     {
         if (_outcome == Outcome::Pending && _waiter.resume)
@@ -314,16 +320,23 @@ class CompletionWait
             std::ignore = ::CancelIoEx(reinterpret_cast<HANDLE>(_socket), &_operation.overlapped);
     }
 
-    /// Ends the wait and resumes the coroutine, touching nothing afterwards.
+    /// Ends the wait and hands the coroutine to the loop, whose drain step resumes it.
+    ///
+    /// Never resumed here: `close()` reaches this from inside an owner's `close()`, and a flow
+    /// resumed there could destroy the owner under its caller's next statement (G2). The park
+    /// callbacks that reach it already run in the drain step, where the queued waiter runs in the
+    /// same drain.
     /// @param outcome Why.
     void finish(Outcome outcome) noexcept
     {
         _outcome = outcome;
         if (_park)
             _loop.unregisterPark(std::exchange(_park, ParkId {}));
-        auto waiter = async::detail::Parked { std::exchange(_waiter, async::ParkedWork {}) };
-        if (waiter.handle())
-            waiter.resume();
+        auto waiter = std::exchange(_waiter, async::ParkedWork {});
+        if (!waiter.resume)
+            return;
+        _queued = waiter.resume;
+        _loop.resumeSoon(std::move(waiter));
     }
 
     /// The park's callback, in turn step 2.
@@ -376,6 +389,7 @@ class CompletionWait
     ParkId _park {};
     ParkId _parkForStop {}; ///< The park a stop names; written before the stop callback exists.
     async::ParkedWork _waiter {};
+    std::coroutine_handle<> _queued {}; ///< Handed to the loop by @c finish; not yet resumed.
     Outcome _outcome = Outcome::Pending;
     bool _stopped = false;
     bool _timedOut = false;

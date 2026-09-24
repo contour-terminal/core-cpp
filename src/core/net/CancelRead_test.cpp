@@ -8,9 +8,10 @@
 // ([fastcached#710](https://github.com/LASTRADA-Software/fastcached/issues/710)).
 //
 // Two promises, and they are not the same promise. The SLOT is free when it returns — that is what
-// lets a caller arm the next read in the same turn. The WAITER is resolved inline here, because a
-// readiness transport consumes nothing, so a retired read can lose nothing. The completion-based
-// transport, `IocpSocket`, keeps both promises for what these cases park -- a `waitReadable`
+// lets a caller arm the next read in the same turn. The WAITER's operation is settled with
+// `Cancelled` at once, because a readiness transport consumes nothing, so a retired read can lose
+// nothing -- and its flow is resumed by the loop, never inside `cancelRead` (G2, since 0.2.1). The
+// completion-based transport, `IocpSocket`, keeps both promises for what these cases park -- a `waitReadable`
 // probe, a zero-byte receive with nothing in it to lose -- and so runs them too; for a REAL read
 // it keeps only the first and settles the waiter with whatever its receive did
 // (fastcached#884), which `windows/IocpSocket_test.cpp` holds.
@@ -84,9 +85,9 @@ Task<void> watchOnce(ISocket* sock, WatchOutcome* out)
 
 /// Parks a watch, and when it is retired arms a SECOND one from inside the resumption.
 ///
-/// The shape that makes `cancelRead` non-idempotent: the first retirement resumes this flow before
-/// it returns, so the caller's next statement is not the next thing that happens — a second call
-/// then retires the watch this resumption armed.
+/// The shape fastcached#1233 was about: while a retirement resumed its victim inline, the second
+/// call retired the watch this resumption armed. Now the resumption runs on the loop, after both
+/// calls have returned.
 Task<void> watchThenRearm(ISocket* sock, WatchOutcome* first, WatchOutcome* second)
 {
     co_await watchOnce(sock, first);
@@ -122,20 +123,29 @@ Task<void> watchAndRetire(
                                   retireThenReuse(loop, sock, peer, parkedFirst, reusable));
 }
 
-/// Retires twice in a row, which is what takes the watch the first retirement's resumption armed.
-Task<void> retireTwice(EventLoop* loop, ISocket* sock, bool* parkedFirst)
+/// Retires twice in a row, lets the loop run the retired flow, looks, and then retires the watch
+/// that flow armed, so the case can finish.
+Task<void> retireTwiceThenLook(
+    EventLoop* loop, ISocket* sock, WatchOutcome const* second, bool* parkedFirst, bool* secondParkedAfter)
 {
     *parkedFirst = loop->parkedWaiterCount() > 0;
     sock->cancelRead();
-    sock->cancelRead();
-    co_return; // a coroutine, so `whenAll` composes it; both retirements are synchronous
+    sock->cancelRead(); // the retired flow has not run yet, so the slot is empty: a no-op
+    co_await loop->delay(std::chrono::milliseconds { 1 }); // the loop resumes it; it re-arms
+    *secondParkedAfter = !second->resolved && loop->parkedWaiterCount() > 0;
+    sock->cancelRead(); // the one call meant for the second watch
 }
 
-/// Runs the re-arming watcher against two retirements.
-Task<void> watchTwiceAndRetireTwice(
-    EventLoop* loop, ISocket* sock, WatchOutcome* first, WatchOutcome* second, bool* parkedFirst)
+/// Runs the re-arming watcher against the retirements.
+Task<void> watchTwiceAndRetire(EventLoop* loop,
+                               ISocket* sock,
+                               WatchOutcome* first,
+                               WatchOutcome* second,
+                               bool* parkedFirst,
+                               bool* secondParkedAfter)
 {
-    co_await core::async::whenAll(watchThenRearm(sock, first, second), retireTwice(loop, sock, parkedFirst));
+    co_await core::async::whenAll(watchThenRearm(sock, first, second),
+                                  retireTwiceThenLook(loop, sock, second, parkedFirst, secondParkedAfter));
 }
 
 /// Gives the awaiting coroutine a stop token of the caller's choosing, without suspending, so a
@@ -320,16 +330,16 @@ TEST_CASE("cancelRead with nothing parked disturbs nothing", "[net][socket][canc
     }
 }
 
-TEST_CASE("A second cancelRead takes the watch the first one's resumption armed", "[net][socket][cancelread]")
+TEST_CASE("A second cancelRead in a row leaves the watch the retired flow arms afterwards",
+          "[net][socket][cancelread]")
 {
-    // **It retires whatever is parked NOW, which is not the same as being idempotent**
-    // ([fastcached#1233](https://github.com/LASTRADA-Software/fastcached/issues/1233)). The first
-    // retirement resumes its victim inline, and a flow that arms its next read there leaves a NEW
-    // watch in the slot — so the second call retires that one, and the caller sees `Cancelled` on
-    // an operation nobody meant to cancel.
-    //
-    // Asserted rather than merely documented, because the declaration used to claim the stronger
-    // word and nothing here would have caught it.
+    // **It retires whatever is parked NOW**
+    // ([fastcached#1233](https://github.com/LASTRADA-Software/fastcached/issues/1233)). Until 0.2.1
+    // the first retirement resumed its victim inline, a flow that armed its next read there left a
+    // NEW watch in the slot, and a second call in a row retired THAT one -- `Cancelled` on an
+    // operation nobody meant to cancel. The victim now runs on the loop after both calls have
+    // returned, so the second call finds the slot empty, and the watch the flow arms afterwards is
+    // left parked until something meant for it arrives.
     for (auto const& backend: BackendMatrix)
     {
         auto source = core::net::makeBackend(backend.kind);
@@ -344,15 +354,18 @@ TEST_CASE("A second cancelRead takes the watch the first one's resumption armed"
             auto first = WatchOutcome {};
             auto second = WatchOutcome {};
             auto parkedFirst = false;
-            loop.blockOn(watchTwiceAndRetireTwice(&loop, pair->first.get(), &first, &second, &parkedFirst));
+            auto secondParkedAfter = false;
+            loop.blockOn(watchTwiceAndRetire(
+                &loop, pair->first.get(), &first, &second, &parkedFirst, &secondParkedAfter));
 
             CHECK(parkedFirst);
             REQUIRE(first.resolved);
             REQUIRE_FALSE(first.hasValue);
             CHECK(first.code == NetErrorCode::Cancelled);
 
-            // The second watch was armed by the first one's resumption and retired by the second
-            // call. Both resolved with Cancelled, and the second one is the surprising half.
+            // The second call in a row did not reach the second watch: it was still parked a turn
+            // later, and only the call meant for it retired it.
+            CHECK(secondParkedAfter);
             REQUIRE(second.resolved);
             REQUIRE_FALSE(second.hasValue);
             CHECK(second.code == NetErrorCode::Cancelled);

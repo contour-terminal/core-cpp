@@ -11,6 +11,19 @@ workflow refuses one without a section here.
 
 ### Changed
 
+- **`close()`, `cancelRead()` and a destructor's abandonment resume a parked flow on a later drain
+  step, never before they return.** The operation is still settled at once, with the same value
+  (`Cancelled`, or the data that won); only the RESUMPTION moved into the loop (see *Fixed*). A
+  caller that asserted a parked flow's outcome right after `close()` or `cancelRead()` now runs one
+  loop turn first (`runOnce`, `runUntilIdle`, a `blockOn`). Two `cancelRead()` calls in a row no
+  longer retire the read the first victim arms when it runs: the second finds the slot empty
+  (fastcached#1233's shape). `testing::InMemorySocket` and `testing::ParkingReadableSocket`, which
+  have no loop, still resume inline.
+- **For contour, missing from 0.1.0's per-consumer summary:** from 0.1.0 until this release,
+  core-cpp's sockets resumed a parked read INSIDE `close()`. Code that closes two sockets in a row
+  through an object the read flow owns -- contour's `NativeClient::detach` -- was exposed to it.
+  0.1.0 is released, so the note is recorded here rather than there.
+
 - **`SyncGuard` brackets only a terminal.** `TerminalOutput::syncGuard()`, and a `SyncGuard`
   constructed directly, ask the output's `isTerminal()` once and write `CSI ? 2026 h` / `l` only
   when it answers true; on a pipe, a file or a capture that is not a terminal the guard still
@@ -24,6 +37,9 @@ workflow refuses one without a section here.
 
 ### Added
 
+- **`ResultAwaitable::resumeThrough(EventLoop&)`**, for an owner with no park to hand
+  `cancelThrough`: it names the loop `complete()` resumes the awaiting flow on. An owner that names
+  no loop at all is resumed inline, as before.
 - **The end of a terminal's input is reported.** `TerminalInput::inputClosed()`, the virtual
   `runtime::InputSource::inputClosed()` (false by default, so an existing source still compiles),
   `TerminalInputSource`'s forward of it, `TuiRuntime::inputClosed()`, and
@@ -38,6 +54,18 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- **A parked flow is never resumed inside the call that settled it** (guarantee G2: every
+  resumption happens in the loop's drain step; `.agent/rules/async-and-net.md`, "a resource never
+  resumes its consumer inline"). `ResultAwaitable::complete()` resumed the waiter on the spot, so
+  `PosixSocket::close()` -- and `cancelRead()`, `IocpSocket`'s, `WindowsSocket::cancelRead()`, and
+  `CompletionWait::close()` under an IOCP listener -- ran the closed read's flow before returning.
+  That flow could run to its end and destroy the object still executing `close()`'s caller: contour
+  crashed on it deterministically, in `NativeClient::detach` (`_writer.close();
+  _connection->close();`, where the first close resumed `runClient`, which destroyed the client).
+  Each now hands the waiter to `EventLoop::resumeSoon`, and an awaiter whose frame is destroyed
+  while its waiter is queued takes it back with `cancelPending`. The listeners already deferred
+  through the loop's closed-park list, and TLS's `SerialGate` since Task B11.
+  `CloseResumesThroughLoop_test.cpp` holds it over `BackendMatrix`, contour's crash included.
 - **The migration table sends the completion types to `core::tui::completer::`**
   ([core-cpp#48](https://github.com/contour-terminal/core-cpp/issues/48), found by the endo
   migration). endo and tuidu declare `CompletionItem`, `CompletionProvider`, `Completer`,

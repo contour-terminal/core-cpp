@@ -307,6 +307,7 @@ core_cpp_add_test(net
         CancelRead_test.cpp
         ClockRefresh_test.cpp
         ClosedParkIdle_test.cpp
+        CloseResumesThroughLoop_test.cpp
         ConnectFlow_test.cpp
         Connector_test.cpp
         EventLoop_test.cpp

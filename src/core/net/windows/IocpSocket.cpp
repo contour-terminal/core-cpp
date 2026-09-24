@@ -657,9 +657,9 @@ void IocpSocket::cancelRead() noexcept
     auto node = _read;
     if (node->kind == Node::Kind::Probe && !node->completed)
     {
-        // **A probe IS retired inline**: a zero-byte receive carries nothing, and completing it
+        // **A probe IS settled at once**: a zero-byte receive carries nothing, and completing it
         // here also keeps it away from the `MSG_PEEK` that would otherwise answer it on a later
-        // turn and could report an EOF nobody observed.
+        // turn and could report an EOF nobody observed. Its flow is resumed by the loop.
         cancelInKernel(*node);
         auto* const awaitable = take(*node);
         awaitable->complete(std::unexpected(cancelled("the read was retired by cancelRead")));

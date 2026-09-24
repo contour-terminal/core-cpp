@@ -88,10 +88,11 @@ void PosixSocket::close(FdWakePolicy policy) noexcept
         return;
     _closed = true;
 
-    // **Detached FIRST, completed LAST, with no member touched in between.** Completing resumes
-    // the parked coroutine, and a coroutine that OWNS this socket runs to its end and destroys it
-    // before the completion returns. Both operations are taken into locals before either is
-    // settled, so the second settle does not read a `this` the first one freed.
+    // **Detached FIRST, completed LAST, with no member touched in between.** Completing SETTLES
+    // the parked operation and hands its coroutine to the loop, which resumes it after this
+    // returns (G2) -- but a destructor abandons into the same slots, and an owner that named no
+    // loop is still resumed inline, so the discipline stays: both operations are taken into locals
+    // before either is settled, and nothing after the first settle reads `this`.
     auto read = takeRead();
     auto write = takeWrite();
 
@@ -128,8 +129,9 @@ void PosixSocket::cancelRead() noexcept
     if (_closed || _read.kind == ReadKind::None || _read.awaitable == nullptr)
         return;
     // The detach-then-complete discipline, for the one caller-facing verb that uses it without
-    // closing the socket: the slot is free when this returns, and the waiter is resolved INLINE,
-    // because a readiness transport consumes nothing and so a retired read can lose nothing.
+    // closing the socket: the slot is free when this returns and the operation is settled with
+    // `Cancelled` at once, because a readiness transport consumes nothing and so a retired read can
+    // lose nothing. Its flow is resumed by the loop, not here.
     auto read = takeRead();
     settleRead(read, makeNetError(NetErrorCode::Cancelled, 0, "the read was retired by cancelRead"));
 }
