@@ -11,11 +11,14 @@
 #include <core/async/Strand.hpp>
 
 #include <cassert>
+#include <concepts>
 #include <coroutine>
 #include <cstddef>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <tuple>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -78,7 +81,10 @@ namespace detail
         /// @param base Where its pump runs.
         /// @param options How it shares the base.
         KeyStrand(std::shared_ptr<Registry> registry, Key key, IExecutor& base, StrandOptions options):
-            StrandCore(base, options, registry.get(), StrandReclaim::WhenIdle),
+            StrandCore(base,
+                       withKeyedHook(options, registry->hooked(), this),
+                       registry.get(),
+                       StrandReclaim::WhenIdle),
             _registry(std::move(registry)),
             _key(std::move(key))
         {
@@ -93,6 +99,24 @@ namespace detail
         void reroute(ParkedWork work) override { _registry->submit(_key, std::move(work)); }
 
       private:
+        /// @return @p options, with an around-task hook that hands this strand's key to the
+        ///         registry's keyed hook where the registry has one.
+        [[nodiscard]] static StrandOptions withKeyedHook(StrandOptions options,
+                                                         bool hooked,
+                                                         KeyStrand* self) noexcept
+        {
+            if (hooked)
+                options.aroundTask = AroundTask {
+                    .call =
+                        [](void* context, RunTask run) {
+                            auto const& strand = *static_cast<KeyStrand const*>(context);
+                            strand._registry->aroundTask(strand._key, run);
+                        },
+                    .context = self,
+                };
+            return options;
+        }
+
         std::shared_ptr<Registry> _registry;
         Key _key;
     };
@@ -108,57 +132,61 @@ namespace detail
 
         /// @param base Where every key's pump runs.
         /// @param options How each key's strand shares the base.
-        KeyedStrandsRegistry(IExecutor& base, StrandOptions options) noexcept: _base(base), _options(options)
+        /// @param aroundTask Called around every task, with its key; may be unset.
+        KeyedStrandsRegistry(IExecutor& base, StrandOptions options, KeyedAroundTask<Key> aroundTask) noexcept
+            :
+            _base(base), _options(options), _aroundTask(aroundTask)
         {
         }
 
         /// Queues @p work on @p key's strand, making the strand if the key has none. After the
-        /// registry closed, the work is dropped.
-        ///
-        /// Touches @p key only until the work is queued: it may be a member of the awaiter of the
-        /// very coroutine being queued, which another thread can resume, and so destroy, the moment
-        /// the strand's lock is released.
+        /// registry closed, the work is dropped, which frees what nobody owns.
         /// @param key The key.
         /// @param work The coroutine to resume on it.
         void submit(Key const& key, ParkedWork work)
         {
-            // Work a refused hand-off abandoned is being freed on this thread, and one of its
-            // destructors submits again: dropped, freeing what nobody owns (see Strand.hpp).
-            if (FreeingAbandoned::active(this))
-                return;
-            auto const handle = work.resume;
-            auto pump = std::coroutine_handle<> {};
-            // Held, not borrowed: once the pump is queued the strand can run, retire and let go of
-            // itself before the hand-off below has been told how the base answered.
-            auto strand = std::shared_ptr<KeyStrandType> {};
             try
             {
-                auto const lock = std::scoped_lock { _mutex };
-                if (_closed)
-                    return; // `work` drops outside the lock, freeing what nobody owns.
-                auto slot = _strands.find(key);
-                if (slot == _strands.end())
-                    slot = _strands
-                               .emplace(key,
-                                        std::make_shared<KeyStrandType>(
-                                            this->shared_from_this(), key, _base, _options))
-                               .first;
-                // Under the registry's lock, so a retirement cannot slip between the lookup and the
-                // queueing: `retire` takes this lock first, then the strand's.
-                strand = slot->second;
-                pump = strand->enqueue(std::move(work));
+                // `work` drops when this returns, if it was refused, freeing what nobody owns.
+                std::ignore = offer(key, [&work] { return StrandTask { Parked { std::move(work) } }; });
             }
             catch (...)
             {
-                // The strand could not be made; the caller resumes the coroutine with this, so its
-                // claim is given back rather than released. (`enqueue` does the same for itself.)
+                // The caller resumes the coroutine with this, so its claim is given back rather than
+                // released.
                 work.abandon.disarm();
                 throw;
             }
-            // Outside every lock: a base that resumes inline runs the strand's tasks in this call.
-            if (pump)
-                strand->queueOnBase(pump, handle);
         }
+
+        /// Queues @p work on @p key's strand unless the registry is closed.
+        /// @return Whether it was queued; where not, @p work is as it was.
+        [[nodiscard]] bool trySubmit(Key const& key, ParkedWork& work)
+        {
+            return offer(key, [&work] { return StrandTask { Parked { std::move(work) } }; });
+        }
+
+        /// Queues a call made from @p fn on @p key's strand unless the registry is closed. The call
+        /// is allocated before any lock is taken and made under it.
+        /// @return Whether it was queued; where not, @p fn is as it was.
+        template <typename Arg>
+        [[nodiscard]] bool offerCall(Key const& key, Arg&& fn)
+        {
+            auto storage = CallStorage<PostedCallOf<std::decay_t<Arg>>> {};
+            return offer(key,
+                         [&storage, &fn] { return StrandTask { storage.construct(std::forward<Arg>(fn)) }; });
+        }
+
+        /// Calls the keyed around-task hook. @pre @c hooked.
+        /// @param key The key whose task @p run is.
+        /// @param run The task.
+        void aroundTask(Key const& key, RunTask run) const
+        {
+            _aroundTask.call(_aroundTask.context, key, run);
+        }
+
+        /// @return Whether a keyed around-task hook is set.
+        [[nodiscard]] bool hooked() const noexcept { return static_cast<bool>(_aroundTask); }
 
         /// Retires @p strand if it is still @p strand's key's strand and has nothing queued.
         /// @param strand A strand whose pump ran out of work.
@@ -170,10 +198,7 @@ namespace detail
             if (slot == _strands.end() || slot->second.get() != &strand || !strand.retireIfEmpty())
                 return false;
             _strands.erase(slot);
-#if CORE_CPP_ASYNC_HAS_THREADS
-            if (_strands.empty())
-                _idle.notify_all();
-#endif
+            notifyIfIdleLocked();
             return true;
         }
 
@@ -200,6 +225,13 @@ namespace detail
             return _strands.size();
         }
 
+        /// @return Whether no key has a strand: nothing queued or running on any.
+        [[nodiscard]] bool idle() const
+        {
+            auto const lock = std::scoped_lock { _mutex };
+            return _strands.empty();
+        }
+
 #if CORE_CPP_ASYNC_HAS_THREADS
         /// Blocks until no key has a strand.
         void waitIdle()
@@ -210,8 +242,84 @@ namespace detail
 #endif
 
       private:
+        /// Queues the task @p make makes on @p key's strand, making the strand if the key has none.
+        ///
+        /// Touches @p key only until the task is queued: it may be a member of the awaiter of the
+        /// very coroutine being queued, which another thread can resume, and so destroy, the moment
+        /// the strand's lock is released.
+        /// @param key The key.
+        /// @param make Makes the task; not called where this returns false.
+        /// @return False where the registry is closed, or this thread is freeing work one of its
+        ///         strands abandoned (see `detail::FreeingAbandoned`).
+        /// @throws What the base's `submit` throws, what @p make throws, `std::bad_alloc`. A strand
+        ///         made for the key that could not take the task is removed again.
+        template <typename Make>
+        [[nodiscard]] bool offer(Key const& key, Make make)
+        {
+            if (FreeingAbandoned::active(this))
+                return false;
+            auto enqueued = StrandCore::Enqueued {};
+            // Held, not borrowed: once the pump is queued the strand can run, retire and let go of
+            // itself before the hand-off below has been told how the base answered.
+            auto strand = std::shared_ptr<KeyStrandType> {};
+            // A strand made here that could not take the task: removed under the lock, closed
+            // outside it, which frees the pump it may already have made.
+            auto discarded = std::shared_ptr<KeyStrandType> {};
+            try
+            {
+                auto const lock = std::scoped_lock { _mutex };
+                if (_closed)
+                    return false;
+                auto slot = _strands.find(key);
+                auto const made = slot == _strands.end();
+                if (made)
+                    slot = _strands
+                               .emplace(key,
+                                        std::make_shared<KeyStrandType>(
+                                            this->shared_from_this(), key, _base, _options))
+                               .first;
+                // Under the registry's lock, so a retirement cannot slip between the lookup and the
+                // queueing: `retire` takes this lock first, then the strand's.
+                strand = slot->second;
+                try
+                {
+                    enqueued = strand->enqueue(std::move(make));
+                }
+                catch (...)
+                {
+                    if (made)
+                    {
+                        discarded = strand;
+                        _strands.erase(slot);
+                        notifyIfIdleLocked();
+                    }
+                    throw;
+                }
+            }
+            catch (...)
+            {
+                if (discarded)
+                    discarded->close();
+                throw;
+            }
+            // Outside every lock: a base that resumes inline runs the strand's tasks in this call.
+            if (enqueued.pump)
+                strand->queueOnBase(enqueued.pump, enqueued.identity);
+            return true;
+        }
+
+        /// Wakes `waitIdle` if no key has a strand. Holds the lock.
+        void notifyIfIdleLocked() noexcept
+        {
+#if CORE_CPP_ASYNC_HAS_THREADS
+            if (_strands.empty())
+                _idle.notify_all();
+#endif
+        }
+
         IExecutor& _base;
         StrandOptions _options;
+        KeyedAroundTask<Key> _aroundTask;
 
         mutable std::mutex _mutex; ///< Guards everything below; taken before any strand's own.
 #if CORE_CPP_ASYNC_HAS_THREADS
@@ -238,8 +346,14 @@ namespace detail
 /// second strand beside it.
 ///
 /// Every member is callable from any thread. What `Strand` says about a task, the current executor,
-/// a throw out of `resume()` and destruction holds for each key's strand; `runningHere(key)` and
-/// `runningAnyHere()` are its queries. The base must outlive this object and run what it queues.
+/// a throw out of `resume()`, posted calls, the `try` members and destruction holds for each key's
+/// strand; `runningHere(key)` and `runningAnyHere()` are its queries. The around-task hook is a
+/// `KeyedAroundTask`, given the key. The base must outlive this object and run what it queues.
+///
+/// **Single-threaded WebAssembly.** `waitIdle()` does not exist there: nothing else can finish the
+/// work, and a blocking wait is not allowed. Destroying or closing these strands drops what is
+/// queued without waiting, since nothing else can be running; a host that wants the work run
+/// first pumps its base until `idle()`.
 ///
 /// @tparam Key The key type: copyable, hashable by @p Hash, compared by @p KeyEqual.
 /// @tparam Hash Hashes a key.
@@ -252,9 +366,10 @@ class KeyedStrands final
     /// @param options How each key's strand shares the base. Its `aroundTask` must be unset.
     /// @param aroundTask Called around every task, with its key.
     explicit KeyedStrands(IExecutor& base, StrandOptions options = {}, KeyedAroundTask<Key> aroundTask = {}):
-        _registry(std::make_shared<Registry>(base, options))
+        _registry(std::make_shared<Registry>(base, options, aroundTask))
     {
-        (void) aroundTask;
+        assert(!options.aroundTask
+               && "KeyedStrands takes its around-task hook as a KeyedAroundTask, which is given the key");
     }
 
     KeyedStrands(KeyedStrands const&) = delete;
@@ -331,48 +446,53 @@ class KeyedStrands final
     [[nodiscard]] std::size_t size() const { return _registry->size(); }
 
     /// Queues @p fn, a callable, on @p key's strand to run as one task. Callable from any thread.
+    ///
+    /// As `Strand::post`: held by value in one allocation -- plus, for a key that has no strand
+    /// right now, what making its strand costs -- and dropped uncalled once these strands are
+    /// closed.
+    /// @param key The key. @param fn The callable, called with no arguments.
     template <typename F>
         requires std::invocable<std::decay_t<F>&> && std::constructible_from<std::decay_t<F>, F>
     void post(Key const& key, F&& fn)
     {
-        (void) key;
-        (void) fn;
+        std::ignore = _registry->offerCall(key, std::forward<F>(fn));
     }
 
-    /// Queues @p fn on @p key's strand, unless these strands are closed.
-    /// @return Whether it was queued; where not, @p fn is left as it was.
+    /// Queues @p fn on @p key's strand, unless these strands are closed. As `Strand::tryPost`.
+    /// @param key The key. @param fn The callable; moved from only where this returns true.
+    /// @return Whether it was queued.
     template <typename F>
         requires std::invocable<F&> && std::move_constructible<F>
     [[nodiscard]] bool tryPost(Key const& key, F& fn)
     {
-        (void) key;
-        (void) fn;
-        return true;
+        return _registry->offerCall(key, std::move(fn));
     }
 
     /// Queues @p handle, borrowed, on @p key's strand, unless these strands are closed.
+    /// @param key The key. @param handle The coroutine to resume there.
     /// @return Whether it was queued.
     [[nodiscard]] bool trySubmit(Key const& key, std::coroutine_handle<> handle)
     {
-        (void) key;
-        (void) handle;
-        return true;
+        auto work = ParkedWork { .resume = handle };
+        return _registry->trySubmit(key, work);
     }
 
     /// Queues @p work on @p key's strand, unless these strands are closed.
-    /// @return Whether it was queued; where not, @p work is left as it was.
-    [[nodiscard]] bool trySubmit(Key const& key, ParkedWork& work)
-    {
-        (void) key;
-        (void) work;
-        return true;
-    }
+    /// @param key The key. @param work The coroutine and its claim; moved from only where this
+    ///        returns true.
+    /// @return Whether it was queued.
+    [[nodiscard]] bool trySubmit(Key const& key, ParkedWork& work) { return _registry->trySubmit(key, work); }
 
-    /// Closes every key's strand, as the destructor does. Idempotent.
+    /// Closes every key's strand, as the destructor does: queued work is dropped, a task running on
+    /// another thread is waited for, and whatever arrives later -- a coroutine that parked on one
+    /// of these strands included -- is dropped, or refused by the `try` members. Idempotent; the
+    /// destructor calls it.
     void close() { _registry->close(); }
 
-    /// @return Whether no key has work queued or running.
-    [[nodiscard]] bool idle() const { return false; }
+    /// @return Whether no key has work queued or running: what a single-threaded host pumps its
+    ///         base until before it destroys these strands. Racy by nature where other threads
+    ///         submit.
+    [[nodiscard]] bool idle() const { return _registry->idle(); }
 
 #if CORE_CPP_ASYNC_HAS_THREADS
     /// Blocks until no key has work queued or running, including work submitted while it waits.

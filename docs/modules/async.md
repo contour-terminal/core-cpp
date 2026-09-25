@@ -275,6 +275,23 @@ Written for 0.4.0 after morph's `StrandExecutor` (morph PR #806); see
   keys, not keys ever seen. `submit(key, ...)`, `co_await strands.resumeOn(key)`,
   `runningHere(key)` and `runningAnyHere()` are its members; `waitIdle()` blocks until no key has
   work, asserts when called from one of its own tasks, and is declared only where threads exist.
+- Both take **callables** as well as coroutines: `post(fn)` and `post(key, fn)` run `fn` as one
+  task, held by value in one allocation, freed once it has run. **`tryPost` and `trySubmit`**
+  return false once the strand is closed -- `close()` is public and idempotent -- and leave the
+  work with the caller, for work that must run somewhere even after its strand's owner is gone.
+  `post` and `submit` drop it instead, as destruction drops what is queued.
+- An **around-task hook** installs ambient context for exactly the length of each task:
+  `StrandOptions::aroundTask`, an `AroundTask` built with `AroundTask::of(hook)` where `hook(run)`
+  calls `run()` once; `KeyedStrands` takes a `KeyedAroundTask<Key>`, whose hook is given the key as
+  well. It runs around every resumption, including a coroutine that parked on another executor and
+  came back through the strand, which is what makes it the place for a request's session: `Task`
+  itself carries no context, because that would cost every `co_await` for every consumer. The hook
+  is a reference fixed at construction, costs a branch per task when unset, and must outlive the
+  strand.
+- `idle()` answers whether nothing is queued or running. On the single-threaded WebAssembly build,
+  which has no `waitIdle()`, a host that wants queued work to run pumps its base until `idle()`
+  before destroying the strands; destroying or closing them drops what is queued without waiting,
+  since nothing else can be running.
 - `ExecutorScope` (`<core/async/ExecutorContext.hpp>`) marks the calling thread as running a task
   of an executor, for as long as it lives; scopes nest and restore on every exit. `EventLoop` holds
   one per turn, `ThreadPoolExecutor` one per worker thread, `Strand` one per batch, and

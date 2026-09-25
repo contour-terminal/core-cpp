@@ -24,8 +24,10 @@
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <ranges>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -279,11 +281,176 @@ namespace detail
         Freeing _previous;
     };
 
-    /// A first-in first-out queue of parked work that allocates nothing until it is first used.
+    /// A callable posted to a strand, with its type erased: the one allocation a post costs.
+    class PostedCall
+    {
+      public:
+        PostedCall() noexcept = default;
+        PostedCall(PostedCall const&) = delete;
+        PostedCall(PostedCall&&) = delete;
+        PostedCall& operator=(PostedCall const&) = delete;
+        PostedCall& operator=(PostedCall&&) = delete;
+
+        /// Calls the callable.
+        virtual void run() = 0;
+
+        /// Destroys the callable and frees this.
+        virtual void destroy() noexcept = 0;
+
+      protected:
+        ~PostedCall() = default;
+    };
+
+    /// Frees a @c PostedCall.
+    struct PostedCallDeleter
+    {
+        void operator()(PostedCall* call) const noexcept { call->destroy(); }
+    };
+
+    /// A posted call, owned.
+    using PostedCallPtr = std::unique_ptr<PostedCall, PostedCallDeleter>;
+
+    /// Storage for one @c PostedCallOf, allocated before it is known whether the call will be
+    /// queued: a `tryPost` decides that under the strand's lock, and allocates nothing there.
+    /// @tparam Call The call type.
+    template <typename Call>
+    class CallStorage final
+    {
+      public:
+        CallStorage(): _storage(allocate()) {}
+        CallStorage(CallStorage const&) = delete;
+        CallStorage(CallStorage&&) = delete;
+        CallStorage& operator=(CallStorage const&) = delete;
+        CallStorage& operator=(CallStorage&&) = delete;
+
+        /// Frees the storage if no call was made in it.
+        ~CallStorage()
+        {
+            if (_storage != nullptr)
+                deallocate(_storage);
+        }
+
+        /// Makes the call in the storage, which it then owns.
+        /// @param fn What the call is made from.
+        /// @return The call.
+        /// @throws What constructing the callable throws, with the storage kept.
+        template <typename Arg>
+        [[nodiscard]] PostedCallPtr construct(Arg&& fn)
+        {
+            auto* const call = ::new (_storage) Call(std::forward<Arg>(fn));
+            _storage = nullptr;
+            return PostedCallPtr { call };
+        }
+
+        /// @return Storage for one call.
+        [[nodiscard]] static void* allocate()
+        {
+            if constexpr (alignof(Call) > __STDCPP_DEFAULT_NEW_ALIGNMENT__)
+                return ::operator new(sizeof(Call), std::align_val_t { alignof(Call) });
+            else
+                return ::operator new(sizeof(Call));
+        }
+
+        /// @param storage What @c allocate returned.
+        static void deallocate(void* storage) noexcept
+        {
+            if constexpr (alignof(Call) > __STDCPP_DEFAULT_NEW_ALIGNMENT__)
+                ::operator delete(storage, sizeof(Call), std::align_val_t { alignof(Call) });
+            else
+                ::operator delete(storage, sizeof(Call));
+        }
+
+      private:
+        void* _storage;
+    };
+
+    /// A posted callable of type @p F, held by value.
+    /// @tparam F The callable's type.
+    template <typename F>
+    class PostedCallOf final: public PostedCall
+    {
+      public:
+        /// @param fn The callable, moved or copied in.
+        template <typename Arg>
+        explicit PostedCallOf(Arg&& fn): _fn(std::forward<Arg>(fn))
+        {
+        }
+
+        PostedCallOf(PostedCallOf const&) = delete;
+        PostedCallOf(PostedCallOf&&) = delete;
+        PostedCallOf& operator=(PostedCallOf const&) = delete;
+        PostedCallOf& operator=(PostedCallOf&&) = delete;
+
+        void run() override { _fn(); }
+
+        void destroy() noexcept override
+        {
+            auto* const storage = static_cast<void*>(this);
+            this->~PostedCallOf();
+            CallStorage<PostedCallOf>::deallocate(storage);
+        }
+
+      private:
+        ~PostedCallOf() = default;
+
+        F _fn;
+    };
+
+    /// One task on a strand's queue: a parked coroutine, or a posted call.
+    class StrandTask final
+    {
+      public:
+        StrandTask() noexcept = default;
+
+        /// @param parked A coroutine to resume, and its claim.
+        explicit StrandTask(Parked parked) noexcept: _parked(std::move(parked)) {}
+
+        /// @param call A call to make.
+        explicit StrandTask(PostedCallPtr call) noexcept: _call(std::move(call)) {}
+
+        /// @return What a submitter names to take this task back out: the call, or the
+        ///         coroutine's frame.
+        [[nodiscard]] void const* identity() const noexcept
+        {
+            return _call ? static_cast<void const*>(_call.get()) : _parked.handle().address();
+        }
+
+        /// @return Whether this holds nothing: run, given up, or never set.
+        [[nodiscard]] bool empty() const noexcept { return !_call && !_parked.handle(); }
+
+        /// Runs the task and leaves this empty. A call is freed when it returns, or throws.
+        void run()
+        {
+            assert(!empty() && "a strand task ran twice");
+            if (auto const call = std::exchange(_call, {}))
+                call->run();
+            else
+                _parked.resume();
+        }
+
+        /// Gives the task up without running it, for a submitter that is about to be told no: a
+        /// coroutine's claim is disarmed, not released, because its submitter resumes it with the
+        /// exception; a call, which only the strand holds, is freed.
+        void disarm() noexcept
+        {
+            if (_parked.handle())
+            {
+                auto const work = _parked.take();
+                work.abandon.disarm();
+            }
+            _call.reset();
+        }
+
+      private:
+        Parked _parked;
+        PostedCallPtr _call;
+    };
+
+    /// A first-in first-out queue of strand tasks that allocates nothing until it is first used.
     ///
     /// A `std::deque` allocates its map and a first block when it is constructed, on some standard
     /// libraries, and `KeyedStrands` constructs a strand every time a key goes from idle to busy.
-    class ParkedQueue final
+    class StrandQueue final
     {
       public:
         /// @return Whether nothing is queued.
@@ -292,20 +459,33 @@ namespace detail
         /// @return How many entries are queued.
         [[nodiscard]] std::size_t size() const noexcept { return _entries.size() - _head; }
 
-        /// Appends @p entry, which is moved from only if this does not throw.
-        /// @param entry The work to queue.
-        void push(Parked& entry) { _entries.push_back(std::move(entry)); }
+        /// Makes room for one more entry, so that the next @c push cannot throw.
+        void reserveOne()
+        {
+            if (_entries.size() == _entries.capacity())
+                _entries.reserve(std::max(MinimumCapacity, 2 * _entries.capacity()));
+        }
 
-        /// Takes the queued entry that would resume @p handle out of the queue, wherever it is.
-        /// @param handle The coroutine to look for.
+        /// Appends @p entry. @pre @c reserveOne since the last push, so this cannot throw.
+        /// @param entry The work to queue.
+        void push(StrandTask entry) noexcept
+        {
+            assert(_entries.size() < _entries.capacity());
+            _entries.push_back(std::move(entry));
+        }
+
+        /// Takes the queued entry @p identity names out of the queue, wherever it is.
+        /// @param identity What @c StrandTask::identity answered for it.
         /// @return Its entry, or an empty one where it is not queued.
-        [[nodiscard]] Parked remove(std::coroutine_handle<> handle) noexcept
+        [[nodiscard]] StrandTask remove(void const* identity) noexcept
         {
             auto const first = _entries.begin() + static_cast<std::ptrdiff_t>(_head);
-            auto const found = std::ranges::find_if(
-                first, _entries.end(), [handle](Parked const& entry) { return entry.handle() == handle; });
-            if (found == _entries.end())
-                return Parked {};
+            auto const found =
+                std::ranges::find_if(first, _entries.end(), [identity](StrandTask const& entry) {
+                    return entry.identity() == identity;
+                });
+            if (identity == nullptr || found == _entries.end())
+                return StrandTask {};
             auto entry = std::move(*found);
             _entries.erase(found);
             if (_head == _entries.size())
@@ -318,7 +498,7 @@ namespace detail
 
         /// Takes the oldest entry. @pre `!empty()`.
         /// @return The oldest entry.
-        [[nodiscard]] Parked pop() noexcept
+        [[nodiscard]] StrandTask pop() noexcept
         {
             auto entry = std::move(_entries[_head]);
             ++_head;
@@ -338,7 +518,7 @@ namespace detail
 
         /// Takes everything queued, leaving this empty.
         /// @return What was queued, oldest first from @c head.
-        [[nodiscard]] std::vector<Parked> takeAll() noexcept
+        [[nodiscard]] std::vector<StrandTask> takeAll() noexcept
         {
             _entries.erase(_entries.begin(), _entries.begin() + static_cast<std::ptrdiff_t>(_head));
             _head = 0;
@@ -347,8 +527,9 @@ namespace detail
 
       private:
         static constexpr std::size_t CompactAfter = 64;
+        static constexpr std::size_t MinimumCapacity = 4;
 
-        std::vector<Parked> _entries;
+        std::vector<StrandTask> _entries;
         std::size_t _head { 0 };
     };
 
@@ -398,54 +579,95 @@ namespace detail
         /// @throws What the base's `submit` throws, and `std::bad_alloc`.
         void submit(ParkedWork work) override
         {
-            auto const handle = work.resume;
-            auto entry = Parked { std::move(work) };
-            auto pump = std::coroutine_handle<> {};
+            auto enqueued = Enqueued {};
             auto rerouted = std::optional<ParkedWork> {};
             try
             {
                 auto const lock = std::scoped_lock { _mutex };
-                // `entry` drops the work outside the lock, freeing what nobody owns.
+                // `work` drops when this returns, outside the lock, freeing what nobody owns.
                 if (_closed || FreeingAbandoned::active(abandonOwner()))
                     return;
                 if (_retired)
-                    rerouted.emplace(entry.take());
+                    rerouted.emplace(std::move(work));
                 else
-                    pump = enqueueLocked(entry);
+                    enqueued = enqueueLocked([&work] { return StrandTask { Parked { std::move(work) } }; });
             }
             catch (...)
             {
-                disarm(entry);
+                work.abandon.disarm();
                 throw;
             }
             // Both outside the lock: a base that resumes inline would run the pump -- and with it
             // the strand's tasks -- inside it, and a reroute takes the owner's lock.
             if (rerouted)
                 reroute(std::move(*rerouted));
-            else if (pump)
-                queueOnBase(pump, handle);
+            else if (enqueued.pump)
+                queueOnBase(enqueued.pump, enqueued.identity);
         }
 
-        /// Queues @p work when the caller already knows this strand is open and not retired:
-        /// `KeyedStrands` holds its registry's lock across the lookup and this. Throws with nothing
-        /// changed, as @c submit does.
-        /// @param work The coroutine to resume on the strand.
-        /// @return The pump to hand to @c queueOnBase once every lock is released, or an empty
-        ///         handle.
-        [[nodiscard]] std::coroutine_handle<> enqueue(ParkedWork work)
+        /// Queues @p work unless the strand is closed. Only for a strand that never retires.
+        /// @param work The coroutine to resume on the strand; moved from only where this returns true.
+        /// @return Whether it was queued.
+        /// @throws What the base's `submit` throws, and `std::bad_alloc`; @p work is then as it was,
+        ///         its claim untouched, unless the base refused it, which disarms the claim.
+        [[nodiscard]] bool trySubmit(ParkedWork& work)
         {
-            auto entry = Parked { std::move(work) };
-            try
+            auto enqueued = Enqueued {};
             {
                 auto const lock = std::scoped_lock { _mutex };
-                assert(!_closed && !_retired);
-                return enqueueLocked(entry);
+                if (_closed || FreeingAbandoned::active(abandonOwner()))
+                    return false;
+                assert(!_retired && "a keyed strand is offered work through its registry");
+                enqueued = enqueueLocked([&work] { return StrandTask { Parked { std::move(work) } }; });
             }
-            catch (...)
+            if (enqueued.pump)
+                queueOnBase(enqueued.pump, enqueued.identity);
+            return true;
+        }
+
+        /// Queues a call made from @p fn unless the strand is closed. Only for a strand that never
+        /// retires. The call is allocated before the lock is taken and made under it, so a closed
+        /// strand leaves @p fn as it was.
+        /// @param fn The callable.
+        /// @return Whether it was queued.
+        /// @throws What the base's `submit` throws, what making the call throws, `std::bad_alloc`.
+        template <typename Arg>
+        [[nodiscard]] bool offerCall(Arg&& fn)
+        {
+            auto storage = CallStorage<PostedCallOf<std::decay_t<Arg>>> {};
+            auto enqueued = Enqueued {};
             {
-                disarm(entry);
-                throw;
+                auto const lock = std::scoped_lock { _mutex };
+                if (_closed || FreeingAbandoned::active(abandonOwner()))
+                    return false;
+                assert(!_retired && "a keyed strand is offered work through its registry");
+                enqueued = enqueueLocked(
+                    [&storage, &fn] { return StrandTask { storage.construct(std::forward<Arg>(fn)) }; });
             }
+            if (enqueued.pump)
+                queueOnBase(enqueued.pump, enqueued.identity);
+            return true;
+        }
+
+        /// What @c enqueue queued: the pump to hand to @c queueOnBase once every lock is released,
+        /// or an empty handle, and what names the task to take it back out if the base refuses.
+        struct Enqueued
+        {
+            std::coroutine_handle<> pump;
+            void const* identity { nullptr };
+        };
+
+        /// Queues the task @p make makes, when the caller already knows this strand is open and
+        /// not retired: `KeyedStrands` holds its registry's lock across the lookup and this.
+        /// @param make Makes the task, called once the steps that can throw for lack of memory are
+        ///        done; what it throws leaves nothing queued.
+        /// @return What was queued.
+        template <typename Make>
+        [[nodiscard]] Enqueued enqueue(Make make)
+        {
+            auto const lock = std::scoped_lock { _mutex };
+            assert(!_closed && !_retired);
+            return enqueueLocked(std::move(make));
         }
 
         /// Hands @p pump, which @c enqueue answered, to the base.
@@ -459,8 +681,8 @@ namespace detail
         /// next submit starts afresh. A submit that the abandoned frames' destructors make to this
         /// strand as they are freed is dropped (see @c FreeingAbandoned).
         /// @param pump The pump, published as scheduled.
-        /// @param withdraw The coroutine whose submit published it, to take back on a refusal.
-        void queueOnBase(std::coroutine_handle<> pump, std::coroutine_handle<> withdraw)
+        /// @param withdraw What names the task whose submit published it, to take back on a refusal.
+        void queueOnBase(std::coroutine_handle<> pump, void const* withdraw)
         {
             // Held across the base's answer: a base that resumes inline runs the pump inside its
             // `submit`, and a task there may let go of the strand's last owner -- after which the
@@ -473,8 +695,8 @@ namespace detail
             }
             catch (...)
             {
-                auto taken = Parked {};
-                auto dropped = std::vector<Parked> {};
+                auto taken = StrandTask {};
+                auto dropped = std::vector<StrandTask> {};
                 auto orphan = std::coroutine_handle<> {};
                 {
                     auto const lock = std::scoped_lock { _mutex };
@@ -483,7 +705,7 @@ namespace detail
                     orphan = unscheduleLocked();
                     endHandOffLocked();
                 }
-                disarm(taken);
+                taken.disarm();
                 freeAbandoned(dropped);
                 if (orphan)
                     orphan.destroy();
@@ -508,11 +730,18 @@ namespace detail
             return _queue.size();
         }
 
+        /// @return Whether nothing is queued, and the pump is neither queued on the base nor running.
+        [[nodiscard]] bool idle() const
+        {
+            auto const lock = std::scoped_lock { _mutex };
+            return _queue.empty() && _phase != StrandPhase::Scheduled && _phase != StrandPhase::Running;
+        }
+
         /// Closes the strand: queued work is dropped, a task running on another thread is waited
         /// for, and an idle pump is freed. Work that arrives later is dropped. Idempotent.
         void close()
         {
-            auto dropped = std::vector<Parked> {};
+            auto dropped = std::vector<StrandTask> {};
             auto idlePump = std::coroutine_handle<> {};
             {
                 auto lock = std::unique_lock { _mutex };
@@ -580,7 +809,7 @@ namespace detail
 
         /// Frees what a refused hand-off abandoned, with a resubmit from its destructors dropped.
         /// @param dropped The abandoned work.
-        void freeAbandoned(std::vector<Parked>& dropped) const noexcept
+        void freeAbandoned(std::vector<StrandTask>& dropped) const noexcept
         {
             auto const freeing = FreeingAbandoned { abandonOwner() };
             dropped.clear();
@@ -612,33 +841,30 @@ namespace detail
                 pump.destroy();
         }
 
-        /// Gives up @p entry's work without freeing it: its chain belongs to whoever is about to
-        /// resume it with an exception.
-        /// @param entry The work to give up.
-        static void disarm(Parked& entry) noexcept
-        {
-            auto const work = entry.take();
-            work.abandon.disarm();
-        }
-
-        /// Queues @p entry and decides whether the pump must be handed to the base. Holds the lock.
+        /// Queues the task @p make makes and decides whether the pump must be handed to the base.
+        /// Holds the lock.
         ///
         /// Every step that can throw comes before anything is published: the pump's frame is made
-        /// first, then the entry is queued -- moved only by a `push_back` that has already made room
-        /// -- and only then is the pump published as scheduled.
-        /// @param entry The work; left as it was if this throws.
-        /// @return The pump to hand to the base, or an empty handle.
-        [[nodiscard]] std::coroutine_handle<> enqueueLocked(Parked& entry)
+        /// first, then room in the queue, then the task -- whose making may throw too, which is a
+        /// posted callable's constructor -- and only once it is queued is the pump published as
+        /// scheduled.
+        /// @param make Makes the task.
+        /// @return The pump to hand to the base, or an empty handle, and the task's identity.
+        template <typename Make>
+        [[nodiscard]] Enqueued enqueueLocked(Make make)
         {
             auto const schedule = _phase == StrandPhase::Idle;
             if (schedule && !_pump)
                 _pump = runStrandPump(shared_from_this()).handle();
-            _queue.push(entry);
+            _queue.reserveOne();
+            auto task = make();
+            auto const identity = task.identity();
+            _queue.push(std::move(task));
             if (!schedule)
                 return {};
             _phase = StrandPhase::Scheduled;
             ++_handOffs; // ended by queueOnBase, whatever the base does
-            return _pump;
+            return Enqueued { .pump = _pump, .identity = identity };
         }
 
         /// The pump starts a turn. @return False where the strand closed or retired, and the
@@ -667,47 +893,61 @@ namespace detail
             auto const scope = ExecutorScope { *this, &anchor, _family };
             for ([[maybe_unused]] auto const turn: std::views::iota(std::size_t { 0 }, _options.batch))
             {
-                auto entry = Parked {};
+                auto entry = StrandTask {};
                 {
                     auto const lock = std::scoped_lock { _mutex };
                     if (_closed || _queue.empty())
                         return;
                     entry = _queue.pop();
                 }
-                resumeTask(entry);
+                runTask(entry);
             }
         }
 
-        /// Resumes one task.
+        /// Runs one task, through the around-task hook if there is one.
         /// @param entry The task.
-        static void resumeTask(Parked& entry)
+        void runTask(StrandTask& entry)
         {
 #if defined(_MSC_VER) && !defined(__clang__)
             // A compiler workaround, not platform logic: under `cl` an exception thrown out of a
             // coroutine's `resume()` and on through this frame and the pump's was measured
             // corrupting the thread's executor scope chain (cl-release; cl-debug and clang-cl are
             // fine), after which nothing about the thread can be trusted. So it ends the process
-            // here, at the first frame that sees it, with a message saying why.
+            // here, at the first frame that sees it, with a message saying why -- a posted call's
+            // throw and a hook's included, since they take the same way out.
             try
             {
-                entry.resume();
+                runTaskAround(entry);
             }
             catch (...)
             {
                 taskThrewUnderMsvc();
             }
 #else
-            entry.resume();
+            runTaskAround(entry);
 #endif
+        }
+
+        /// @copydoc runTask
+        void runTaskAround(StrandTask& entry)
+        {
+            auto const& around = _options.aroundTask;
+            if (!around)
+            {
+                entry.run();
+                return;
+            }
+            around.call(around.context, RunTask { entry });
+            assert(entry.empty() && "an around-task hook must run the task it is given");
         }
 
 #if defined(_MSC_VER) && !defined(__clang__)
         /// Ends the process for a task that threw out of `resume()`, under MSVC's `cl`.
         [[noreturn]] static void taskThrewUnderMsvc() noexcept
         {
-            std::fputs("core::async::Strand: a task threw out of resume(); under MSVC's cl that "
-                       "exception cannot cross the strand's coroutine frames safely, so the process "
-                       "ends (see Strand's documentation)\n",
+            std::fputs("core::async::Strand: a task threw out of resume() (or a posted call threw); under "
+                       "MSVC's cl that exception cannot cross the strand's coroutine frames safely, so "
+                       "the process ends (see Strand's documentation)\n",
                        stderr);
             std::fflush(stderr);
             std::terminate();
@@ -841,7 +1081,7 @@ namespace detail
             {
                 // A refusal abandons the queue, as it does in queueOnBase; nothing of the caller's
                 // is in it here.
-                auto dropped = std::vector<Parked> {};
+                auto dropped = std::vector<StrandTask> {};
                 auto orphan = std::coroutine_handle<> {};
                 {
                     auto const lock = std::scoped_lock { _mutex };
@@ -895,7 +1135,7 @@ namespace detail
 #if CORE_CPP_ASYNC_HAS_THREADS
         std::condition_variable _settled; ///< Signalled whenever the pump stops running.
 #endif
-        ParkedQueue _queue;
+        StrandQueue _queue;
         std::coroutine_handle<> _pump;
         StrandPhase _phase { StrandPhase::Idle };
         /// Submits between publishing the pump as scheduled and the base's answer; `close()` waits
@@ -948,7 +1188,7 @@ namespace detail
 
 inline void RunTask::operator()() const
 {
-    (void) _task;
+    _task->run();
 }
 
 /// An executor that runs what it is given one at a time, in the order given, on a base executor.
@@ -956,8 +1196,15 @@ inline void RunTask::operator()() const
 /// **Serial.** At most one task runs at a time, whatever the base is, so state touched only from
 /// the strand needs no lock. Two strands over one pool run concurrently with each other.
 ///
-/// **FIFO.** Tasks run in the order `submit` received them; `co_await ResumeOn { strand }` is a
-/// submit.
+/// **FIFO.** Tasks run in the order `submit` and `post` received them; `co_await ResumeOn { strand }`
+/// is a submit.
+///
+/// **Callables.** `post(fn)` runs `fn` as one task, held by value in one allocation. `tryPost` and
+/// `trySubmit` refuse once the strand is closed and leave the work with the caller.
+///
+/// **Ambient context.** `StrandOptions::aroundTask` is called around every task -- every
+/// resumption, including one that came back through the strand from another executor -- to
+/// install per-task context such as a session.
 ///
 /// **What a task is.** A resumption: from `submit` until the coroutine next suspends. A coroutine
 /// that suspends has left the strand, and another task may run before it comes back; it comes
@@ -1000,7 +1247,9 @@ inline void RunTask::operator()() const
 /// it: a pump queued there finds the strand closed and ends. **`core::net::EventLoop` as a base
 /// drops what is still in its inbound queue when it is destroyed**, so a strand whose pump was
 /// handed to a loop from another thread and not yet taken up by a turn leaks its state with the
-/// loop; run one more turn, or destroy the strand first.
+/// loop; run one more turn, or destroy the strand first. On the single-threaded WebAssembly build
+/// nothing else can be running, so destruction drops what is queued without waiting; a host that
+/// wants it run pumps its base until `idle()` first.
 class Strand final: public IExecutor
 {
   public:
@@ -1037,44 +1286,58 @@ class Strand final: public IExecutor
     [[nodiscard]] std::size_t queued() const { return _core->queued(); }
 
     /// Queues @p fn, a callable, to run as one task. Callable from any thread.
+    ///
+    /// The callable is held by value in one allocation, freed once it has run. What it throws takes
+    /// the way a task's throw takes (see the class). A closed strand drops it without calling it.
+    /// @param fn The callable, called with no arguments; its result is ignored.
+    /// @throws What the base's `submit` throws, what copying or moving @p fn throws, `std::bad_alloc`;
+    ///         nothing is queued then.
     template <typename F>
         requires std::invocable<std::decay_t<F>&> && std::constructible_from<std::decay_t<F>, F>
     void post(F&& fn)
     {
-        (void) fn;
+        std::ignore = _core->offerCall(std::forward<F>(fn));
     }
 
-    /// Queues @p fn, unless the strand is closed.
-    /// @return Whether it was queued; where not, @p fn is left as it was.
+    /// Queues @p fn, unless the strand is closed -- for work that must run somewhere, which the
+    /// caller then runs itself.
+    ///
+    /// @p fn is moved into the strand under its lock, which is how a closed strand can leave it
+    /// untouched: its move constructor must not submit to this strand.
+    /// @param fn The callable; moved from only where this returns true.
+    /// @return Whether it was queued.
+    /// @throws As @c post does.
     template <typename F>
         requires std::invocable<F&> && std::move_constructible<F>
     [[nodiscard]] bool tryPost(F& fn)
     {
-        (void) fn;
-        return true;
+        return _core->offerCall(std::move(fn));
     }
 
     /// Queues @p handle, borrowed, unless the strand is closed.
+    /// @param handle The coroutine to resume on the strand.
     /// @return Whether it was queued.
+    /// @throws As @c submit does.
     [[nodiscard]] bool trySubmit(std::coroutine_handle<> handle)
     {
-        (void) handle;
-        return true;
+        auto work = ParkedWork { .resume = handle };
+        return _core->trySubmit(work);
     }
 
     /// Queues @p work, unless the strand is closed.
-    /// @return Whether it was queued; where not, @p work is left as it was.
-    [[nodiscard]] bool trySubmit(ParkedWork& work)
-    {
-        (void) work;
-        return true;
-    }
+    /// @param work The coroutine and its claim; moved from only where this returns true.
+    /// @return Whether it was queued.
+    /// @throws As @c submit does, with @p work as it was.
+    [[nodiscard]] bool trySubmit(ParkedWork& work) { return _core->trySubmit(work); }
 
-    /// Closes the strand, as the destructor does. Idempotent.
+    /// Closes the strand, as the destructor does: queued work is dropped, a task running on another
+    /// thread is waited for, and whatever arrives later is dropped, or refused by the `try`
+    /// members. Idempotent; the destructor calls it.
     void close() { _core->close(); }
 
-    /// @return Whether nothing is queued or running.
-    [[nodiscard]] bool idle() const { return false; }
+    /// @return Whether nothing is queued or running -- what a single-threaded host pumps its base
+    ///         until, before it destroys the strand. Racy by nature where other threads submit.
+    [[nodiscard]] bool idle() const { return _core->idle(); }
 
   private:
     std::shared_ptr<detail::StrandCore> _core;

@@ -45,7 +45,8 @@ workflow refuses one without a section here.
   if nothing is queued on it. **A refused hand-off abandons the strand's queued work**: a base
   whose `submit` throws when the strand hands it its pump makes that `submit` throw, and the rest
   of the queue -- work other threads queued meanwhile included -- is dropped as destruction drops
-  it; a `KeyedStrands` key's strand is retired with it. What a frame freed by that drop submits to
+  it; a `KeyedStrands` key's strand is retired with it. A key whose first submit cannot allocate
+  no longer leaves its new strand registered with nothing to retire it. What a frame freed by that drop submits to
   the same strand (or `KeyedStrands`) from its destructor is dropped as well, not handed to the
   refusing base. `~Strand` waits for a hand-off still inside the base's `submit`. Destroying a strand drops what is
   queued -- a chain rooted in a `DetachedTask` is freed, a `Task`-owned coroutine is left to its
@@ -64,6 +65,23 @@ workflow refuses one without a section here.
   its own tasks, and is declared only where threads exist. Destroying it from one of its own tasks
   does not wait for that task. A coroutine that parked while its key's
   strand was reclaimed comes back to the key, never to a second strand beside it.
+- **Callables, a closed strand's answer, an around-task hook and `idle()` on both strands** -- what
+  morph's switch from its own `StrandExecutor` found missing:
+  - `post(fn)` / `post(key, fn)` run a callable as one task, held by value in one allocation (the
+    census in `StrandAllocation_test.cpp`: one per post, none per submit, on a warm strand; a post
+    to a key with no strand also makes the strand, five allocations in all). What it throws takes
+    a task's way out, and ends the process under MSVC's `cl` as a task's throw does.
+  - `tryPost(fn)`, `trySubmit(work)` and their keyed forms return false once the strand is closed
+    and leave the work with the caller, which can then run it itself. `close()` is public on both,
+    idempotent, and what the destructors call.
+  - `StrandOptions::aroundTask` (an `AroundTask`) and `KeyedStrands`' `KeyedAroundTask<Key>`, which
+    is given the key: a hook called around every task, a coroutine that came back through the
+    strand from another executor included, to install per-task ambient context such as a
+    session. A reference set at construction; unset, it costs one branch per task. `Task` carries
+    no context of its own, which would cost every `co_await` for every consumer.
+  - `idle()`: nothing queued or running. On the single-threaded WebAssembly build, where
+    `waitIdle()` does not exist, a host pumps its base until `idle()`; destroying or closing a
+    strand there drops what is queued without waiting, since nothing else can be running.
 - **The current-executor context** (`<core/async/ExecutorContext.hpp>`): `ExecutorScope` marks the
   calling thread as running a task of an executor, nests, and restores on every exit;
   `currentExecutor()` answers the innermost; `ResumeTarget` is what an awaitable holds across a

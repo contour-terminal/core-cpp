@@ -631,6 +631,17 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   pump then ends and drops its own reference -- all before `submit` returns to a hand-off that
   still has to end its count under the strand's lock (ASan heap-use-after-free, review round 3;
   the `keep` had been taken on the refusal path only).
+- **A `try` member decides under the lock, and allocates before it.** `tryPost` must leave a
+  refused callable untouched, so the call's storage is allocated before the strand's (or the
+  registry's) lock is taken and the callable moved in only once the strand is known open; every
+  step that can run out of memory -- the pump's frame, the queue's room -- comes before that move,
+  so a throw leaves nothing queued. And a key's strand made for a submit that then could not take
+  the work is removed under the same lock hold: before, it stayed registered with nothing to
+  retire it (the `KeyedStrands` case of the allocation test, which fails each allocation in turn).
+- **Per-task context is a strand hook, never a `Task` field.** A context carried by `Task`'s
+  promise and restored in every `await_resume` costs every `co_await` of every consumer; an
+  around-task hook costs one branch per task, and only on strands, where a consumer asked for it
+  (morph's session, 0.4.0).
 - **Abandoned work is freed with its resubmits dropped.** A refused hand-off leaves the strand idle
   and open, so a destructor of a freed frame that submits to it again scheduled a new pump on the
   base that had just refused, and threw out of a noexcept destructor. `detail::FreeingAbandoned`

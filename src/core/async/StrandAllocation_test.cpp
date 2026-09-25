@@ -377,3 +377,28 @@ TEST_CASE("A key whose first submit cannot allocate leaves no strand behind, whi
     }
     CHECK(reachedSuccess);
 }
+
+TEST_CASE("A post to an idle key costs the key's strand as well as the call",
+          "[KeyedStrands][post][allocation]")
+{
+    // Pinned, not endorsed: a key with no work has no strand, so a post to it makes one -- the
+    // strand's shared state, its map node, its pump's frame and its queue's first room -- before
+    // the call. A consumer that posts mostly to idle keys pays this per post.
+    auto base = FixedExecutor {};
+    auto strands = core::async::KeyedStrands<int> { base };
+    auto count = 0;
+    strands.post(1, [&count] { ++count; }); // warms the map's buckets
+    base.drain();
+    REQUIRE(strands.size() == 0);
+
+    auto const before = allocationsServed;
+    strands.post(1, [&count] { ++count; });
+    auto const cost = allocationsServed - before;
+    INFO("a post to an idle key cost " << cost << " allocations");
+    // Five: the four above and the call. MSVC's checked iterators give a container one more, its
+    // proxy, which the queue's vector is.
+    CHECK(cost >= 5);
+    CHECK(cost <= 6);
+    base.drain();
+    CHECK(count == 2);
+}

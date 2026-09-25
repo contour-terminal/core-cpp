@@ -106,6 +106,27 @@ and every other key's running task is. No ownership pattern is required of the c
 reference, no posted release -- and `Strand_test.cpp` and `KeyedStrands_test.cpp` each have the case,
 under a hand-driven executor and, for `Strand`, on a pool thread.
 
+### Callables, a closed answer, and ambient context
+
+morph's switch from its own `StrandExecutor` needed three things a coroutine-only strand did not
+have, and each was added as the smallest thing that meets it:
+
+- **Callables.** Every one of morph's strand sites posts a lambda. A queue entry is a parked
+  coroutine *or* a posted call; the call holds the callable by value in one allocation, which is
+  made before the strand's lock is taken so that `tryPost` can decide under the lock and still
+  leave a refused callable untouched. What a call throws takes the way a task's throw takes.
+- **A closed strand's answer.** A Task handler's end must run even after its backend is gone: it
+  settles the caller's sink and leaves the gate. `post` and `submit` drop work on a closed strand,
+  as destruction does; `tryPost` and `trySubmit` return false and leave it with the caller, which
+  runs it itself. A policy option -- "run inline when closed" -- was rejected: it would run work on
+  whatever thread the submitter is, under no scope, with the strand's serialisation gone, and hide
+  that from the caller.
+- **Ambient context per task.** morph installs the action's session around every resumption of a
+  handler. A task-local context carried by `Task`'s promise was rejected: restoring it would cost
+  every `co_await` in every consumer, fastcached's hot path included, for a need that is per
+  strand. An around-task hook costs one branch per task where it is unset, and `KeyedStrands`'
+  hook is given the key, because morph finds the session by the model instance the key names.
+
 `KeyedStrands` retires a key's strand when its queue runs dry, under its registry's lock and the
 strand's, in that order everywhere. A retired strand is not reused; one that is still referenced
 (below) hands what it is given back to the registry, which gives it to the key's current strand or
