@@ -7,7 +7,7 @@ release may break the API; every break is listed under **Breaking** with a migra
 release tag `vX.Y.Z` equals the version in `project(core-cpp VERSION X.Y.Z)`, and the release
 workflow refuses one without a section here.
 
-## [Unreleased]
+## [0.4.1] - 2026-09-25
 
 ### Added
 
@@ -23,12 +23,18 @@ workflow refuses one without a section here.
   `KeyedStrands` strand is handed out or kept once sealed.
   - **What a drain can see:** `idle()` and `waitIdle()` then mean nothing queued and nothing
     running. A coroutine suspended off the strand -- on a socket, a timer, an `AsyncQueue` -- is
-    invisible to both and may still come back, so a consumer counts its own in-flight work (morph:
-    its stop signal plus the runs it tracks). The teardown that loses nothing is `seal()`, then that
+    invisible to both and may still come back, so a consumer counts its own in-flight work. The teardown that loses nothing is `seal()`, then that
     count and `waitIdle()` both done (on the single-threaded WebAssembly build, the base run until
     they are), then `close()`. `post` is new work too: a producer that posts must stop, or offer
     through `tryPost`, before `waitIdle()`.
   - Idempotent; `close()` is unchanged. A patch-compatible addition.
+
+### Known issues
+
+- **MSVC cl 19.51 `/O2` leaks a coroutine's by-value parameters** when its frame is destroyed at
+  a suspension point with no statement after it
+  ([#54](https://github.com/contour-terminal/core-cpp/issues/54)). Keep a statement after the
+  last `co_await` in a coroutine that may be destroyed while suspended.
 
 ## [0.4.0] - 2026-09-25
 
