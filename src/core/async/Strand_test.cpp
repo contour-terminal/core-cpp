@@ -1590,9 +1590,12 @@ TEST_CASE("Work offered while another thread seals a strand either runs or is ha
         auto& mine = tasks.at(which);
         mine.reserve(1U << 16U);
         auto refused = 0;
-        while (refused < RefusalsEach && std::chrono::steady_clock::now() < deadline && mine.size() < mine.capacity())
+        while (refused < RefusalsEach && std::chrono::steady_clock::now() < deadline
+               && mine.size() < mine.capacity())
         {
-            auto call = [&ran] { ran.fetch_add(1); };
+            auto call = [&ran] {
+                ran.fetch_add(1);
+            };
             if (!strand.tryPost(call))
             {
                 ++refused;
