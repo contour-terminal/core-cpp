@@ -27,6 +27,36 @@
 namespace core::async
 {
 
+/// A hook `KeyedStrands` calls around every task any key's strand runs, with the key: to install
+/// the ambient context that belongs to that key -- the session of the action the key is running --
+/// for exactly the length of each task. What `AroundTask` says holds for it.
+/// @tparam Key The key type.
+template <typename Key>
+struct KeyedAroundTask
+{
+    /// Called with @c context, the key and the task; must call the task (see @c RunTask).
+    void (*call)(void* context, Key const& key, RunTask run) = nullptr;
+    /// Passed to @c call.
+    void* context = nullptr;
+
+    /// @tparam Hook A callable taking the key and a @c RunTask.
+    /// @param hook The hook; referenced, so it must outlive the `KeyedStrands` given the result.
+    /// @return A hook that calls @p hook.
+    template <typename Hook>
+        requires std::invocable<Hook&, Key const&, RunTask>
+    [[nodiscard]] static KeyedAroundTask of(Hook& hook) noexcept
+    {
+        return KeyedAroundTask {
+            .call =
+                [](void* context, Key const& key, RunTask run) { (*static_cast<Hook*>(context))(key, run); },
+            .context = std::addressof(hook),
+        };
+    }
+
+    /// @return Whether a hook is set.
+    [[nodiscard]] explicit operator bool() const noexcept { return call != nullptr; }
+};
+
 namespace detail
 {
 
@@ -219,10 +249,12 @@ class KeyedStrands final
 {
   public:
     /// @param base Where every key's strand runs. Must outlive this object.
-    /// @param options How each key's strand shares the base.
-    explicit KeyedStrands(IExecutor& base, StrandOptions options = {}):
+    /// @param options How each key's strand shares the base. Its `aroundTask` must be unset.
+    /// @param aroundTask Called around every task, with its key.
+    explicit KeyedStrands(IExecutor& base, StrandOptions options = {}, KeyedAroundTask<Key> aroundTask = {}):
         _registry(std::make_shared<Registry>(base, options))
     {
+        (void) aroundTask;
     }
 
     KeyedStrands(KeyedStrands const&) = delete;
@@ -297,6 +329,50 @@ class KeyedStrands final
     /// @return How many keys have a strand right now: those with work queued or running. Racy by
     ///         nature; for tests and metrics.
     [[nodiscard]] std::size_t size() const { return _registry->size(); }
+
+    /// Queues @p fn, a callable, on @p key's strand to run as one task. Callable from any thread.
+    template <typename F>
+        requires std::invocable<std::decay_t<F>&> && std::constructible_from<std::decay_t<F>, F>
+    void post(Key const& key, F&& fn)
+    {
+        (void) key;
+        (void) fn;
+    }
+
+    /// Queues @p fn on @p key's strand, unless these strands are closed.
+    /// @return Whether it was queued; where not, @p fn is left as it was.
+    template <typename F>
+        requires std::invocable<F&> && std::move_constructible<F>
+    [[nodiscard]] bool tryPost(Key const& key, F& fn)
+    {
+        (void) key;
+        (void) fn;
+        return true;
+    }
+
+    /// Queues @p handle, borrowed, on @p key's strand, unless these strands are closed.
+    /// @return Whether it was queued.
+    [[nodiscard]] bool trySubmit(Key const& key, std::coroutine_handle<> handle)
+    {
+        (void) key;
+        (void) handle;
+        return true;
+    }
+
+    /// Queues @p work on @p key's strand, unless these strands are closed.
+    /// @return Whether it was queued; where not, @p work is left as it was.
+    [[nodiscard]] bool trySubmit(Key const& key, ParkedWork& work)
+    {
+        (void) key;
+        (void) work;
+        return true;
+    }
+
+    /// Closes every key's strand, as the destructor does. Idempotent.
+    void close() { _registry->close(); }
+
+    /// @return Whether no key has work queued or running.
+    [[nodiscard]] bool idle() const { return false; }
 
 #if CORE_CPP_ASYNC_HAS_THREADS
     /// Blocks until no key has work queued or running, including work submitted while it waits.

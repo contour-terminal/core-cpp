@@ -10,9 +10,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <exception>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -503,6 +505,152 @@ TEST_CASE("Work a key's refused hand-off frees is dropped, not refused, when it 
     std::ignore = base.drain();
     CHECK(order == std::vector { 7 });
 #endif
+}
+
+namespace
+{
+
+/// The session a keyed hook installs for the length of one task.
+thread_local int keyedSession = 0;
+
+/// Installs a session derived from the key -- as morph installs the session of the action its
+/// model instance is running -- and records which keys it was called for.
+struct KeySessionHook
+{
+    std::vector<int> keys;
+
+    void operator()(int const& key, core::async::RunTask run)
+    {
+        keys.push_back(key);
+        auto const previous = std::exchange(keyedSession, 100 * key);
+        run();
+        keyedSession = previous;
+    }
+};
+
+/// Hops onto @p key's strand, then pops once, recording the session at each resumption.
+Task<void> keyedSessionConsumer(Strands* strands, int key, Queue* queue, std::vector<int>* sessions)
+{
+    co_await strands->resumeOn(key);
+    sessions->push_back(keyedSession);
+    std::ignore = co_await queue->pop();
+    sessions->push_back(keyedSession);
+}
+
+/// A callable that owns something, so a test can see whether it was moved from.
+struct OwningCall
+{
+    std::unique_ptr<int> payload;
+    std::vector<int>* out;
+
+    void operator()() const { out->push_back(*payload); }
+};
+
+} // namespace
+
+TEST_CASE("KeyedStrands::post runs a callable on its key's strand, in order with that key's other work",
+          "[KeyedStrands][post]")
+{
+    auto base = ManualExecutor {};
+    auto strands = Strands { base };
+    auto order = std::vector<int> {};
+    auto onKey = std::vector<bool> {};
+
+    strands.post(1, [&order, &onKey, &strands] {
+        order.push_back(1);
+        onKey.push_back(strands.runningHere(1) && !strands.runningHere(2));
+    });
+    auto second = append(&strands, 1, &order, 2);
+    second.handle().resume();
+    strands.post(1, [&order] { order.push_back(3); });
+    strands.post(2, [&order, &onKey, &strands] {
+        order.push_back(20);
+        onKey.push_back(strands.runningHere(2));
+    });
+    CHECK(strands.size() == 2);
+
+    std::ignore = base.drain();
+    // Key 1's three in order; key 2's anywhere among them.
+    auto keyOne = std::vector<int> {};
+    std::ranges::copy_if(order, std::back_inserter(keyOne), [](int value) { return value < 10; });
+    CHECK(keyOne == std::vector { 1, 2, 3 });
+    CHECK(std::ranges::count(order, 20) == 1);
+    CHECK(onKey == std::vector { true, true });
+    CHECK(strands.size() == 0);
+}
+
+TEST_CASE("KeyedStrands' tryPost and trySubmit leave the work with the caller once they are closed",
+          "[KeyedStrands][post]")
+{
+    auto base = ManualExecutor {};
+    auto strands = Strands { base };
+    auto order = std::vector<int> {};
+
+    auto first = OwningCall { .payload = std::make_unique<int>(1), .out = &order };
+    CHECK(strands.tryPost(4, first));
+    std::ignore = base.drain();
+    CHECK(order == std::vector { 1 });
+
+    strands.close();
+    strands.close(); // idempotent
+
+    auto call = OwningCall { .payload = std::make_unique<int>(2), .out = &order };
+    CHECK_FALSE(strands.tryPost(4, call));
+    CHECK(call.payload != nullptr);
+
+    auto refused = append(&strands, 4, &order, 3); // not started: its handle is only borrowed below
+    auto work = ParkedWork { .resume = refused.handle() };
+    CHECK_FALSE(strands.trySubmit(4, work));
+    CHECK(work.resume == refused.handle());
+    CHECK_FALSE(strands.trySubmit(4, refused.handle()));
+
+    strands.post(4, [&order] { order.push_back(5); });
+    CHECK(base.pending() == 0);
+    CHECK(order == std::vector { 1 });
+    CHECK(strands.size() == 0);
+}
+
+TEST_CASE("KeyedStrands::idle is true once no key has work queued or running", "[KeyedStrands][idle]")
+{
+    auto base = ManualExecutor {};
+    auto strands = Strands { base };
+    CHECK(strands.idle());
+    strands.post(1, [] {});
+    strands.post(2, [] {});
+    CHECK_FALSE(strands.idle());
+    // A host-driven loop's teardown: pump the base until the strands are idle.
+    while (!strands.idle() && base.runOne())
+    {
+    }
+    CHECK(strands.idle());
+    CHECK(strands.size() == 0);
+}
+
+TEST_CASE("A keyed around-task hook is given the key, around every resumption on that key's strand",
+          "[KeyedStrands][aroundTask]")
+{
+    auto base = ManualExecutor {};
+    auto foreign = ManualExecutor {};
+    auto queue = Queue { foreign, core::async::AsyncQueueOptions {} };
+    auto hook = KeySessionHook {};
+    auto strands =
+        Strands { base, core::async::StrandOptions {}, core::async::KeyedAroundTask<int>::of(hook) };
+    auto sessions = std::vector<int> {};
+
+    auto consumer = keyedSessionConsumer(&strands, 3, &queue, &sessions);
+    consumer.handle().resume();
+    std::ignore = base.drain();
+    REQUIRE(queue.hasWaiter());
+    std::ignore = queue.push(1); // back through key 3's strand -- a new one, the old one retired
+    std::ignore = base.drain();
+    std::ignore = foreign.drain();
+    strands.post(5, [] { CHECK(keyedSession == 500); });
+    std::ignore = base.drain();
+
+    CHECK(consumer.done());
+    CHECK(sessions == std::vector { 300, 300 });
+    CHECK(hook.keys == std::vector { 3, 3, 5 });
+    CHECK(keyedSession == 0);
 }
 
 #if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)

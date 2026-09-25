@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <concepts>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
@@ -43,6 +44,62 @@
 namespace core::async
 {
 
+namespace detail
+{
+    class StrandCore;
+    class StrandTask;
+} // namespace detail
+
+/// The rest of one task, handed to an around-task hook: calling it runs the task.
+///
+/// A hook calls it exactly once, on the thread the hook was called on, before the hook returns.
+/// What the task throws propagates through the hook as it would without one.
+class RunTask final
+{
+  public:
+    /// Runs the task.
+    void operator()() const;
+
+  private:
+    friend class detail::StrandCore;
+
+    /// @param task The task to run.
+    explicit RunTask(detail::StrandTask& task) noexcept: _task(&task) {}
+
+    detail::StrandTask* _task;
+};
+
+/// A hook a strand calls around every task it runs, instead of running the task itself: to install
+/// an ambient context -- a request's session, a tenant -- for exactly the length of each task.
+///
+/// A task is one resumption, so the hook also runs around a coroutine that parked on another
+/// executor and came back through the strand. Set at construction and never changed; a reference,
+/// not an owner: the hook must outlive the strand. Unset, it costs one branch per task and nothing
+/// else.
+struct AroundTask
+{
+    /// Called with @c context and the task; must call the task (see @c RunTask).
+    void (*call)(void* context, RunTask run) = nullptr;
+    /// Passed to @c call.
+    void* context = nullptr;
+
+    /// @tparam Hook A callable taking a @c RunTask.
+    /// @param hook The hook; referenced, so it must outlive every strand given the result.
+    /// @return A hook that calls @p hook.
+    template <typename Hook>
+        requires std::invocable<Hook&, RunTask>
+    [[nodiscard]] static AroundTask of(Hook& hook) noexcept
+    {
+        return AroundTask {
+            .call = [](void* context, RunTask run) { (*static_cast<Hook*>(context))(run); },
+            .context = std::addressof(hook),
+        };
+    }
+
+    /// @return Whether a hook is set.
+    [[nodiscard]] explicit operator bool() const noexcept { return call != nullptr; }
+};
+
 /// How a strand shares its base executor.
 struct StrandOptions
 {
@@ -54,12 +111,14 @@ struct StrandOptions
     /// `dispatchBatch` bound mean anything with a strand on it. Each hand-back costs one `submit`
     /// on the base.
     std::size_t batch { 32 };
+
+    /// Called around every task the strand runs. `KeyedStrands` takes its hook as a
+    /// `KeyedAroundTask`, which is given the key, and asserts that this one is unset.
+    AroundTask aroundTask {};
 };
 
 namespace detail
 {
-
-    class StrandCore;
 
     /// Where a strand's pump is. The one state the strand's mutex guards besides its queue.
     enum class StrandPhase : std::uint8_t
@@ -887,6 +946,11 @@ namespace detail
 
 } // namespace detail
 
+inline void RunTask::operator()() const
+{
+    (void) _task;
+}
+
 /// An executor that runs what it is given one at a time, in the order given, on a base executor.
 ///
 /// **Serial.** At most one task runs at a time, whatever the base is, so state touched only from
@@ -971,6 +1035,46 @@ class Strand final: public IExecutor
 
     /// @return How many tasks are queued and not yet running. Racy by nature; for tests.
     [[nodiscard]] std::size_t queued() const { return _core->queued(); }
+
+    /// Queues @p fn, a callable, to run as one task. Callable from any thread.
+    template <typename F>
+        requires std::invocable<std::decay_t<F>&> && std::constructible_from<std::decay_t<F>, F>
+    void post(F&& fn)
+    {
+        (void) fn;
+    }
+
+    /// Queues @p fn, unless the strand is closed.
+    /// @return Whether it was queued; where not, @p fn is left as it was.
+    template <typename F>
+        requires std::invocable<F&> && std::move_constructible<F>
+    [[nodiscard]] bool tryPost(F& fn)
+    {
+        (void) fn;
+        return true;
+    }
+
+    /// Queues @p handle, borrowed, unless the strand is closed.
+    /// @return Whether it was queued.
+    [[nodiscard]] bool trySubmit(std::coroutine_handle<> handle)
+    {
+        (void) handle;
+        return true;
+    }
+
+    /// Queues @p work, unless the strand is closed.
+    /// @return Whether it was queued; where not, @p work is left as it was.
+    [[nodiscard]] bool trySubmit(ParkedWork& work)
+    {
+        (void) work;
+        return true;
+    }
+
+    /// Closes the strand, as the destructor does. Idempotent.
+    void close() { _core->close(); }
+
+    /// @return Whether nothing is queued or running.
+    [[nodiscard]] bool idle() const { return false; }
 
   private:
     std::shared_ptr<detail::StrandCore> _core;

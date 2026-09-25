@@ -941,6 +941,185 @@ TEST_CASE("A base that refuses the pump's hand-back between turns does not wedge
     CHECK(third.done());
 }
 
+namespace
+{
+
+/// A callable that owns something, so a test can see whether it was moved from.
+struct OwningCall
+{
+    std::unique_ptr<int> payload;
+    std::vector<int>* out;
+
+    void operator()() const { out->push_back(*payload); }
+};
+
+/// The session an around-task hook installs, as morph's action session is installed: per thread,
+/// for the length of one task.
+thread_local int ambientSession = 0;
+
+/// An around-task hook that installs @c session for the length of every task, and counts them.
+struct SessionHook
+{
+    int session;
+    int calls { 0 };
+
+    void operator()(core::async::RunTask run)
+    {
+        ++calls;
+        auto const previous = std::exchange(ambientSession, session);
+        run();
+        ambientSession = previous;
+    }
+};
+
+/// Hops onto @p strand, then pops twice, recording the ambient session at every resumption.
+Task<void> sessionConsumer(Strand* strand, Queue* queue, std::vector<int>* sessions)
+{
+    co_await ResumeOn { *strand };
+    sessions->push_back(ambientSession);
+    for ([[maybe_unused]] auto const index: { 0, 1 })
+    {
+        std::ignore = co_await queue->pop();
+        sessions->push_back(ambientSession);
+    }
+}
+
+} // namespace
+
+TEST_CASE("Strand::post runs a callable as one task, in FIFO order with submitted coroutines",
+          "[Strand][post]")
+{
+    auto base = ManualExecutor {};
+    auto strand = Strand { base };
+    auto order = std::vector<int> {};
+    auto onStrand = std::vector<bool> {};
+    auto seen = std::vector<Sighting> {};
+
+    strand.post([&order, &onStrand, &strand] {
+        order.push_back(1);
+        onStrand.push_back(strand.runningHere());
+    });
+    auto coroutine = lookOnce(&strand, &seen);
+    strand.submit(coroutine.handle());
+    strand.post([&order, &onStrand, &strand, &seen] {
+        order.push_back(seen.empty() ? -1 : 3);
+        onStrand.push_back(strand.runningHere() && currentExecutor() != nullptr);
+    });
+    CHECK(strand.queued() == 3);
+    CHECK(base.pending() == 1);
+
+    std::ignore = base.drain();
+    CHECK(order == std::vector { 1, 3 });
+    CHECK(onStrand == std::vector { true, true });
+    CHECK(coroutine.done());
+    CHECK(strand.queued() == 0);
+}
+
+TEST_CASE("A callable that throws out of a strand propagates as a task's throw, and the strand goes on",
+          "[Strand][post][exceptions]")
+{
+#if defined(_MSC_VER) && !defined(__clang__)
+    SKIP("under MSVC's cl a throw out of a strand task ends the process; "
+         "core-cpp.strand-throw-canary asserts it");
+#else
+    auto base = ManualExecutor {};
+    auto strand = Strand { base };
+    auto order = std::vector<int> {};
+
+    strand.post([] { throw std::runtime_error { "a posted call that throws" }; });
+    strand.post([&order] { order.push_back(2); });
+    CHECK_THROWS_AS(base.drain(), std::runtime_error);
+    CHECK(currentExecutor() == nullptr);
+    std::ignore = base.drain();
+    CHECK(order == std::vector { 2 });
+#endif
+}
+
+TEST_CASE("tryPost and trySubmit queue on an open strand, and leave the work with the caller once it is "
+          "closed",
+          "[Strand][post]")
+{
+    auto base = ManualExecutor {};
+    auto strand = Strand { base };
+    auto order = std::vector<int> {};
+    auto seen = std::vector<Sighting> {};
+
+    auto first = OwningCall { .payload = std::make_unique<int>(1), .out = &order };
+    CHECK(strand.tryPost(first));
+    auto queuedTask = lookOnce(&strand, &seen);
+    CHECK(strand.trySubmit(queuedTask.handle()));
+    std::ignore = base.drain();
+    CHECK(order == std::vector { 1 });
+    CHECK(queuedTask.done());
+
+    strand.close();
+    strand.close(); // idempotent
+
+    auto call = OwningCall { .payload = std::make_unique<int>(2), .out = &order };
+    CHECK_FALSE(strand.tryPost(call));
+    CHECK(call.payload != nullptr);
+
+    auto refused = lookOnce(&strand, &seen);
+    auto work = ParkedWork { .resume = refused.handle() };
+    CHECK_FALSE(strand.trySubmit(work));
+    CHECK(work.resume == refused.handle());
+    CHECK_FALSE(strand.trySubmit(refused.handle()));
+
+    // post and submit drop instead.
+    strand.post([&order] { order.push_back(3); });
+    strand.submit(refused.handle());
+    CHECK(base.pending() == 0);
+    CHECK(order == std::vector { 1 });
+    CHECK_FALSE(refused.done());
+}
+
+TEST_CASE("Strand::idle is true once nothing is queued or running", "[Strand][idle]")
+{
+    auto base = ManualExecutor {};
+    auto strand = Strand { base };
+    CHECK(strand.idle());
+
+    auto inside = std::optional<bool> {};
+    strand.post([&inside, &strand] { inside = strand.idle(); });
+    CHECK_FALSE(strand.idle());
+    std::ignore = base.drain();
+    CHECK(strand.idle());
+    REQUIRE(inside.has_value());
+    CHECK_FALSE(*inside); // running is not idle
+}
+
+TEST_CASE("An around-task hook runs around every task, including a resumption that came back through the "
+          "strand from another executor",
+          "[Strand][aroundTask]")
+{
+    auto base = ManualExecutor {};
+    auto foreign = ManualExecutor {};
+    auto queue = Queue { foreign, core::async::AsyncQueueOptions {} };
+    auto hook = SessionHook { .session = 42 };
+    auto strand =
+        Strand { base, core::async::StrandOptions { .aroundTask = core::async::AroundTask::of(hook) } };
+    auto sessions = std::vector<int> {};
+
+    auto consumer = sessionConsumer(&strand, &queue, &sessions);
+    consumer.handle().resume(); // hops onto the strand
+    std::ignore = base.drain(); // first task: runs to the first pop, and parks
+    REQUIRE(queue.hasWaiter());
+    std::ignore = queue.push(1); // hands the consumer back to the strand it parked on
+    std::ignore = base.drain();
+    std::ignore = queue.push(2);
+    std::ignore = base.drain();
+    std::ignore = foreign.drain();
+
+    CHECK(consumer.done());
+    CHECK(sessions == std::vector { 42, 42, 42 });
+    CHECK(hook.calls == 3);
+    CHECK(ambientSession == 0);
+
+    strand.post([] { CHECK(ambientSession == 42); });
+    std::ignore = base.drain();
+    CHECK(hook.calls == 4);
+}
+
 #if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
 
 namespace
