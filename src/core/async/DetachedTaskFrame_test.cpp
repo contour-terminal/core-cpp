@@ -258,8 +258,13 @@ TEST_CASE("A DetachedTask finished inside its first await is not read by its ram
         auto const guard = GuardedFrames {};
         finishedInsideItsAwait(&ran);
     }
-    CHECK(returnRevokedPages() >= std::size_t { 1 }); // the frame, at least, was guarded
+    auto const guarded = returnRevokedPages();
     CHECK(ran == 1);
+    // The coroutine starts and ends inside this call, so a compiler may elide its heap frame
+    // altogether (emsdk's latest clang does, in Release). Then there is no freed frame for a ramp to
+    // read, and this case observed nothing.
+    if (guarded == 0)
+        SKIP("the frame allocation was elided, so no frame was guarded or freed");
 }
 
 #if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
