@@ -107,6 +107,16 @@ what follows is what a change to it must not break.
   abandonment behind a queued readiness is still queued, being a different answer.
   `ReadinessQueue_test.cpp`'s *A frameless readiness park is queued once however many waits
   report it first* holds it with a bound of one and a scripted backend.
+- **A loop in its steady state allocates nothing per completion, and it is counted over many turns,
+  never one.** Four allocations hid on the completion path until 0.4.0, and a single turn's count
+  could read clean over every one of them: the ready queue was a `std::deque`, which allocates a
+  node and frees one every few entries of a FIFO whose length never changes (it is now
+  `detail::RingQueue`, which keeps its capacity); every parked operation's default answer spelled a
+  sentence into `NetError::context`, a heap string (it is worded where it is read); a fired or
+  cancelled timer's park was freed rather than recycled; and each firing collected its ids into a
+  vector of its own. `CallbackAllocation_test.cpp`'s *A frame-free completion of a detached chain
+  allocates nothing once warm* sums 256 turns against an idle one, and a timer-only loop's 256
+  against the same.
 - **The wait is skipped when nothing could come back from it.** A loop with no park and no closed
   handle has nothing the backend can report. `run()` is the exception, and it is the whole of what
   `IdlePolicy::Block` means: a loop that owns its thread and is idle BLOCKS, because another
@@ -667,6 +677,13 @@ get right, and each one is a defect that has already happened.
   can see it. The mechanism is `RegistrationLifetime::UntilClosed`, a loop-owned registration per
   handle with one slot per direction (`detail::HandleWatch`), so backends still dispatch and the
   loop still resumes. Three rules hold it up:
+  - **A watch names its parks by address as well as by id, and the address is cleared with the
+    id.** A readiness report reaches the park through `HandleWatch::readerPark` rather than by
+    probing the park table, which was a cache miss per completion. The pointer is non-null exactly
+    while the id beside it is valid: `releaseWatchSlot` clears both, every path that takes a park
+    out of the table while a slot names it releases the slot first, and teardown, which frees the
+    parks before the watches, releases theirs as it frees them. `queueParkedWaiter(Park&)` asserts
+    in Debug that the table still holds the park it was handed.
   - **The owner announces the close, or the registration outlives the descriptor.** Nothing else can
     end it: epoll forgets a closed descriptor silently, and a registration the loop still believed
     armed would never fire for the next socket to get that number. `notifyHandleClosing` detaches
@@ -742,6 +759,10 @@ get right, and each one is a defect that has already happened.
   without resuming inside the callback (G2). At the back, as 0.2.1 had it, a flow queued ahead of
   the callback that yields once to let reported readiness run (fastcached's `AbandonIfPeerGone`)
   read state the waiter had not updated. `resumeSoon` from anywhere else stays FIFO at the back.
+  The common case -- one waiter, with nothing else in the callback position -- is resumed by the
+  drain straight after the callback, taken out of the callback's scratch vector once the queueing
+  target is restored, which is the same position without the trip through `_resumeFirst`; a
+  second waiter, or a bound reached by the callback itself, takes the general path.
 
 - **The slot guards end the process in EVERY build; a contract violation is never a silent
   hang.** They were Debug-only, and under `NDEBUG` a second operation displaced the parked one,

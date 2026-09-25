@@ -369,7 +369,17 @@ namespace detail
         Interest armed = Interest::None; ///< What the backend is armed for right now.
         ParkId reader {};                ///< The park waiting to read, or none.
         ParkId writer {};                ///< The park waiting to write, or none.
-        bool narrowQueued = false;       ///< Whether a wait has already asked for it to be narrowed.
+
+        /// The parks @c reader and @c writer name, set and cleared with them, so a readiness report
+        /// reaches its park without probing the table -- a cache miss per completion, measured in
+        /// fastcached. **Non-null exactly while the id beside it is valid**: the loop clears both
+        /// where a slot is released (`EventLoop::releaseWatchSlot`), and every path that takes a
+        /// park out of the table while a slot still names it releases the slot first -- teardown
+        /// included, which frees the parks before the watches.
+        Park* readerPark = nullptr;
+        Park* writerPark = nullptr; ///< See @c readerPark.
+
+        bool narrowQueued = false; ///< Whether a wait has already asked for it to be narrowed.
     };
 
     /// The parks one loop holds, keyed by id: an open-addressing table with linear probing.
@@ -762,6 +772,18 @@ namespace detail
         [[nodiscard]] std::vector<ParkId> takeExpired(platform::SteadyTimePoint now)
         {
             auto due = std::vector<ParkId> {};
+            takeExpired(now, due);
+            return due;
+        }
+
+        /// @c takeExpired into @p due, which is cleared first and keeps its capacity: the turn
+        /// asks every time a deadline fires, and a vector made per call was an allocation per
+        /// firing.
+        /// @param now The current time.
+        /// @param due Receives the ids that expired, soonest first.
+        void takeExpired(platform::SteadyTimePoint now, std::vector<ParkId>& due)
+        {
+            due.clear();
             pruneTimers();
             while (!_timers.empty() && _timers.front().deadline <= now)
             {
@@ -778,7 +800,6 @@ namespace detail
                 }
                 pruneTimers();
             }
-            return due;
         }
 
       private:

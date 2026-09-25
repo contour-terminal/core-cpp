@@ -6,8 +6,10 @@
 // by one. Running a callback so that what it queues resumes in the callback's position must not
 // make each of them allocate, so this binary counts: it replaces the global allocation functions,
 // which is why it is a binary of its own -- a replacement reaches every test linked beside it.
+#include <core/async/DetachedTask.hpp>
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
+#include <core/net/IoAwaitable.hpp>
 #include <core/net/testing/TestLoop.hpp>
 #include <core/platform/Clock.hpp>
 
@@ -19,6 +21,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <new>
+#include <ranges>
 #include <tuple>
 #include <utility>
 
@@ -93,6 +96,91 @@ void wakeWaiter(void* state)
 {
     auto* const waking = static_cast<Waking*>(state);
     waking->loop->resumeSoon(core::async::ParkedWork { .resume = std::exchange(waking->parked, {}) });
+}
+
+/// A frame-free operation completed from a timer callback due at once: the path a socket's
+/// readiness completion takes -- `ResultAwaitable::complete`, the ready queue, the drain step --
+/// with no kernel in it.
+class TimerCompletion
+{
+  public:
+    /// @param loop The loop; must outlive this.
+    /// @param clock The loop's clock.
+    TimerCompletion(core::net::EventLoop& loop, core::platform::IClock& clock) noexcept:
+        _loop(&loop), _clock(&clock)
+    {
+    }
+
+    /// @return One operation, completed by the turn after the one that arms it.
+    [[nodiscard]] core::net::IoAwaitable wait() { return core::net::IoAwaitable { &arm, &retire, this }; }
+
+  private:
+    static void arm(void* owner, core::net::IoAwaitable& self)
+    {
+        auto* const source = static_cast<TimerCompletion*>(owner);
+        source->_operation = &self;
+        source->_timer = source->_loop->addTimer(source->_clock->now(), &fire, source);
+        self.cancelThrough(*source->_loop, core::net::ParkId::invalid());
+    }
+
+    static void retire(void* owner, void* awaitable) noexcept
+    {
+        auto* const source = static_cast<TimerCompletion*>(owner);
+        if (source->_operation != awaitable)
+            return;
+        source->_operation = nullptr;
+        std::ignore =
+            source->_loop->cancelTimer(std::exchange(source->_timer, core::net::TimerId::invalid()));
+    }
+
+    static void fire(void* state)
+    {
+        auto* const source = static_cast<TimerCompletion*>(state);
+        source->_timer = core::net::TimerId::invalid();
+        if (auto* const operation = std::exchange(source->_operation, nullptr))
+            operation->complete(std::size_t { 1 });
+    }
+
+    core::net::EventLoop* _loop;
+    core::platform::IClock* _clock;
+    core::net::IoAwaitable* _operation = nullptr;
+    core::net::TimerId _timer {};
+};
+
+/// A timer that re-arms itself each time it fires: the owner's own scaffolding above, with no
+/// operation completed and no waiter resumed.
+struct Rearming
+{
+    core::net::EventLoop* loop;
+    core::platform::IClock* clock;
+    std::size_t fired = 0;
+};
+
+/// Fires a @c Rearming timer and arms it again, due at once.
+/// @param state The @c Rearming.
+void rearm(void* state)
+{
+    auto* const timer = static_cast<Rearming*>(state);
+    ++timer->fired;
+    std::ignore = timer->loop->addTimer(timer->clock->now(), &rearm, timer);
+}
+
+/// Awaits completions until told to stop, as a connection's handler awaits its socket's reads.
+/// @param source The owner.
+/// @param stop Ends the loop at the next completion.
+/// @param completed Counts the completions.
+core::async::Task<void> awaitCompletions(TimerCompletion* source, bool const* stop, std::size_t* completed)
+{
+    while (!*stop)
+        if ((co_await source->wait()).has_value())
+            ++*completed;
+}
+
+/// The root nobody owns, as a server's per-connection flow is, so every completion carries a claim.
+/// @param child The handler it awaits.
+core::async::DetachedTask runDetached(core::async::Task<void> child)
+{
+    co_await std::move(child);
 }
 
 } // namespace
@@ -192,4 +280,62 @@ TEST_CASE("A drain-step callback that resumes a parked waiter costs no allocatio
 
     REQUIRE(resumes == 9);
     CHECK(callbackTurn == idleTurn);
+}
+
+TEST_CASE("A frame-free completion of a detached chain allocates nothing once warm",
+          "[EventLoop][turn][alloc]")
+{
+    // The whole of what a parked socket operation costs the loop per completion, measured over many
+    // turns rather than one: a timer park, the owner's callback queued and run in the drain step,
+    // the waiter claimed, queued in the callback's position and resumed, and the next operation
+    // armed. Four allocations hid on that path, none of them in one turn's worth of reading: the
+    // ready queue was a `std::deque`, which allocates a node and frees one every few entries of a
+    // FIFO that never grows; every parked operation's default answer spelled a sentence into a
+    // `std::string`; a fired or cancelled timer's park was freed rather than kept; and each firing
+    // collected its ids into a vector of its own.
+    auto clock = core::platform::ManualClock {};
+    auto loop = core::net::testing::TestLoop { clock };
+    auto source = TimerCompletion { loop, clock };
+    auto stop = false;
+    auto completed = std::size_t { 0 };
+    runDetached(awaitCompletions(&source, &stop, &completed));
+    for ([[maybe_unused]] auto const warm: std::views::iota(0, 64))
+        std::ignore = loop.runOnce();
+    REQUIRE(completed > 0);
+
+    // What a turn with nothing to do allocates on this platform, on a loop of its own, warmed; and
+    // what a turn allocates whose only work is the owner's timer -- a park made, fired and
+    // recycled -- with no operation completed and no waiter resumed.
+    constexpr auto Turns = std::size_t { 256 };
+    auto idleLoop = core::net::testing::TestLoop { clock };
+    std::ignore = idleLoop.runOnce();
+    auto const beforeIdle = allocations.load();
+    std::ignore = idleLoop.runOnce();
+    auto const idleTurn = allocations.load() - beforeIdle;
+
+    auto timerLoop = core::net::testing::TestLoop { clock };
+    auto timer = Rearming { .loop = &timerLoop, .clock = &clock };
+    std::ignore = timerLoop.addTimer(clock.now(), &rearm, &timer);
+    for ([[maybe_unused]] auto const warm: std::views::iota(0, 64))
+        std::ignore = timerLoop.runOnce();
+    auto const beforeTimer = allocations.load();
+    for ([[maybe_unused]] auto const turn: std::views::iota(std::size_t { 0 }, Turns))
+        std::ignore = timerLoop.runOnce();
+    auto const timerTurns = allocations.load() - beforeTimer;
+    REQUIRE(timer.fired >= Turns);
+    CHECK(timerTurns == idleTurn * Turns); // a timer firing allocates nothing
+
+    auto const completedBefore = completed;
+    auto const before = allocations.load();
+    for ([[maybe_unused]] auto const turn: std::views::iota(std::size_t { 0 }, Turns))
+        std::ignore = loop.runOnce();
+    auto const allocated = allocations.load() - before;
+
+    CHECK(completed - completedBefore >= Turns - 1); // one completion per turn
+    CHECK(allocated == idleTurn * Turns);            // and neither does a completion
+
+    // The chain ends at its next completion and frees itself.
+    stop = true;
+    std::ignore = loop.runOnce();
+    std::ignore = loop.runOnce();
 }

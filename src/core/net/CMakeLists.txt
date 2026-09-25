@@ -52,6 +52,7 @@ set(_coreCppNetSubset
     detail/ParkId.hpp
     detail/ParkTable.hpp
     detail/ReadyBatch.hpp
+    detail/RingQueue.hpp
     detail/ScopeGuard.hpp
     detail/WaitTimeout.hpp
     detail/WorkerIdentity.hpp)
@@ -69,6 +70,7 @@ set(_coreCppNetSubsetTests
     SleepUntil_test.cpp
     Timers_test.cpp
     detail/ParkTable_test.cpp
+    detail/RingQueue_test.cpp
     testing/ScriptedBackend_test.cpp)
 #
 # Exactly one DefaultBackend.cpp is compiled, and it is the whole of how a platform picks its
@@ -153,6 +155,7 @@ core_cpp_add_module(net KIND STATIC
         detail/ParkTable.hpp
         detail/ReadinessSlot.hpp
         detail/ReadyBatch.hpp
+        detail/RingQueue.hpp
         detail/ScopeGuard.hpp
         detail/StreamSocketOptions.hpp
         detail/WorkerIdentity.hpp

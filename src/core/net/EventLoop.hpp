@@ -48,6 +48,7 @@
 #include <core/async/Task.hpp>
 #include <core/net/IoBackend.hpp>
 #include <core/net/detail/ParkTable.hpp>
+#include <core/net/detail/RingQueue.hpp>
 #include <core/net/detail/ScopeGuard.hpp>
 #include <core/net/detail/WorkerIdentity.hpp>
 #include <core/platform/Clock.hpp>
@@ -59,7 +60,6 @@
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <expected>
 #include <functional>
 #include <list>
@@ -796,6 +796,12 @@ class EventLoop: public async::IExecutor
     ///        closing under @c FdWakePolicy::Cancel.
     void queueParkedWaiter(ParkId park, ParkWake wake);
 
+    /// @c queueParkedWaiter for a park the caller already holds -- a readiness report reaches its
+    /// park through the handler or the handle's watch -- so the park table is not probed for it.
+    /// @param park The park; must be filed.
+    /// @param wake Why it is being queued.
+    void queueParkedWaiter(detail::Park& park, ParkWake wake);
+
     /// The readiness callback every park registers, for both directions.
     ///
     /// Static and `noexcept`, because that is what a @c ReadinessCallback is. It only enqueues.
@@ -892,7 +898,6 @@ class EventLoop: public async::IExecutor
     struct ReadyEntry
     {
         async::detail::Parked parked {}; ///< The coroutine, and what to free if it is not resumed.
-        bool ownedByLoop = false;        ///< Whether @c parked carried a claim when it was queued.
 
         /// The callback timer this entry is due to run, or @c ParkId::invalid() for a coroutine.
         ///
@@ -901,10 +906,6 @@ class EventLoop: public async::IExecutor
         /// park out of the table is what makes this entry resolve to nothing. It is the same
         /// generation check every other cancellation path uses, reused rather than re-invented.
         ParkId callbackPark {};
-
-        /// Why @c callbackPark is being run, for a frameless READINESS park. Ignored for a timer,
-        /// which has exactly one reason to fire and therefore needs none carried.
-        ParkWake wake = ParkWake::Ready;
 
         /// The readiness or deadline park this coroutine was queued FROM, or @c ParkId::invalid().
         ///
@@ -922,6 +923,15 @@ class EventLoop: public async::IExecutor
         /// reference to the chain's state and the resume may end the chain -- see
         /// @c async::detail::CountedClaim.
         async::detail::CountedClaim claim {};
+
+        // The byte-wide members in one run, after every eight-byte one: two of them apart cost an
+        // eight-byte slot each, which took this entry from 56 bytes to 64 when `claim` joined it.
+
+        bool ownedByLoop = false; ///< Whether @c parked carried a claim when it was queued.
+
+        /// Why @c callbackPark is being run, for a frameless READINESS park. Ignored for a timer,
+        /// which has exactly one reason to fire and therefore needs none carried.
+        ParkWake wake = ParkWake::Ready;
 
         /// Resumes the entry's coroutine, giving its chain back first; a handle that cannot be
         /// resumed has its chain freed rather than dropped, as @c async::detail::Parked::resume.
@@ -948,7 +958,7 @@ class EventLoop: public async::IExecutor
     /// Teardown: takes what the loop OWNS out of the ready queue, to be freed rather than resumed,
     /// and drops the due timer callbacks; what it borrows stays queued, to be resumed.
     /// @return The owned entries.
-    [[nodiscard]] std::deque<ReadyEntry> setAsideOwnedReady();
+    [[nodiscard]] detail::RingQueue<ReadyEntry> setAsideOwnedReady();
 
     /// Teardown steps 3 and 6: drains what is queued, a bounded number of passes.
     void drainForTeardown();
@@ -960,7 +970,11 @@ class EventLoop: public async::IExecutor
     /// the destructor body frees everything while both are alive precisely so this ordering is
     /// never relied upon. It is stated here because the day somebody deletes the destructor body,
     /// the order is what decides whether the failure is a crash or silence.
-    std::deque<ReadyEntry> _ready;
+    ///
+    /// A ring that keeps its capacity rather than a `std::deque`, which allocates a node and frees
+    /// one every few entries of a FIFO that never grows -- the steady state of a server, one
+    /// completion queued and resumed per request (see @c detail::RingQueue).
+    detail::RingQueue<ReadyEntry> _ready;
 
     /// Where @c queueReady files work while a drain-step callback runs, or null outside one.
     ///
@@ -993,6 +1007,9 @@ class EventLoop: public async::IExecutor
     /// The handles whose watch a wait reported with no park to take the report, to be narrowed once
     /// the wait returns. Cleared rather than swapped, so its capacity is kept across turns.
     std::vector<platform::NativeHandle> _watchesToNarrow;
+
+    /// The parks turn step 5 found due, kept across turns so a firing allocates nothing.
+    std::vector<ParkId> _expired;
 
     /// Parks whose handle closed since the last turn, merged into the next turn as one more source
     /// of readiness. Consumed ONLY in a turn: ~EventLoop must resume parked flows through its own
@@ -1104,12 +1121,12 @@ class EventLoop: public async::IExecutor
     /// Files @p entry at the back of the ready queue, or -- while a drain-step callback runs -- in
     /// that callback's position (@c _queuedByCallback). Every @c ReadyEntry goes through here.
     /// @param entry What to queue.
-    void queueEntry(ReadyEntry entry);
+    void queueEntry(ReadyEntry&& entry);
 
     /// What @c resumeSoon and @c resumeCompleted share: the affinity assertion, the queueing, and
     /// the wake outside a turn.
     /// @param entry What to queue.
-    void queueSoon(ReadyEntry entry);
+    void queueSoon(ReadyEntry&& entry);
 
     /// The one place a @c ReadyEntry is made from a work item, so the ownership flag cannot be got
     /// wrong at one site out of six. A completion's entry, which carries no work item, is made by

@@ -322,7 +322,12 @@ class ResultAwaitable
         // observed before arming, or a teardown that resumed this park. The owner is still holding
         // a pointer to this object, which is about to stop existing.
         if (!_settled)
+        {
             retireNow();
+            // Worded only here, where it is read: see `_result`.
+            _result = std::unexpected(
+                makeNetError(NetErrorCode::Cancelled, 0, "the operation was never completed"));
+        }
 
         // An ABANDONED operation unwinds whatever the token says: the owner is being destroyed, so
         // resuming this flow on its normal path would run its body against storage that has gone.
@@ -466,8 +471,13 @@ class ResultAwaitable
     /// Defaults to a cancellation rather than to a value: an awaitable resumed without its owner
     /// ever answering — a loop torn down under a parked operation — must report something true,
     /// and "the operation did not happen" is it.
-    Result _result { std::unexpected(
-        makeNetError(NetErrorCode::Cancelled, 0, "the operation was never completed")) };
+    ///
+    /// **With no words until they are read.** `NetError::context` is a `std::string`, and this
+    /// initialiser runs for every operation that parks: its sentence, longer than any standard
+    /// library's inline capacity, was a heap allocation and a free per parked operation -- per
+    /// request, on a server -- for a value read only by `await_resume` on the never-completed path,
+    /// which words it there.
+    Result _result { std::unexpected(makeNetError(NetErrorCode::Cancelled)) };
 
     /// Set only for a coroutine-backed operation, and then it is the whole implementation: every
     /// other member below belongs to the frame-free path and stays at its default.

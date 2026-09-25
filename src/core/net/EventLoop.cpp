@@ -179,15 +179,15 @@ EventLoop::~EventLoop()
     _backend.armWakeAt(std::nullopt);
 }
 
-std::deque<EventLoop::ReadyEntry> EventLoop::setAsideOwnedReady()
+detail::RingQueue<EventLoop::ReadyEntry> EventLoop::setAsideOwnedReady()
 {
-    auto owned = std::deque<ReadyEntry> {};
-    auto borrowed = std::deque<ReadyEntry> {};
+    auto owned = detail::RingQueue<ReadyEntry> {};
+    auto borrowed = detail::RingQueue<ReadyEntry> {};
     for (auto& entry: _ready)
     {
         if (entry.callbackPark)
             continue;
-        (entry.ownedByLoop ? owned : borrowed).push_back(std::move(entry));
+        (entry.ownedByLoop ? owned : borrowed).pushBack(std::move(entry));
     }
     _ready = std::move(borrowed);
     return owned;
@@ -240,8 +240,12 @@ void EventLoop::abandonParkedWork() noexcept
         // Detached BEFORE anything is freed: the backend holds each handler's address, and a
         // handler freed while it is still registered leaves the backend walking dead storage.
         for (auto const& park: parks)
+        {
             if (park->attached)
                 _backend.detach(park->handler);
+            // And out of any watch slot, which names the park by address as well as by id.
+            std::ignore = releaseWatchSlot(*park);
+        }
 
         // And now the frees. Each `Parked` releases its claim on the chain it was holding, and
         // the LAST claim on a chain destroys it -- so what goes is exactly the chains nothing else
@@ -485,7 +489,7 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
         for (auto& entry:
              std::ranges::subrange(_resumeFirst.begin() + head, _resumeFirst.end()) | std::views::reverse)
             if (!isTakenBack(entry))
-                _ready.push_front(std::move(entry));
+                _ready.pushFront(std::move(entry));
         _resumeFirst.clear();
         _resumeFirstHead = 0;
     } };
@@ -520,8 +524,8 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
             //
             // Neither step allocates once warm: the callback queues into a member vector whose
             // capacity survives, and its range moves to the front of `_resumeFirst`, another,
-            // rather than into the deque, whose front insertion allocates a block on some standard
-            // libraries. Each callback owns the range from `mark`, and the previous target is
+            // rather than into the ready queue itself, which would shift everything queued behind
+            // it. Each callback owns the range from `mark`, and the previous target is
             // restored, so a callback that drives a nested drain leaves the outer one's entries
             // where they are; `cancelPending` marks an entry taken rather than erasing it, so no
             // range moves under a mark.
@@ -530,27 +534,50 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
             // the callback position already consumed, hands its whole scratch vector over by a swap
             // -- the one waiter a readiness completion queues then costs no element move, and both
             // vectors keep their capacity.
+            //
+            // And the commonest case of all -- a readiness callback that completed exactly ONE
+            // waiter, with nothing else in the callback position -- takes that waiter straight out
+            // of the scratch vector and resumes it here, once the callback's queueing target is
+            // restored: no trip through `_resumeFirst`, and the same position, since nothing runs
+            // between the callback's return and the resume.
             auto const mark = _callbackScratch.size();
-            auto* const previous = std::exchange(_queuedByCallback, &_callbackScratch);
-            auto const inPosition = detail::ScopeGuard { [this, mark, previous]() noexcept {
-                _queuedByCallback = previous;
-                if (_callbackScratch.size() == mark)
-                    return;
-                if (mark == 0 && _resumeFirstHead == _resumeFirst.size())
+            auto waiter = ReadyEntry {};
+            auto resumeWaiter = false;
+            {
+                auto* const previous = std::exchange(_queuedByCallback, &_callbackScratch);
+                auto const inPosition = detail::ScopeGuard { [this, mark, previous]() noexcept {
+                    _queuedByCallback = previous;
+                    if (_callbackScratch.size() == mark)
+                        return;
+                    if (mark == 0 && _resumeFirstHead == _resumeFirst.size())
+                    {
+                        _resumeFirst.clear();
+                        _resumeFirstHead = 0;
+                        _resumeFirst.swap(_callbackScratch);
+                        return;
+                    }
+                    auto const first = _callbackScratch.begin() + static_cast<std::ptrdiff_t>(mark);
+                    _resumeFirst.insert(_resumeFirst.begin() + static_cast<std::ptrdiff_t>(_resumeFirstHead),
+                                        std::make_move_iterator(first),
+                                        std::make_move_iterator(_callbackScratch.end()));
+                    _callbackScratch.erase(first, _callbackScratch.end());
+                } };
+                runDueCallback(callback, wake);
+                ++resumed;
+                if (resumed < bound && mark == 0 && _callbackScratch.size() == 1
+                    && _resumeFirstHead == _resumeFirst.size() && !isTakenBack(_callbackScratch.back()))
                 {
-                    _resumeFirst.clear();
-                    _resumeFirstHead = 0;
-                    _resumeFirst.swap(_callbackScratch);
-                    return;
+                    waiter = std::move(_callbackScratch.back());
+                    _callbackScratch.pop_back();
+                    resumeWaiter = true;
                 }
-                auto const first = _callbackScratch.begin() + static_cast<std::ptrdiff_t>(mark);
-                _resumeFirst.insert(_resumeFirst.begin() + static_cast<std::ptrdiff_t>(_resumeFirstHead),
-                                    std::make_move_iterator(first),
-                                    std::make_move_iterator(_callbackScratch.end()));
-                _callbackScratch.erase(first, _callbackScratch.end());
-            } };
-            runDueCallback(callback, wake);
-            ++resumed;
+            }
+            if (resumeWaiter)
+            {
+                waiter.resume();
+                ++resumed;
+                reapFinishedRoots();
+            }
             continue;
         }
 
@@ -596,9 +623,7 @@ std::optional<EventLoop::ReadyEntry> EventLoop::takeNextReady()
     }
     if (_ready.empty())
         return std::nullopt;
-    auto entry = std::optional<ReadyEntry> { std::move(_ready.front()) };
-    _ready.pop_front();
-    return entry;
+    return std::optional<ReadyEntry> { _ready.takeFront() };
 }
 
 void EventLoop::reapFinishedRoots() noexcept
@@ -699,7 +724,8 @@ std::size_t EventLoop::fireExpiredTimers()
     if (_parks.timerSlotCount() == 0)
         return 0;
     auto fired = std::size_t { 0 };
-    for (auto const park: _parks.takeExpired(_clock.now()))
+    _parks.takeExpired(_clock.now(), _expired);
+    for (auto const park: _expired)
     {
         // Two kinds of park come back from one heap, in one order: a coroutine to resume, and a
         // callback to call. Both are QUEUED here and run by the next turn's drain, which is what
@@ -707,7 +733,7 @@ std::size_t EventLoop::fireExpiredTimers()
         // rather than an artefact of which mechanism got to fire first.
         auto const* const entry = _parks.find(park);
         if (entry != nullptr && entry->onExpired != nullptr)
-            queueEntry(ReadyEntry { .parked = {}, .ownedByLoop = false, .callbackPark = park });
+            queueEntry(ReadyEntry { .parked = {}, .callbackPark = park, .ownedByLoop = false });
         else
             queueParkedWaiter(park);
         ++fired;
@@ -739,10 +765,14 @@ void EventLoop::runDueCallback(ParkId park, ParkWake wake)
     //
     // A park that is already gone is a timer cancelled between step 5 queueing it and this drain
     // reaching it -- the window `cancelTimer` documents -- and skipping it is what closes it.
-    auto const entry = _parks.take(park);
+    auto entry = _parks.take(park);
     if (!entry || entry->onExpired == nullptr)
         return;
     entry->onExpired(entry->callbackState);
+    // Kept for the next park rather than freed, as `unregisterPark` keeps one: a timer is made and
+    // fired once per deadline, and a receive deadline is one per read that waits. The spare list
+    // is not the table, so this reads nothing the callback may have changed.
+    _parks.recycle(std::move(entry));
 }
 
 void EventLoop::armHostWake()
@@ -1050,7 +1080,7 @@ bool EventLoop::cancelTimer(TimerId timer) noexcept
     // The park goes; any ReadyEntry naming it resolves to nothing when the drain reaches it. That
     // is the generation check doing the work, and it is why cancelling a timer that step 5 has
     // already queued costs no scan of the ready queue.
-    std::ignore = _parks.take(timer.park);
+    _parks.recycle(_parks.take(timer.park));
     return true;
 }
 
@@ -1066,11 +1096,11 @@ void EventLoop::resumeCompleted(std::coroutine_handle<> waiter, std::coroutine_h
     auto claim = waiter ? async::detail::CountedClaim::on(unownedRoot) : async::detail::CountedClaim {};
     auto const owned = static_cast<bool>(claim);
     queueSoon(ReadyEntry { .parked = async::detail::Parked { async::ParkedWork { .resume = waiter } },
-                           .ownedByLoop = owned,
-                           .claim = std::move(claim) });
+                           .claim = std::move(claim),
+                           .ownedByLoop = owned });
 }
 
-void EventLoop::queueSoon(ReadyEntry entry)
+void EventLoop::queueSoon(ReadyEntry&& entry)
 {
     // The same predicate the turn and the destructor use: this loop's own thread, or nobody
     // driving it. Anywhere else, this writes scheduler state beside a turn that is reading it.
@@ -1099,16 +1129,19 @@ EventLoop::ReadyEntry EventLoop::entryFor(async::ParkedWork work, ParkId sourceP
 {
     auto const owned = static_cast<bool>(work.abandon);
     return ReadyEntry { .parked = async::detail::Parked { std::move(work) },
-                        .ownedByLoop = owned,
-                        .sourcePark = sourcePark };
+                        .sourcePark = sourcePark,
+                        .ownedByLoop = owned };
 }
 
-void EventLoop::queueEntry(ReadyEntry entry)
+void EventLoop::queueEntry(ReadyEntry&& entry)
 {
+    // Every entry of every queue a completion passes through has this size, so it is held: the
+    // claim a completion carries once took it from 56 bytes to 64 for want of member order.
+    static_assert(sizeof(void*) != 8 || sizeof(ReadyEntry) <= 56, "EventLoop::ReadyEntry grew past 56 bytes");
     if (_queuedByCallback != nullptr)
         _queuedByCallback->push_back(std::move(entry));
     else
-        _ready.push_back(std::move(entry));
+        _ready.pushBack(std::move(entry));
 }
 
 ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
@@ -1196,6 +1229,7 @@ ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
         park->attached = true;
     }
 
+    auto* const filed = park.get();
     auto const id = _parks.add(std::move(park));
 
     // The slot is taken once the park has its id. One read operation and one write operation per
@@ -1212,6 +1246,7 @@ ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
         contract::claimReadSlot(displaced, entry.handle);
         _parks.fileByHandle(watch->reader);
         watch->reader = id;
+        watch->readerPark = filed;
     }
     if (watch != nullptr && hasInterest(entry.interest, Interest::Write))
     {
@@ -1219,6 +1254,7 @@ ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
         contract::claimWriteSlot(displaced, entry.handle);
         _parks.fileByHandle(watch->writer);
         watch->writer = id;
+        watch->writerPark = filed;
     }
 
     // **A park filed outside a turn has to ask for the turn that will reach it**, and on a
@@ -1365,7 +1401,7 @@ void EventLoop::resolveCancel(ParkId park)
 void EventLoop::onParkReady(ReadinessHandler& handler) noexcept
 {
     auto* const park = static_cast<detail::Park*>(handler.owner);
-    park->loop->queueParkedWaiter(park->id);
+    park->loop->queueParkedWaiter(*park, ParkWake::Ready);
 }
 
 void EventLoop::onWatchReadable(ReadinessHandler& handler) noexcept
@@ -1373,10 +1409,10 @@ void EventLoop::onWatchReadable(ReadinessHandler& handler) noexcept
     auto* const watch = static_cast<detail::HandleWatch*>(handler.owner);
     auto* const loop = watch->loop;
     if (watch->reader)
-        loop->queueParkedWaiter(watch->reader);
+        loop->queueParkedWaiter(*watch->readerPark, ParkWake::Ready);
     // The writer too, for the starvation reason the declaration gives.
     if (watch->writer)
-        loop->queueParkedWaiter(watch->writer);
+        loop->queueParkedWaiter(*watch->writerPark, ParkWake::Ready);
     if (!watch->reader && !watch->narrowQueued)
     {
         watch->narrowQueued = true;
@@ -1389,7 +1425,7 @@ void EventLoop::onWatchWritable(ReadinessHandler& handler) noexcept
     auto* const watch = static_cast<detail::HandleWatch*>(handler.owner);
     auto* const loop = watch->loop;
     if (watch->writer)
-        loop->queueParkedWaiter(watch->writer);
+        loop->queueParkedWaiter(*watch->writerPark, ParkWake::Ready);
     else if (!watch->narrowQueued)
     {
         watch->narrowQueued = true;
@@ -1451,11 +1487,13 @@ Interest EventLoop::releaseWatchSlot(detail::Park& park) noexcept
     if (watch.reader == park.id)
     {
         watch.reader = ParkId::invalid();
+        watch.readerPark = nullptr;
         released = released | Interest::Read;
     }
     if (watch.writer == park.id)
     {
         watch.writer = ParkId::invalid();
+        watch.writerPark = nullptr;
         released = released | Interest::Write;
     }
     return released;
@@ -1510,12 +1548,23 @@ void EventLoop::queueParkedWaiter(ParkId park)
 
 void EventLoop::queueParkedWaiter(ParkId park, ParkWake wake)
 {
+    // Not filed any more: a readiness report that raced the park's retirement, or a stale id.
+    if (auto* const filed = _parks.find(park))
+        queueParkedWaiter(*filed, wake);
+}
+
+void EventLoop::queueParkedWaiter(detail::Park& filed, ParkWake wake)
+{
+    assert(_parks.find(filed.id) == &filed
+           && "EventLoop::queueParkedWaiter handed a park the table does not hold: a watch slot "
+              "outlived the park it names");
+    auto const park = filed.id;
     // A FRAMELESS readiness park is queued as a callback rather than as a resumption, and -- unlike
     // a timer -- it is NOT taken out of the table: its owner runs a retry loop across many wakes
     // and only the owner retires it. Queued rather than called here for the reason a due timer is:
     // this is reached from inside a backend dispatch, where Rule 1 permits enqueueing and nothing
     // else.
-    if (auto* const readiness = _parks.find(park); readiness != nullptr && readiness->onReady != nullptr)
+    if (filed.onReady != nullptr)
     {
         // A frameless park has no waiter for `notifyHandleClosing`'s mark to reach, so it is
         // consulted HERE instead of in an `await_resume`. Consuming it is safe for the same reason
@@ -1533,11 +1582,11 @@ void EventLoop::queueParkedWaiter(ParkId park, ParkWake wake)
         // on one loop, at the default bound of 64, cost some 1,460 dispatches per round trip. A copy
         // for the SAME reason answers nothing the queued entry will not; a different reason -- a
         // cancel or an abandonment behind a readiness -- is still queued, as it always was.
-        if (readiness->readinessQueued && readiness->queuedWake == closing)
+        if (filed.readinessQueued && filed.queuedWake == closing)
             return;
-        readiness->readinessQueued = true;
-        readiness->queuedWake = closing;
-        queueEntry(ReadyEntry { .parked = {}, .ownedByLoop = false, .callbackPark = park, .wake = closing });
+        filed.readinessQueued = true;
+        filed.queuedWake = closing;
+        queueEntry(ReadyEntry { .parked = {}, .callbackPark = park, .ownedByLoop = false, .wake = closing });
         return;
     }
 

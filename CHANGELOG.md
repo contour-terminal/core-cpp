@@ -24,9 +24,21 @@ workflow refuses one without a section here.
   the ordering (a waiter resumes in its callback's position), teardown (a detached chain is freed,
   a borrowed one resumed) and take-back paths are the same, and each is a case in
   `CompletionClaim_test.cpp`.
+  - A readiness callback that completes one waiter, the common case, has that waiter resumed by
+    the drain straight after it returns, instead of through the callback position's queue; a
+    readiness report reaches its park through the handle's watch instead of probing the park
+    table; and `EventLoop`'s queue entry is back to 56 bytes from 64.
   - `resumeSoonOn(EventLoop&, std::coroutine_handle<>, ...)`, `ResultAwaitable`'s out-of-line hook
     in `<core/net/IoAwaitable.hpp>`, takes the chain's unowned root instead of a work-item factory.
     No consumer calls it; a transport completes an operation through `ResultAwaitable::complete`.
+- **A loop in its steady state allocates nothing per completion or per timer firing.** Measured by
+  fastcached as allocations per request, and now asserted over 256 turns in
+  `CallbackAllocation_test.cpp`. Four allocations are gone: the ready queue is a ring that keeps its
+  capacity (`detail::RingQueue`) rather than a `std::deque`, which allocated a node every few
+  entries of a FIFO that never grows; a parked operation no longer spells its never-completed
+  answer into a heap string when it is armed, only when that answer is read; a fired or cancelled
+  timer's park is recycled like every other; and a turn collects its due deadlines into a vector
+  it keeps.
 
 ### Fixed
 
