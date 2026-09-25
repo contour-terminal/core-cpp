@@ -15,6 +15,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <coroutine>
 #include <cstddef>
@@ -1176,6 +1177,47 @@ TEST_CASE("An around-task hook runs around every task, including a resumption th
     CHECK(hook.calls == 4);
 }
 
+TEST_CASE("seal() stops admission and keeps running what is queued", "[Strand][seal]")
+{
+    // The teardown a consumer needs: seal, drain, close -- with nothing arriving in between being
+    // dropped unannounced. After seal() the try members hand work back; what was queued runs.
+    auto base = ManualExecutor {};
+    auto strand = Strand { base };
+    auto order = std::vector<int> {};
+    auto seen = std::vector<Sighting> {};
+
+    strand.post([&order] { order.push_back(1); });
+    auto queued = lookOnce(&strand, &seen);
+    strand.submit(queued.handle());
+    strand.seal();
+    strand.seal(); // idempotent
+    CHECK_FALSE(strand.idle());
+
+    auto refusedCall = OwningCall { .payload = std::make_unique<int>(2), .out = &order };
+    CHECK_FALSE(strand.tryPost(refusedCall));
+    CHECK(refusedCall.payload != nullptr);
+    auto refused = lookOnce(&strand, &seen);
+    auto work = ParkedWork { .resume = refused.handle() };
+    CHECK_FALSE(strand.trySubmit(work));
+    CHECK(work.resume == refused.handle());
+    CHECK_FALSE(strand.trySubmit(refused.handle()));
+    // post and submit drop, as a closed strand's do.
+    strand.post([&order] { order.push_back(3); });
+    strand.submit(refused.handle());
+
+    // A host with one thread pumps its base until the strand is idle: sealed and drained.
+    while (!strand.idle() && base.runOne())
+    {
+    }
+    CHECK(strand.idle());
+    CHECK(order == std::vector { 1 });
+    CHECK(queued.done());
+    CHECK_FALSE(refused.done());
+    CHECK(base.pending() == 0);
+    strand.close();
+    CHECK(strand.idle());
+}
+
 #if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
 
 namespace
@@ -1512,6 +1554,67 @@ TEST_CASE("A strand closed while a refused hand-off is still inside the base's s
     CHECK(refused.load() == 1);
     CHECK(arrived.load() == 0);
     CHECK(destroyed == 1);
+}
+
+namespace
+{
+
+/// Increments @p ran once resumed; for a submitter that resumes it itself where it is refused.
+Task<void> countWhenRun(std::atomic<int>* ran)
+{
+    ran->fetch_add(1);
+    co_return;
+}
+
+} // namespace
+
+TEST_CASE("Work offered while another thread seals a strand either runs or is handed back, never dropped",
+          "[Strand][seal][threads]")
+{
+    // Producers offer callables and coroutines through the try members, and run what is refused
+    // themselves; a third thread seals the strand halfway. Every piece of work must have run exactly
+    // once, on the strand or on its producer: a piece accepted and then dropped is the window seal()
+    // exists to close.
+    static constexpr auto PerProducer = 4000;
+    auto pool = core::async::ThreadPoolExecutor { 4 };
+    auto strand = Strand { pool };
+    auto ranOnStrand = std::atomic<int> { 0 };
+    auto ranByProducer = std::atomic<int> { 0 };
+    auto producersDone = std::atomic<int> { 0 };
+    auto offered = std::atomic<int> { 0 };
+    auto tasks = std::array<std::vector<Task<void>>, 2> {};
+    for (auto& perProducer: tasks)
+    {
+        perProducer.reserve(PerProducer);
+        for ([[maybe_unused]] auto const index: std::views::iota(0, PerProducer))
+            perProducer.push_back(countWhenRun(&ranOnStrand));
+    }
+
+    auto producer = [&](std::size_t which) {
+        for (auto const index: std::views::iota(0, PerProducer))
+        {
+            auto call = [&ranOnStrand] { ranOnStrand.fetch_add(1); };
+            if (!strand.tryPost(call))
+                ranByProducer.fetch_add(1);
+            auto const handle = tasks.at(which).at(static_cast<std::size_t>(index)).handle();
+            if (!strand.trySubmit(handle))
+                handle.resume(); // counts into ranOnStrand too: it is the same body
+            offered.fetch_add(2);
+        }
+        producersDone.fetch_add(1);
+    };
+    auto first = std::thread { producer, std::size_t { 0 } };
+    auto second = std::thread { producer, std::size_t { 1 } };
+    CHECK(waitUntil([&offered] { return offered.load() >= PerProducer; }));
+    strand.seal();
+    CHECK(waitUntil([&producersDone] { return producersDone.load() == 2; }));
+    first.join();
+    second.join();
+    CHECK(waitUntil([&strand] { return strand.idle(); }));
+
+    CHECK(ranOnStrand.load() + ranByProducer.load() == 4 * PerProducer);
+    for (auto const& perProducer: tasks)
+        CHECK(std::ranges::all_of(perProducer, [](Task<void> const& task) { return task.done(); }));
 }
 
 #endif

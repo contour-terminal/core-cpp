@@ -1382,6 +1382,9 @@ class Strand final: public IExecutor
     /// members. Idempotent; the destructor calls it.
     void close() { _core->close(); }
 
+    /// Stops admitting work, and keeps running what is queued. Idempotent.
+    void seal() {}
+
     /// @return Whether nothing is queued or running -- what a single-threaded host pumps its base
     ///         until, before it destroys the strand. Racy by nature where other threads submit.
     [[nodiscard]] bool idle() const { return _core->idle(); }

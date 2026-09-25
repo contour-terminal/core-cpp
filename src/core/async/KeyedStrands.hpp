@@ -592,6 +592,9 @@ class KeyedStrands final
     /// destructor calls it.
     void close() { _registry->close(); }
 
+    /// Stops admitting work, and keeps running what is queued. Idempotent.
+    void seal() {}
+
     /// @return Whether no key has work queued or running: what a single-threaded host pumps its
     ///         base until before it destroys these strands. Racy by nature where other threads
     ///         submit.

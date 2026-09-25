@@ -701,6 +701,48 @@ TEST_CASE("A keyed around-task hook is given the key, around every resumption on
     CHECK(keyedSession == 0);
 }
 
+TEST_CASE("KeyedStrands::seal() stops admission for every key, a new one included, and keeps running what "
+          "is queued",
+          "[KeyedStrands][seal]")
+{
+    auto base = ManualExecutor {};
+    auto strands = Strands { base };
+    auto order = std::vector<int> {};
+
+    strands.post(1, [&order] { order.push_back(1); });
+    auto queued = append(&strands, 2, &order, 2);
+    queued.handle().resume(); // queued on key 2
+    strands.seal();
+    strands.seal(); // idempotent
+    CHECK(strands.size() == 2);
+
+    auto refusedCall = OwningCall { .payload = std::make_unique<int>(3), .out = &order };
+    CHECK_FALSE(strands.tryPost(1, refusedCall)); // a key with queued work
+    CHECK_FALSE(strands.tryPost(7, refusedCall)); // a key with none: no strand is made for it
+    CHECK(refusedCall.payload != nullptr);
+    auto refused = append(&strands, 7, &order, 4);
+    auto work = ParkedWork { .resume = refused.handle() };
+    CHECK_FALSE(strands.trySubmit(7, work));
+    CHECK(work.resume == refused.handle());
+    strands.post(1, [&order] { order.push_back(5); }); // dropped
+    CHECK(strands.size() == 2);
+
+    // Single-threaded teardown: pump the base until idle -- sealed and drained.
+    while (!strands.idle() && base.runOne())
+    {
+    }
+    CHECK(strands.idle());
+    CHECK(strands.size() == 0);
+    std::ranges::sort(order);
+    CHECK(order == std::vector { 1, 2 });
+    CHECK(queued.done());
+    CHECK_FALSE(refused.done());
+    // A key activated after the drain is refused too: the seal holds for every key, for good.
+    CHECK_FALSE(strands.tryPost(8, refusedCall));
+    CHECK(strands.size() == 0);
+    strands.close();
+}
+
 #if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
 
 namespace
@@ -923,6 +965,39 @@ TEST_CASE("waitIdle returns after a key's first hand-off was refused", "[KeyedSt
     REQUIRE(strands.size() == 0); // or waitIdle below would never return
     CHECK(waitIdleWithin(strands));
     CHECK(order.empty());
+}
+
+TEST_CASE("Work offered to many keys while another thread seals them either runs or is handed back",
+          "[KeyedStrands][seal][threads]")
+{
+    static constexpr auto PerProducer = 4000;
+    auto pool = core::async::ThreadPoolExecutor { 4 };
+    auto strands = Strands { pool };
+    auto ranOnStrand = std::atomic<int> { 0 };
+    auto ranByProducer = std::atomic<int> { 0 };
+    auto producersDone = std::atomic<int> { 0 };
+    auto offered = std::atomic<int> { 0 };
+
+    auto producer = [&](int firstKey) {
+        for (auto const index: std::views::iota(0, PerProducer))
+        {
+            auto call = [&ranOnStrand] { ranOnStrand.fetch_add(1); };
+            if (!strands.tryPost(firstKey + (index % 8), call))
+                ranByProducer.fetch_add(1);
+            offered.fetch_add(1);
+        }
+        producersDone.fetch_add(1);
+    };
+    auto first = std::thread { producer, 0 };
+    auto second = std::thread { producer, 4 };
+    CHECK(waitUntil([&offered] { return offered.load() >= PerProducer; }));
+    strands.seal();
+    CHECK(waitUntil([&producersDone] { return producersDone.load() == 2; }));
+    first.join();
+    second.join();
+    CHECK(waitIdleWithin(strands)); // sealed and drained
+    CHECK(strands.size() == 0);
+    CHECK(ranOnStrand.load() + ranByProducer.load() == 2 * PerProducer);
 }
 
 #endif
