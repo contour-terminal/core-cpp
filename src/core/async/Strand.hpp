@@ -906,7 +906,7 @@ namespace detail
 
         /// Runs one task, through the around-task hook if there is one.
         /// @param entry The task.
-        void runTask(StrandTask& entry)
+        void runTask(StrandTask& entry) const
         {
 #if defined(_MSC_VER) && !defined(__clang__)
             // A compiler workaround, not platform logic: under `cl` an exception thrown out of a
@@ -929,7 +929,7 @@ namespace detail
         }
 
         /// @copydoc runTask
-        void runTaskAround(StrandTask& entry)
+        void runTaskAround(StrandTask& entry) const
         {
             auto const& around = _options.aroundTask;
             if (!around)

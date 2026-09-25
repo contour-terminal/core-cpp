@@ -17,8 +17,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <algorithm>
 #include <array>
+#include <cassert>
 #include <coroutine>
 #include <cstddef>
 #include <cstdlib>
@@ -63,7 +63,11 @@ class FixedExecutor final: public core::async::IExecutor
   public:
     using IExecutor::submit;
 
-    void submit(std::coroutine_handle<> handle) override { _queued.at(_count++) = handle; }
+    void submit(std::coroutine_handle<> handle) override
+    {
+        assert(_tail - _head < _queued.size());
+        _queued.at(_tail++ % _queued.size()) = handle;
+    }
 
     void submit(core::async::ParkedWork work) override
     {
@@ -74,18 +78,14 @@ class FixedExecutor final: public core::async::IExecutor
     /// Resumes everything queued, including what that queues.
     void drain()
     {
-        while (_count > 0)
-        {
-            auto const next = _queued.front();
-            std::shift_left(_queued.begin(), _queued.end(), 1);
-            --_count;
-            next.resume();
-        }
+        while (_head != _tail)
+            _queued.at(_head++ % _queued.size()).resume();
     }
 
   private:
     std::array<std::coroutine_handle<>, 8> _queued {};
-    std::size_t _count { 0 };
+    std::size_t _head { 0 };
+    std::size_t _tail { 0 };
 };
 
 /// Records that it ran, then ends.

@@ -960,7 +960,7 @@ thread_local int ambientSession = 0;
 /// An around-task hook that installs @c session for the length of every task, and counts them.
 struct SessionHook
 {
-    int session;
+    int session { 0 };
     int calls { 0 };
 
     void operator()(core::async::RunTask run)
