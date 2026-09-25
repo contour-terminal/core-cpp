@@ -23,6 +23,11 @@ workflow refuses one without a section here.
     `co_await ResumeOn { queueExecutor }`. An `IExecutor` of your own that resumes coroutines
     should state itself with `core::async::ExecutorScope` around the resumption (as
     `testing::ManualExecutor` does), or its coroutines keep the old behaviour.
+  - *Consumers*: fastcached uses `AsyncQueue` in five files (`RaftPeerTransport.hpp` and `.cpp`,
+    and fastcache-cli's `LiveEventSource.cpp`, `LiveSourceRig.hpp` and `ScriptedStopSignal.hpp`)
+    and is unaffected: every queue there is built over the reactor, and every `pop()` parks either
+    on that reactor or outside any executor, so the executor it comes back to is the one it came back
+    to before. morph's handlers, which parked on a strand, come back to it now, which is the fix.
 
 ### Added
 
@@ -32,16 +37,26 @@ workflow refuses one without a section here.
   the calling thread is inside one of its tasks. One coroutine pump per strand, queued on the base
   once however many tasks arrive while it is busy, runs at most `StrandOptions::batch` (32) tasks
   per turn before it hands the base back. A task that throws out of `resume()` propagates to
-  whoever resumed the pump and does not wedge the strand or lose the tasks behind it. Destroying a
-  strand drops what is queued -- a chain rooted in a `DetachedTask` is freed, a `Task`-owned
-  coroutine is left to its owner -- and waits for a task running on another thread, but not for
-  the task it is called from: a task may release the last reference to the strand's owner. Written after
-  morph's `StrandExecutor`, which consumers should replace with it.
+  whoever resumed the pump and does not wedge the strand or lose the tasks behind it -- **except
+  under MSVC's `cl`, where it ends the process with a message**: an exception crossing the strand's
+  coroutine frames was measured corrupting the thread's executor scopes on `cl-release`
+  (`core-cpp.strand-throw-canary`). A base whose `submit` throws, and an allocation that fails, leave
+  the strand as it was: `submit` throws with nothing queued. Destroying a strand drops what is
+  queued -- a chain rooted in a `DetachedTask` is freed, a `Task`-owned coroutine is left to its
+  owner -- and waits for a task running on another thread, but not for the task it is called
+  from: a task may release the last reference to the strand's owner. The strand's state outlives
+  it, so a coroutine that parked on it and is handed back later (an `AsyncQueue` push after the
+  strand died) is dropped the same way rather than reaching freed storage; inside a task,
+  `currentExecutor()` is that state, not the `Strand`'s address -- ask `runningHere()`. The base
+  must outlive the strand and run what it queued; an `EventLoop` destroyed with the strand's pump
+  still in its inbound queue drops it, leaking the strand's state. Written after morph's
+  `StrandExecutor`, which consumers should replace with it.
 - **`core::async::KeyedStrands<Key, Hash, KeyEqual>`** (`<core/async/KeyedStrands.hpp>`): one
   strand per key over a shared base, made when a key gets work and reclaimed when it runs out.
   `submit(key, ...)`, `co_await strands.resumeOn(key)`, `runningHere(key)`, `runningAnyHere()`,
   `size()`, and `waitIdle()`, which blocks until no key has work, asserts when called from one of
-  its own tasks, and is declared only where threads exist. A coroutine that parked while its key's
+  its own tasks, and is declared only where threads exist. Destroying it from one of its own tasks
+  does not wait for that task. A coroutine that parked while its key's
   strand was reclaimed comes back to the key, never to a second strand beside it.
 - **The current-executor context** (`<core/async/ExecutorContext.hpp>`): `ExecutorScope` marks the
   calling thread as running a task of an executor, nests, and restores on every exit;
@@ -53,7 +68,7 @@ workflow refuses one without a section here.
   turn's step 2. Measured on the drain path against 0.3.0 (gcc-release, one
   pinned core, 4M resumptions, best of 35): 38.9 against 38.2 ns per resumption with one
   resumption per turn, 19.4 against 19.7 with a turn of 64 -- inside the run-to-run spread of
-  38-48 ns.
+  38-48 ns. The program is `tests/bench/ExecutorContextBench.cpp` (`core-cpp-bench-executor-context`).
   - `core::net`'s socket operations and timers do not read it and keep resuming on their
     `EventLoop` (G2); a strand-bound coroutine hops back with `co_await ResumeOn { strand }`.
 - **`core::async::testing::ManualExecutor`** (`<core/async/testing/ManualExecutor.hpp>`): an

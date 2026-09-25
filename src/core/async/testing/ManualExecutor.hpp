@@ -28,6 +28,10 @@ namespace core::async::testing
 ///
 /// Work still queued when it is destroyed is dropped, not resumed: what nothing else owns (a chain
 /// rooted in a `DetachedTask`) is freed, and what a `Task` owns is left to it.
+///
+/// The namespace is `core::async::testing`, the directory's, as `core::net::testing` is net's:
+/// inside `namespace core::async` an unqualified `testing::` names this one and not the `core::testing`
+/// module, so code there that means the module spells it `core::testing::`.
 class ManualExecutor final: public IExecutor
 {
   public:

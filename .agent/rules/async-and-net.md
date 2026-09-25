@@ -606,10 +606,19 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   fastcached's parity path. Do not move it into the drain loop.
 - **Never hold an `ExecutorScope` across a `co_await`**, for the profiling-zone reason: the
   destructor would restore another stack's scope. It asserts that it is the innermost.
-- **Across a suspension hold a `ResumeTarget`, never `currentExecutor()`'s pointer.** A
-  `KeyedStrands` key's strand is reclaimed when it runs dry; the target keeps it alive and a retired
-  strand hands work back to the registry, so the coroutine comes back to the KEY. A raw pointer is a
-  use-after-free the first time the key goes idle while the coroutine waits.
+- **Across a suspension hold a `ResumeTarget`, never `currentExecutor()`'s pointer, and a strand's
+  scope always carries its anchor.** A `KeyedStrands` key's strand is reclaimed when it runs dry,
+  and a plain `Strand` is destroyed before the queue in an owner `{ AsyncQueue q; Strand s; }`: the
+  target keeps the strand's shared state alive, a closed state drops what it is given, and a retired
+  keyed one hands work back to the registry, so the coroutine comes back to the KEY. The executor a
+  strand task sees as current is that state, never the owner object. A scope without the anchor was
+  review round 1's HIGH: a push after the strand died submitted to freed storage.
+- **Nothing a strand publishes may be followed by a step that can throw.** The pump's frame is made,
+  then the entry queued, and only then is "scheduled" published; a base that refuses the pump has it
+  unscheduled and the work taken back out, or between turns keeps the thread; a thrown submit
+  disarms its claim, because the caller resumes the coroutine with the exception. Published first,
+  a throw left a pump "scheduled" that nothing would run -- every later submit queued behind it and
+  `~Strand` waited for ever. `async-alloc` fails each allocation in turn.
 - **A strand's pump decides "idle" in its own `await_suspend`, under the strand's lock**, so a
   submit either sees it running and only queues, or sees it suspended and may queue it on the base.
   Deciding before suspending lets a submit on another thread resume a pump that has not suspended.

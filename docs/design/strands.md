@@ -56,6 +56,10 @@ drain slot for ever, and the loop's own `dispatchBatch` would bound nothing.
 - **Submitting each task to the base directly** and serialising with a flag cannot work: the
   strand never learns when a task *suspends*, because control returns to the base, not to the
   strand. A pump is the frame that gets control back.
+- **Publishing before the step that can throw.** The pump's frame, the queue's room and the base's
+  `submit` can each throw, and each comes before the phase it would change is published, or is
+  rolled back: a strand left "scheduled" with nothing queued anywhere accepted every later submit
+  and ran none of them. `StrandAllocation_test.cpp` fails every allocation of a first submit in turn.
 - **Swallowing what a task throws** (morph logged it): `core::async` has no logger and depends on
   nothing, and a strand that hid an exception would make a bug quiet. What a task throws out of
   `resume()` -- which no coroutine type of this module does -- propagates to whoever resumed the

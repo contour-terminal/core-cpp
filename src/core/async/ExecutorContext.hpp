@@ -57,6 +57,10 @@ namespace detail
 /// function that resumes coroutines, never in a coroutine body. The destructor asserts it.
 ///
 /// Costs two thread-local stores and no allocation, whichever constructor is used.
+///
+/// The slot is an `inline` thread-local, so there is one per linked image: a program that compiles
+/// these headers into two shared libraries with hidden visibility has two chains, and a scope stated
+/// in one is not seen by an awaitable compiled into the other. core-cpp's own targets are static.
 class ExecutorScope final
 {
   public:
