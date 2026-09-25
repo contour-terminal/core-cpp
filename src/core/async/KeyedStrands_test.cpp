@@ -981,13 +981,14 @@ TEST_CASE("Work offered to many keys while another thread seals them either runs
 
     auto producer = [&](int firstKey) {
         auto refused = 0;
-        for (auto index = 0; refused < RefusalsEach && std::chrono::steady_clock::now() < deadline; ++index)
+        auto index = 0;
+        while (refused < RefusalsEach && std::chrono::steady_clock::now() < deadline)
         {
             auto call = [&ran] {
                 ran.fetch_add(1);
             };
             // Keys come and go: some have a strand when the seal lands, some would need a new one.
-            if (!strands.tryPost(firstKey + (index % 16), call))
+            if (!strands.tryPost(firstKey + (index++ % 16), call))
             {
                 ++refused;
                 call();
