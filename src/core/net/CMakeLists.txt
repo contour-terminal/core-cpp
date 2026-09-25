@@ -64,6 +64,7 @@ set(_coreCppNetSubsetTests
     HostDrivenLoop_test.cpp
     InterruptibleSleep_test.cpp
     IoBackend_test.cpp
+    ReadinessQueue_test.cpp
     SleepUntil_test.cpp
     Timers_test.cpp
     detail/ParkTable_test.cpp

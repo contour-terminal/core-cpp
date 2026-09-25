@@ -66,7 +66,8 @@ its turn fails a row with its name on it.
    requests by live `ParkId`.
 2. Drain the ready queue — **this is the one place a coroutine resumes, and the one place a timer
    callback is called**, and it is bounded by `EventLoopOptions::dispatchBatch` so work that
-   re-queues itself cannot starve the rest.
+   re-queues itself cannot starve the rest. A readiness callback the bound leaves queued is not
+   queued a second time by the next wait's report of the same handle.
 3. Refresh the clock, then compute how long to wait.
 4. Wait on the backend, which dispatches readiness.
 5. Refresh the clock, then fire the expired deadlines, soonest first and FIFO on a tie.

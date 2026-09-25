@@ -145,6 +145,8 @@ TEST_CASE("ParkTable hands a recycled park back reset", "[net][parktable]")
     };
     park->callbackState = &table;
     park->ownedByLoop = true;
+    park->readinessQueued = true;
+    park->queuedWake = ParkWake::Abandoned;
     park->deadline = clock.now() + std::chrono::seconds { 1 };
     auto const id = table.add(std::move(park));
     auto taken = table.take(id);
@@ -170,6 +172,8 @@ TEST_CASE("ParkTable hands a recycled park back reset", "[net][parktable]")
     CHECK(again->onReady == nullptr);
     CHECK(again->callbackState == nullptr);
     CHECK(!again->ownedByLoop);
+    CHECK(!again->readinessQueued);
+    CHECK(again->queuedWake == ParkWake::Ready);
     CHECK(!again->deadline.has_value());
     CHECK(again->sequence == 0);
 }

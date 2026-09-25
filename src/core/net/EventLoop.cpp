@@ -710,11 +710,12 @@ void EventLoop::runDueCallback(ParkId park, ParkWake wake)
     // retire an operation after one partial transfer. Only the owner retires it, through
     // `unregisterPark`. Read before the call rather than after, because the callback is allowed to
     // do exactly that and the table must not be touched afterwards.
-    if (auto const* const readiness = _parks.find(park);
-        readiness != nullptr && readiness->onReady != nullptr)
+    if (auto* const readiness = _parks.find(park); readiness != nullptr && readiness->onReady != nullptr)
     {
         auto* const onReady = readiness->onReady;
         auto* const state = readiness->callbackState;
+        // Before the call: a report arriving from here on is one this call has not answered.
+        readiness->readinessQueued = false;
         onReady(state, wake);
         return;
     }
@@ -1479,8 +1480,7 @@ void EventLoop::queueParkedWaiter(ParkId park, ParkWake wake)
     // and only the owner retires it. Queued rather than called here for the reason a due timer is:
     // this is reached from inside a backend dispatch, where Rule 1 permits enqueueing and nothing
     // else.
-    if (auto const* const readiness = _parks.find(park);
-        readiness != nullptr && readiness->onReady != nullptr)
+    if (auto* const readiness = _parks.find(park); readiness != nullptr && readiness->onReady != nullptr)
     {
         // A frameless park has no waiter for `notifyHandleClosing`'s mark to reach, so it is
         // consulted HERE instead of in an `await_resume`. Consuming it is safe for the same reason
@@ -1488,6 +1488,20 @@ void EventLoop::queueParkedWaiter(ParkId park, ParkWake wake)
         // mark a COROUTINE park's awaiter is owed, because this branch is only reached for a park
         // that has no coroutine at all.
         auto const closing = wakeReasonOf(park) == FdWakeReason::Abandoned ? ParkWake::Abandoned : wake;
+
+        // **Once per park, not once per report.** A coroutine park is queued once by construction
+        // -- queueing takes its waiter -- but a frameless park stays filed, and a level-triggered
+        // backend reports its handle on every wait until somebody reads it, which nobody does while
+        // the callback is still waiting in the queue: behind the drain bound, for one. Each report
+        // queued the callback again, each copy spent a slot of the bound doing nothing, and the
+        // copies crowded out the very work that would consume the readiness: 64 busy connections
+        // on one loop, at the default bound of 64, cost some 1,460 dispatches per round trip. A copy
+        // for the SAME reason answers nothing the queued entry will not; a different reason -- a
+        // cancel or an abandonment behind a readiness -- is still queued, as it always was.
+        if (readiness->readinessQueued && readiness->queuedWake == closing)
+            return;
+        readiness->readinessQueued = true;
+        readiness->queuedWake = closing;
         queueEntry(ReadyEntry { .parked = {}, .ownedByLoop = false, .callbackPark = park, .wake = closing });
         return;
     }

@@ -336,6 +336,12 @@ namespace detail
         /// nothing can ask it. See @c EventLoop::unparkEverything.
         bool ownedByLoop = false;
 
+        /// Whether the ready queue holds an entry that will run @c onReady, and for which reason:
+        /// a frameless readiness park is queued ONCE, however many waits report its handle before
+        /// the drain reaches it. See @c EventLoop::queueParkedWaiter.
+        bool readinessQueued = false;
+        ParkWake queuedWake = ParkWake::Ready; ///< The reason the queued entry carries.
+
         std::optional<platform::SteadyTimePoint> deadline; ///< Set while this park waits on one.
         std::uint64_t sequence = 0;                        ///< Tie-break so equal deadlines fire FIFO.
     };
@@ -567,6 +573,8 @@ namespace detail
             park->onReady = nullptr;
             park->callbackState = nullptr;
             park->ownedByLoop = false;
+            park->readinessQueued = false;
+            park->queuedWake = ParkWake::Ready;
             park->deadline.reset();
             park->sequence = 0;
             _spare.push_back(std::move(park));

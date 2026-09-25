@@ -94,6 +94,19 @@ what follows is what a change to it must not break.
   otherwise starve steps 4 and 5 entirely. Nothing is dropped: what the bound leaves is what the
   next turn takes, and step 3 answers a timeout of zero while the queue is non-empty, so a full
   ready queue is a poll rather than a block.
+- **What the bound leaves must not be queued again by the wait it made room for.** A frameless
+  readiness park stays filed across its wakes, and a level-triggered backend reports its handle on
+  every wait until somebody reads it -- which nobody does while the owner's callback waits behind
+  the bound. Each report queued the callback again, each copy spent a slot of the bound doing
+  nothing, and the copies crowded out the work that would have consumed the readiness. Measured on
+  0.3.0 with 64 socket pairs ping-ponging on one loop at the default bound of 64: 47,424 round
+  trips in 10 s, at about 1,460 dispatches and as many drain slots each; 32 pairs, which fit the
+  bound, took 0.28 s for 64,000. So `queueParkedWaiter` queues a frameless park ONCE per reason
+  (`Park::readinessQueued`, cleared by `runDueCallback` before the call): 64 pairs then take
+  0.65 s for 128,000, four drain slots per round trip, which is the floor. A cancel or an
+  abandonment behind a queued readiness is still queued, being a different answer.
+  `ReadinessQueue_test.cpp`'s *A frameless readiness park is queued once however many waits
+  report it first* holds it with a bound of one and a scripted backend.
 - **The wait is skipped when nothing could come back from it.** A loop with no park and no closed
   handle has nothing the backend can report. `run()` is the exception, and it is the whole of what
   `IdlePolicy::Block` means: a loop that owns its thread and is idle BLOCKS, because another

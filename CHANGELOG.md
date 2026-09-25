@@ -9,6 +9,18 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A loop with more ready connections than its drain bound no longer multiplies readiness
+  callbacks.** A frameless readiness park -- every parked socket operation -- stays filed across its
+  wakes, and a level-triggered backend reports its handle on every wait until it is read, which it
+  was not while the owner's callback waited behind `EventLoopOptions::dispatchBatch`. Each report
+  queued the callback again, and the copies took the bound's slots doing nothing: 64 socket pairs
+  ping-ponging on one loop at the default bound of 64 made 47,424 round trips in 10 s, at about
+  1,460 dispatches each, where 32 pairs made 64,000 in 0.28 s. A park is now queued once per reason
+  (a cancel or an abandonment behind a queued readiness still queues), and 64 pairs make 128,000
+  round trips in 0.65 s.
+
 ## [0.3.0] - 2026-09-24
 
 ### Breaking
