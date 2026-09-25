@@ -701,8 +701,8 @@ TEST_CASE("A keyed around-task hook is given the key, around every resumption on
     CHECK(keyedSession == 0);
 }
 
-TEST_CASE("KeyedStrands::seal() stops admission for every key, a new one included, and keeps running what "
-          "is queued",
+TEST_CASE("KeyedStrands::seal() closes the offer door for every key, and runs what is queued and what "
+          "comes back",
           "[KeyedStrands][seal]")
 {
     auto base = ManualExecutor {};
@@ -720,27 +720,113 @@ TEST_CASE("KeyedStrands::seal() stops admission for every key, a new one include
     CHECK_FALSE(strands.tryPost(1, refusedCall)); // a key with queued work
     CHECK_FALSE(strands.tryPost(7, refusedCall)); // a key with none: no strand is made for it
     CHECK(refusedCall.payload != nullptr);
+    CHECK(strands.size() == 2);
     auto refused = append(&strands, 7, &order, 4);
     auto work = ParkedWork { .resume = refused.handle() };
     CHECK_FALSE(strands.trySubmit(7, work));
     CHECK(work.resume == refused.handle());
-    strands.post(1, [&order] { order.push_back(5); }); // dropped
-    CHECK(strands.size() == 2);
 
-    // Single-threaded teardown: pump the base until idle -- sealed and drained.
+    // post and submit are how admitted work comes back, and are admitted until close() -- a key with
+    // no strand included.
+    strands.post(1, [&order] { order.push_back(5); });
+    auto cameBack = append(&strands, 9, &order, 6);
+    cameBack.handle().resume();
+    CHECK(strands.size() == 3);
+
     while (!strands.idle() && base.runOne())
     {
     }
     CHECK(strands.idle());
     CHECK(strands.size() == 0);
     std::ranges::sort(order);
-    CHECK(order == std::vector { 1, 2 });
+    CHECK(order == std::vector { 1, 2, 5, 6 });
     CHECK(queued.done());
+    CHECK(cameBack.done());
     CHECK_FALSE(refused.done());
-    // A key activated after the drain is refused too: the seal holds for every key, for good.
-    CHECK_FALSE(strands.tryPost(8, refusedCall));
+    CHECK_FALSE(strands.tryPost(8, refusedCall)); // the seal holds for good
+    strands.close();
+}
+
+TEST_CASE("A coroutine parked off its key's strand when the strands are sealed comes back to its key",
+          "[KeyedStrands][seal][AsyncQueue]")
+{
+    // As for a Strand, both ways back: once while the key's strand is still alive -- work queued
+    // behind the parked coroutine keeps it from retiring -- so the push submits to that strand
+    // directly, and once after it retired, so it reroutes through the registry.
+    auto base = ManualExecutor {};
+    auto foreign = ManualExecutor {};
+    auto queue = Queue { foreign, core::async::AsyncQueueOptions {} };
+    // One task per turn, so work queued behind the consumer is still queued when it has parked.
+    auto strands = Strands { base, core::async::StrandOptions { .batch = 1 } };
+    auto out = Consumed {};
+    auto consumer = consumeOnKey(&strands, 3, &queue, &out);
+    consumer.handle().resume();
+    auto behind = false;
+    strands.post(3, [&behind] { behind = true; }); // keeps key 3's strand alive past the park
+    std::ignore = base.runOne();                   // the consumer's turn: it runs to the pop, and parks
+    REQUIRE(queue.hasWaiter());
+    REQUIRE(strands.size() == 1);
+    REQUIRE_FALSE(behind);
+
+    strands.seal();
+    std::ignore = queue.push(1); // straight to key 3's live strand
+    std::ignore = base.drain();
+    REQUIRE(queue.hasWaiter());
+    CHECK(strands.idle());       // key 3's strand retired: the parked coroutine is invisible to idle()
+    std::ignore = queue.push(2); // through the retired strand's reroute to the registry
+    std::ignore = base.drain();
+    queue.close();
+    std::ignore = base.drain();
+    std::ignore = foreign.drain();
+
+    CHECK(behind);
+    CHECK(out.seen == std::vector { 1, 2 });
+    CHECK(out.onKey == std::vector { true, true });
+    CHECK(out.closed);
+    CHECK(consumer.done());
     CHECK(strands.size() == 0);
     strands.close();
+}
+
+namespace
+{
+
+/// Records the awaiting coroutine's handle and stays suspended.
+struct ParkSelf
+{
+    std::coroutine_handle<>* self;
+    [[nodiscard]] bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> handle) const noexcept { *self = handle; }
+    void await_resume() const noexcept {}
+};
+
+/// A detached chain that parks at once, carrying a sentinel: its frame is its root.
+DetachedTask parkDetached(std::coroutine_handle<>* self, FrameSentinel sentinel)
+{
+    (void) sentinel;
+    co_await ParkSelf { self };
+}
+
+} // namespace
+
+TEST_CASE("A trySubmit sealed KeyedStrands refuse leaves the caller an armed claim", "[KeyedStrands][seal]")
+{
+    auto base = ManualExecutor {};
+    auto strands = Strands { base };
+    auto destroyed = 0;
+    auto root = std::coroutine_handle<> {};
+    parkDetached(&root, FrameSentinel { &destroyed });
+    REQUIRE(root);
+    auto work = ParkedWork { .resume = root, .abandon = core::async::detail::claimOn(root) };
+    REQUIRE(work.abandon.armed());
+
+    strands.seal();
+    CHECK_FALSE(strands.trySubmit(4, work));
+    CHECK(work.resume == root);
+    CHECK(work.abandon.armed());
+    CHECK(destroyed == 0);
+    work.abandon.reset();
+    CHECK(destroyed == 1);
 }
 
 #if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
@@ -982,7 +1068,9 @@ TEST_CASE("Work offered to many keys while another thread seals them either runs
     auto producer = [&](int firstKey) {
         auto refused = 0;
         auto index = 0;
-        while (refused < RefusalsEach && std::chrono::steady_clock::now() < deadline)
+        // Capped as the Strand case is, so a seal that refuses nothing fails at once, not on the
+        // budget.
+        while (refused < RefusalsEach && index < (1 << 16) && std::chrono::steady_clock::now() < deadline)
         {
             auto call = [&ran] {
                 ran.fetch_add(1);

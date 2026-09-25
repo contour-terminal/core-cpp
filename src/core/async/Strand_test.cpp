@@ -1177,10 +1177,10 @@ TEST_CASE("An around-task hook runs around every task, including a resumption th
     CHECK(hook.calls == 4);
 }
 
-TEST_CASE("seal() stops admission and keeps running what is queued", "[Strand][seal]")
+TEST_CASE("seal() closes the offer door, and runs what is queued and what comes back", "[Strand][seal]")
 {
-    // The teardown a consumer needs: seal, drain, close -- with nothing arriving in between being
-    // dropped unannounced. After seal() the try members hand work back; what was queued runs.
+    // After seal() the try members hand work back; post and submit -- how work the strand already
+    // admitted comes back to it -- are still admitted until close(), and what was queued runs.
     auto base = ManualExecutor {};
     auto strand = Strand { base };
     auto order = std::vector<int> {};
@@ -1201,21 +1201,99 @@ TEST_CASE("seal() stops admission and keeps running what is queued", "[Strand][s
     CHECK_FALSE(strand.trySubmit(work));
     CHECK(work.resume == refused.handle());
     CHECK_FALSE(strand.trySubmit(refused.handle()));
-    // post and submit drop, as a closed strand's do.
-    strand.post([&order] { order.push_back(3); });
-    strand.submit(refused.handle());
 
-    // A host with one thread pumps its base until the strand is idle: sealed and drained.
+    strand.post([&order] { order.push_back(3); });
+    auto cameBack = lookOnce(&strand, &seen);
+    strand.submit(cameBack.handle());
+
+    // A host with one thread pumps its base until the strand is idle: nothing queued or running.
     while (!strand.idle() && base.runOne())
     {
     }
     CHECK(strand.idle());
-    CHECK(order == std::vector { 1 });
+    CHECK(order == std::vector { 1, 3 });
     CHECK(queued.done());
+    CHECK(cameBack.done());
     CHECK_FALSE(refused.done());
     CHECK(base.pending() == 0);
     strand.close();
     CHECK(strand.idle());
+}
+
+TEST_CASE("A coroutine parked off the strand when it is sealed comes back to it, and finishes before close",
+          "[Strand][seal][AsyncQueue]")
+{
+    // The teardown morph runs: its handler is admitted, runs on the strand and parks on an
+    // AsyncQueue pop -- off the strand -- when the seal lands. idle() cannot see it; the push that
+    // hands it back goes through the strand's plain submit, which after the seal dropped it
+    // (3549c34): a detached chain freed without its finish, an owned one never resumed.
+    auto base = ManualExecutor {};
+    auto foreign = ManualExecutor {};
+    auto queue = Queue { foreign, core::async::AsyncQueueOptions {} };
+    auto strand = Strand { base };
+    auto out = Consumed {};
+    auto consumer = consumeOnStrand(&strand, &queue, &out);
+    consumer.handle().resume();
+    std::ignore = base.drain();
+    REQUIRE(queue.hasWaiter());
+
+    strand.seal();
+    CHECK(strand.idle()); // what the strand can see: nothing queued, nothing running
+
+    std::ignore = queue.push(7);
+    std::ignore = base.drain();
+    queue.close();
+    std::ignore = base.drain();
+    std::ignore = foreign.drain();
+
+    CHECK(out.seen == std::vector { 7 });
+    CHECK(out.onStrand == std::vector { true });
+    CHECK(out.end == ConsumerEnd::Closed);
+    CHECK(consumer.done());
+    CHECK(strand.idle());
+    strand.close();
+}
+
+namespace
+{
+
+/// Records the awaiting coroutine's handle and stays suspended.
+struct ParkSelf
+{
+    std::coroutine_handle<>* self;
+    [[nodiscard]] bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> handle) const noexcept { *self = handle; }
+    void await_resume() const noexcept {}
+};
+
+/// A detached chain that parks at once, carrying a sentinel: its frame is its root.
+DetachedTask parkDetached(std::coroutine_handle<>* self, FrameSentinel sentinel)
+{
+    (void) sentinel;
+    co_await ParkSelf { self };
+}
+
+} // namespace
+
+TEST_CASE("A trySubmit a sealed strand refuses leaves the caller an armed claim", "[Strand][seal]")
+{
+    auto base = ManualExecutor {};
+    auto strand = Strand { base };
+    auto destroyed = 0;
+    auto root = std::coroutine_handle<> {};
+    parkDetached(&root, FrameSentinel { &destroyed });
+    REQUIRE(root);
+    auto work = ParkedWork { .resume = root, .abandon = core::async::detail::claimOn(root) };
+    REQUIRE(work.abandon.armed());
+
+    strand.seal();
+    CHECK_FALSE(strand.trySubmit(work));
+    CHECK(work.resume == root);
+    CHECK(work.abandon.armed());
+    CHECK(destroyed == 0);
+    // Still the caller's to give up: the last claim on an armed chain frees it.
+    work.abandon.reset();
+    CHECK(destroyed == 1);
 }
 
 #if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
@@ -1577,13 +1655,15 @@ TEST_CASE("Work offered while another thread seals a strand either runs or is ha
     // on the strand or on its producer: a piece accepted and then dropped is the window seal()
     // exists to close.
     static constexpr auto RefusalsEach = 64;
+    // Declared before the pool and the strand, so it outlives them: a case that times out with
+    // tasks still queued then reads red, rather than having the pool resume freed frames.
+    auto tasks = std::array<std::vector<Task<void>>, 2> {};
+    auto ran = std::atomic<int> { 0 };
     auto pool = core::async::ThreadPoolExecutor { 4 };
     auto strand = Strand { pool };
-    auto ran = std::atomic<int> { 0 };
     auto offered = std::atomic<int> { 0 };
     auto refusedTotal = std::atomic<int> { 0 };
     auto producersDone = std::atomic<int> { 0 };
-    auto tasks = std::array<std::vector<Task<void>>, 2> {};
     auto const deadline = std::chrono::steady_clock::now() + Budget;
 
     auto producer = [&](std::size_t which) {
