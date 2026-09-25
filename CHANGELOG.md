@@ -71,10 +71,10 @@ workflow refuses one without a section here.
   states itself once per turn (and around its teardown drains), `ThreadPoolExecutor` once per
   worker thread, a strand once per batch. The scope is two thread-local stores and no allocation;
   on the loop it is paid per turn, not per resumption, because G2 puts every resumption inside one
-  turn's step 2. Measured on the drain path against 0.3.0 (gcc-release, one
-  pinned core, 4M resumptions, best of 35): 38.9 against 38.2 ns per resumption with one
-  resumption per turn, 19.4 against 19.7 with a turn of 64 -- inside the run-to-run spread of
-  38-48 ns. The program is `tests/bench/ExecutorContextBench.cpp` (`core-cpp-bench-executor-context`).
+  turn's step 2. Measured on the drain path against the same tree without it (gcc-release, one
+  pinned core, 4M resumptions, median of five interleaved runs): 35.9 to 36.3 ns per resumption
+  with one resumption per turn -- the two stores, paid once per turn -- and 19.6 to 19.7 with a
+  turn of 64. The program is `tests/bench/ExecutorContextBench.cpp` (`core-cpp-bench-executor-context`).
   - `core::net`'s socket operations and timers do not read it and keep resuming on their
     `EventLoop` (G2); a strand-bound coroutine hops back with `co_await ResumeOn { strand }`.
 - **`core::async::testing::ManualExecutor`** (`<core/async/testing/ManualExecutor.hpp>`): an
