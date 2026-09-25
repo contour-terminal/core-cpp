@@ -333,6 +333,10 @@ TEST_CASE("A post to a busy key costs one allocation, the call", "[KeyedStrands]
 TEST_CASE("A key whose first submit cannot allocate leaves no strand behind, whichever allocation it is",
           "[KeyedStrands][exceptions]")
 {
+#if defined(_ITERATOR_DEBUG_LEVEL) && _ITERATOR_DEBUG_LEVEL > 0
+    SKIP("MSVC's checked iterators allocate a container proxy inside std::vector's noexcept default "
+         "constructor, so failing that allocation ends the process in the standard library");
+#endif
     // The key's strand is made, registered, and then fails to take the work: before the fix it stayed
     // registered with nothing queued and nothing to retire it -- size() 1, and waitIdle() for ever.
     auto failures = 0;
