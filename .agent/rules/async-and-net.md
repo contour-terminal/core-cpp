@@ -581,6 +581,56 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   is observable. None of the C++ is wrong, so no x64 leg and no sanitizer can fail for it. Origin:
   [fastcached#1546](https://github.com/LASTRADA-Software/fastcached/issues/1546).
 
+## Strands and the resume context
+
+0.4.0. `Strand`, `KeyedStrands` and the current-executor context (`ExecutorScope`,
+`currentExecutor()`, `ResumeTarget`); the design is
+[`docs/design/strands.md`](../../docs/design/strands.md), and every rule below has a case in
+`src/core/async/{Strand,KeyedStrands}_test.cpp` or `src/core/net/LoopExecutorContext_test.cpp`.
+
+- **An awaitable that another thread completes resumes on the executor that was current when it
+  parked**, read ONCE, in `await_suspend`, with `ResumeTarget::currentOr(fallback)`, and carried
+  with the park to every path that can take it -- for `AsyncQueue::pop` a push, a `close()` and the
+  stop callback. A path that forgets it resumes a strand-bound coroutine off the strand, and nothing
+  fails: the coroutine runs, on the wrong thread, beside the state the strand serialises. That is
+  morph's finding (PR #806), and the stop path is the one to check first, because it is the one a
+  happy-path test never reaches. A new awaitable of that shape joins the list in the design note.
+- **`core::net` does not read it, and a change that makes it do so breaks G2.** A socket's slots,
+  its park ids, its stop callbacks and the park table belong to the loop's thread; its completions
+  are resumed in step 2 of that loop's turn and nowhere else. A strand-bound coroutine that awaits a
+  socket hops back with `co_await ResumeOn { strand }`.
+- **An executor that resumes coroutines states itself** with an `ExecutorScope` around the
+  resumption, or its coroutines see no current executor and every awaitable takes its fallback --
+  which is correct, and is the old behaviour, and is therefore silent. `EventLoop` holds one per
+  turn, not per resumption: G2 makes the answer constant across a turn, and the drain is
+  fastcached's parity path. Do not move it into the drain loop.
+- **Never hold an `ExecutorScope` across a `co_await`**, for the profiling-zone reason: the
+  destructor would restore another stack's scope. It asserts that it is the innermost.
+- **Across a suspension hold a `ResumeTarget`, never `currentExecutor()`'s pointer.** A
+  `KeyedStrands` key's strand is reclaimed when it runs dry; the target keeps it alive and a retired
+  strand hands work back to the registry, so the coroutine comes back to the KEY. A raw pointer is a
+  use-after-free the first time the key goes idle while the coroutine waits.
+- **A strand's pump decides "idle" in its own `await_suspend`, under the strand's lock**, so a
+  submit either sees it running and only queues, or sees it suspended and may queue it on the base.
+  Deciding before suspending lets a submit on another thread resume a pump that has not suspended.
+- **Nothing reachable through the pump's frame is touched after the pump is queued on the base or
+  published idle**: another thread may already be running it. `EndTurn::await_suspend` copies the
+  base out before it unlocks.
+- **A key's strand is retired under the registry's lock, then the strand's -- that order
+  everywhere** -- and only with an empty queue. The submit that finds the key holds the registry's
+  lock across the lookup and the queueing. Either half alone lets a key have two strands at once,
+  which is two tasks of one key running concurrently; morph's `StrandExecutor` documents fixing that
+  race twice.
+- **A strand's destructor drops what is queued and waits for what is running on another thread**,
+  never from inside its own task (that would wait for itself) and never where there are no threads.
+  It cannot take back a pump already queued on the base, which is why the state is shared with the
+  pump and the pump ends when it finds it closed. The base must outlive the strand and run what the
+  strand queued there.
+- **A throw out of `resume()` kills the pump, and the pump's frame must outlive that `resume()`.**
+  The replacement pump takes the queue over before the exception leaves; the dead frame is freed on
+  the thread it threw on, at that thread's next pump death or exit (`detail::DeadPumpReaper`),
+  because another thread freeing it races the compiler's own write to the frame on the way out.
+
 ## Sockets
 
 - **Every connected stream socket gets its options in one place, dialled or accepted.**
@@ -1259,6 +1309,7 @@ stackless event and is safe anywhere. See
   and `BackendKind::Wfmo` after one release in which the IOCP backend is the Windows default and
   green.
 - **[core-cpp#9](https://github.com/contour-terminal/core-cpp/issues/9)** — resolve morph's
-  follow-up from its move onto `core::async` (executors and strand, logger, `FileIoOps`, the
-  DateTime clock seam, `morph::net` on Windows), and graduate morph's strand into `core::async`
-  once a second consumer needs one.
+  follow-up from its move onto `core::async` (logger, `FileIoOps`, the DateTime clock seam,
+  `morph::net` on Windows). The strand half is done: 0.4.0 has `Strand` and `KeyedStrands`, by the
+  user's ruling that a strand is generic rather than waiting for a second consumer, and morph moves
+  onto them.

@@ -115,6 +115,7 @@ nav:
     - Error handling: design/error-handling.md
     - Coroutines and lifetimes: design/coroutines-and-lifetimes.md
     - Threading: design/threading.md
+    - Strands and the resume context: design/strands.md
     - Portability: design/portability.md
     - Profiling: design/profiling.md
   - Provenance: provenance.md

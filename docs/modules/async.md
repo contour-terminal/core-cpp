@@ -12,7 +12,8 @@ The C++23 coroutine vocabulary. Namespace `core::async`, directory `src/core/asy
     only the standard library. Task B1 merged fastcached's executors and ownership rules into the
     rest (`src/FastCache/Async` at `0708dd54`): `ParkedWork`, `DetachedTask`, `syncRun`,
     `IExecutor`, `ResumeOn`, `ThreadPoolExecutor` and `AsyncQueue`, and an awaiter that owns the
-    task it awaits.
+    task it awaits. 0.4.0 added `Strand`, `KeyedStrands`, the current-executor context and
+    `testing::ManualExecutor`.
 
 ## StopToken
 
@@ -243,13 +244,53 @@ and `Detail::` `detail::`:
   `OperationCancelled`, while an item already queued and a `close()` both answer first. The queue
   owns no coroutine frame and cannot, so an owner observes its consumer finishing before
   destroying it; `~AsyncQueue` asserts that no waiter is left, and `hasWaiter()` lets a test assert
-  it in a release build too.
+  it in a release build too. A parked consumer is resumed on the executor it was running on when
+  it parked -- the current executor, below -- and on the queue's own executor only where none was
+  current. Until 0.4.0 it was always the queue's.
 
 `unownedRoot` is what ties these together. It is a member of every promise in the module, set at
 each `await_suspend` from the awaiting coroutine's own, and non-empty exactly where the chain
 bottoms out in a `DetachedTask`. `whenAll`'s and `whenAny`'s runners carry it too: a runner is a
 coroutine type of its own between a detached root and the task that parks, and one that did not
 carry the answer would make every park underneath a combinator read as *somebody owns this*.
+
+## Strands and the current executor
+
+Written for 0.4.0 after morph's `StrandExecutor` (morph PR #806); see
+[Strands and the resume context](../design/strands.md) for the design and what it rejected.
+
+- `Strand` (`<core/async/Strand.hpp>`) is an `IExecutor` over any `IExecutor` that runs what it is
+  given one task at a time, in the order given. A *task* is one resumption: from the submit until
+  the coroutine next suspends. `co_await ResumeOn { strand }` hops onto it, and `runningHere()`
+  answers whether the calling thread is inside one of its tasks. `StrandOptions::batch` (32) bounds
+  how many tasks one turn on the base runs before the strand hands the base back and queues itself
+  again. A task that throws out of `resume()` -- no coroutine type of this module does -- propagates
+  to whoever resumed the strand on its base, and the tasks behind it still run. Destroying a strand
+  drops what is queued (a chain rooted in a `DetachedTask` is freed, a coroutine a `Task` owns is
+  left to it) and, where threads exist, waits for a task running on another thread.
+- `KeyedStrands<Key, Hash, KeyEqual>` (`<core/async/KeyedStrands.hpp>`) is one strand per key over
+  a shared base: work for one key is serial and ordered, work for different keys runs concurrently.
+  A key's strand is made when it gets work and reclaimed when it runs out, so `size()` counts busy
+  keys, not keys ever seen. `submit(key, ...)`, `co_await strands.resumeOn(key)`,
+  `runningHere(key)` and `runningAnyHere()` are its members; `waitIdle()` blocks until no key has
+  work, asserts when called from one of its own tasks, and is declared only where threads exist.
+- `ExecutorScope` (`<core/async/ExecutorContext.hpp>`) marks the calling thread as running a task
+  of an executor, for as long as it lives; scopes nest and restore on every exit. `EventLoop` holds
+  one per turn, `ThreadPoolExecutor` one per worker thread, `Strand` one per batch, and
+  `testing::ManualExecutor` one per resumption. It is never held across a `co_await`.
+- `currentExecutor()` answers the innermost scope's executor, or null. It is valid for the
+  synchronous part of a task; across a suspension a coroutine holds a `ResumeTarget` instead, which
+  `ResumeTarget::currentOr(fallback)` takes in `await_suspend` and which keeps a `KeyedStrands`
+  key's strand alive until it is used.
+- **Which awaitables come back to the current executor:** `AsyncQueue::pop`, on a push, a close and
+  a stop alike. `ResumeOn` goes where it is told. The whole of `core::net` -- socket operations,
+  timers, `delay`, `sleepUntil` -- resumes on its `EventLoop` and nowhere else, because guarantee
+  G2 puts every resumption in step 2 of that loop's turn and the socket, its slots and its parks
+  belong to that loop's thread. A strand-bound coroutine that awaits a socket hops back with
+  `co_await ResumeOn { strand }`.
+- `testing::ManualExecutor` (`<core/async/testing/ManualExecutor.hpp>`) is an executor a test
+  drains by hand (`runOne`, `drain`, `pending`), stating itself as the current executor while it
+  does. The module's first public test double.
 
 ## Conventions
 
@@ -279,7 +320,8 @@ stop state with a `std::mutex`, a `std::condition_variable` and `std::this_threa
 its own. `core-cpp.async-link-smoke` is that link, made with the fallback forced and nothing else
 on the line. Under single-threaded Emscripten the fallback keeps plain state and the module links
 nothing. Under WebAssembly everything builds except
-`ThreadPoolExecutor.hpp`, which refuses to compile without threads and is in no `FILE_SET` there;
+`ThreadPoolExecutor.hpp`, which refuses to compile without threads and is in no `FILE_SET` there,
+and `KeyedStrands::waitIdle`, which is not declared there;
 where libc++ has no
 `<stop_token>` without its experimental library, `StopToken` is the fallback. See
 [Coroutines and lifetimes](../design/coroutines-and-lifetimes.md).
