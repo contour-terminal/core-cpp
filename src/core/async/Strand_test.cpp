@@ -41,6 +41,7 @@ using core::async::DetachedTask;
 using core::async::ExecutorScope;
 using core::async::IExecutor;
 using core::async::OperationCancelled;
+using core::async::ParkedWork;
 using core::async::ResumeOn;
 using core::async::ResumeTarget;
 using core::async::StopSource;
@@ -267,7 +268,9 @@ TEST_CASE("co_await ResumeOn a strand hops onto it, and the strand is the curren
 
     REQUIRE(seen.size() == 2);
     CHECK(seen[1].onStrand);
-    CHECK(seen[1].current == &strand);
+    // The strand's shared state, which outlives the object: runningHere() is how to ask.
+    CHECK(seen[1].current != nullptr);
+    CHECK(seen[1].current != &base);
     CHECK(task.done());
     // And the context is gone once the base returns.
     CHECK(currentExecutor() == nullptr);
@@ -538,6 +541,172 @@ TEST_CASE("A strand destroyed from inside one of its own tasks neither waits for
     CHECK(currentExecutor() == nullptr);
 }
 
+namespace
+{
+
+/// Hops onto the owner's strand, releases the last reference to the owner from inside that task,
+/// and THEN parks on @p queue: the resume target it takes names a strand that no longer exists.
+DetachedTask releaseOwnerThenPop(std::shared_ptr<StrandOwner>* holder,
+                                 Queue* queue,
+                                 FrameSentinel sentinel,
+                                 bool* parked)
+{
+    (void) sentinel;
+    co_await ResumeOn { (*holder)->strand() };
+    holder->reset();
+    *parked = true;
+    std::ignore = co_await queue->pop();
+    *parked = false;
+}
+
+} // namespace
+
+TEST_CASE("A consumer parked while on a strand does not reach that strand once it is destroyed",
+          "[Strand][AsyncQueue][lifetime]")
+{
+    // The owner `{ AsyncQueue queue; Strand strand; }` destroys the strand first: a push, a close or
+    // a stop that lands between the two -- or from another thread, at any time after -- hands the
+    // consumer to the strand it parked on. It must find the strand's state, closed, not freed
+    // storage (ASan: heap-use-after-free in Strand::submit, before the fix).
+    auto base = ManualExecutor {};
+    auto foreign = ManualExecutor {};
+    auto queue = Queue { foreign, core::async::AsyncQueueOptions {} };
+    auto out = Consumed {};
+    auto consumer = std::optional<Task<void>> {};
+    {
+        auto strand = Strand { base };
+        consumer.emplace(consumeOnStrand(&strand, &queue, &out));
+        consumer->handle().resume();
+        std::ignore = base.drain();
+        REQUIRE(queue.hasWaiter());
+    }
+
+    std::ignore = queue.push(7);
+    // Dropped by the closed strand: never resumed, on the strand's base or the queue's.
+    CHECK_FALSE(queue.hasWaiter());
+    CHECK(base.pending() == 0);
+    CHECK(foreign.pending() == 0);
+    CHECK(out.seen.empty());
+    CHECK(out.end == ConsumerEnd::Running);
+}
+
+TEST_CASE("A task that destroys its strand's owner and then parks is freed, not resumed on freed storage",
+          "[Strand][AsyncQueue][lifetime]")
+{
+    auto base = ManualExecutor {};
+    auto foreign = ManualExecutor {};
+    auto queue = Queue { foreign, core::async::AsyncQueueOptions {} };
+    auto destroyed = 0;
+    auto parked = false;
+    auto holder = std::make_shared<StrandOwner>(base);
+
+    releaseOwnerThenPop(&holder, &queue, FrameSentinel { &destroyed }, &parked);
+    std::ignore = base.drain();
+    REQUIRE(holder == nullptr);
+    REQUIRE(parked);
+    REQUIRE(queue.hasWaiter());
+
+    // The push hands the detached consumer to the strand it parked on, which is closed: the chain
+    // nobody owns is freed there rather than resumed.
+    std::ignore = queue.push(1);
+    CHECK(destroyed == 1);
+    CHECK(parked);
+    CHECK(base.pending() == 0);
+    CHECK(foreign.pending() == 0);
+}
+
+namespace
+{
+
+/// A base executor that refuses the next @c refuse submits by throwing, and otherwise queues like
+/// @c ManualExecutor -- an executor whose own queue could not grow, or that is shutting down.
+class RefusingExecutor final: public IExecutor
+{
+  public:
+    using IExecutor::submit;
+
+    /// Refuses the next @p count submits.
+    /// @param count How many.
+    void refuse(int count) noexcept { _refuse = count; }
+
+    void submit(std::coroutine_handle<> handle) override { submit(ParkedWork { .resume = handle }); }
+
+    void submit(ParkedWork work) override
+    {
+        if (_refuse > 0)
+        {
+            --_refuse;
+            throw std::runtime_error { "the base executor refuses" };
+        }
+        _inner.submit(std::move(work));
+    }
+
+    /// @return How many entries were resumed.
+    std::size_t drain() { return _inner.drain(); }
+
+    /// @return How many entries are queued.
+    [[nodiscard]] std::size_t pending() const { return _inner.pending(); }
+
+  private:
+    ManualExecutor _inner;
+    int _refuse { 0 };
+};
+
+} // namespace
+
+TEST_CASE("A base that refuses the strand's pump leaves the strand usable, and the refused task unqueued",
+          "[Strand][exceptions]")
+{
+    // Before the fix the pump stayed Scheduled with nothing queued anywhere: every later submit only
+    // queued behind it, and the refused task ran later although its submitter had been told no.
+    auto base = RefusingExecutor {};
+    auto strand = Strand { base };
+    auto seen = std::vector<Sighting> {};
+
+    auto refused = lookOnce(&strand, &seen);
+    base.refuse(1);
+    CHECK_THROWS_AS(strand.submit(refused.handle()), std::runtime_error);
+    CHECK(strand.queued() == 0);
+
+    auto accepted = lookOnce(&strand, &seen);
+    strand.submit(accepted.handle());
+    std::ignore = base.drain();
+    CHECK(accepted.done());
+    CHECK_FALSE(refused.done());
+    REQUIRE(seen.size() == 1);
+    CHECK(seen[0].onStrand);
+}
+
+TEST_CASE("A base that refuses the pump's hand-back between turns does not wedge the strand",
+          "[Strand][exceptions]")
+{
+    // With a batch of one, the pump hands the base back after every task and queues itself again.
+    // A refusal there cannot be reported to anyone -- the pump is not inside a caller's submit -- so
+    // the pump keeps the base it is running on and goes on with the next turn inline.
+    auto base = RefusingExecutor {};
+    auto strand = Strand { base, core::async::StrandOptions { .batch = 1 } };
+    auto seen = std::vector<Sighting> {};
+
+    auto first = lookOnce(&strand, &seen);
+    auto second = lookOnce(&strand, &seen);
+    strand.submit(first.handle());
+    strand.submit(second.handle());
+    REQUIRE(base.pending() == 1);
+
+    base.refuse(1);
+    CHECK_NOTHROW(base.drain());
+    CHECK(first.done());
+    CHECK(second.done());
+    CHECK(seen.size() == 2);
+    CHECK(strand.queued() == 0);
+
+    // And it still takes work afterwards.
+    auto third = lookOnce(&strand, &seen);
+    strand.submit(third.handle());
+    std::ignore = base.drain();
+    CHECK(third.done());
+}
+
 #if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
 
 namespace
@@ -580,7 +749,7 @@ struct Overlap
 DetachedTask overlapProbe(Strand* strand, Overlap* probe, int index)
 {
     co_await ResumeOn { *strand };
-    if (!strand->runningHere() || currentExecutor() != strand)
+    if (!strand->runningHere() || currentExecutor() == nullptr)
         probe->offStrand.fetch_add(1);
     if (probe->inside.fetch_add(1) != 0)
         probe->overlaps.fetch_add(1);
@@ -673,7 +842,8 @@ TEST_CASE("A coroutine on a strand fed by a producer thread through AsyncQueue a
         consumer.emplace(consumeOnStrand(&strand, &queue, &out));
         consumer->handle().resume();
 
-        auto producer = std::thread { [&queue] {
+        auto drained = std::atomic<bool> { false };
+        auto producer = std::thread { [&queue, &drained] {
             for (auto const index: std::views::iota(0, Count))
             {
                 std::ignore = queue.push(index);
@@ -682,10 +852,12 @@ TEST_CASE("A coroutine on a strand fed by a producer thread through AsyncQueue a
             }
             // Closing discards what is held, so it waits for the consumer to have taken everything:
             // an item a pop took is delivered whatever happens after.
-            std::ignore = waitUntil([&queue] { return queue.size() == 0; });
+            drained.store(waitUntil([&queue] { return queue.size() == 0; }));
             queue.close();
         } };
         producer.join();
+        // Asserted here, on the case's thread: Catch2's assertions belong to it.
+        CHECK(drained.load());
         auto const done = waitUntil([&out] { return out.finished.load(); });
         REQUIRE(done);
         // The strand and then the pool go here, and the pool's join is what ends every thread

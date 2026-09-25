@@ -80,10 +80,13 @@ The base executor must outlive the strand and run what the strand queued on it.
 **Destroying a strand from inside one of its own tasks is supported, and deferred by design.**
 morph's CI deadlocked on this twice: a completion's frame held the last reference to the object
 that owned the strand, released it on the strand, and the destructor waited for its own in-flight
-task. Here the destructor asks `runningHere()` first and does not wait when the answer is yes; the
-state it would otherwise protect is the one it shares with the pump, so nothing is freed under the
-running task. The task runs to its end; the pump then finds the strand closed, takes nothing more
-and ends, releasing the last reference. What was queued behind the task is dropped, as for any
+task. Here the destructor asks `runningHere()` first and does not wait when the answer is yes. What
+the pump touches after the task returns is the strand's shared state, which the pump itself holds,
+so the strand's own machinery is not freed under the running task -- **the owner's other members
+are**: the task must not touch them after the release, as with any `delete this`. The task runs to
+its end; the pump then finds the strand closed, takes nothing more and ends, releasing its
+reference. A task that parks after the release -- on an `AsyncQueue`, say -- holds that state too,
+and is dropped rather than resumed when the queue hands it back. What was queued behind the task is dropped, as for any
 destruction. The same holds for `KeyedStrands`: the key whose task destroys it is not waited for,
 and every other key's running task is. No ownership pattern is required of the caller -- no weak
 reference, no posted release -- and `Strand_test.cpp` and `KeyedStrands_test.cpp` each have the case,
@@ -117,9 +120,18 @@ awaitable that another thread completes reads that once, in `await_suspend`, and
 - `currentExecutor()` reads the innermost. `Strand::runningHere()` asks whether *any* scope in
   force is the strand's, because a task that resumes something synchronously is still inside the
   task, and the strand still serialises it.
-- `ResumeTarget` is what an awaitable holds across the suspension: the executor, plus -- only for a
-  `KeyedStrands` key's strand, whose lifetime is not its user's -- a reference that keeps it alive.
-  A raw `IExecutor*` would dangle when the key went idle while the coroutine waited.
+- `ResumeTarget` is what an awaitable holds across the suspension: the executor, plus -- for a
+  strand, plain or keyed -- a reference that keeps the strand's shared state alive. A raw
+  `IExecutor*` would dangle: a key goes idle and is reclaimed while the coroutine waits, and an
+  owner `{ AsyncQueue queue; Strand strand; }` destroys the strand first, so a push landing
+  between the two members' destructors -- or from another thread at any time after -- would submit
+  to freed storage. So the executor a strand's task sees as current is that shared state, not the
+  `Strand` object; once closed it drops what it is given, which frees a chain nobody owns. It costs
+  one reference count per park on a strand, and nothing on a loop or a pool, whose scopes carry no
+  reference. `Strand::runningHere()`, not a pointer comparison, is how to ask where a task is.
+- `inline` thread-locals are one per linked image: a program that loads core-cpp's headers into two
+  shared libraries with hidden visibility has two scope chains, and a scope stated in one is not
+  seen by an awaitable compiled into the other. core-cpp ships static libraries, where there is one.
 - Outside every scope an awaitable falls back to what it did before: `AsyncQueue` uses the executor
   it was constructed over. A test double that does not state itself leaves its coroutines there too,
   which is why `testing::ManualExecutor` does.

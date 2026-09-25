@@ -20,7 +20,7 @@
 #include <utility>
 #include <vector>
 
-#if CORE_ASYNC_STRAND_HAS_THREADS
+#if CORE_CPP_ASYNC_HAS_THREADS
     #include <condition_variable>
 #endif
 
@@ -48,7 +48,7 @@ namespace detail
         /// @param base Where its pump runs.
         /// @param options How it shares the base.
         KeyStrand(std::shared_ptr<Registry> registry, Key key, IExecutor& base, StrandOptions options):
-            StrandCore(base, options, nullptr, registry.get(), StrandReclaim::WhenIdle),
+            StrandCore(base, options, registry.get(), StrandReclaim::WhenIdle),
             _registry(std::move(registry)),
             _key(std::move(key))
         {
@@ -92,7 +92,10 @@ namespace detail
         /// @param work The coroutine to resume on it.
         void submit(Key const& key, ParkedWork work)
         {
+            auto const handle = work.resume;
             auto pump = std::coroutine_handle<> {};
+            auto* strand = static_cast<KeyStrandType*>(nullptr);
+            try
             {
                 auto const lock = std::scoped_lock { _mutex };
                 if (_closed)
@@ -106,11 +109,20 @@ namespace detail
                                .first;
                 // Under the registry's lock, so a retirement cannot slip between the lookup and the
                 // queueing: `retire` takes this lock first, then the strand's.
-                pump = slot->second->enqueue(std::move(work));
+                strand = slot->second.get();
+                pump = strand->enqueue(std::move(work));
+            }
+            catch (...)
+            {
+                // The strand could not be made; the caller resumes the coroutine with this, so its
+                // claim is given back rather than released. (`enqueue` does the same for itself.)
+                work.abandon.disarm();
+                throw;
             }
             // Outside every lock: a base that resumes inline runs the strand's tasks in this call.
+            // The strand outlives it -- a scheduled pump holds it, and only the base runs the pump.
             if (pump)
-                _base.submit(pump);
+                strand->queueOnBase(pump, handle);
         }
 
         /// Retires @p strand if it is still @p strand's key's strand and has nothing queued.
@@ -123,7 +135,7 @@ namespace detail
             if (slot == _strands.end() || slot->second.get() != &strand || !strand.retireIfEmpty())
                 return false;
             _strands.erase(slot);
-#if CORE_ASYNC_STRAND_HAS_THREADS
+#if CORE_CPP_ASYNC_HAS_THREADS
             if (_strands.empty())
                 _idle.notify_all();
 #endif
@@ -138,7 +150,7 @@ namespace detail
                 auto const lock = std::scoped_lock { _mutex };
                 _closed = true;
                 strands.swap(_strands);
-#if CORE_ASYNC_STRAND_HAS_THREADS
+#if CORE_CPP_ASYNC_HAS_THREADS
                 _idle.notify_all();
 #endif
             }
@@ -153,7 +165,7 @@ namespace detail
             return _strands.size();
         }
 
-#if CORE_ASYNC_STRAND_HAS_THREADS
+#if CORE_CPP_ASYNC_HAS_THREADS
         /// Blocks until no key has a strand.
         void waitIdle()
         {
@@ -167,7 +179,7 @@ namespace detail
         StrandOptions _options;
 
         mutable std::mutex _mutex; ///< Guards everything below; taken before any strand's own.
-#if CORE_ASYNC_STRAND_HAS_THREADS
+#if CORE_CPP_ASYNC_HAS_THREADS
         std::condition_variable _idle; ///< Signalled when the last strand retires.
 #endif
         std::unordered_map<Key, std::shared_ptr<KeyStrandType>, Hash, KeyEqual> _strands;
@@ -281,7 +293,7 @@ class KeyedStrands final
     ///         nature; for tests and metrics.
     [[nodiscard]] std::size_t size() const { return _registry->size(); }
 
-#if CORE_ASYNC_STRAND_HAS_THREADS
+#if CORE_CPP_ASYNC_HAS_THREADS
     /// Blocks until no key has work queued or running, including work submitted while it waits.
     ///
     /// Not from inside a task of these strands, which would wait for itself: asserted. Not in the

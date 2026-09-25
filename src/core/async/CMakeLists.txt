@@ -127,6 +127,13 @@ core_cpp_add_test(async NAME async-fallback
     SOURCES ${_coreCppAsyncStopTokenTests}
     DEFINITIONS CORE_ASYNC_FORCE_STOP_TOKEN_FALLBACK ${_coreCppAsyncDefinitions})
 
+# What a strand does when an allocation it needs fails: a binary of its own because it replaces the
+# global allocation functions, which would reach every case linked beside it. Not under a sanitizer,
+# whose runtime defines those functions itself (the link refuses a second definition).
+if(NOT CORE_CPP_SANITIZERS)
+    core_cpp_add_test(async NAME async-alloc SOURCES StrandAllocation_test.cpp)
+endif()
+
 # The link a consumer makes: core::async alone, with the fallback forced, so that what the
 # fallback needs has to come from core::async's own usage requirements. It is not a
 # core_cpp_add_test(), because that links core::testing_main, which brings core::base, which links

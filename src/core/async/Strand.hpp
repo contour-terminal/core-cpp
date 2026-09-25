@@ -14,10 +14,13 @@
 #include <core/async/IExecutor.hpp>
 #include <core/async/ParkedWork.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -25,16 +28,16 @@
 #include <utility>
 #include <vector>
 
-// Whether this build has threads, and so whether a strand can be running a task on a thread other
-// than the one destroying it. Single-threaded Emscripten has none: there the wait below cannot be
-// needed, and a blocking wait is not allowed in the WebAssembly subset
-// (.agent/rules/library-hygiene.md).
+// Internal to core::async, not an option: whether this build has threads, and so whether a strand
+// can be running a task on a thread other than the one destroying it. Single-threaded Emscripten has
+// none: there the wait below cannot be needed, and a blocking wait is not allowed in the WebAssembly
+// subset (.agent/rules/library-hygiene.md).
 #if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
     #include <condition_variable>
 
-    #define CORE_ASYNC_STRAND_HAS_THREADS 1
+    #define CORE_CPP_ASYNC_HAS_THREADS 1
 #else
-    #define CORE_ASYNC_STRAND_HAS_THREADS 0
+    #define CORE_CPP_ASYNC_HAS_THREADS 0
 #endif
 
 namespace core::async
@@ -181,9 +184,29 @@ namespace detail
         /// @return How many entries are queued.
         [[nodiscard]] std::size_t size() const noexcept { return _entries.size() - _head; }
 
-        /// Appends @p entry.
+        /// Appends @p entry, which is moved from only if this does not throw.
         /// @param entry The work to queue.
-        void push(Parked entry) { _entries.push_back(std::move(entry)); }
+        void push(Parked& entry) { _entries.push_back(std::move(entry)); }
+
+        /// Takes the queued entry that would resume @p handle out of the queue, wherever it is.
+        /// @param handle The coroutine to look for.
+        /// @return Its entry, or an empty one where it is not queued.
+        [[nodiscard]] Parked remove(std::coroutine_handle<> handle) noexcept
+        {
+            auto const first = _entries.begin() + static_cast<std::ptrdiff_t>(_head);
+            auto const found = std::ranges::find_if(
+                first, _entries.end(), [handle](Parked const& entry) { return entry.handle() == handle; });
+            if (found == _entries.end())
+                return Parked {};
+            auto entry = std::move(*found);
+            _entries.erase(found);
+            if (_head == _entries.size())
+            {
+                _entries.clear();
+                _head = 0;
+            }
+            return entry;
+        }
 
         /// Takes the oldest entry. @pre `!empty()`.
         /// @return The oldest entry.
@@ -223,29 +246,22 @@ namespace detail
 
     /// What a strand is: a queue, a pump, and the state that says where the pump is.
     ///
-    /// Shared between the strand's owner and its pump, so that closing the strand while the pump
-    /// is queued on the base -- which the owner cannot take back -- leaves the pump something to
-    /// find. It is an @c IExecutor itself because a key's strand in `KeyedStrands` has no owner
-    /// object of its own to be current as: there, this is what `currentExecutor()` names, and a
-    /// @c ResumeTarget taken there keeps it alive.
+    /// Shared between the strand's owner, its pump, and every @c ResumeTarget taken inside one of
+    /// its tasks, so that neither closing the strand while the pump is queued on the base -- which
+    /// the owner cannot take back -- nor a coroutine that parked on the strand and is handed back
+    /// after the owner is gone finds freed storage: they find this, closed, and it drops what it is
+    /// given. It is the @c IExecutor tasks see as current, for that reason: the owner object -- a
+    /// `Strand`, or a `KeyedStrands` -- may be gone by the time a parked coroutine comes back.
     class StrandCore: public IExecutor, public std::enable_shared_from_this<StrandCore>
     {
       public:
         /// @param base Where the pump runs. Must outlive every pump this strand makes.
         /// @param options The batch bound.
-        /// @param reportedAs What `currentExecutor()` names inside a task, or null for this core.
         /// @param family The address `ExecutorScope::family()` answers inside a task, or null.
         /// @param reclaim Whether the strand ends when it runs out of work.
-        StrandCore(IExecutor& base,
-                   StrandOptions options,
-                   IExecutor* reportedAs,
-                   void const* family,
-                   StrandReclaim reclaim) noexcept:
-            _base(base),
-            _options(options),
-            _reportedAs(reportedAs != nullptr ? reportedAs : this),
-            _family(family),
-            _reclaim(reclaim)
+        StrandCore(IExecutor& base, StrandOptions options, void const* family, StrandReclaim reclaim) noexcept
+            :
+            _base(base), _options(options), _family(family), _reclaim(reclaim)
         {
             assert(options.batch > 0
                    && "StrandOptions::batch must be at least 1: a turn that runs nothing never empties "
@@ -265,12 +281,20 @@ namespace detail
         void submit(std::coroutine_handle<> handle) override { submit(ParkedWork { .resume = handle }); }
 
         /// Queues @p work; a closed strand drops it, and a retired one hands it to its owner.
+        ///
+        /// **What this throws, it throws with nothing changed**: the work is not queued, and its
+        /// claim is disarmed rather than released, because the caller -- `ResumeOn::await_suspend`
+        /// -- is about to resume the coroutine with the exception, and releasing the claim of a
+        /// detached chain would free the frame that is about to run.
         /// @param work The coroutine to resume on the strand, and its claim on the chain root.
+        /// @throws What the base's `submit` throws, and `std::bad_alloc`.
         void submit(ParkedWork work) override
         {
+            auto const handle = work.resume;
             auto entry = Parked { std::move(work) };
             auto pump = std::coroutine_handle<> {};
             auto rerouted = std::optional<ParkedWork> {};
+            try
             {
                 auto const lock = std::scoped_lock { _mutex };
                 if (_closed)
@@ -278,32 +302,74 @@ namespace detail
                 if (_retired)
                     rerouted.emplace(entry.take());
                 else
-                    pump = enqueueLocked(std::move(entry));
+                    pump = enqueueLocked(entry);
+            }
+            catch (...)
+            {
+                disarm(entry);
+                throw;
             }
             // Both outside the lock: a base that resumes inline would run the pump -- and with it
             // the strand's tasks -- inside it, and a reroute takes the owner's lock.
             if (rerouted)
                 reroute(std::move(*rerouted));
             else if (pump)
-                _base.submit(pump);
+                queueOnBase(pump, handle);
         }
 
         /// Queues @p work when the caller already knows this strand is open and not retired:
-        /// `KeyedStrands` holds its registry's lock across the lookup and this.
+        /// `KeyedStrands` holds its registry's lock across the lookup and this. Throws with nothing
+        /// changed, as @c submit does.
         /// @param work The coroutine to resume on the strand.
-        /// @return The pump to hand to the base once every lock is released, or an empty handle.
+        /// @return The pump to hand to @c queueOnBase once every lock is released, or an empty
+        ///         handle.
         [[nodiscard]] std::coroutine_handle<> enqueue(ParkedWork work)
         {
-            auto const lock = std::scoped_lock { _mutex };
-            assert(!_closed && !_retired);
-            return enqueueLocked(Parked { std::move(work) });
+            auto entry = Parked { std::move(work) };
+            try
+            {
+                auto const lock = std::scoped_lock { _mutex };
+                assert(!_closed && !_retired);
+                return enqueueLocked(entry);
+            }
+            catch (...)
+            {
+                disarm(entry);
+                throw;
+            }
+        }
+
+        /// Hands @p pump, which @c enqueue answered, to the base; where the base refuses, takes the
+        /// work queued with it back out and rethrows, so the strand is where it was.
+        /// @param pump The pump, published as scheduled.
+        /// @param withdraw The coroutine whose submit published it, to take back on a refusal.
+        void queueOnBase(std::coroutine_handle<> pump, std::coroutine_handle<> withdraw)
+        {
+            try
+            {
+                _base.submit(pump);
+            }
+            catch (...)
+            {
+                auto taken = Parked {};
+                auto orphan = std::coroutine_handle<> {};
+                {
+                    auto const lock = std::scoped_lock { _mutex };
+                    taken = _queue.remove(withdraw);
+                    orphan = unscheduleLocked();
+                }
+                disarm(taken);
+                if (orphan)
+                    orphan.destroy();
+                throw;
+            }
         }
 
         /// @return Whether the calling thread is inside one of this strand's tasks, at any depth.
         [[nodiscard]] bool runningHere() const noexcept
         {
             return ExecutorScope::anyInForce(
-                [this](ExecutorScope const& scope) noexcept { return &scope.executor() == _reportedAs; });
+                [this](ExecutorScope const& scope) noexcept { return &scope.executor() == this; });
         }
 
         /// @return How many tasks are queued and not yet running.
@@ -314,7 +380,7 @@ namespace detail
         }
 
         /// Closes the strand: queued work is dropped, a task running on another thread is waited
-        /// for, and an idle pump is freed. Idempotent.
+        /// for, and an idle pump is freed. Work that arrives later is dropped. Idempotent.
         void close()
         {
             auto dropped = std::vector<Parked> {};
@@ -323,7 +389,7 @@ namespace detail
                 auto lock = std::unique_lock { _mutex };
                 _closed = true;
                 dropped = _queue.takeAll();
-#if CORE_ASYNC_STRAND_HAS_THREADS
+#if CORE_CPP_ASYNC_HAS_THREADS
                 // Not from inside one of its own tasks, which would wait for itself: the pump ends
                 // when that task returns, because it reads `_closed` before it takes another.
                 if (!runningHere())
@@ -372,15 +438,30 @@ namespace detail
         friend StrandPump runStrandPump(std::shared_ptr<StrandCore> strand);
         friend struct StrandPump::promise_type;
 
-        /// Queues @p entry and decides whether the pump must be queued on the base. Holds the lock.
-        /// @return The pump to hand to the base, or an empty handle.
-        [[nodiscard]] std::coroutine_handle<> enqueueLocked(Parked entry)
+        /// Gives up @p entry's work without freeing it: its chain belongs to whoever is about to
+        /// resume it with an exception.
+        /// @param entry The work to give up.
+        static void disarm(Parked& entry) noexcept
         {
-            _queue.push(std::move(entry));
-            if (_phase != StrandPhase::Idle)
-                return {};
-            if (!_pump)
+            auto const work = entry.take();
+            work.abandon.disarm();
+        }
+
+        /// Queues @p entry and decides whether the pump must be handed to the base. Holds the lock.
+        ///
+        /// Every step that can throw comes before anything is published: the pump's frame is made
+        /// first, then the entry is queued -- moved only by a `push_back` that has already made room
+        /// -- and only then is the pump published as scheduled.
+        /// @param entry The work; left as it was if this throws.
+        /// @return The pump to hand to the base, or an empty handle.
+        [[nodiscard]] std::coroutine_handle<> enqueueLocked(Parked& entry)
+        {
+            auto const schedule = _phase == StrandPhase::Idle;
+            if (schedule && !_pump)
                 _pump = runStrandPump(shared_from_this()).handle();
+            _queue.push(entry);
+            if (!schedule)
+                return {};
             _phase = StrandPhase::Scheduled;
             return _pump;
         }
@@ -402,12 +483,13 @@ namespace detail
         }
 
         /// Runs up to one batch of tasks, with this strand current. What a task throws out of
-        /// `resume()` propagates, through the pump, to whoever resumed the pump.
+        /// `resume()` propagates, through the pump, to whoever resumed the pump -- except under
+        /// MSVC's `cl`, where it ends the process (see `Strand`).
         /// @param anchor What a @c ResumeTarget taken inside a task copies to keep this strand
-        ///        alive, or empty where the strand's owner does.
+        ///        alive: the pump's own reference.
         void runBatch(std::shared_ptr<void> const& anchor)
         {
-            auto const scope = ExecutorScope { *_reportedAs, anchor ? &anchor : nullptr, _family };
+            auto const scope = ExecutorScope { *this, &anchor, _family };
             for ([[maybe_unused]] auto const turn: std::views::iota(std::size_t { 0 }, _options.batch))
             {
                 auto entry = Parked {};
@@ -417,17 +499,53 @@ namespace detail
                         return;
                     entry = _queue.pop();
                 }
-                entry.resume();
+                resumeTask(entry);
             }
         }
+
+        /// Resumes one task.
+        /// @param entry The task.
+        static void resumeTask(Parked& entry)
+        {
+#if defined(_MSC_VER) && !defined(__clang__)
+            // A compiler workaround, not platform logic: under `cl` an exception thrown out of a
+            // coroutine's `resume()` and on through this frame and the pump's was measured
+            // corrupting the thread's executor scope chain (cl-release; cl-debug and clang-cl are
+            // fine), after which nothing about the thread can be trusted. So it ends the process
+            // here, at the first frame that sees it, with a message saying why.
+            try
+            {
+                entry.resume();
+            }
+            catch (...)
+            {
+                taskThrewUnderMsvc();
+            }
+#else
+            entry.resume();
+#endif
+        }
+
+#if defined(_MSC_VER) && !defined(__clang__)
+        /// Ends the process for a task that threw out of `resume()`, under MSVC's `cl`.
+        [[noreturn]] static void taskThrewUnderMsvc() noexcept
+        {
+            std::fputs("core::async::Strand: a task threw out of resume(); under MSVC's cl that "
+                       "exception cannot cross the strand's coroutine frames safely, so the process "
+                       "ends (see Strand's documentation)\n",
+                       stderr);
+            std::fflush(stderr);
+            std::terminate();
+        }
+#endif
 
         /// The pump's suspension between turns: queued again on the base if work is waiting, idle
         /// if not, and ended if the strand closed or retired.
         class EndTurn final
         {
           public:
-            /// @param strand The pump's own reference to its strand, in the pump's frame.
-            explicit EndTurn(std::shared_ptr<StrandCore> const& strand) noexcept: _strand(&strand) {}
+            /// @param strand The strand, held by the pump's frame.
+            explicit EndTurn(StrandCore& strand) noexcept: _strand(&strand) {}
 
             /// @return False: whether to suspend is `await_suspend`'s question, asked under the lock.
             [[nodiscard]] constexpr bool await_ready() const noexcept { return false; }
@@ -436,10 +554,10 @@ namespace detail
             /// another thread may resume it, so nothing reachable through the frame is touched
             /// after either.
             /// @param pump The suspended pump.
-            /// @return True to stay suspended; false to go on, into a turn that ends the pump.
+            /// @return True to stay suspended; false to go on, into another turn or the end.
             [[nodiscard]] bool await_suspend(std::coroutine_handle<> pump) const
             {
-                auto& self = **_strand;
+                auto& self = *_strand;
                 auto lock = std::unique_lock { self._mutex };
                 if (self._closed)
                     return false;
@@ -461,65 +579,134 @@ namespace detail
                     return true;
                 }
                 self._phase = StrandPhase::Scheduled;
-                self.notifySettledLocked();
                 auto& base = self._base;
                 lock.unlock();
-                base.submit(pump);
+                try
+                {
+                    base.submit(pump);
+                }
+                catch (...)
+                {
+                    // The base refused to take the pump back. Nobody else can have moved it on --
+                    // only the base resumes a scheduled pump -- and there is no caller to tell, so
+                    // the pump keeps the thread it is on and runs the next turn now.
+                    auto const relock = std::scoped_lock { self._mutex };
+                    self._phase = StrandPhase::Running;
+                    return false;
+                }
                 return true;
             }
 
             void await_resume() const noexcept {}
 
           private:
-            std::shared_ptr<StrandCore> const* _strand;
+            StrandCore* _strand;
         };
 
         /// A task threw out of `resume()`, which ended the pump: a new one takes over the queue.
         /// Called from the dead pump's `unhandled_exception`, on the thread it threw on.
+        ///
+        /// Throws with the strand in a state that restarts: if the new pump cannot be made, or the
+        /// base refuses it, the strand is left idle with no pump, and the next submit makes one.
         void replaceDeadPump()
         {
+            auto fresh = std::coroutine_handle<> {};
+            try
+            {
+                fresh = runStrandPump(shared_from_this()).handle();
+            }
+            catch (...)
+            {
+                auto const lock = std::scoped_lock { _mutex };
+                _pump = {};
+                _phase = _closed ? StrandPhase::Exited : StrandPhase::Idle;
+                notifySettledLocked();
+                throw;
+            }
+
             auto pump = std::coroutine_handle<> {};
+            auto discard = std::coroutine_handle<> {};
             {
                 auto const lock = std::scoped_lock { _mutex };
                 if (_closed)
                 {
                     _phase = StrandPhase::Exited;
                     _pump = {};
-                    notifySettledLocked();
-                    return;
+                    discard = fresh;
                 }
-                _pump = runStrandPump(shared_from_this()).handle();
-                // A strand that is reclaimed when idle is queued even with nothing to do, so the
-                // new pump's first turn is what retires it.
-                if (_queue.empty() && _reclaim == StrandReclaim::Never)
-                    _phase = StrandPhase::Idle;
                 else
                 {
-                    _phase = StrandPhase::Scheduled;
-                    pump = _pump;
+                    _pump = fresh;
+                    // A strand that is reclaimed when idle is queued even with nothing to do, so
+                    // the new pump's first turn is what retires it.
+                    if (_queue.empty() && _reclaim == StrandReclaim::Never)
+                        _phase = StrandPhase::Idle;
+                    else
+                    {
+                        _phase = StrandPhase::Scheduled;
+                        pump = fresh;
+                    }
                 }
                 notifySettledLocked();
             }
-            if (pump)
+            if (discard)
+                discard.destroy();
+            if (!pump)
+                return;
+            try
+            {
                 _base.submit(pump);
+            }
+            catch (...)
+            {
+                auto orphan = std::coroutine_handle<> {};
+                {
+                    auto const lock = std::scoped_lock { _mutex };
+                    orphan = unscheduleLocked();
+                }
+                if (orphan)
+                    orphan.destroy();
+                throw;
+            }
+        }
+
+        /// Takes back a scheduled pump the base refused. Nothing else can have moved it on --
+        /// only the base resumes a scheduled pump -- so it is idle again; or, where the strand
+        /// closed meanwhile and so will never queue it again, it is handed back to be freed.
+        /// Holds the lock.
+        /// @return The pump to destroy once the lock is released, or an empty handle.
+        [[nodiscard]] std::coroutine_handle<> unscheduleLocked() noexcept
+        {
+            auto orphan = std::coroutine_handle<> {};
+            if (_phase == StrandPhase::Scheduled)
+            {
+                if (_closed)
+                {
+                    _phase = StrandPhase::Exited;
+                    orphan = std::exchange(_pump, {});
+                }
+                else
+                    _phase = StrandPhase::Idle;
+            }
+            notifySettledLocked();
+            return orphan;
         }
 
         /// Wakes a close waiting for the pump to stop running. Holds the lock.
         void notifySettledLocked() noexcept
         {
-#if CORE_ASYNC_STRAND_HAS_THREADS
+#if CORE_CPP_ASYNC_HAS_THREADS
             _settled.notify_all();
 #endif
         }
 
         IExecutor& _base;
         StrandOptions _options;
-        IExecutor* _reportedAs;
         void const* _family;
 
         /// Guards everything below.
         mutable std::mutex _mutex;
-#if CORE_ASYNC_STRAND_HAS_THREADS
+#if CORE_CPP_ASYNC_HAS_THREADS
         std::condition_variable _settled; ///< Signalled whenever the pump stops running.
 #endif
         ParkedQueue _queue;
@@ -532,14 +719,16 @@ namespace detail
 
     inline StrandPump runStrandPump(std::shared_ptr<StrandCore> strand)
     {
-        // Held for the pump's life, so a ResumeTarget taken inside a task can keep a strand whose
-        // owner is its registry alive; empty where an owner object is what tasks see.
-        auto const anchor =
-            strand->_reportedAs == strand.get() ? std::shared_ptr<void> { strand } : std::shared_ptr<void> {};
-        while (strand->beginTurn())
+        // Moved out of the parameter first, so a pump that dies by exception -- whose frame, and
+        // with it the parameter, lives on until the thread's reaper frees it -- pins nothing.
+        auto const self = std::move(strand);
+        // Held for the pump's life and handed to every scope a task runs in, so a ResumeTarget taken
+        // inside a task keeps the strand's state alive after its owner is gone.
+        auto const anchor = std::shared_ptr<void> { self };
+        while (self->beginTurn())
         {
-            strand->runBatch(anchor);
-            co_await StrandCore::EndTurn { strand };
+            self->runBatch(anchor);
+            co_await StrandCore::EndTurn { *self };
         }
     }
 
@@ -553,8 +742,9 @@ namespace detail
         }
         catch (...)
         {
-            // The new pump's first turn ran inline and threw too: that exception is the one that
-            // leaves, and this frame is still buried rather than leaked.
+            // The replacement could not be made or queued, or its first turn ran inline and threw
+            // too: that exception is the one that leaves, and this frame is still buried rather
+            // than leaked.
             buryDeadPump(self);
             throw;
         }
@@ -582,29 +772,42 @@ namespace detail
 /// timer awaitables of `core::net` resume on their `EventLoop` instead, and a coroutine hops back
 /// with `co_await ResumeOn { strand }`.
 ///
-/// **Current executor.** Inside a task, `currentExecutor()` is this strand and `runningHere()` is
-/// true -- also inside anything the task resumes synchronously.
+/// **Current executor.** Inside a task, `runningHere()` is true -- also inside anything the task
+/// resumes synchronously -- and `currentExecutor()` is the strand's shared state: an executor that
+/// submits to this strand, and not this object's address, so that a coroutine which parks on the
+/// strand and is handed back after the strand is destroyed finds that state, closed, rather than
+/// freed storage. Ask `runningHere()`, never compare the pointer.
 ///
 /// **A task that throws out of `resume()`** -- which no coroutine type of this module does, since
 /// `Task` hands an exception to its awaiter and `DetachedTask` terminates -- propagates to
 /// whoever resumed the strand on the base, and the strand goes on with the tasks behind it.
+/// **Under MSVC's `cl` it ends the process instead**, with a message on `stderr`: an exception
+/// crossing the strand's coroutine frames was measured corrupting the thread's executor scopes
+/// there (`core-cpp.strand-throw-canary` watches it).
+///
+/// **A base that refuses** -- whose `submit` throws -- makes `submit` throw with nothing queued; a
+/// refusal between two turns, which nobody could be told about, runs the next turn on the thread
+/// the strand already has.
 ///
 /// **Destruction.** Tasks still queued are dropped, never run: a chain rooted in a `DetachedTask`
 /// is freed, and a coroutine a `Task` owns is left to its owner, suspended. A task running on
 /// another thread is waited for (not where threads do not exist, and not from inside one of the
 /// strand's own tasks, which the strand finishes once it returns). So a task may release the last
 /// reference to the strand's owner: the destructor returns at once, the task runs to its end, and
-/// the pump then ends without running anything more. The base must outlive the
-/// strand and run what the strand queued on it: a pump queued there finds the strand closed and
-/// ends.
+/// the pump then ends without running anything more. A coroutine that parked on the strand and
+/// is handed back after it is gone -- by an `AsyncQueue` push, close or stop -- is dropped, which
+/// frees a chain nobody owns. The base must outlive the strand and run what the strand queued on
+/// it: a pump queued there finds the strand closed and ends. **`core::net::EventLoop` as a base
+/// drops what is still in its inbound queue when it is destroyed**, so a strand whose pump was
+/// handed to a loop from another thread and not yet taken up by a turn leaks its state with the
+/// loop; run one more turn, or destroy the strand first.
 class Strand final: public IExecutor
 {
   public:
     /// @param base Where the strand's tasks run. Must outlive the strand.
     /// @param options How the strand shares its base.
     explicit Strand(IExecutor& base, StrandOptions options = {}):
-        _core(
-            std::make_shared<detail::StrandCore>(base, options, this, nullptr, detail::StrandReclaim::Never))
+        _core(std::make_shared<detail::StrandCore>(base, options, nullptr, detail::StrandReclaim::Never))
     {
     }
 
@@ -620,6 +823,7 @@ class Strand final: public IExecutor
 
     /// Queues @p handle, borrowed. Callable from any thread.
     /// @param handle The coroutine to resume on the strand.
+    /// @throws What the base's `submit` throws, with nothing queued; `std::bad_alloc`.
     void submit(std::coroutine_handle<> handle) override { _core->submit(handle); }
 
     /// Queues @p work, holding its claim until it runs. Callable from any thread.

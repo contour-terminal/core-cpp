@@ -262,7 +262,8 @@ Written for 0.4.0 after morph's `StrandExecutor` (morph PR #806); see
 - `Strand` (`<core/async/Strand.hpp>`) is an `IExecutor` over any `IExecutor` that runs what it is
   given one task at a time, in the order given. A *task* is one resumption: from the submit until
   the coroutine next suspends. `co_await ResumeOn { strand }` hops onto it, and `runningHere()`
-  answers whether the calling thread is inside one of its tasks. `StrandOptions::batch` (32) bounds
+  answers whether the calling thread is inside one of its tasks; `currentExecutor()` there is the
+  strand's shared state, which outlives the `Strand` object, not the object's address. `StrandOptions::batch` (32) bounds
   how many tasks one turn on the base runs before the strand hands the base back and queues itself
   again. A task that throws out of `resume()` -- no coroutine type of this module does -- propagates
   to whoever resumed the strand on its base, and the tasks behind it still run. Destroying a strand
