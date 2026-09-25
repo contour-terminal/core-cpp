@@ -313,7 +313,19 @@ namespace detail
                 auto slot = _strands.find(key);
                 auto const made = slot == _strands.end();
                 if (made)
-                    slot = insertLocked(key, strandForLocked(key));
+                {
+                    auto fresh = strandForLocked(key);
+                    try
+                    {
+                        slot = insertLocked(key, fresh);
+                    }
+                    catch (...)
+                    {
+                        // A kept strand's pump waits, holding it: closed below, not just dropped.
+                        discarded = std::move(fresh);
+                        throw;
+                    }
+                }
                 // Under the registry's lock, so a retirement cannot slip between the lookup and the
                 // queueing: `retire` takes this lock first, then the strand's.
                 strand = slot->second;
@@ -356,10 +368,11 @@ namespace detail
             if (auto const found = std::ranges::find_if(_spareStrands, unreferenced);
                 found != _spareStrands.end())
             {
+                // Given the key while still kept: if copying the key throws, the strand stays kept.
+                (*found)->rekey(key);
                 auto strand = std::move(*found);
                 *found = std::move(_spareStrands.back());
                 _spareStrands.pop_back();
-                strand->rekey(key);
                 return strand;
             }
             return std::make_shared<KeyStrandType>(this->shared_from_this(), key, _base, _options);
@@ -388,7 +401,7 @@ namespace detail
         }
 
         using StrandMap = std::unordered_map<Key, std::shared_ptr<KeyStrandType>, Hash, KeyEqual>;
-        using NodeType = typename StrandMap::node_type;
+        using NodeType = StrandMap::node_type;
 
         /// How many retired strands, and map nodes, are kept for reuse at most. A key that goes idle
         /// and busy again -- or a new key after an old one went idle -- then costs no allocation
