@@ -9,6 +9,17 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Changed
+
+- **`core::log::ScopedCapture` is thread-safe for emitting and reading.** Its sink appended to a
+  `std::string` without a lock, so a test whose code logged from two threads corrupted the heap
+  (contour's Windows test crash). Every append, and `text()`, `contains()`, `count()` and
+  `lines()`, now take one mutex. **`text()` returns a copy** (`std::string`, not
+  `std::string const&`), because a reference would be read while another thread appends; binding
+  it to `auto const&` or comparing it still compiles, while a `std::string_view` kept from it now
+  dangles at the end of the statement. Construction and destruction still reassign each category's
+  sink, so they stay single-threaded, as with `ScopedOutput`.
+
 ### Fixed
 
 - **`DetachedTask` no longer reads a freed frame under clang-cl at `-O0`** (core-cpp#51). A
@@ -17,9 +28,9 @@ workflow refuses one without a section here.
   suspension. When that suspension handed the coroutine to something that ran it to its end first
   -- a pool thread, an event loop on another thread, an `await_suspend` that resumes inline -- the
   frame was already freed. fastcached's shutdown flows, which hop onto a loop from another thread
-  and finish there, have this shape. `DetachedTask`'s destructor is now defaulted out of line, which
-  makes it user-provided, so every ABI returns it through a pointer the caller owns. The type is no longer trivially
-  destructible; nothing else about it changes.
+  and finish there, have this shape. `DetachedTask`'s destructor is now defaulted out of line,
+  which makes it user-provided, so every ABI returns it through a pointer the caller owns. The type
+  is no longer trivially destructible; nothing else about it changes.
 
 ## [0.4.1] - 2026-09-25
 

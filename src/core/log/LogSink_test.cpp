@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <ctime>
 #include <filesystem>
@@ -468,6 +469,48 @@ TEST_CASE("ScopedCapture enables and restores what it captures", "[log][logsink]
     CHECK_FALSE(category.isEnabled());
     CHECK(&category.sink() == before);
 }
+
+#if CORE_CPP_TEST_THREADS
+TEST_CASE("ScopedCapture takes lines from several threads while it is read", "[log][logsink][threads]")
+{
+    // contour's Windows heap crash: a test logged into a capture from two threads, and the sink
+    // appended to one std::string unguarded. Readers poll while the writers run, because a read
+    // racing an append that reallocates is the other half of it. Rounds, because an unguarded
+    // append does not fail every time.
+    static constexpr auto Rounds = 20;
+    static constexpr auto ThreadCount = 4;
+    static constexpr auto LinesPerThread = 500;
+
+    auto category = TestCategory { "test.capturethreads" };
+    for ([[maybe_unused]] auto const round: std::views::iota(0, Rounds))
+    {
+        auto capture = core::log::ScopedCapture { "test.capturethreads" };
+        auto running = std::atomic<int> { ThreadCount };
+        auto writers = std::vector<std::thread> {};
+        for (auto const worker: std::views::iota(0, ThreadCount))
+            writers.emplace_back([&category, &running, worker] {
+                for (auto const line: std::views::iota(0, LinesPerThread))
+                    category.value()("worker {} line {}", worker, line);
+                running.fetch_sub(1);
+            });
+        while (running.load() != 0)
+        {
+            [[maybe_unused]] auto const seen = capture.contains("worker 0 line");
+            [[maybe_unused]] auto const text = capture.text();
+        }
+        for (auto& writer: writers)
+            writer.join();
+
+        auto const lines = capture.lines();
+        REQUIRE(lines.size() == std::size_t { ThreadCount } * LinesPerThread);
+        // Whatever formatter an earlier case left installed, each worker's lines are found by the
+        // text it wrote. A torn line, or two run together, breaks one of these counts; a lost one
+        // breaks the total above.
+        for (auto const worker: std::views::iota(0, ThreadCount))
+            CHECK(capture.count(std::format("worker {} line ", worker)) == std::size_t { LinesPerThread });
+    }
+}
+#endif
 
 TEST_CASE("configure's prefix match is bounded by the category name", "[log][logsink]")
 {

@@ -251,7 +251,10 @@ ScopedOutput::~ScopedOutput()
 }
 
 ScopedCapture::ScopedCapture(std::string_view categoryName):
-    _sink { true, [this](std::string_view const& text) { _text += text; } }
+    _sink { true, [this](std::string_view const& text) {
+               auto const guard = std::scoped_lock { _mutex };
+               _text += text;
+           } }
 {
     auto capture = [this](Category& target) {
         _restorePoints.push_back(RestorePoint {
@@ -276,8 +279,15 @@ ScopedCapture::~ScopedCapture()
     }
 }
 
+std::string ScopedCapture::text() const
+{
+    auto const guard = std::scoped_lock { _mutex };
+    return _text;
+}
+
 bool ScopedCapture::contains(std::string_view needle) const
 {
+    auto const guard = std::scoped_lock { _mutex };
     return _text.contains(needle);
 }
 
@@ -290,6 +300,7 @@ std::size_t ScopedCapture::count(std::string_view needle) const
 std::vector<std::string> ScopedCapture::lines() const
 {
     auto result = std::vector<std::string> {};
+    auto const guard = std::scoped_lock { _mutex };
     for (auto const line: core::split(std::string_view { _text }, '\n'))
         if (!line.empty())
             result.emplace_back(line);

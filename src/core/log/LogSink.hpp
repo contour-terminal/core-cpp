@@ -150,8 +150,11 @@ class ScopedOutput
 /// assertion unwinds: leaving a category pointing at a destroyed local sink would corrupt
 /// every later test in the binary.
 ///
-/// Not thread-safe, which is sound because every instrumented emission point runs on one
-/// thread. Revisit if test cases are ever run concurrently.
+/// Thread safety: emitting into a captured category and reading the capture (@c text,
+/// @c contains, @c count, @c lines) are safe from any thread at once; every append and every
+/// read takes one mutex. A test whose code under test logs from its own threads needs nothing
+/// more. Construction and destruction are not: like @c ScopedOutput, they reassign each
+/// category's sink, so construct and destroy this while no other thread logs.
 class ScopedCapture
 {
   public:
@@ -164,8 +167,9 @@ class ScopedCapture
     ScopedCapture(ScopedCapture&&) = delete;
     ScopedCapture& operator=(ScopedCapture&&) = delete;
 
-    /// @return Everything written to the captured categories so far, verbatim.
-    [[nodiscard]] std::string const& text() const noexcept { return _text; }
+    /// @return A copy of everything written to the captured categories so far, verbatim. A copy,
+    ///         because another thread may be appending to what it was taken from.
+    [[nodiscard]] std::string text() const;
 
     /// @param needle The substring to look for.
     /// @return Whether any captured output contains @p needle.
@@ -187,6 +191,7 @@ class ScopedCapture
         bool wasEnabled;
     };
 
+    mutable std::mutex _mutex; ///< Guards @c _text against a writer on another thread.
     std::string _text;
     Sink _sink;
     std::vector<RestorePoint> _restorePoints;
