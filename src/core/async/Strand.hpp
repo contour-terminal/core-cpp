@@ -139,6 +139,21 @@ namespace detail
         WhenIdle,  ///< It asks its owner to retire it, and ends if the owner does.
     };
 
+    /// What a strand asking to be retired may let its owner do with its pump.
+    enum class PumpOnRetire : std::uint8_t
+    {
+        End = 0, ///< The pump ends: the strand will not be reused.
+        MayWait, ///< The owner may keep the strand for reuse, its pump waiting, idle, to be queued again.
+    };
+
+    /// The owner's answer to a strand that asked to be retired.
+    enum class RetireAnswer : std::uint8_t
+    {
+        Declined = 0, ///< Not retired: work arrived, or the strand is no longer the key's.
+        PumpEnds,     ///< Retired; the pump ends.
+        PumpWaits,    ///< Retired and kept for reuse; the pump waits, idle, for the next key's work.
+    };
+
     /// The coroutine that runs a strand's tasks on the strand's base executor.
     ///
     /// One per strand, alive for as long as the strand has one: a strand that goes idle suspends
@@ -782,11 +797,32 @@ namespace detail
             return true;
         }
 
+        /// How many references a strand's own pump holds to it while its frame exists: the
+        /// promise's, and the anchor its tasks' scopes hand out. An owner that keeps retired strands
+        /// for reuse counts on it: a kept strand whose `use_count()` is its own reference plus these
+        /// is referenced by nothing else -- no parked coroutine, no submitter -- and nothing can make
+        /// a new reference to it but the owner.
+        static constexpr long PumpReferences = 2;
+
       protected:
         /// Asks the owner to retire this strand, which ran out of work. Only a strand made with
         /// @c StrandReclaim::WhenIdle is asked.
-        /// @return Whether it was retired.
-        [[nodiscard]] virtual bool tryRetire() { return false; }
+        /// @param pump Whether the owner may keep the strand for reuse, its pump waiting.
+        /// @return The owner's answer.
+        [[nodiscard]] virtual RetireAnswer tryRetire(PumpOnRetire pump)
+        {
+            (void) pump;
+            return RetireAnswer::Declined;
+        }
+
+        /// Puts a retired strand that its owner kept back into service. Called by the owner, holding
+        /// its own lock, once nothing else references the strand (see @c PumpReferences).
+        void unretire() noexcept
+        {
+            auto const lock = std::scoped_lock { _mutex };
+            assert(_retired && !_closed);
+            _retired = false;
+        }
 
         /// Hands @p work, which arrived after this strand retired, to whatever now serves its
         /// work. A strand that never retires is never asked, and drops it if it is.
@@ -826,7 +862,7 @@ namespace detail
         /// idle pump it will never queue again.
         void retireIdle()
         {
-            if (_reclaim != StrandReclaim::WhenIdle || !tryRetire())
+            if (_reclaim != StrandReclaim::WhenIdle || tryRetire(PumpOnRetire::End) == RetireAnswer::Declined)
                 return;
             auto pump = std::coroutine_handle<> {};
             {
@@ -981,11 +1017,21 @@ namespace detail
                     // Stays Running while the owner decides, so no submit queues the pump in the
                     // meantime: work that arrives now is queued, and seen below.
                     lock.unlock();
-                    if (self.tryRetire())
+                    auto const answer = self.tryRetire(PumpOnRetire::MayWait);
+                    if (answer == RetireAnswer::PumpEnds)
                         return false;
                     lock.lock();
                     if (self._closed)
                         return false;
+                    // Kept for reuse: the pump waits, idle, until the strand is given to a key and
+                    // queued again -- unless it already has been, while the lock was released, in
+                    // which case it goes on as any strand does below.
+                    if (answer == RetireAnswer::PumpWaits && self._retired)
+                    {
+                        self._phase = StrandPhase::Idle;
+                        self.notifySettledLocked();
+                        return true;
+                    }
                 }
                 if (self._queue.empty())
                 {
@@ -1150,14 +1196,15 @@ namespace detail
     {
         // Moved out of the parameter first, so a pump that dies by exception -- whose frame, and
         // with it the parameter, lives on until the thread's reaper frees it -- pins nothing.
-        auto const self = std::move(strand);
         // Held for the pump's life and handed to every scope a task runs in, so a ResumeTarget taken
-        // inside a task keeps the strand's state alive after its owner is gone.
-        auto const anchor = std::shared_ptr<void> { self };
-        while (self->beginTurn())
+        // inside a task keeps the strand's state alive after its owner is gone. With the promise's,
+        // it is one of the pump's two references (StrandCore::PumpReferences).
+        auto const anchor = std::shared_ptr<void> { std::move(strand) };
+        auto& self = *static_cast<StrandCore*>(anchor.get());
+        while (self.beginTurn())
         {
-            self->runBatch(anchor);
-            co_await StrandCore::EndTurn { *self };
+            self.runBatch(anchor);
+            co_await StrandCore::EndTurn { self };
         }
     }
 

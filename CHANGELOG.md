@@ -68,8 +68,10 @@ workflow refuses one without a section here.
 - **Callables, a closed strand's answer, an around-task hook and `idle()` on both strands** -- what
   morph's switch from its own `StrandExecutor` found missing:
   - `post(fn)` / `post(key, fn)` run a callable as one task, held by value in one allocation (the
-    census in `StrandAllocation_test.cpp`: one per post, none per submit, on a warm strand; a post
-    to a key with no strand also makes the strand, five allocations in all). What it throws takes
+    census in `StrandAllocation_test.cpp`: one per post and none per submit, to a busy key and to
+    an idle one alike, in the steady state -- `KeyedStrands` keeps up to 32 retired strands, with
+    their pump frames, queue room and map nodes, and gives them to the next key that needs one;
+    without that a post to an idle key cost five). What it throws takes
     a task's way out, and ends the process under MSVC's `cl` as a task's throw does.
   - `tryPost(fn)`, `trySubmit(work)` and their keyed forms return false once the strand is closed
     and leave the work with the caller, which can then run it itself. `close()` is public on both,

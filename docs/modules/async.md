@@ -272,7 +272,9 @@ Written for 0.4.0 after morph's `StrandExecutor` (morph PR #806); see
 - `KeyedStrands<Key, Hash, KeyEqual>` (`<core/async/KeyedStrands.hpp>`) is one strand per key over
   a shared base: work for one key is serial and ordered, work for different keys runs concurrently.
   A key's strand is made when it gets work and reclaimed when it runs out, so `size()` counts busy
-  keys, not keys ever seen. `submit(key, ...)`, `co_await strands.resumeOn(key)`,
+  keys, not keys ever seen. Up to 32 reclaimed strands are kept, with their pump frames, queue room
+  and map nodes, and given to the next key that needs one, so a key going idle and busy again
+  allocates nothing for its strand. `submit(key, ...)`, `co_await strands.resumeOn(key)`,
   `runningHere(key)` and `runningAnyHere()` are its members; `waitIdle()` blocks until no key has
   work, asserts when called from one of its own tasks, and is declared only where threads exist.
 - Both take **callables** as well as coroutines: `post(fn)` and `post(key, fn)` run `fn` as one

@@ -127,6 +127,25 @@ have, and each was added as the smallest thing that meets it:
   strand. An around-task hook costs one branch per task where it is unset, and `KeyedStrands`'
   hook is given the key, because morph finds the session by the model instance the key names.
 
+### Reclaimed strands are kept
+
+A key with no work has no strand, which is what keeps a program keyed by connection from holding
+a strand per connection it ever saw. Made afresh each time, though, a key going idle and busy
+again cost five allocations -- the strand, its pump's frame, its queue's room, its map node, and
+the task's -- where morph's own `StrandExecutor`, which recycles through a spare list, cost one;
+morph's CI holds an allocation budget per call. So the registry keeps up to 32 retired strands, their
+pumps waiting idle, and up to as many map nodes (`unordered_map::extract` and `insert`), and a key
+that needs a strand takes a kept one. A post to an idle key then allocates the call alone, and a
+coroutine's submit nothing.
+
+A kept strand may still be referenced: a coroutine that parked on it holds it through its
+`ResumeTarget`, and must come back to *that* key. So a kept strand is given to a key only when
+nothing else references it, which the registry reads from its `use_count()` under its own lock:
+its own reference plus the pump's two (`StrandCore::PumpReferences`). That reading is exact, not
+approximate, at that point: when it holds, nothing outside the registry and the idle pump
+references the strand, and no new reference can appear except through the registry, whose lock is
+held. One still referenced is skipped, and taken later, once the coroutine has let it go.
+
 `KeyedStrands` retires a key's strand when its queue runs dry, under its registry's lock and the
 strand's, in that order everywhere. A retired strand is not reused; one that is still referenced
 (below) hands what it is given back to the registry, which gives it to the key's current strand or

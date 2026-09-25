@@ -10,6 +10,7 @@
 #include <core/async/ParkedWork.hpp>
 #include <core/async/Strand.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <concepts>
 #include <coroutine>
@@ -93,8 +94,20 @@ namespace detail
         /// @return The key this strand serves.
         [[nodiscard]] Key const& key() const noexcept { return _key; }
 
+        /// Gives a kept, retired strand to @p key. Called by the registry under its lock, once
+        /// nothing else references this strand.
+        /// @param key The key it serves from now on.
+        void rekey(Key const& key)
+        {
+            _key = key;
+            unretire();
+        }
+
       protected:
-        [[nodiscard]] bool tryRetire() override { return _registry->retire(*this); }
+        [[nodiscard]] RetireAnswer tryRetire(PumpOnRetire pump) override
+        {
+            return _registry->retire(*this, pump);
+        }
 
         void reroute(ParkedWork work) override { _registry->submit(_key, std::move(work)); }
 
@@ -133,10 +146,13 @@ namespace detail
         /// @param base Where every key's pump runs.
         /// @param options How each key's strand shares the base.
         /// @param aroundTask Called around every task, with its key; may be unset.
-        /// @throws std::bad_alloc Not noexcept: MSVC's `unordered_map` allocates even empty.
+        /// @throws std::bad_alloc Not noexcept: MSVC's `unordered_map` allocates even empty, and the
+        ///         room for kept strands is reserved here.
         KeyedStrandsRegistry(IExecutor& base, StrandOptions options, KeyedAroundTask<Key> aroundTask):
             _base(base), _options(options), _aroundTask(aroundTask)
         {
+            _spareStrands.reserve(SpareStrands);
+            _spareNodes.reserve(SpareStrands);
         }
 
         /// Queues @p work on @p key's strand, making the strand if the key has none. After the
@@ -188,34 +204,58 @@ namespace detail
         /// @return Whether a keyed around-task hook is set.
         [[nodiscard]] bool hooked() const noexcept { return static_cast<bool>(_aroundTask); }
 
-        /// Retires @p strand if it is still @p strand's key's strand and has nothing queued.
+        /// Retires @p strand if it is still @p strand's key's strand and has nothing queued, and
+        /// keeps it, and its map node, for the next key that needs a strand while there is room.
         /// @param strand A strand whose pump ran out of work.
-        /// @return Whether it was retired, and removed.
-        [[nodiscard]] bool retire(KeyStrandType& strand)
+        /// @param pump Whether the strand may be kept with its pump waiting.
+        /// @return The answer: declined, or retired with its pump ending or waiting.
+        [[nodiscard]] RetireAnswer retire(KeyStrandType& strand, PumpOnRetire pump)
         {
             auto const lock = std::scoped_lock { _mutex };
             auto const slot = _strands.find(strand.key());
             if (slot == _strands.end() || slot->second.get() != &strand || !strand.retireIfEmpty())
-                return false;
-            _strands.erase(slot);
+                return RetireAnswer::Declined;
+            auto node = _strands.extract(slot);
+            auto answer = RetireAnswer::PumpEnds;
+            // Both vectors had their room reserved at construction: keeping allocates nothing.
+            if (pump == PumpOnRetire::MayWait && !_closed && _spareStrands.size() < SpareStrands)
+            {
+                _spareStrands.push_back(std::move(node.mapped()));
+                answer = RetireAnswer::PumpWaits;
+            }
+            if (_spareNodes.size() < SpareStrands)
+            {
+                node.mapped().reset();
+                _spareNodes.push_back(std::move(node));
+            }
             notifyIfIdleLocked();
-            return true;
+            // A strand not kept is still referenced by its pump, which is running this: dropping
+            // the registry's reference here frees nothing.
+            return answer;
         }
 
         /// Closes every strand and refuses what arrives later. See `~KeyedStrands`.
         void close()
         {
             auto strands = std::unordered_map<Key, std::shared_ptr<KeyStrandType>, Hash, KeyEqual> {};
+            auto spares = std::vector<std::shared_ptr<KeyStrandType>> {};
+            auto spareNodes = std::vector<NodeType> {};
             {
                 auto const lock = std::scoped_lock { _mutex };
                 _closed = true;
                 strands.swap(_strands);
+                spares.swap(_spareStrands);
+                spareNodes.swap(_spareNodes);
 #if CORE_CPP_ASYNC_HAS_THREADS
                 _idle.notify_all();
 #endif
             }
             for (auto& [key, strand]: strands)
                 strand->close();
+            // A kept strand's pump waits, idle, holding the strand: closing it frees the pump, which
+            // is what lets the strand -- and the reference it holds to this registry -- go.
+            for (auto const& spare: spares)
+                spare->close();
         }
 
         /// @return How many keys have a strand right now.
@@ -273,11 +313,7 @@ namespace detail
                 auto slot = _strands.find(key);
                 auto const made = slot == _strands.end();
                 if (made)
-                    slot = _strands
-                               .emplace(key,
-                                        std::make_shared<KeyStrandType>(
-                                            this->shared_from_this(), key, _base, _options))
-                               .first;
+                    slot = insertLocked(key, strandForLocked(key));
                 // Under the registry's lock, so a retirement cannot slip between the lookup and the
                 // queueing: `retire` takes this lock first, then the strand's.
                 strand = slot->second;
@@ -308,6 +344,40 @@ namespace detail
             return true;
         }
 
+        /// A strand for @p key, which has none: a kept one that nothing else references, given to
+        /// @p key, or a new one. Holds the lock.
+        /// @param key The key.
+        /// @return The strand.
+        [[nodiscard]] std::shared_ptr<KeyStrandType> strandForLocked(Key const& key)
+        {
+            auto const unreferenced = [](std::shared_ptr<KeyStrandType> const& spare) noexcept {
+                return spare.use_count() == 1 + StrandCore::PumpReferences;
+            };
+            if (auto const found = std::ranges::find_if(_spareStrands, unreferenced);
+                found != _spareStrands.end())
+            {
+                auto strand = std::move(*found);
+                *found = std::move(_spareStrands.back());
+                _spareStrands.pop_back();
+                strand->rekey(key);
+                return strand;
+            }
+            return std::make_shared<KeyStrandType>(this->shared_from_this(), key, _base, _options);
+        }
+
+        /// Maps @p key to @p strand, in a kept map node where there is one. Holds the lock.
+        /// @return Where it is mapped.
+        [[nodiscard]] auto insertLocked(Key const& key, std::shared_ptr<KeyStrandType> strand)
+        {
+            if (_spareNodes.empty())
+                return _strands.emplace(key, std::move(strand)).first;
+            auto node = std::move(_spareNodes.back());
+            _spareNodes.pop_back();
+            node.key() = key;
+            node.mapped() = std::move(strand);
+            return _strands.insert(std::move(node)).position;
+        }
+
         /// Wakes `waitIdle` if no key has a strand. Holds the lock.
         void notifyIfIdleLocked() noexcept
         {
@@ -317,6 +387,14 @@ namespace detail
 #endif
         }
 
+        using StrandMap = std::unordered_map<Key, std::shared_ptr<KeyStrandType>, Hash, KeyEqual>;
+        using NodeType = typename StrandMap::node_type;
+
+        /// How many retired strands, and map nodes, are kept for reuse at most. A key that goes idle
+        /// and busy again -- or a new key after an old one went idle -- then costs no allocation
+        /// for its strand: its pump's frame, its queue's room and its map node are the kept ones.
+        static constexpr std::size_t SpareStrands = 32;
+
         IExecutor& _base;
         StrandOptions _options;
         KeyedAroundTask<Key> _aroundTask;
@@ -325,7 +403,11 @@ namespace detail
 #if CORE_CPP_ASYNC_HAS_THREADS
         std::condition_variable _idle; ///< Signalled when the last strand retires.
 #endif
-        std::unordered_map<Key, std::shared_ptr<KeyStrandType>, Hash, KeyEqual> _strands;
+        StrandMap _strands;
+        /// Retired strands kept for reuse, each with its pump waiting. One that a parked coroutine
+        /// still references is not reused until that reference is gone.
+        std::vector<std::shared_ptr<KeyStrandType>> _spareStrands;
+        std::vector<NodeType> _spareNodes; ///< Map nodes kept for reuse, empty.
         bool _closed { false };
     };
 
@@ -343,7 +425,9 @@ namespace detail
 /// runs dry, so a program keyed by connection holds strands for its busy connections, not for every
 /// connection it ever had. A coroutine that parked on something another thread completes while
 /// its key was reclaimed comes back to the key -- to its current strand, or a new one -- never to a
-/// second strand beside it.
+/// second strand beside it. Up to 32 reclaimed strands are kept, with their pumps, queue room and
+/// map nodes, for the next key that needs one: in the steady state a post to an idle key allocates
+/// the call alone, and a submit nothing.
 ///
 /// Every member is callable from any thread. What `Strand` says about a task, the current executor,
 /// a throw out of `resume()`, posted calls, the `try` members and destruction holds for each key's
@@ -355,7 +439,8 @@ namespace detail
 /// queued without waiting, since nothing else can be running; a host that wants the work run
 /// first pumps its base until `idle()`.
 ///
-/// @tparam Key The key type: copyable, hashable by @p Hash, compared by @p KeyEqual.
+/// @tparam Key The key type: copyable and copy-assignable, hashable by @p Hash, compared by
+///         @p KeyEqual.
 /// @tparam Hash Hashes a key.
 /// @tparam KeyEqual Compares two keys; default-constructed wherever it is used.
 template <typename Key, typename Hash = std::hash<Key>, typename KeyEqual = std::equal_to<Key>>
