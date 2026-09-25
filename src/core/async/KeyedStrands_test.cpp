@@ -351,6 +351,18 @@ DetachedTask keyedProbe(Strands* strands, PerKey* probe, int key)
     probe->finished.fetch_add(1);
 }
 
+/// The same accounting as @c keyedProbe, for a task that holds its strand for no time at all, so
+/// that its key goes idle -- and is retired -- as often as a producer lets it.
+DetachedTask keyedTick(Strands* strands, PerKey* probe, int key)
+{
+    co_await strands->resumeOn(key);
+    auto& mine = probe->inside.at(static_cast<std::size_t>(key));
+    if (mine.fetch_add(1) != 0)
+        probe->overlaps.fetch_add(1);
+    mine.fetch_sub(1);
+    probe->finished.fetch_add(1);
+}
+
 } // namespace
 
 TEST_CASE("Different keys run concurrently and the same key never overlaps", "[KeyedStrands][threads]")
@@ -399,6 +411,39 @@ TEST_CASE("Two keys each waiting for the other to start both finish", "[KeyedStr
     }
     CHECK(met[0].load());
     CHECK(met[1].load());
+}
+
+TEST_CASE("A key's strand retiring while other threads re-activate that key never runs two of its tasks "
+          "at once",
+          "[KeyedStrands][threads]")
+{
+    // The retirement race: the pump finds the queue dry and asks the registry to retire it while a
+    // submit on another thread is looking the key up. Either the submit lands first and the strand
+    // stays, or the retirement does and the submit makes a new strand -- never both strands alive
+    // with work, which would run two tasks of one key at once. Producers pause now and then so the
+    // key goes idle and is retired over and over while they run.
+    static constexpr auto PerProducer = 20000;
+    auto probe = PerKey {};
+    auto pool = core::async::ThreadPoolExecutor { 4 };
+    {
+        auto strands = Strands { pool };
+        auto producer = [&strands, &probe] {
+            for (auto const index: std::views::iota(0, PerProducer))
+            {
+                keyedTick(&strands, &probe, 0);
+                if (index % 64 == 0)
+                    std::this_thread::yield();
+            }
+        };
+        auto first = std::thread { producer };
+        auto second = std::thread { producer };
+        first.join();
+        second.join();
+        strands.waitIdle();
+        CHECK(strands.size() == 0);
+    }
+    CHECK(probe.finished.load() == 2 * PerProducer);
+    CHECK(probe.overlaps.load() == 0);
 }
 
 TEST_CASE("waitIdle waits for every key's work, including work that work submits", "[KeyedStrands][threads]")
