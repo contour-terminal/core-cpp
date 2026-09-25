@@ -22,8 +22,10 @@
 #include <cstdlib>
 #include <new>
 #include <ranges>
+#include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -151,8 +153,8 @@ class TimerCompletion
 /// operation completed and no waiter resumed.
 struct Rearming
 {
-    core::net::EventLoop* loop;
-    core::platform::IClock* clock;
+    core::net::EventLoop* loop = nullptr;
+    core::platform::IClock* clock = nullptr;
     std::size_t fired = 0;
 };
 
@@ -293,6 +295,14 @@ TEST_CASE("A frame-free completion of a detached chain allocates nothing once wa
     // FIFO that never grows; every parked operation's default answer spelled a sentence into a
     // `std::string`; a fired or cancelled timer's park was freed rather than kept; and each firing
     // collected its ids into a vector of its own.
+    // A standard library that allocates a debugging proxy per container -- MSVC's checked iterators
+    // in a Debug build -- allocates for every empty string and vector a turn makes, so the count
+    // there is its bookkeeping, not the loop's. Asked of the library rather than of the build.
+    auto const probe = allocations.load();
+    auto const empty = std::string {}.empty() && std::vector<int> {}.empty();
+    if (!empty || allocations.load() != probe)
+        SKIP("this standard library allocates a proxy per container, so allocations do not count the loop's");
+
     auto clock = core::platform::ManualClock {};
     auto loop = core::net::testing::TestLoop { clock };
     auto source = TimerCompletion { loop, clock };

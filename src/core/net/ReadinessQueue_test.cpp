@@ -117,9 +117,9 @@ TEST_CASE("A frameless readiness park is queued once however many waits report i
         std::ignore = loop.runOnce(core::platform::SteadyDuration::zero());
         mostQueued = std::max(mostQueued, loop.readyCount());
     }
-    CHECK(mostQueued <= 2);        // the busy flow and one entry for the park, never a copy
-    CHECK(calls >= Turns / 2 - 1); // and the park is still served, every other turn
-    CHECK(requeued >= Turns / 2 - 1);
+    CHECK(mostQueued <= 2);          // the busy flow and one entry for the park, never a copy
+    CHECK(calls >= (Turns / 2) - 1); // and the park is still served, every other turn
+    CHECK(requeued >= (Turns / 2) - 1);
 
     loop.unregisterPark(park);
     stop = true;

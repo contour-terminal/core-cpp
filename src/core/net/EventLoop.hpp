@@ -798,9 +798,9 @@ class EventLoop: public async::IExecutor
 
     /// @c queueParkedWaiter for a park the caller already holds -- a readiness report reaches its
     /// park through the handler or the handle's watch -- so the park table is not probed for it.
-    /// @param park The park; must be filed.
+    /// @param filed The park; must be filed.
     /// @param wake Why it is being queued.
-    void queueParkedWaiter(detail::Park& park, ParkWake wake);
+    void queueParkedWaiter(detail::Park& filed, ParkWake wake);
 
     /// The readiness callback every park registers, for both directions.
     ///

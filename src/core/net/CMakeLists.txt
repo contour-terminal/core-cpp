@@ -49,6 +49,7 @@ set(_coreCppNetSubset
     EventLoop.cpp
     HostDrivenBackend.cpp
     InterruptibleSleep.cpp
+    IoAwaitable.cpp
     detail/ParkId.hpp
     detail/ParkTable.hpp
     detail/ReadyBatch.hpp
@@ -183,7 +184,6 @@ core_cpp_add_module(net KIND STATIC
         HealthProbe.cpp
         HttpServer.cpp
         ISocket.cpp
-        IoAwaitable.cpp
         ReadinessDial.cpp
         SharedPortDatagram.cpp
         SocketAddress.cpp
