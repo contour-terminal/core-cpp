@@ -302,12 +302,10 @@ TEST_CASE("A task that throws out of resume() neither wedges the strand nor lose
           "[Strand]")
 {
 #if defined(_MSC_VER) && !defined(__clang__)
-    // The exception crosses two coroutine frames on its way out, the task's and the strand's pump.
-    // MSVC's coroutine unwinding is the interaction Task_test.cpp and WhenAny_test.cpp already skip
-    // for: cl-release was measured leaving the ExecutorScope chain corrupt (`currentExecutor()`
-    // answering a code address) and then crashing the harness, while cl-debug and clang-cl pass.
-    // No coroutine type of core::async throws out of resume(), so this is the one path it reaches.
-    SKIP("exception propagation through a coroutine frame is unreliable under MSVC (see Task_test.cpp)");
+    // Under MSVC's cl the strand ends the process here instead (Strand.hpp), which a Catch case
+    // cannot observe: core-cpp.strand-throw-canary is the process that asserts it.
+    SKIP("under MSVC's cl a throw out of resume() on a strand ends the process; "
+         "core-cpp.strand-throw-canary asserts it");
 #else
     auto base = ManualExecutor {};
     auto strand = Strand { base };

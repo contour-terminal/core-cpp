@@ -134,6 +134,30 @@ if(NOT CORE_CPP_SANITIZERS)
     core_cpp_add_test(async NAME async-alloc SOURCES StrandAllocation_test.cpp)
 endif()
 
+# What a strand does with a task that throws out of resume(), which differs by compiler: under MSVC's
+# cl it ends the process with a message (Strand.hpp), everywhere else the exception reaches the base
+# and the strand goes on. A process of its own because one branch ends it; registered with the
+# branch this compiler takes as the PASS and the other as the FAIL, so neither can pass for the other.
+if(CORE_CPP_TESTING AND NOT EMSCRIPTEN)
+    add_executable(core-cpp-strand-throw-canary StrandThrowCanary.cpp)
+    # core::testing_dialogs, because an abort in an MSVC Debug build opens a message box and waits.
+    target_link_libraries(core-cpp-strand-throw-canary PRIVATE core::async core::testing_dialogs)
+    core_cpp_apply_toolchain(core-cpp-strand-throw-canary)
+    add_test(NAME core-cpp.strand-throw-canary COMMAND core-cpp-strand-throw-canary)
+    set(_coreCppStrandTerminates "core::async::Strand: a task threw out of resume\(\)")
+    set(_coreCppStrandPropagates "strand-throw-canary: the task behind it ran")
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+        set_tests_properties(core-cpp.strand-throw-canary PROPERTIES
+            PASS_REGULAR_EXPRESSION "${_coreCppStrandTerminates}"
+            FAIL_REGULAR_EXPRESSION "strand-throw-canary: the throw reached the base")
+    else()
+        set_tests_properties(core-cpp.strand-throw-canary PROPERTIES
+            PASS_REGULAR_EXPRESSION "${_coreCppStrandPropagates}"
+            FAIL_REGULAR_EXPRESSION "${_coreCppStrandTerminates}")
+    endif()
+    set_tests_properties(core-cpp.strand-throw-canary PROPERTIES LABELS "core-cpp;async;canary" TIMEOUT 60)
+endif()
+
 # The link a consumer makes: core::async alone, with the fallback forced, so that what the
 # fallback needs has to come from core::async's own usage requirements. It is not a
 # core_cpp_add_test(), because that links core::testing_main, which brings core::base, which links
