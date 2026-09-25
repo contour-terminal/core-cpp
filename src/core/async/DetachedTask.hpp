@@ -37,8 +37,30 @@ namespace detail
 ///
 /// It is the one shape an executor may free at teardown, because nothing else can
 /// ([`ParkedWork`](ParkedWork.hpp)).
+///
+/// The destructor is user-provided, and empty, on purpose: see @c ~DetachedTask.
 struct DetachedTask
 {
+    DetachedTask() noexcept = default;
+    DetachedTask(DetachedTask const&) noexcept = default;
+    DetachedTask(DetachedTask&&) noexcept = default;
+    DetachedTask& operator=(DetachedTask const&) noexcept = default;
+    DetachedTask& operator=(DetachedTask&&) noexcept = default;
+
+    /// Does nothing, and exists to make this type non-trivially destructible.
+    ///
+    /// A trivial empty class is returned in a register, and clang-cl without optimisation keeps
+    /// the ramp's copy of it in the coroutine frame and reloads it from there on the way out --
+    /// after the first suspension. By then whoever the body suspended into (a pool thread, an
+    /// event loop, an `await_suspend` that resumes inline) may have run it to its end and freed
+    /// the frame, so the reload read freed memory. A non-trivial destructor makes every ABI return
+    /// the object through a pointer the caller passes, which the ramp keeps on its own stack
+    /// ([core-cpp#51](https://github.com/contour-terminal/core-cpp/issues/51)).
+    ~DetachedTask()
+    {
+        // Deliberately user-provided: `= default` would leave the type trivial (see above).
+    }
+
     /// The coroutine promise; the standard looks up `DetachedTask::promise_type`.
     struct promise_type
     {

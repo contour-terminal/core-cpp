@@ -9,6 +9,18 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`DetachedTask` no longer reads a freed frame under clang-cl at `-O0`** (core-cpp#51). A
+  trivial empty return object is returned in a register, and clang-cl without optimisation kept the
+  starting call's copy of it in the coroutine frame and reloaded it from there after the first
+  suspension. When that suspension handed the coroutine to something that ran it to its end first
+  -- a pool thread, an event loop on another thread, an `await_suspend` that resumes inline -- the
+  frame was already freed. fastcached's shutdown flows, which hop onto a loop from another thread
+  and finish there, have this shape. `DetachedTask` now has a user-provided empty destructor, so
+  every ABI returns it through a pointer the caller owns. The type is no longer trivially
+  destructible; nothing else about it changes.
+
 ## [0.4.1] - 2026-09-25
 
 ### Added

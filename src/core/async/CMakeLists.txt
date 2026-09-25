@@ -132,6 +132,9 @@ core_cpp_add_test(async NAME async-fallback
 # whose runtime defines those functions itself (the link refuses a second definition).
 if(NOT CORE_CPP_SANITIZERS)
     core_cpp_add_test(async NAME async-alloc SOURCES StrandAllocation_test.cpp)
+    # The same reason, and a replacement of its own: freed coroutine frames become inaccessible
+    # pages, so a ramp that reads its frame after the coroutine finished faults (core-cpp#51).
+    core_cpp_add_test(async NAME async-detached-frame SOURCES DetachedTaskFrame_test.cpp)
 endif()
 
 # What a strand does with a task that throws out of resume(), which differs by compiler: under MSVC's
