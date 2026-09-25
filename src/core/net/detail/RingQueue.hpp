@@ -156,6 +156,16 @@ class RingQueue
         return value;
     }
 
+    /// Removes the first element without moving it out -- for an element that owns nothing, such as
+    /// one already read in place; the queue must not be empty. It stays in its slot until a later
+    /// element is moved over it, which is the state every unused slot is in.
+    void dropFront() noexcept
+    {
+        assert(_size != 0);
+        _head = (_head + 1) & mask();
+        --_size;
+    }
+
     /// Removes the element at @p position, moving the ones behind it forward.
     /// @param position A position in this queue.
     void erase(iterator position) noexcept

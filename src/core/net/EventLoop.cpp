@@ -497,6 +497,17 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
     auto resumed = std::size_t { 0 };
     while (resumed < bound)
     {
+        // A callback at the front of the ready queue, with the callback position empty, is read
+        // where it is and dropped: it holds nothing to move out, so no entry is moved for it.
+        if (_resumeFirstHead == _resumeFirst.size() && !_ready.empty() && _ready.front().callbackPark)
+        {
+            auto const callback = _ready.front().callbackPark;
+            auto const wake = _ready.front().wake;
+            _ready.dropFront();
+            resumed += runInPosition(callback, wake, bound - resumed);
+            continue;
+        }
+
         auto next = takeNextReady();
         if (!next)
             break;
@@ -513,71 +524,7 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
         // queue more.
         if (auto const callback = next->callbackPark)
         {
-            auto const wake = next->wake;
-            // What the callback queues -- the waiter its completion hands to `resumeSoon` -- runs
-            // in the callback's position: taken next once the callback returns, in the order
-            // queued, so it resumes before anything that was queued after the callback. Not inside
-            // the callback, which is G2, and not at the back, which let a flow queued ahead of the
-            // callback yield past the waiter and read state the waiter had not updated yet. A
-            // waiter that re-parks is completed by a later callback, in that one's position, so
-            // nothing here recurses.
-            //
-            // Neither step allocates once warm: the callback queues into a member vector whose
-            // capacity survives, and its range moves to the front of `_resumeFirst`, another,
-            // rather than into the ready queue itself, which would shift everything queued behind
-            // it. Each callback owns the range from `mark`, and the previous target is
-            // restored, so a callback that drives a nested drain leaves the outer one's entries
-            // where they are; `cancelPending` marks an entry taken rather than erasing it, so no
-            // range moves under a mark.
-            //
-            // The common case moves nothing at all: a callback that is the only one running, with
-            // the callback position already consumed, hands its whole scratch vector over by a swap
-            // -- the one waiter a readiness completion queues then costs no element move, and both
-            // vectors keep their capacity.
-            //
-            // And the commonest case of all -- a readiness callback that completed exactly ONE
-            // waiter, with nothing else in the callback position -- takes that waiter straight out
-            // of the scratch vector and resumes it here, once the callback's queueing target is
-            // restored: no trip through `_resumeFirst`, and the same position, since nothing runs
-            // between the callback's return and the resume.
-            auto const mark = _callbackScratch.size();
-            auto waiter = ReadyEntry {};
-            auto resumeWaiter = false;
-            {
-                auto* const previous = std::exchange(_queuedByCallback, &_callbackScratch);
-                auto const inPosition = detail::ScopeGuard { [this, mark, previous]() noexcept {
-                    _queuedByCallback = previous;
-                    if (_callbackScratch.size() == mark)
-                        return;
-                    if (mark == 0 && _resumeFirstHead == _resumeFirst.size())
-                    {
-                        _resumeFirst.clear();
-                        _resumeFirstHead = 0;
-                        _resumeFirst.swap(_callbackScratch);
-                        return;
-                    }
-                    auto const first = _callbackScratch.begin() + static_cast<std::ptrdiff_t>(mark);
-                    _resumeFirst.insert(_resumeFirst.begin() + static_cast<std::ptrdiff_t>(_resumeFirstHead),
-                                        std::make_move_iterator(first),
-                                        std::make_move_iterator(_callbackScratch.end()));
-                    _callbackScratch.erase(first, _callbackScratch.end());
-                } };
-                runDueCallback(callback, wake);
-                ++resumed;
-                if (resumed < bound && mark == 0 && _callbackScratch.size() == 1
-                    && _resumeFirstHead == _resumeFirst.size() && !isTakenBack(_callbackScratch.back()))
-                {
-                    waiter = std::move(_callbackScratch.back());
-                    _callbackScratch.pop_back();
-                    resumeWaiter = true;
-                }
-            }
-            if (resumeWaiter)
-            {
-                waiter.resume();
-                ++resumed;
-                reapFinishedRoots();
-            }
+            resumed += runInPosition(callback, next->wake, bound - resumed);
             continue;
         }
 
@@ -596,6 +543,89 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
         reapFinishedRoots();
     }
     return resumed;
+}
+
+std::size_t EventLoop::runInPosition(ParkId callback, ParkWake wake, std::size_t budget)
+{
+    // What the callback queues -- the waiter its completion hands to the loop -- runs in the
+    // callback's position: taken next once the callback returns, in the order queued, so it
+    // resumes before anything that was queued after the callback. Not inside the callback, which
+    // is G2, and not at the back, which let a flow queued ahead of the callback yield past the
+    // waiter and read state the waiter had not updated yet. A waiter that re-parks is completed by
+    // a later callback, in that one's position, so nothing here recurses.
+    //
+    // Neither path allocates once warm. The commonest case -- a readiness callback completing ONE
+    // socket operation and queueing nothing else -- leaves its waiter in `slot` and it is resumed
+    // straight from there below: no queue entry at all. Anything else goes into a member vector
+    // whose capacity survives, and its range moves to the front of `_resumeFirst` -- by a swap of
+    // the two vectors where the callback position was empty -- rather than into the ready queue,
+    // which would shift everything behind it. Each callback owns the range from `mark` and the
+    // previous targets are restored, so a callback that drives a nested drain leaves the outer
+    // one's entries where they are; an outer slot's waiter is moved into its range first, so only
+    // the innermost slot is ever filled. `cancelPending` marks an entry taken rather than erasing
+    // it, so no range moves under a mark, and empties the slot where it finds its waiter there.
+    flushCompletionSlot();
+    auto const mark = _callbackScratch.size();
+    auto slot = CompletionSlot { .waiter = {}, .claim = {}, .mark = mark };
+    auto waiter = std::coroutine_handle<> {};
+    auto claim = async::detail::CountedClaim {};
+    {
+        auto* const previous = std::exchange(_queuedByCallback, &_callbackScratch);
+        auto* const previousSlot = std::exchange(_completionSlot, &slot);
+        auto const inPosition = detail::ScopeGuard { [this, mark, previous, previousSlot]() noexcept {
+            // A waiter still in the slot -- the budget is spent, or the callback threw -- takes
+            // the head of the callback's range like any other.
+            flushCompletionSlot();
+            _completionSlot = previousSlot;
+            _queuedByCallback = previous;
+            if (_callbackScratch.size() == mark)
+                return;
+            if (mark == 0 && _resumeFirstHead == _resumeFirst.size())
+            {
+                _resumeFirst.clear();
+                _resumeFirstHead = 0;
+                _resumeFirst.swap(_callbackScratch);
+                return;
+            }
+            auto const first = _callbackScratch.begin() + static_cast<std::ptrdiff_t>(mark);
+            _resumeFirst.insert(_resumeFirst.begin() + static_cast<std::ptrdiff_t>(_resumeFirstHead),
+                                std::make_move_iterator(first),
+                                std::make_move_iterator(_callbackScratch.end()));
+            _callbackScratch.erase(first, _callbackScratch.end());
+        } };
+        runDueCallback(callback, wake);
+        if (budget > 1 && slot.waiter)
+        {
+            waiter = std::exchange(slot.waiter, {});
+            claim = std::move(slot.claim);
+        }
+    }
+    if (!waiter)
+        return 1;
+
+    // As `ReadyEntry::resume`: the chain is given back before the resume, which may end it, and a
+    // handle that cannot be resumed has its claim released, freeing the chain if it was the last.
+    if (waiter.done())
+        claim.reset();
+    else
+    {
+        claim.giveBack();
+        waiter.resume();
+    }
+    reapFinishedRoots();
+    return 2;
+}
+
+void EventLoop::flushCompletionSlot()
+{
+    auto* const slot = _completionSlot;
+    if (slot == nullptr || !slot->waiter)
+        return;
+    auto const owned = static_cast<bool>(slot->claim);
+    _callbackScratch.push_back(ReadyEntry {
+        .parked = async::detail::Parked { async::ParkedWork { .resume = std::exchange(slot->waiter, {}) } },
+        .claim = std::move(slot->claim),
+        .ownedByLoop = owned });
 }
 
 std::size_t EventLoop::readyCount() const noexcept
@@ -919,6 +949,14 @@ bool EventLoop::cancelPending(std::coroutine_handle<> handle) noexcept
         unregisterPark(source);
         return true;
     };
+    // The running callback's slot: a completed waiter whose frame is destroyed before the callback
+    // returns. The claim is given back, as for any entry taken back.
+    if (auto* const slot = _completionSlot; slot != nullptr && slot->waiter == handle)
+    {
+        slot->waiter = {};
+        slot->claim.giveBack();
+        return true;
+    }
     if (takeFrom(_ready, _ready.begin(), true)
         || takeFrom(_resumeFirst, _resumeFirst.begin() + static_cast<std::ptrdiff_t>(_resumeFirstHead), false)
         || takeFrom(_callbackScratch, _callbackScratch.begin(), false))
@@ -1091,6 +1129,15 @@ void EventLoop::resumeSoon(async::ParkedWork work)
 
 void EventLoop::resumeCompleted(std::coroutine_handle<> waiter, std::coroutine_handle<> unownedRoot)
 {
+    // The hot path: the running drain-step callback's first completion, with nothing queued by it
+    // before -- held in its slot, and resumed from there once it returns (`runInPosition`).
+    if (auto* const slot = _completionSlot;
+        slot != nullptr && waiter && !slot->waiter && _callbackScratch.size() == slot->mark)
+    {
+        slot->claim = async::detail::CountedClaim::on(unownedRoot);
+        slot->waiter = waiter;
+        return;
+    }
     // No claim for an empty handle, which `queueSoon` drops: it would arm the chain with nothing
     // left to give it back.
     auto claim = waiter ? async::detail::CountedClaim::on(unownedRoot) : async::detail::CountedClaim {};
@@ -1139,7 +1186,10 @@ void EventLoop::queueEntry(ReadyEntry&& entry)
     // claim a completion carries once took it from 56 bytes to 64 for want of member order.
     static_assert(sizeof(void*) != 8 || sizeof(ReadyEntry) <= 56, "EventLoop::ReadyEntry grew past 56 bytes");
     if (_queuedByCallback != nullptr)
+    {
+        flushCompletionSlot();
         _queuedByCallback->push_back(std::move(entry));
+    }
     else
         _ready.pushBack(std::move(entry));
 }

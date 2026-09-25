@@ -18,14 +18,14 @@ workflow refuses one without a section here.
   costing two, with the same count, arm and teardown behaviour. The waiter a readiness callback
   queues reaches the callback position by a swap of two vectors instead of a range insert and an
   erase, and the drain resumes an entry in place rather than moving it out first. Measured with the
-  new `[bench]` cases (`core-cpp-net_backend-test "[bench]"`, gcc-release, median of five): a
-  completion through a drain-step callback went from 118.3 to 111.5 ns for a detached chain,
-  against 112.7 and 108.6 ns for a chain a caller owns. Nothing else a caller can observe changed:
+  new `[bench]` cases (`core-cpp-net_backend-test "[bench]"`, gcc-release, median of five on an
+  idle host): a completion through a drain-step callback went from 120.4 to 83.4 ns for a
+  detached chain, and from 122.6 to 79.3 ns for a chain a caller owns. Nothing else a caller can observe changed:
   the ordering (a waiter resumes in its callback's position), teardown (a detached chain is freed,
   a borrowed one resumed) and take-back paths are the same, and each is a case in
   `CompletionClaim_test.cpp`.
-  - A readiness callback that completes one waiter, the common case, has that waiter resumed by
-    the drain straight after it returns, instead of through the callback position's queue; a
+  - A readiness callback that completes one waiter, the common case, has that waiter held in a
+    slot and resumed by the drain straight after it returns, with no queue entry made for it; a
     readiness report reaches its park through the handle's watch instead of probing the park
     table; and `EventLoop`'s queue entry is back to 56 bytes from 64.
   - `resumeSoonOn(EventLoop&, std::coroutine_handle<>, ...)`, `ResultAwaitable`'s out-of-line hook

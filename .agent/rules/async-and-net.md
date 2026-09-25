@@ -759,10 +759,14 @@ get right, and each one is a defect that has already happened.
   without resuming inside the callback (G2). At the back, as 0.2.1 had it, a flow queued ahead of
   the callback that yields once to let reported readiness run (fastcached's `AbandonIfPeerGone`)
   read state the waiter had not updated. `resumeSoon` from anywhere else stays FIFO at the back.
-  The common case -- one waiter, with nothing else in the callback position -- is resumed by the
-  drain straight after the callback, taken out of the callback's scratch vector once the queueing
-  target is restored, which is the same position without the trip through `_resumeFirst`; a
-  second waiter, or a bound reached by the callback itself, takes the general path.
+  The common case -- a callback whose first and only queueing is one completion -- makes no queue
+  entry at all: `resumeCompleted` holds the waiter in the running callback's `CompletionSlot`, and
+  the drain resumes it from there once the callback returns, which is the same position. Anything
+  else the callback queues, a second completion, a spent bound or a throw first moves the slot's
+  waiter to the head of the callback's range (`flushCompletionSlot`), so the order is unchanged;
+  a nested callback flushes the outer slot before it runs, so only the innermost is ever filled,
+  and `cancelPending` empties the slot where it finds its waiter there.
+  `CompletionClaim_test.cpp` has a case for each of the order, the take-back and the throw.
 
 - **The slot guards end the process in EVERY build; a contract violation is never a silent
   hang.** They were Debug-only, and under `NDEBUG` a second operation displaced the parked one,

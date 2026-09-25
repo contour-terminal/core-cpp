@@ -29,11 +29,14 @@
 #include <coroutine>
 #include <cstddef>
 #include <format>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <ranges>
+#include <stdexcept>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 using core::async::DetachedTask;
 using core::async::Task;
@@ -155,6 +158,62 @@ std::shared_ptr<core::async::detail::AbandonState> const& abandonStateOf(std::co
         .abandonState;
 }
 
+/// An operation completed by whoever holds it, with no timer of its own: a case completes it from a
+/// callback that does something else too.
+class ManualCompletion
+{
+  public:
+    /// @param loop The loop the resumption runs on; must outlive this.
+    explicit ManualCompletion(EventLoop& loop) noexcept: _loop(&loop) {}
+
+    /// @return One operation, completed by @c complete.
+    [[nodiscard]] IoAwaitable wait() { return IoAwaitable { &arm, &retire, this }; }
+
+    /// Completes the parked operation with a count of @p value, if one is parked.
+    /// @param value The count.
+    void complete(std::size_t value)
+    {
+        if (auto* const operation = std::exchange(_operation, nullptr))
+            operation->complete(value);
+    }
+
+  private:
+    static void arm(void* owner, IoAwaitable& self)
+    {
+        auto* const source = static_cast<ManualCompletion*>(owner);
+        source->_operation = &self;
+        self.cancelThrough(*source->_loop, core::net::ParkId::invalid());
+    }
+
+    static void retire(void* owner, void* awaitable) noexcept
+    {
+        auto* const source = static_cast<ManualCompletion*>(owner);
+        if (source->_operation == awaitable)
+            source->_operation = nullptr;
+    }
+
+    EventLoop* _loop;
+    IoAwaitable* _operation = nullptr;
+};
+
+/// Awaits one operation and records its count in @p order.
+/// @param source The owner.
+/// @param order Where the count goes once the flow resumes.
+/// @param destroyed Set when this frame is destroyed.
+Task<void> recordOne(ManualCompletion* source, std::vector<std::size_t>* order, bool* destroyed)
+{
+    auto const flag = DestroyedFlag { destroyed };
+    if (auto const got = co_await source->wait(); got.has_value())
+        order->push_back(*got);
+}
+
+/// A timer callback that runs whatever the case scripted.
+/// @param state A @c std::function<void()>.
+void runScript(void* state)
+{
+    (*static_cast<std::function<void()>*>(state))();
+}
+
 } // namespace
 
 TEST_CASE("A completion queues a detached chain counted and armed, holding no reference of its own",
@@ -239,6 +298,87 @@ TEST_CASE("A detached chain destroyed while its completion is queued takes the c
     CHECK(loop.drain() == 0);
     CHECK(completed == 0);
     CHECK_FALSE(ended);
+}
+
+TEST_CASE("Two completions from one callback resume in the order they completed",
+          "[net][ioawaitable][resume][ordering]")
+{
+    // The first completion is held in the callback's slot; the second moves it to the head of the
+    // callback's range and queues behind it, and whatever the callback queues after is behind both.
+    auto clock = ManualClock {};
+    auto loop = TestLoop { clock };
+    auto first = ManualCompletion { loop };
+    auto second = ManualCompletion { loop };
+    auto order = std::vector<std::size_t> {};
+    auto destroyed = std::array<bool, 2> {};
+    auto flows =
+        std::array { recordOne(&first, &order, destroyed.data()), recordOne(&second, &order, &destroyed[1]) };
+    for (auto& flow: flows)
+        flow.handle().resume();
+
+    auto script = std::function<void()> { [&] {
+        first.complete(1);
+        second.complete(2);
+    } };
+    std::ignore = loop.addTimer(clock.now(), &runScript, &script);
+    std::ignore = loop.drain();
+    CHECK(order == std::vector<std::size_t> { 1, 2 });
+}
+
+TEST_CASE("A waiter destroyed while the callback that completed it still runs is taken back",
+          "[net][ioawaitable][resume][claim]")
+{
+    // The completion sits in the running callback's slot, not in any queue; the frame goes before
+    // the callback returns, and nothing may resume it.
+    auto clock = ManualClock {};
+    auto loop = TestLoop { clock };
+    auto source = ManualCompletion { loop };
+    auto root = std::coroutine_handle<> {};
+    auto order = std::vector<std::size_t> {};
+    auto destroyed = false;
+    auto ended = false;
+    runDetached(recordOne(&source, &order, &destroyed), &root, &ended);
+    REQUIRE(root);
+
+    auto script = std::function<void()> { [&] {
+        source.complete(1);
+        root.destroy();
+    } };
+    std::ignore = loop.addTimer(clock.now(), &runScript, &script);
+    std::ignore = loop.drain();
+    CHECK(destroyed);
+    CHECK(order.empty());
+    CHECK_FALSE(ended);
+    CHECK(loop.pendingSubmissions() == 0);
+}
+
+TEST_CASE("A completed waiter survives a callback that throws after completing it",
+          "[net][ioawaitable][resume][claim]")
+{
+    // The throw leaves the drain; the waiter in the callback's slot takes the head of the ready
+    // queue for the next drain rather than being lost with the callback's frame.
+    auto clock = ManualClock {};
+    auto loop = TestLoop { clock };
+    auto source = ManualCompletion { loop };
+    auto root = std::coroutine_handle<> {};
+    auto order = std::vector<std::size_t> {};
+    auto destroyed = false;
+    auto ended = false;
+    runDetached(recordOne(&source, &order, &destroyed), &root, &ended);
+
+    auto script = std::function<void()> { [&] {
+        source.complete(7);
+        throw std::runtime_error { "callback failed after completing" };
+    } };
+    std::ignore = loop.addTimer(clock.now(), &runScript, &script);
+    CHECK_THROWS_AS(loop.drain(), std::runtime_error);
+    CHECK(order.empty());
+    REQUIRE(loop.pendingSubmissions() == 1);
+
+    std::ignore = loop.drain();
+    CHECK(order == std::vector<std::size_t> { 7 });
+    CHECK(ended);
+    CHECK(destroyed);
 }
 
 TEST_CASE("Completion cost through a drain-step callback", "[.][bench][net][ioawaitable]")

@@ -985,6 +985,25 @@ class EventLoop: public async::IExecutor
     /// once to let reported readiness run found the waiter not yet resumed.
     std::vector<ReadyEntry>* _queuedByCallback = nullptr;
 
+    /// The one waiter a drain-step callback completed, held apart from every queue.
+    ///
+    /// A readiness callback that completes one socket operation, and queues nothing else, is the
+    /// hot path of the loop: its waiter resumes right after the callback returns. Held here it is
+    /// resumed from here -- no queue entry is made, moved, or popped for it. Anything else the
+    /// callback queues, or a second completion, first moves this waiter to the head of the
+    /// callback's range (@c flushCompletionSlot), so the order is the callback position's either
+    /// way.
+    struct CompletionSlot
+    {
+        std::coroutine_handle<> waiter {}; ///< The completed waiter, or empty.
+        async::detail::CountedClaim claim; ///< Its chain's claim, where nobody owns the chain.
+        std::size_t mark = 0;              ///< Where the running callback's range begins.
+    };
+
+    /// The running drain-step callback's slot, or null outside one. It points into the drain's own
+    /// frame, and a nested callback's replaces it for as long as that one runs.
+    CompletionSlot* _completionSlot = nullptr;
+
     /// Where what a drain-step callback queues waits until the callback returns. A member, and
     /// cleared rather than freed, so a readiness completion -- the hot path -- costs no
     /// allocation once it has grown; each callback owns the range from where it began, so a
@@ -1097,6 +1116,18 @@ class EventLoop: public async::IExecutor
     /// @return The next entry the drain runs: the callback position first, then the ready queue;
     ///         nothing when both are empty.
     [[nodiscard]] std::optional<ReadyEntry> takeNextReady();
+
+    /// Runs the drain-step callback @p callback in its position: what it queues is taken next, and
+    /// the one waiter it completes, where that is all it does, is resumed straight after it.
+    /// @param callback The callback's park.
+    /// @param wake Why it is being run.
+    /// @param budget How many resumptions the drain may still make; at least one.
+    /// @return How many it made: the callback, and its waiter if that was resumed here.
+    std::size_t runInPosition(ParkId callback, ParkWake wake, std::size_t budget);
+
+    /// Moves the waiter in the running callback's @c CompletionSlot, if any, to the head of that
+    /// callback's range, as an ordinary queue entry.
+    void flushCompletionSlot();
 
     /// @param entry An entry of the callback position or of a callback's range.
     /// @return Whether @c cancelPending took it back, leaving it with nothing to run.
