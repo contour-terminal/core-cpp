@@ -382,27 +382,41 @@ TEST_CASE("A key whose first submit cannot allocate leaves no strand behind, whi
     CHECK(reachedSuccess);
 }
 
-TEST_CASE("A post to an idle key costs the key's strand as well as the call",
+TEST_CASE("A post to an idle key costs one allocation, the call, and a submit none, once warm",
           "[KeyedStrands][post][allocation]")
 {
-    // Pinned, not endorsed: a key with no work has no strand, so a post to it makes one -- the
-    // strand's shared state, its map node, its pump's frame and its queue's first room -- before
-    // the call. A consumer that posts mostly to idle keys pays this per post.
+    // A key with no work has no strand; the strand its last work retired is kept -- pump frame,
+    // queue room and map node -- and given to the next key that needs one. So in the steady state a
+    // post to an idle key allocates the call and nothing else, as a post to a busy key does.
     auto base = FixedExecutor {};
     auto strands = core::async::KeyedStrands<int> { base };
     auto count = 0;
-    strands.post(1, [&count] { ++count; }); // warms the map's buckets
+    auto order = std::vector<int> {};
+    order.reserve(8);
+    strands.post(1, [&count] { ++count; }); // warms: a strand, its pump, its room, a node, the buckets
     base.drain();
     REQUIRE(strands.size() == 0);
 
-    auto const before = allocationsServed;
+    auto before = allocationsServed;
     strands.post(1, [&count] { ++count; });
-    auto const cost = allocationsServed - before;
-    INFO("a post to an idle key cost " << cost << " allocations");
-    // Five: the four above and the call. MSVC's checked iterators give a container one more, its
-    // proxy, which the queue's vector is.
-    CHECK(cost >= 5);
-    CHECK(cost <= 6);
+    auto const idleSameKey = allocationsServed - before;
     base.drain();
-    CHECK(count == 2);
+
+    before = allocationsServed;
+    strands.post(2, [&count] { ++count; }); // another key: the kept strand is given to it
+    auto const idleOtherKey = allocationsServed - before;
+    base.drain();
+
+    auto task = record(&order, 1);
+    before = allocationsServed;
+    strands.submit(3, task.handle());
+    auto const idleSubmit = allocationsServed - before;
+    base.drain();
+
+    CHECK(idleSameKey == 1);
+    CHECK(idleOtherKey == 1);
+    CHECK(idleSubmit == 0);
+    CHECK(count == 3);
+    CHECK(order == std::vector { 1 });
+    CHECK(strands.size() == 0);
 }

@@ -610,6 +610,54 @@ TEST_CASE("KeyedStrands' tryPost and trySubmit leave the work with the caller on
     CHECK(strands.size() == 0);
 }
 
+namespace
+{
+
+/// Hops onto @p key's strand, records whether it is there, parks on @p queue, and records again.
+Task<void> parkOnKey(Strands* strands, int key, Queue* queue, std::vector<bool>* onKey)
+{
+    co_await strands->resumeOn(key);
+    onKey->push_back(strands->runningHere(key));
+    std::ignore = co_await queue->pop();
+    onKey->push_back(strands->runningHere(key));
+}
+
+} // namespace
+
+TEST_CASE("A retired strand that a parked coroutine still holds is not given to another key",
+          "[KeyedStrands][lifetime]")
+{
+    // Retired strands are kept for reuse. One that a coroutine parked on it still references must
+    // keep serving its own key -- handing the coroutine back to that key's strand -- and never be
+    // given to another: the coroutine would come back on the wrong key.
+    auto base = ManualExecutor {};
+    auto foreign = ManualExecutor {};
+    auto queue = Queue { foreign, core::async::AsyncQueueOptions {} };
+    auto strands = Strands { base };
+    auto onKey = std::vector<bool> {};
+    auto onOther = std::vector<bool> {};
+
+    auto parked = parkOnKey(&strands, 1, &queue, &onKey);
+    parked.handle().resume();
+    std::ignore = base.drain(); // key 1's task parks; its strand retires
+    REQUIRE(queue.hasWaiter());
+    REQUIRE(strands.size() == 0);
+
+    strands.post(2, [&onOther, &strands] {
+        onOther.push_back(strands.runningHere(2));
+        onOther.push_back(strands.runningHere(1));
+    });
+    std::ignore = base.drain();
+    std::ignore = queue.push(1); // back to key 1
+    std::ignore = base.drain();
+    std::ignore = foreign.drain();
+
+    CHECK(parked.done());
+    CHECK(onKey == std::vector { true, true });
+    CHECK(onOther == std::vector { true, false });
+    CHECK(strands.size() == 0);
+}
+
 TEST_CASE("KeyedStrands::idle is true once no key has work queued or running", "[KeyedStrands][idle]")
 {
     auto base = ManualExecutor {};
