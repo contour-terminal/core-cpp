@@ -200,6 +200,36 @@ class RingQueue
     /// @return Past the back.
     [[nodiscard]] const_iterator end() const noexcept { return const_iterator { this, _size }; }
 
+    RingQueue() noexcept = default;
+    RingQueue(RingQueue const&) = delete;
+    RingQueue& operator=(RingQueue const&) = delete;
+
+    /// Takes @p other's elements, leaving it empty and usable: its head and size go with its slots,
+    /// or it would answer for elements it no longer has.
+    /// @param other The queue to take.
+    RingQueue(RingQueue&& other) noexcept:
+        _slots(std::exchange(other._slots, {})),
+        _head(std::exchange(other._head, 0)),
+        _size(std::exchange(other._size, 0))
+    {
+    }
+
+    /// As the move constructor; what this held is released.
+    /// @param other The queue to take.
+    /// @return This.
+    RingQueue& operator=(RingQueue&& other) noexcept
+    {
+        if (this != &other)
+        {
+            _slots = std::exchange(other._slots, {});
+            _head = std::exchange(other._head, 0);
+            _size = std::exchange(other._size, 0);
+        }
+        return *this;
+    }
+
+    ~RingQueue() = default;
+
   private:
     /// The capacity a first element allocates, and so the length below which a loop never grows.
     static constexpr std::size_t InitialCapacity = 16;

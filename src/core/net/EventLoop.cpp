@@ -633,6 +633,12 @@ void EventLoop::flushCompletionSlot()
     auto* const slot = _completionSlot;
     if (slot == nullptr || !slot->waiter)
         return;
+    // Room first, then the waiter: a failed allocation leaves it in its slot, where the callback's
+    // return still finds it, rather than in a queue entry that never got queued. (Reached from a
+    // completion or from the callback's unwinding, both noexcept, such a failure ends the process
+    // instead -- out of memory only.)
+    if (_callbackScratch.size() == _callbackScratch.capacity())
+        _callbackScratch.reserve(std::max(std::size_t { 8 }, 2 * _callbackScratch.capacity()));
     auto const owned = static_cast<bool>(slot->claim);
     _callbackScratch.push_back(ReadyEntry {
         .parked = async::detail::Parked { async::ParkedWork { .resume = std::exchange(slot->waiter, {}) } },

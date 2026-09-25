@@ -181,6 +181,32 @@ class ResumeTarget final
     /// @param executor Where to resume; must outlive every @c submit through this target.
     explicit ResumeTarget(IExecutor& executor) noexcept: _executor(&executor) {}
 
+    ResumeTarget(ResumeTarget const&) = default;
+    ResumeTarget& operator=(ResumeTarget const&) = default;
+
+    /// Takes @p other's executor and what keeps it alive, leaving @p other empty: a target that
+    /// kept the pointer without the keep-alive would name an executor it no longer holds.
+    /// @param other The target to take.
+    ResumeTarget(ResumeTarget&& other) noexcept:
+        _executor(std::exchange(other._executor, nullptr)), _keepAlive(std::move(other._keepAlive))
+    {
+    }
+
+    /// As the move constructor.
+    /// @param other The target to take.
+    /// @return This.
+    ResumeTarget& operator=(ResumeTarget&& other) noexcept
+    {
+        if (this != &other)
+        {
+            _executor = std::exchange(other._executor, nullptr);
+            _keepAlive = std::move(other._keepAlive);
+        }
+        return *this;
+    }
+
+    ~ResumeTarget() = default;
+
     /// @return The target of the calling thread's innermost @c ExecutorScope, or an empty one
     ///         outside every executor's task.
     [[nodiscard]] static ResumeTarget current() noexcept

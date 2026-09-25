@@ -12,6 +12,8 @@
 #include <cstddef>
 #include <deque>
 #include <mutex>
+#include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace core::async::testing
@@ -74,13 +76,25 @@ class ManualExecutor final: public IExecutor
         return true;
     }
 
+    /// How many resumptions @c drain makes, by default, before it calls the work endless.
+    static constexpr std::size_t DrainBound = std::size_t { 1 } << 20U;
+
     /// Resumes entries until none is left, including those the resumptions queue.
+    ///
+    /// Bounded: work that requeues itself for ever would otherwise hang the case that drains it,
+    /// where a bound fails it and says why.
+    /// @param bound How many resumptions to make at most.
     /// @return How many were resumed. What one throws propagates, and the rest stay queued.
-    std::size_t drain(std::size_t bound = 1U << 20U)
+    /// @throws std::length_error Where @p bound resumptions left work still queued.
+    std::size_t drain(std::size_t bound = DrainBound)
     {
         auto ran = std::size_t { 0 };
         while (ran < bound && runOne())
             ++ran;
+        if (ran == bound && pending() != 0)
+            throw std::length_error { "ManualExecutor::drain: " + std::to_string(bound)
+                                      + " resumptions and work is still queued -- work that requeues "
+                                        "itself for ever?" };
         return ran;
     }
 
