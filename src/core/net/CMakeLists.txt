@@ -59,6 +59,7 @@ set(_coreCppNetSubset
 # ManualClock and touch no descriptor, so they are cases the browser can run -- and the browser is
 # what Task B5's deadlines exist for.
 set(_coreCppNetSubsetTests
+    CompletionClaim_test.cpp
     DeadlineTimer_test.cpp
     HostDrivenBackend_test.cpp
     HostDrivenLoop_test.cpp
@@ -350,6 +351,8 @@ core_cpp_add_test(net
         testing/TestLoop_test.cpp
     # POSIX-only, each for its own reason. `ReactorSocket_test` names PosixSocket directly, and
     # `SocketRegistration_test` counts what PosixSocket's kept registration costs the backend.
+    # `CompletionCost_test` is a benchmark that reports USER time apart from system time, which it
+    # reads with `getrusage`.
     # `SocketDecorator_test` needs a WRITE that parks, and assumes no send buffer takes 8MiB: on
     # Windows a non-blocking send takes all of it at once (measured, Task B7b), so its third
     # section would retire nothing. `CancelRead_test` left this list with Task B7b, when `IocpSocket`
@@ -363,6 +366,7 @@ core_cpp_add_test(net
     # portable file would have had to carry both spellings behind an `#ifdef`, which is the shape
     # Ruling R40 keeps out of this module.
     SOURCES_POSIX
+        CompletionCost_test.cpp
         ReactorSocket_test.cpp
         SocketDecorator_test.cpp
         SocketRegistration_test.cpp

@@ -9,6 +9,25 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Changed
+
+- **A socket completion costs less on the loop's thread.** `ResultAwaitable::complete` hands its
+  waiter to the drain step (G2) through `EventLoop`'s ready queue, and for a chain rooted in a
+  `DetachedTask` -- every connection a server spawns -- the queue entry was a refcounted work item
+  whose claim cost five atomic operations per completion; it is now a `detail::CountedClaim`
+  costing two, with the same count, arm and teardown behaviour. The waiter a readiness callback
+  queues reaches the callback position by a swap of two vectors instead of a range insert and an
+  erase, and the drain resumes an entry in place rather than moving it out first. Measured with the
+  new `[bench]` cases (`core-cpp-net_backend-test "[bench]"`, gcc-release, median of five): a
+  completion through a drain-step callback went from 118.3 to 111.5 ns for a detached chain,
+  against 112.7 and 108.6 ns for a chain a caller owns. Nothing else a caller can observe changed:
+  the ordering (a waiter resumes in its callback's position), teardown (a detached chain is freed,
+  a borrowed one resumed) and take-back paths are the same, and each is a case in
+  `CompletionClaim_test.cpp`.
+  - `resumeSoonOn(EventLoop&, std::coroutine_handle<>, ...)`, `ResultAwaitable`'s out-of-line hook
+    in `<core/net/IoAwaitable.hpp>`, takes the chain's unowned root instead of a work-item factory.
+    No consumer calls it; a transport completes an operation through `ResultAwaitable::complete`.
+
 ### Fixed
 
 - **A loop with more ready connections than its drain bound no longer multiplies readiness

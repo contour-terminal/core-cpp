@@ -447,6 +447,23 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   `EventLoop::submit`, `resumeSoon`, `schedule(timePoint, ParkedWork)`. Origin:
   [fastcached#1025](https://github.com/LASTRADA-Software/fastcached/issues/1025), and core-cpp's
   own Task B1 fix round (controller ruling R97, commit `ac0ff76`), which is where it was a bug.
+- **One queue holds a claim that is counted and NOT referenced, and it is the loop's ready queue,
+  for a completion.** `ResultAwaitable::complete` is the hot path of every socket operation that
+  parks, and an `AbandonClaim` there cost five atomic operations per completion of a chain nobody
+  owns: the state's reference taken and dropped, the arm, the disarm, the release.
+  `detail::CountedClaim` costs two -- count-and-arm when queued, `giveBack`'s disarm-and-uncount
+  when resumed or taken back -- and reaches the state through the root's promise instead of
+  holding a reference to it. That is sound only where the parked frame takes its entry back if it
+  is destroyed first, which `~ResultAwaitable` does through `cancelPendingOn`, so the root's
+  promise outlives the claim: no other claim can free a counted chain, the chain cannot end while
+  the parked frame is suspended in it, and a chain destroyed by its owner destroys the frame's
+  locals before the promise. **It is given back BEFORE the resume**, where `Parked::resume`
+  releases after it, because the resume may end the chain and take the state with it; the one
+  path that can free the root (teardown, the last claim on an armed chain) holds a reference for
+  the length of that call. Anything else that holds work for later keeps `detail::Parked`: the
+  rule above is the default, and this is the exception with the reason it is safe.
+  `CompletionClaim_test.cpp` asserts the count, the arm and the absence of a reference while a
+  completion is queued, the free at teardown and the take-back.
 - **Both `IExecutor::submit` overloads are pure virtual, which is what actually closes the hiding
   hazard.** A derived class that re-declares one overload of a name hides every other overload of
   it — so an executor declaring only `submit(handle)` hides `submit(ParkedWork)`, fails to override

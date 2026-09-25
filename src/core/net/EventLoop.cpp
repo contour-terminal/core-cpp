@@ -525,10 +525,24 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
             // restored, so a callback that drives a nested drain leaves the outer one's entries
             // where they are; `cancelPending` marks an entry taken rather than erasing it, so no
             // range moves under a mark.
+            //
+            // The common case moves nothing at all: a callback that is the only one running, with
+            // the callback position already consumed, hands its whole scratch vector over by a swap
+            // -- the one waiter a readiness completion queues then costs no element move, and both
+            // vectors keep their capacity.
             auto const mark = _callbackScratch.size();
             auto* const previous = std::exchange(_queuedByCallback, &_callbackScratch);
             auto const inPosition = detail::ScopeGuard { [this, mark, previous]() noexcept {
                 _queuedByCallback = previous;
+                if (_callbackScratch.size() == mark)
+                    return;
+                if (mark == 0 && _resumeFirstHead == _resumeFirst.size())
+                {
+                    _resumeFirst.clear();
+                    _resumeFirstHead = 0;
+                    _resumeFirst.swap(_callbackScratch);
+                    return;
+                }
                 auto const first = _callbackScratch.begin() + static_cast<std::ptrdiff_t>(mark);
                 _resumeFirst.insert(_resumeFirst.begin() + static_cast<std::ptrdiff_t>(_resumeFirstHead),
                                     std::make_move_iterator(first),
@@ -540,12 +554,11 @@ std::size_t EventLoop::drainReadyQueue(std::size_t bound)
             continue;
         }
 
-        auto entry = std::move(*next);
-
         // `resume()` disowns and resumes in one expression, so work that runs normally is never
         // also freed by the entry going out of scope here -- and a handle it DECLINES to resume
-        // has its chain freed rather than dropped.
-        entry.parked.resume();
+        // has its chain freed rather than dropped. Resumed where `takeNextReady` put it: the entry
+        // is already out of both queues.
+        next->resume();
         ++resumed;
 
         // O(1) self-unlink: the turn that runs a spawned flow to its end releases its frame there
@@ -864,7 +877,7 @@ bool EventLoop::cancelPending(std::coroutine_handle<> handle) noexcept
         // released -- releasing the last claim would free the very frame the caller has just been
         // handed, which is the opposite of an ownership transfer.
         auto const source = found->sourcePark;
-        found->parked.take().abandon.disarm();
+        found->takeBack();
         if (erase)
             queue.erase(found);
         // **The park it was queued from comes down with it** -- the two structures answer "is it
@@ -1043,14 +1056,31 @@ bool EventLoop::cancelTimer(TimerId timer) noexcept
 
 void EventLoop::resumeSoon(async::ParkedWork work)
 {
+    queueSoon(entryFor(std::move(work)));
+}
+
+void EventLoop::resumeCompleted(std::coroutine_handle<> waiter, std::coroutine_handle<> unownedRoot)
+{
+    // No claim for an empty handle, which `queueSoon` drops: it would arm the chain with nothing
+    // left to give it back.
+    auto claim = waiter ? async::detail::CountedClaim::on(unownedRoot) : async::detail::CountedClaim {};
+    auto const owned = static_cast<bool>(claim);
+    queueSoon(ReadyEntry { .parked = async::detail::Parked { async::ParkedWork { .resume = waiter } },
+                           .ownedByLoop = owned,
+                           .claim = std::move(claim) });
+}
+
+void EventLoop::queueSoon(ReadyEntry entry)
+{
     // The same predicate the turn and the destructor use: this loop's own thread, or nobody
     // driving it. Anywhere else, this writes scheduler state beside a turn that is reading it.
+    // Named after `resumeSoon`, the public member, whose affinity canary reads this text.
     assert(teardownIsSerialisedWithDispatch()
            && "EventLoop::resumeSoon from a second thread while another is driving this loop: "
               "post() a call to it instead");
-    if (!work.resume)
+    if (!entry.parked.handle())
         return;
-    queueReady(std::move(work));
+    queueEntry(std::move(entry));
 
     // Ready work filed outside a turn asks for one, for `registerPark`'s reason. `wake()` and not
     // `armHostWake()` because this work has no deadline: "as soon as you can" is precisely what
@@ -1062,10 +1092,15 @@ void EventLoop::resumeSoon(async::ParkedWork work)
 
 void EventLoop::queueReady(async::ParkedWork work, ParkId sourcePark)
 {
+    queueEntry(entryFor(std::move(work), sourcePark));
+}
+
+EventLoop::ReadyEntry EventLoop::entryFor(async::ParkedWork work, ParkId sourcePark)
+{
     auto const owned = static_cast<bool>(work.abandon);
-    queueEntry(ReadyEntry { .parked = async::detail::Parked { std::move(work) },
-                            .ownedByLoop = owned,
-                            .sourcePark = sourcePark });
+    return ReadyEntry { .parked = async::detail::Parked { std::move(work) },
+                        .ownedByLoop = owned,
+                        .sourcePark = sourcePark };
 }
 
 void EventLoop::queueEntry(ReadyEntry entry)

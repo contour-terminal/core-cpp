@@ -67,14 +67,18 @@ void requestCancelOn(EventLoop& loop, ParkId park) noexcept;
 
 /// Hands @p waiter to @p loop's ready queue, to be resumed in its drain step, out of line for the
 /// same reason as @c requestCancelOn. Loop thread only, as @c EventLoop::resumeSoon.
+///
+/// **The waiter must take itself back out of the queue if its frame is destroyed first**
+/// (@c cancelPendingOn), as @c ResultAwaitable's destructor does: the claim the queue entry holds
+/// on @p unownedRoot is an @c async::detail::CountedClaim, which relies on exactly that.
 /// @param loop The loop to resume on.
 /// @param waiter The suspended coroutine.
-/// @param workFor Makes the loop's work item for @p waiter: the handle, with the claim on its chain
-///        where the loop is to free it. Called here rather than by the caller, so the work item --
-///        and the claim's release -- is built and destroyed out of line.
+/// @param unownedRoot The root of @p waiter's chain where nobody owns it -- the loop is then to
+///        free the chain rather than resume it if it is torn down first -- or an empty handle
+///        (@c async::detail::unownedRootOf).
 void resumeSoonOn(EventLoop& loop,
                   std::coroutine_handle<> waiter,
-                  async::ParkedWork (*workFor)(std::coroutine_handle<>)) noexcept;
+                  std::coroutine_handle<> unownedRoot) noexcept;
 
 /// Takes @p waiter back out of @p loop's ready queue, where @c resumeSoonOn put it, because its
 /// frame is being destroyed before the loop reached it. Loop thread only.
@@ -240,7 +244,7 @@ class ResultAwaitable
             return _task->await_suspend(awaiting);
 
         _waiter = awaiting;
-        _workFor = &parkedWorkOf<Promise>;
+        _unownedRoot = async::detail::unownedRootOf(awaiting);
         if constexpr (requires { awaiting.promise().stopToken(); })
             _token = awaiting.promise().stopToken();
 
@@ -345,11 +349,13 @@ class ResultAwaitable
     /// the client's read flow, the flow destroyed the client, and the second statement called
     /// through freed storage.
     ///
-    /// **Handed over with the chain's claim**, which `await_suspend` knew how to make and this
+    /// **Handed over with the chain's root**, which `await_suspend` knew how to find and this
     /// function, with a type-erased handle, does not: a chain nobody owns -- a @c DetachedTask --
     /// is the loop's to FREE if the loop is destroyed before it resumes it, and one handed over as
     /// a bare handle was filed as borrowed and resumed instead, running the rest of its body on a
-    /// loop being torn down.
+    /// loop being torn down. The loop claims the root when it queues the waiter, with the
+    /// two-atomic @c async::detail::CountedClaim rather than a refcounted work item, because this
+    /// is the hot path of every socket operation that parks.
     ///
     /// The loop is the one the owner named through @c cancelThrough. An owner that named none -- a
     /// loop-less test double such as @c testing::InMemorySocket, or a transport written before
@@ -372,7 +378,7 @@ class ResultAwaitable
         if (_loop != nullptr)
         {
             _queued = waiter;
-            resumeSoonOn(*_loop, waiter, _workFor);
+            resumeSoonOn(*_loop, waiter, _unownedRoot);
             return;
         }
         waiter.resume();
@@ -442,17 +448,6 @@ class ResultAwaitable
         bool* _flag;
     };
 
-    /// @c async::detail::parkedWorkFor for the awaiting coroutine's promise type, which only
-    /// `await_suspend` knows, kept for @c complete.
-    /// @tparam Promise The awaiting coroutine's promise type.
-    /// @param waiter The awaiting coroutine.
-    /// @return The handle, with a claim on its chain where nobody else owns it.
-    template <typename Promise>
-    [[nodiscard]] static async::ParkedWork parkedWorkOf(std::coroutine_handle<> waiter)
-    {
-        return async::detail::parkedWorkFor(std::coroutine_handle<Promise>::from_address(waiter.address()));
-    }
-
     /// Tells the owner to forget this operation, exactly once.
     void retireNow() noexcept
     {
@@ -481,8 +476,10 @@ class ResultAwaitable
     std::optional<async::StopCallback<std::function<void()>>> _cancelReg;
     std::coroutine_handle<> _waiter {};
 
-    /// How @c complete makes the loop's work item for @c _waiter; set with it.
-    async::ParkedWork (*_workFor)(std::coroutine_handle<>) = nullptr;
+    /// The root of @c _waiter's chain where nobody owns it, or empty; set with it, because only
+    /// `await_suspend` knows the promise type that answers it, and handed to the loop by
+    /// @c complete, which claims it there.
+    std::coroutine_handle<> _unownedRoot {};
 
     /// The waiter @c complete handed to the loop, until `await_resume` runs; the destructor takes it
     /// back if the frame is destroyed first.

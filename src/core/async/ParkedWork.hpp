@@ -111,6 +111,22 @@ namespace detail
         /// and never a step of its own -- see the note there for what a bare re-arm cost.
         void disarm() noexcept { _word.fetch_and(~ArmedBit, std::memory_order_release); }
 
+        /// Gives up one park's claim AND gives the chain back, in one step: `disarm()` followed by a
+        /// `release()` that therefore cannot free anything, for the price of one atomic operation
+        /// rather than two.
+        ///
+        /// It is what a park does when it is resumed or taken back -- the chain is running again, or
+        /// is about to be handed to whoever took it -- so it never frees the root. The count must
+        /// include this claim.
+        void releaseDisarmed() noexcept
+        {
+            auto expected = _word.load(std::memory_order_relaxed);
+            while (!_word.compare_exchange_weak(
+                expected, (expected - 1) & ~ArmedBit, std::memory_order_release, std::memory_order_relaxed))
+            {
+            }
+        }
+
         /// @return Whether the chain is still this state's to free.
         [[nodiscard]] bool armed() const noexcept
         {
@@ -287,13 +303,31 @@ namespace detail
             return {};
     }
 
-    /// The claim on @p root, made by the first park of a chain and shared by every later one.
+    /// @param root A chain root, as @c unownedRootOf answers: always a @c DetachedTask, whose handle
+    ///        therefore converts back to the typed one that names the promise.
+    /// @return The root's promise, which holds the chain's @c AbandonState.
+    [[nodiscard]] inline DetachedTask::promise_type& rootPromiseOf(std::coroutine_handle<> root) noexcept
+    {
+        return std::coroutine_handle<DetachedTask::promise_type>::from_address(root.address()).promise();
+    }
+
+    /// The state every park of @p root's chain shares, made by the first park and found by every
+    /// later one.
     ///
-    /// The state lives in the root's own promise, so the sharing needs no registry: @p root is a
-    /// @c DetachedTask -- that is the only thing @c unownedRootOf ever answers with -- so its
-    /// handle converts back to the typed one that names the slot. `std::call_once` rather than a
-    /// null check, because a fan-out's children can park on two threads at once and two null
-    /// checks make two states, which is the very thing this exists to prevent.
+    /// The state lives in the root's own promise, so the sharing needs no registry. `std::call_once`
+    /// rather than a null check, because a fan-out's children can park on two threads at once and
+    /// two null checks make two states, which is the very thing this exists to prevent.
+    /// @param root The chain root; must not be empty.
+    /// @return The state, as the root's promise holds it.
+    [[nodiscard]] inline std::shared_ptr<AbandonState> const& sharedStateOf(std::coroutine_handle<> root)
+    {
+        auto& promise = rootPromiseOf(root);
+        std::call_once(promise.abandonOnce,
+                       [&promise, root] { promise.abandonState = std::make_shared<AbandonState>(root); });
+        return promise.abandonState;
+    }
+
+    /// The claim on @p root, made by the first park of a chain and shared by every later one.
     /// @param root The chain root, or an empty handle for a chain somebody owns.
     /// @return A claim on it, or an empty claim.
     [[nodiscard]] inline AbandonClaim claimOn(std::coroutine_handle<> root)
@@ -301,17 +335,114 @@ namespace detail
         if (!root)
             return {};
 
-        auto& promise =
-            std::coroutine_handle<DetachedTask::promise_type>::from_address(root.address()).promise();
-        std::call_once(promise.abandonOnce,
-                       [&promise, root] { promise.abandonState = std::make_shared<AbandonState>(root); });
+        auto const& state = sharedStateOf(root);
         // A chain that parks again is one an executor may once more have to free, so a fresh claim
         // undoes whatever an earlier resumption disarmed -- and takes the count with it, in the
         // same atomic step, because a chain that is armed but uncounted reads as abandoned to a
         // concurrent `release()`.
-        promise.abandonState->claimAndArm();
-        return AbandonClaim { AbandonClaim::Adopt {}, promise.abandonState };
+        state->claimAndArm();
+        return AbandonClaim { AbandonClaim::Adopt {}, state };
     }
+
+    /// One park's claim on a chain nobody owns, COUNTED in the chain's state like an
+    /// @c AbandonClaim but holding no reference to that state: it names the root, and reaches the
+    /// state through the root's promise.
+    ///
+    /// **Why it exists: it is the claim of the hottest park there is.** Every socket operation that
+    /// parks is completed by its owner and queued for the loop's drain step (G2), and for a chain
+    /// rooted in a @c DetachedTask -- every connection a server spawns -- that queue entry needs a
+    /// claim. An @c AbandonClaim costs five atomic operations over its life: the reference taken
+    /// and dropped on the state, the arm, the disarm at the resume and the release after it. This
+    /// costs two: the arm and count in one step when the park is made, and @c giveBack's disarm
+    /// and uncount in one step when it is resumed or taken back.
+    ///
+    /// **What makes the missing reference safe is where it may be held**, and it is a narrower
+    /// place than an @c AbandonClaim's: a queue whose entry the parked frame TAKES BACK if it is
+    /// destroyed before the queue reaches it -- @c EventLoop's ready queue, which
+    /// @c net::ResultAwaitable's destructor searches. The root's promise, which holds the state,
+    /// is then alive for as long as this claim is:
+    ///
+    /// - no other claim can free the root, because this one is counted;
+    /// - the root cannot end normally, because the frame this claim parks is suspended inside it;
+    /// - a chain destroyed by its owner destroys the parked frame's locals -- the awaitable that
+    ///   takes the entry back, and this claim with it -- before the root's promise;
+    /// - and @c giveBack runs BEFORE the resume, not after it as @c Parked::resume releases its
+    ///   claim: the resume may run the chain to its end, which frees the root and the state with
+    ///   it. Giving back first loses nothing, because a resumed park disarms before resuming in
+    ///   both, so no other claim could have freed the chain in between.
+    ///
+    /// The one path that can FREE the root -- the last claim on an armed chain, dropped by a loop
+    /// being torn down -- takes a reference for the length of that release, since the state goes
+    /// with the root's promise inside it.
+    class CountedClaim final
+    {
+      public:
+        CountedClaim() noexcept = default;
+
+        /// Claims @p root for one park: counts the park and arms the chain in one step, as
+        /// @c claimOn does.
+        /// @param root The chain root, or an empty handle for a chain somebody owns.
+        /// @return The claim, or an empty one.
+        [[nodiscard]] static CountedClaim on(std::coroutine_handle<> root)
+        {
+            if (!root)
+                return {};
+            sharedStateOf(root)->claimAndArm();
+            return CountedClaim { root };
+        }
+
+        CountedClaim(CountedClaim const&) = delete;
+        CountedClaim& operator=(CountedClaim const&) = delete;
+
+        CountedClaim(CountedClaim&& other) noexcept: _root(std::exchange(other._root, {})) {}
+
+        CountedClaim& operator=(CountedClaim&& other) noexcept
+        {
+            if (this != &other)
+            {
+                reset();
+                _root = std::exchange(other._root, {});
+            }
+            return *this;
+        }
+
+        /// Releases the claim, freeing the chain if it was the last one on an armed chain.
+        ~CountedClaim()
+        {
+            if (_root)
+                reset();
+        }
+
+        /// @return Whether this claim names a chain at all.
+        explicit operator bool() const noexcept { return static_cast<bool>(_root); }
+
+        /// Gives the chain back and this claim up, in one atomic step: what a park does when it is
+        /// resumed or taken back. Never frees. Empty afterwards.
+        void giveBack() noexcept
+        {
+            if (auto const root = std::exchange(_root, {}))
+                rootPromiseOf(root).abandonState->releaseDisarmed();
+        }
+
+        /// Gives this claim up now, which frees the chain if it was the last one on an armed chain;
+        /// empty afterwards.
+        void reset() noexcept
+        {
+            auto const root = std::exchange(_root, {});
+            if (!root)
+                return;
+            // Held for the length of the call: freeing the root destroys its promise, and with it
+            // the promise's reference, which may be the state's last.
+            auto const state = rootPromiseOf(root).abandonState;
+            state->release();
+        }
+
+      private:
+        /// @param root The chain root, whose state already counts this claim.
+        explicit CountedClaim(std::coroutine_handle<> root) noexcept: _root(root) {}
+
+        std::coroutine_handle<> _root;
+    };
 
     /// How a coroutine parks itself on an @c IExecutor.
     ///

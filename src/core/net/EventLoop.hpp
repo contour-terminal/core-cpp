@@ -619,6 +619,11 @@ class EventLoop: public async::IExecutor
     /// @param work The coroutine to resume, and the chain root to free if it is not.
     void resumeSoon(async::ParkedWork work);
 
+    /// A frame-free operation's completion, and nothing else: see @c resumeCompleted.
+    friend void resumeSoonOn(EventLoop& loop,
+                             std::coroutine_handle<> waiter,
+                             std::coroutine_handle<> unownedRoot) noexcept;
+
     /// Parks @p entry: registers its handle with the backend if it names one, arms its deadline if
     /// it has one, and files it so a cancel can find it by id.
     ///
@@ -745,12 +750,22 @@ class EventLoop: public async::IExecutor
         std::optional<platform::SteadyDuration> maxWait);
 
     /// Queues @p work for the next drain, recording whether its chain is the loop's to free.
-    ///
-    /// The one place a @c ReadyEntry is made, so the flag cannot be got wrong at one site out of
-    /// six.
     /// @param work The coroutine to resume, and the chain root to free if it is not.
     /// @param sourcePark The park @p work was taken from, if any; see @c ReadyEntry::sourcePark.
     void queueReady(async::ParkedWork work, ParkId sourcePark = ParkId::invalid());
+
+    /// @c resumeSoon for a frame-free operation's waiter (@c net::ResultAwaitable::complete, through
+    /// @c resumeSoonOn): the same queueing, with the chain claimed by an
+    /// @c async::detail::CountedClaim rather than handed over as a refcounted work item.
+    ///
+    /// **A separate path because it is the hot one.** Every socket operation that parks ends here,
+    /// and for a chain nobody owns the work item's claim was five atomic operations per completion
+    /// against this one's two. The claim is sound only where the waiter takes its queue entry back
+    /// if its frame is destroyed first, which the awaitable does -- the reason this is reachable
+    /// from @c resumeSoonOn alone and not a public overload of @c resumeSoon.
+    /// @param waiter The suspended coroutine.
+    /// @param unownedRoot Its chain's root where nobody owns it, or an empty handle.
+    void resumeCompleted(std::coroutine_handle<> waiter, std::coroutine_handle<> unownedRoot);
 
     /// Turn step 5: queues the waiters of every park whose deadline has been reached.
     /// @return How many were queued.
@@ -899,6 +914,35 @@ class EventLoop: public async::IExecutor
         /// name the park for `cancelPending` to take it too. Without it the caller owned a frame the
         /// backend still held a handler for: core-cpp#41.
         ParkId sourcePark {};
+
+        /// The claim a COMPLETION queued its waiter with (@c resumeCompleted), in place of
+        /// @c parked's own, which is empty then; empty for every other entry.
+        ///
+        /// It is given back BEFORE the waiter resumes rather than after, because it holds no
+        /// reference to the chain's state and the resume may end the chain -- see
+        /// @c async::detail::CountedClaim.
+        async::detail::CountedClaim claim {};
+
+        /// Resumes the entry's coroutine, giving its chain back first; a handle that cannot be
+        /// resumed has its chain freed rather than dropped, as @c async::detail::Parked::resume.
+        void resume()
+        {
+            if (auto const handle = parked.handle(); handle && !handle.done())
+                claim.giveBack();
+            parked.resume();
+            // Empty after a resume. For a handle `parked` declined, the claim goes here, AFTER that
+            // look at the handle, and frees the chain if it was the last one on it.
+            claim.reset();
+        }
+
+        /// Takes the entry's coroutine back for a caller that becomes its only owner: the chain is
+        /// given back rather than released, since releasing the last claim would free the very
+        /// frame the caller has just been handed.
+        void takeBack() noexcept
+        {
+            parked.take().abandon.disarm();
+            claim.giveBack();
+        }
     };
 
     /// Teardown: takes what the loop OWNS out of the ready queue, to be freed rather than resumed,
@@ -1061,6 +1105,19 @@ class EventLoop: public async::IExecutor
     /// that callback's position (@c _queuedByCallback). Every @c ReadyEntry goes through here.
     /// @param entry What to queue.
     void queueEntry(ReadyEntry entry);
+
+    /// What @c resumeSoon and @c resumeCompleted share: the affinity assertion, the queueing, and
+    /// the wake outside a turn.
+    /// @param entry What to queue.
+    void queueSoon(ReadyEntry entry);
+
+    /// The one place a @c ReadyEntry is made from a work item, so the ownership flag cannot be got
+    /// wrong at one site out of six. A completion's entry, which carries no work item, is made by
+    /// @c resumeCompleted.
+    /// @param work The coroutine to resume, and the chain root to free if it is not.
+    /// @param sourcePark The park @p work was taken from, if any; see @c ReadyEntry::sourcePark.
+    /// @return The entry, flagged as the loop's to free exactly where @p work carries a claim.
+    [[nodiscard]] static ReadyEntry entryFor(async::ParkedWork work, ParkId sourcePark = ParkId::invalid());
 
     /// Live spawned background flows. A `std::list` because a completing flow unlinks ITSELF in
     /// O(1) through the iterator its root holds: a `vector` swept with `erase_if` every turn is
