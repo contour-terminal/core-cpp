@@ -36,9 +36,9 @@
 // The page allocator is the one platform difference here, and it is test scaffolding: Windows'
 // VirtualAlloc/VirtualProtect, POSIX's mmap/mprotect, and plain malloc where there is neither
 // (WebAssembly), which guards nothing.
-#if defined(_WIN32)
+#ifdef _WIN32
     #include <windows.h>
-#elif !defined(__EMSCRIPTEN__)
+#elifndef __EMSCRIPTEN__
     #include <sys/mman.h>
 
     #include <unistd.h>
@@ -51,7 +51,7 @@ namespace
 thread_local bool guardAllocations = false;
 
 /// Where a block's storage came from.
-enum class Backing : std::uint64_t
+enum class Backing : std::uint8_t
 {
     Heap,  ///< `malloc`, and back to `free`.
     Pages, ///< Pages of its own, revoked rather than freed.
@@ -72,11 +72,11 @@ static_assert(sizeof(BlockHeader) % alignof(std::max_align_t) == 0);
 /// @return The size of a page.
 std::size_t pageSize() noexcept
 {
-#if defined(_WIN32)
+#ifdef _WIN32
     auto info = SYSTEM_INFO {};
     GetSystemInfo(&info);
     return info.dwPageSize;
-#elif !defined(__EMSCRIPTEN__)
+#elifndef __EMSCRIPTEN__
     return static_cast<std::size_t>(sysconf(_SC_PAGESIZE));
 #else
     return 64 * 1024;
@@ -86,9 +86,9 @@ std::size_t pageSize() noexcept
 /// Maps @p length bytes of fresh, readable and writable pages.
 void* mapPages(std::size_t length) noexcept
 {
-#if defined(_WIN32)
+#ifdef _WIN32
     return VirtualAlloc(nullptr, length, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-#elif !defined(__EMSCRIPTEN__)
+#elifndef __EMSCRIPTEN__
     auto* const pages = mmap(nullptr, length, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     return pages == MAP_FAILED ? nullptr : pages;
 #else
@@ -99,10 +99,10 @@ void* mapPages(std::size_t length) noexcept
 /// Makes @p length bytes at @p base fault on any access, for good: they are never handed out again.
 void revokePages([[maybe_unused]] void* base, [[maybe_unused]] std::size_t length) noexcept
 {
-#if defined(_WIN32)
+#ifdef _WIN32
     auto previous = DWORD {};
     VirtualProtect(base, length, PAGE_NOACCESS, &previous);
-#elif !defined(__EMSCRIPTEN__)
+#elifndef __EMSCRIPTEN__
     mprotect(base, length, PROT_NONE);
 #endif
 }

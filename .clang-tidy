@@ -62,6 +62,11 @@
 #     `[[nodiscard]]`, where the attribute then appertains to the return type.
 #   * `readability-redundant-member-init` -- its fix drops a load-bearing `T member {};`
 #     from aggregates built with designated initializers that omit fields.
+#   * `performance-trivially-destructible` -- its fix makes a type trivially destructible, and
+#     `core::async::DetachedTask`'s out-of-line defaulted destructor exists to stop exactly that:
+#     a trivial empty return object is one clang-cl at -O0 reloads from a coroutine frame that
+#     may already be freed (core-cpp#51). An empty in-class body is what
+#     `modernize-use-equals-default` refuses, so out of line is the one spelling left.
 #
 # One directory departs from this list, and says so in its own file:
 # `src/core/tui/.clang-tidy` raises `readability-function-cognitive-complexity` to 210 for
@@ -139,6 +144,7 @@ Checks: >-
   portability-*,
   -portability-avoid-pragma-once,
   -performance-no-int-to-ptr,
+  -performance-trivially-destructible,
   readability-*,
   -readability-avoid-unconditional-preprocessor-if,
   -readability-braces-around-statements,

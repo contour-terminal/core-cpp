@@ -202,7 +202,7 @@ and `Detail::` `detail::`:
   caller to hand it to. Its promise answers `stopToken()` with a never-stopped token, so a `Task`
   awaited from it takes the ordinary inheritance path. It is the one coroutine shape in the module
   that nothing owns, which is what makes the next entry answerable. Its destructor is
-  user-provided and empty, which makes the type non-trivial: whoever the body first suspends into
+  defaulted out of line, which makes it user-provided and the type non-trivial: whoever the body first suspends into
   may run it to its end and free the frame before the call that started it returns, and a trivial
   return object is one clang-cl at `-O0` reloads from that frame on the way out (core-cpp#51).
 - `ParkedWork` (`<core/async/ParkedWork.hpp>`) is what a coroutine hands an executor: the handle

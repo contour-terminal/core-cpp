@@ -655,8 +655,9 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
 - **A coroutine type whose frame frees itself has a non-trivial destructor.** A trivial empty
   return object comes back in a register, and clang-cl at `-O0` reloads the ramp's copy of it from
   the frame after the first suspension -- which a pool thread, a loop on another thread or an inline
-  resume may already have freed (core-cpp#51). `DetachedTask`'s empty user-provided destructor is
-  what moves it to a caller-owned return slot; `= default` would not. `async-detached-frame` turns
+  resume may already have freed (core-cpp#51). `DetachedTask`'s destructor, defaulted out of line
+  and so user-provided, is what moves it to a caller-owned return slot; `= default` in the class
+  would not, and a `static_assert` beside it says so. `async-detached-frame` turns
   freed frames into inaccessible pages, so the read faults rather than passing.
 - **A kept strand goes to another key only when nothing else references it.** `KeyedStrands`
   keeps retired strands for reuse; one a parked coroutine still holds through its `ResumeTarget`

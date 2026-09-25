@@ -17,8 +17,8 @@ workflow refuses one without a section here.
   suspension. When that suspension handed the coroutine to something that ran it to its end first
   -- a pool thread, an event loop on another thread, an `await_suspend` that resumes inline -- the
   frame was already freed. fastcached's shutdown flows, which hop onto a loop from another thread
-  and finish there, have this shape. `DetachedTask` now has a user-provided empty destructor, so
-  every ABI returns it through a pointer the caller owns. The type is no longer trivially
+  and finish there, have this shape. `DetachedTask`'s destructor is now defaulted out of line, which
+  makes it user-provided, so every ABI returns it through a pointer the caller owns. The type is no longer trivially
   destructible; nothing else about it changes.
 
 ## [0.4.1] - 2026-09-25
