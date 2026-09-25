@@ -60,6 +60,13 @@ drain slot for ever, and the loop's own `dispatchBatch` would bound nothing.
   `submit` can each throw, and each comes before the phase it would change is published, or is
   rolled back: a strand left "scheduled" with nothing queued anywhere accepted every later submit
   and ran none of them. `StrandAllocation_test.cpp` fails every allocation of a first submit in turn.
+- **Keeping the queue when the base refuses the pump.** Other threads queue behind a scheduled pump
+  and are told their work was accepted; if the base then refuses the pump, keeping their work
+  leaves it with no pump to run it, and a keyed strand idle in its registry for ever. A refusal
+  means the base is not running this strand, so the queue is abandoned as destruction abandons it,
+  the refused submitter gets its exception and its own work back, and the strand starts afresh on
+  the next submit. `~Strand` waits for a hand-off still inside the base's `submit`, or it would
+  free the work that submitter is about to be given back.
 - **Swallowing what a task throws** (morph logged it): `core::async` has no logger and depends on
   nothing, and a strand that hid an exception would make a bug quiet. What a task throws out of
   `resume()` -- which no coroutine type of this module does -- propagates to whoever resumed the

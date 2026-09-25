@@ -94,7 +94,9 @@ namespace detail
         {
             auto const handle = work.resume;
             auto pump = std::coroutine_handle<> {};
-            auto* strand = static_cast<KeyStrandType*>(nullptr);
+            // Held, not borrowed: once the pump is queued the strand can run, retire and let go of
+            // itself before the hand-off below has been told how the base answered.
+            auto strand = std::shared_ptr<KeyStrandType> {};
             try
             {
                 auto const lock = std::scoped_lock { _mutex };
@@ -109,7 +111,7 @@ namespace detail
                                .first;
                 // Under the registry's lock, so a retirement cannot slip between the lookup and the
                 // queueing: `retire` takes this lock first, then the strand's.
-                strand = slot->second.get();
+                strand = slot->second;
                 pump = strand->enqueue(std::move(work));
             }
             catch (...)
@@ -120,7 +122,6 @@ namespace detail
                 throw;
             }
             // Outside every lock: a base that resumes inline runs the strand's tasks in this call.
-            // The strand outlives it -- a scheduled pump holds it, and only the base runs the pump.
             if (pump)
                 strand->queueOnBase(pump, handle);
         }

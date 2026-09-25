@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -32,6 +33,7 @@
 using core::async::currentExecutor;
 using core::async::DetachedTask;
 using core::async::IExecutor;
+using core::async::ParkedWork;
 using core::async::Task;
 using core::async::testing::ManualExecutor;
 
@@ -297,6 +299,36 @@ TEST_CASE("KeyedStrands destroyed from inside one of its own tasks neither waits
     CHECK(base.pending() == 0);
 }
 
+namespace
+{
+
+/// A base that refuses every submit.
+class RefusingBase final: public IExecutor
+{
+  public:
+    using IExecutor::submit;
+    void submit(std::coroutine_handle<> /*handle*/) override { throw std::runtime_error { "refused" }; }
+    void submit(ParkedWork /*work*/) override { throw std::runtime_error { "refused" }; }
+};
+
+} // namespace
+
+TEST_CASE("A key whose first hand-off the base refuses leaves no strand behind", "[KeyedStrands][exceptions]")
+{
+    // Before the fix the key's new strand stayed in the registry, idle, with nothing to retire it:
+    // size() stayed 1 and waitIdle() never returned.
+    auto base = RefusingBase {};
+    auto strands = Strands { base };
+    auto order = std::vector<int> {};
+    auto task = append(&strands, 9, &order, 1);
+
+    task.handle().resume(); // the refusal reaches the Task, which keeps it for its awaiter
+    REQUIRE(task.done());
+    CHECK_THROWS_AS(task.result(), std::runtime_error);
+    CHECK(strands.size() == 0);
+    CHECK(order.empty());
+}
+
 #if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
 
 namespace
@@ -470,6 +502,20 @@ TEST_CASE("waitIdle waits for every key's work, including work that work submits
         CHECK(finished.load() == 16);
         CHECK(strands.size() == 0);
     }
+}
+
+TEST_CASE("waitIdle returns after a key's first hand-off was refused", "[KeyedStrands][exceptions][threads]")
+{
+    auto base = RefusingBase {};
+    auto strands = Strands { base };
+    auto order = std::vector<int> {};
+    auto task = append(&strands, 9, &order, 1);
+    task.handle().resume(); // the refusal reaches the Task, which keeps it for its awaiter
+    REQUIRE(task.done());
+    CHECK_THROWS_AS(task.result(), std::runtime_error);
+    REQUIRE(strands.size() == 0); // or waitIdle below would never return
+    strands.waitIdle();
+    CHECK(order.empty());
 }
 
 #endif

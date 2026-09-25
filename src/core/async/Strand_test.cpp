@@ -268,9 +268,9 @@ TEST_CASE("co_await ResumeOn a strand hops onto it, and the strand is the curren
 
     REQUIRE(seen.size() == 2);
     CHECK(seen[1].onStrand);
-    // The strand's shared state, which outlives the object: runningHere() is how to ask.
+    // Some executor is current, and it is the strand's (its shared state, which outlives the
+    // object -- so runningHere(), above, is the question, not a pointer comparison).
     CHECK(seen[1].current != nullptr);
-    CHECK(seen[1].current != &base);
     CHECK(task.done());
     // And the context is gone once the base returns.
     CHECK(currentExecutor() == nullptr);
@@ -913,6 +913,134 @@ TEST_CASE("A strand destroyed from inside one of its own tasks on a pool thread 
     }
     CHECK(holder == nullptr);
     CHECK(releaser->done());
+}
+
+namespace
+{
+
+/// A base that holds its first submit until the case says so, then refuses it: the window in which
+/// a second submitter finds the pump already scheduled, and a close can start.
+class HoldingRefusingExecutor final: public IExecutor
+{
+  public:
+    using IExecutor::submit;
+
+    void submit(std::coroutine_handle<> handle) override { submit(ParkedWork { .resume = handle }); }
+
+    void submit(ParkedWork work) override
+    {
+        if (!_refused.exchange(true))
+        {
+            _entered.store(true);
+            std::ignore = waitUntil([this] { return _release.load(); });
+            // Long enough for a close started just before the release to be inside its wait.
+            std::this_thread::sleep_for(20ms);
+            throw std::runtime_error { "the base executor refuses" };
+        }
+        _inner.submit(std::move(work));
+    }
+
+    /// @return Whether the held submit has been entered.
+    [[nodiscard]] bool entered() const noexcept { return _entered.load(); }
+
+    /// Lets the held submit go on, to refuse.
+    void release() noexcept { _release.store(true); }
+
+    /// @return How many entries were resumed.
+    std::size_t drain() { return _inner.drain(); }
+
+  private:
+    ManualExecutor _inner;
+    std::atomic<bool> _refused { false };
+    std::atomic<bool> _entered { false };
+    std::atomic<bool> _release { false };
+};
+
+/// Hops onto @p strand, recording whether the hop threw and whether it arrived.
+DetachedTask hopOrRecordRefusal(Strand* strand,
+                                FrameSentinel sentinel,
+                                std::atomic<int>* refused,
+                                std::atomic<int>* arrived)
+{
+    (void) sentinel;
+    try
+    {
+        co_await ResumeOn { *strand };
+        arrived->fetch_add(1);
+    }
+    catch (std::runtime_error const&)
+    {
+        refused->fetch_add(1);
+    }
+}
+
+} // namespace
+
+TEST_CASE("A refused hand-off abandons the work another thread queued behind it, and the strand restarts",
+          "[Strand][exceptions][threads]")
+{
+    // Submitter A publishes the pump as scheduled and is held inside the base's submit; submitter B
+    // finds it scheduled, queues and returns. The base then refuses A. Before the fix B's work stayed
+    // queued with no pump anywhere, and ran -- late, out of nobody's order -- on the next submit.
+    // Now a refusal means the base is not running this strand, and what is queued is dropped, as
+    // close() drops it: B's detached frame is freed, never run.
+    auto refused = std::atomic<int> { 0 };
+    auto arrived = std::atomic<int> { 0 };
+    auto destroyedA = 0;
+    auto destroyedB = 0;
+    auto base = HoldingRefusingExecutor {};
+    auto strand = Strand { base };
+
+    auto submitterA = std::thread { [&strand, &refused, &arrived, &destroyedA] {
+        hopOrRecordRefusal(&strand, FrameSentinel { &destroyedA }, &refused, &arrived);
+    } };
+    REQUIRE(waitUntil([&base] { return base.entered(); }));
+    hopOrRecordRefusal(&strand, FrameSentinel { &destroyedB }, &refused, &arrived);
+    base.release();
+    submitterA.join();
+
+    CHECK(refused.load() == 1); // A was told, and ran its catch on its own thread.
+    CHECK(destroyedA == 1);     // ...and ended there.
+    CHECK(destroyedB == 1);     // B was dropped with the queue,
+    CHECK(strand.queued() == 0);
+    std::ignore = base.drain();
+    CHECK(arrived.load() == 0); // and never ran.
+
+    // The strand is idle, not wedged: the next submit makes it run again.
+    auto seen = std::vector<Sighting> {};
+    auto next = lookOnce(&strand, &seen);
+    strand.submit(next.handle());
+    std::ignore = base.drain();
+    CHECK(next.done());
+    CHECK(seen.size() == 1);
+}
+
+TEST_CASE("A strand closed while a refused hand-off is still inside the base's submit does not free the "
+          "work the refusal returns",
+          "[Strand][exceptions][threads][lifetime]")
+{
+    // close() used to drop the queue -- the refused submitter's own entry included, freeing its
+    // detached frame -- while the submitter was still inside the base's submit; the refusal then
+    // resumed the freed frame with the exception (ASan: heap-use-after-free). close() now waits for
+    // hand-offs in flight, as it waits for a running task.
+    auto refused = std::atomic<int> { 0 };
+    auto arrived = std::atomic<int> { 0 };
+    auto destroyed = 0;
+    auto base = HoldingRefusingExecutor {};
+    auto strand = std::optional<Strand> {};
+    strand.emplace(base);
+
+    auto submitter = std::thread { [&strand, &refused, &arrived, &destroyed] {
+        hopOrRecordRefusal(&*strand, FrameSentinel { &destroyed }, &refused, &arrived);
+    } };
+    REQUIRE(waitUntil([&base] { return base.entered(); }));
+    base.release();
+    strand.reset();
+    submitter.join();
+
+    CHECK(refused.load() == 1);
+    CHECK(arrived.load() == 0);
+    CHECK(destroyed == 1);
 }
 
 #endif

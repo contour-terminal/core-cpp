@@ -614,11 +614,18 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   strand task sees as current is that state, never the owner object. A scope without the anchor was
   review round 1's HIGH: a push after the strand died submitted to freed storage.
 - **Nothing a strand publishes may be followed by a step that can throw.** The pump's frame is made,
-  then the entry queued, and only then is "scheduled" published; a base that refuses the pump has it
-  unscheduled and the work taken back out, or between turns keeps the thread; a thrown submit
-  disarms its claim, because the caller resumes the coroutine with the exception. Published first,
-  a throw left a pump "scheduled" that nothing would run -- every later submit queued behind it and
-  `~Strand` waited for ever. `async-alloc` fails each allocation in turn.
+  then the entry queued, and only then is "scheduled" published; a thrown submit disarms its claim,
+  because the caller resumes the coroutine with the exception. Published first, a throw left a pump
+  "scheduled" that nothing would run -- every later submit queued behind it and `~Strand` waited for
+  ever. `async-alloc` fails each allocation in turn.
+- **A refused hand-off abandons the queue, and `close()` waits for hand-offs in flight.** Between
+  publishing "scheduled" and the base's answer, other threads queue behind the pump and are told
+  yes; if the base then refuses, taking back only the refused submitter's entry strands theirs with
+  no pump (review round 2's MEDIUM), so everything else queued is dropped as `close()` drops it and
+  a keyed strand is retired through its owner. And `close()` must not drop the refused submitter's
+  own entry while it is still inside the base's `submit`: the refusal then resumes a freed frame
+  (ASan). `_handOffs` counts them, and `close()` waits for zero as it waits for `Running`. Between
+  turns a refusal keeps the thread instead: there is nobody to tell.
 - **A strand's pump decides "idle" in its own `await_suspend`, under the strand's lock**, so a
   submit either sees it running and only queues, or sees it suspended and may queue it on the base.
   Deciding before suspending lets a submit on another thread resume a pump that has not suspended.

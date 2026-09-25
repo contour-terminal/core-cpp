@@ -339,8 +339,15 @@ namespace detail
             }
         }
 
-        /// Hands @p pump, which @c enqueue answered, to the base; where the base refuses, takes the
-        /// work queued with it back out and rethrows, so the strand is where it was.
+        /// Hands @p pump, which @c enqueue answered, to the base.
+        ///
+        /// **A refusal abandons the strand's queued work.** A base whose `submit` throws is not
+        /// running this strand, so what is queued -- including work other threads queued behind
+        /// the scheduled pump and were told was accepted -- is dropped as `close()` drops it:
+        /// a chain nobody owns is freed, and a coroutine a `Task` owns is left to its owner. The
+        /// caller's own work is taken back out, its claim disarmed, and the exception rethrown to
+        /// it. The strand is then idle, and a keyed strand is retired through its owner, so the
+        /// next submit starts afresh.
         /// @param pump The pump, published as scheduled.
         /// @param withdraw The coroutine whose submit published it, to take back on a refusal.
         void queueOnBase(std::coroutine_handle<> pump, std::coroutine_handle<> withdraw)
@@ -351,18 +358,28 @@ namespace detail
             }
             catch (...)
             {
+                // The owner may let go of this strand below -- a keyed strand is erased from its
+                // registry -- and the pump, which also holds it, may be freed with it.
+                auto const keep = shared_from_this();
                 auto taken = Parked {};
+                auto dropped = std::vector<Parked> {};
                 auto orphan = std::coroutine_handle<> {};
                 {
                     auto const lock = std::scoped_lock { _mutex };
                     taken = _queue.remove(withdraw);
+                    dropped = _queue.takeAll();
                     orphan = unscheduleLocked();
+                    endHandOffLocked();
                 }
                 disarm(taken);
+                dropped.clear();
                 if (orphan)
                     orphan.destroy();
+                retireIdle();
                 throw;
             }
+            auto const lock = std::scoped_lock { _mutex };
+            endHandOffLocked();
         }
 
         /// @return Whether the calling thread is inside one of this strand's tasks, at any depth.
@@ -388,13 +405,18 @@ namespace detail
             {
                 auto lock = std::unique_lock { _mutex };
                 _closed = true;
-                dropped = _queue.takeAll();
 #if CORE_CPP_ASYNC_HAS_THREADS
                 // Not from inside one of its own tasks, which would wait for itself: the pump ends
-                // when that task returns, because it reads `_closed` before it takes another.
+                // when that task returns, because it reads `_closed` before it takes another. The
+                // hand-offs too: a submit still inside the base's `submit` is about to take its own
+                // work back out if the base refuses, and dropping that work here first would free a
+                // frame the refusal then resumes.
                 if (!runningHere())
-                    _settled.wait(lock, [this] { return _phase != StrandPhase::Running; });
+                    _settled.wait(lock, [this] { return _phase != StrandPhase::Running && _handOffs == 0; });
 #endif
+                // Taken after the wait: nothing is queued once `_closed` is set, and a refusal that
+                // was in flight has taken its own work back out by now.
+                dropped = _queue.takeAll();
                 if (_phase == StrandPhase::Idle)
                 {
                     idlePump = std::exchange(_pump, {});
@@ -438,6 +460,32 @@ namespace detail
         friend StrandPump runStrandPump(std::shared_ptr<StrandCore> strand);
         friend struct StrandPump::promise_type;
 
+        /// Ends one hand-off to the base, waking a close that waits for it. Holds the lock.
+        void endHandOffLocked() noexcept
+        {
+            --_handOffs;
+            notifySettledLocked();
+        }
+
+        /// After a refused hand-off, retires a strand its owner reclaims when idle, and frees the
+        /// idle pump it will never queue again.
+        void retireIdle()
+        {
+            if (_reclaim != StrandReclaim::WhenIdle || !tryRetire())
+                return;
+            auto pump = std::coroutine_handle<> {};
+            {
+                auto const lock = std::scoped_lock { _mutex };
+                if (_phase == StrandPhase::Idle)
+                {
+                    pump = std::exchange(_pump, {});
+                    _phase = StrandPhase::Exited;
+                }
+            }
+            if (pump)
+                pump.destroy();
+        }
+
         /// Gives up @p entry's work without freeing it: its chain belongs to whoever is about to
         /// resume it with an exception.
         /// @param entry The work to give up.
@@ -463,6 +511,7 @@ namespace detail
             if (!schedule)
                 return {};
             _phase = StrandPhase::Scheduled;
+            ++_handOffs; // ended by queueOnBase, whatever the base does
             return _pump;
         }
 
@@ -659,13 +708,19 @@ namespace detail
             }
             catch (...)
             {
+                // A refusal abandons the queue, as it does in queueOnBase; nothing of the caller's
+                // is in it here.
+                auto dropped = std::vector<Parked> {};
                 auto orphan = std::coroutine_handle<> {};
                 {
                     auto const lock = std::scoped_lock { _mutex };
+                    dropped = _queue.takeAll();
                     orphan = unscheduleLocked();
                 }
+                dropped.clear();
                 if (orphan)
                     orphan.destroy();
+                retireIdle();
                 throw;
             }
         }
@@ -712,6 +767,9 @@ namespace detail
         ParkedQueue _queue;
         std::coroutine_handle<> _pump;
         StrandPhase _phase { StrandPhase::Idle };
+        /// Submits between publishing the pump as scheduled and the base's answer; `close()` waits
+        /// for them.
+        std::size_t _handOffs { 0 };
         StrandReclaim _reclaim;
         bool _closed { false };  ///< The owner is gone; nothing runs any more.
         bool _retired { false }; ///< The owner reclaimed it; work goes to the owner.
@@ -785,9 +843,12 @@ namespace detail
 /// crossing the strand's coroutine frames was measured corrupting the thread's executor scopes
 /// there (`core-cpp.strand-throw-canary` watches it).
 ///
-/// **A base that refuses** -- whose `submit` throws -- makes `submit` throw with nothing queued; a
-/// refusal between two turns, which nobody could be told about, runs the next turn on the thread
-/// the strand already has.
+/// **A refused hand-off abandons the strand's queued work.** A base whose `submit` throws when the
+/// strand hands it its pump is not running this strand: the `submit` that handed it over throws,
+/// with its own work taken back out, and everything else queued -- including work another thread
+/// queued behind the scheduled pump and was told was accepted -- is dropped as `close()` drops it. The
+/// strand is then idle, and the next submit starts it afresh. A refusal between two turns, which
+/// nobody could be told about, runs the next turn on the thread the strand already has.
 ///
 /// **Destruction.** Tasks still queued are dropped, never run: a chain rooted in a `DetachedTask`
 /// is freed, and a coroutine a `Task` owns is left to its owner, suspended. A task running on
