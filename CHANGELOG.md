@@ -7,7 +7,7 @@ release may break the API; every break is listed under **Breaking** with a migra
 release tag `vX.Y.Z` equals the version in `project(core-cpp VERSION X.Y.Z)`, and the release
 workflow refuses one without a section here.
 
-## [Unreleased]
+## [0.4.2] - 2026-09-26
 
 ### Added
 
@@ -30,7 +30,8 @@ workflow refuses one without a section here.
   frame was already freed. fastcached's shutdown flows, which hop onto a loop from another thread
   and finish there, have this shape. `DetachedTask`'s destructor is now defaulted out of line,
   which makes it user-provided, so every ABI returns it through a pointer the caller owns. The type
-  is no longer trivially destructible; nothing else about it changes.
+  is no longer trivially destructible, trivially copyable or an aggregate; `DetachedTask{}` still
+  works through its default constructor, and its members and behaviour are unchanged.
 
 ## [0.4.1] - 2026-09-25
 
