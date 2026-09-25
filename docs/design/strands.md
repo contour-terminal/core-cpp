@@ -202,8 +202,10 @@ awaitable that another thread completes reads that once, in `await_suspend`, and
 **Once per turn, not once per resumption, on the loop.** Guarantee G2 puts every resumption in
 step 2 of a turn, so the answer cannot change between two resumptions of one turn, and the scope's
 cost -- two thread-local stores -- is paid per turn rather than per flow resumed. fastcached's
-parity gate is user CPU per request, and the drain is the path it measures; see the CHANGELOG for
-the measurement against 0.3.0.
+parity gate is user CPU per request, and the drain is the path it measures. The CHANGELOG gives
+both measurements for 0.4.0: the drain with and without the scope
+(`tests/bench/ExecutorContextBench.cpp`, *Added*), and fastcached against its own reactor
+(*Changed*).
 
 ### Who reads it, and who deliberately does not
 

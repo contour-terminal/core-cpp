@@ -440,7 +440,10 @@ namespace detail
 /// its key was reclaimed comes back to the key -- to its current strand, or a new one -- never to a
 /// second strand beside it. Up to 32 reclaimed strands are kept, with their pumps, queue room and
 /// map nodes, for the next key that needs one: in the steady state a post to an idle key allocates
-/// the call alone, and a submit nothing.
+/// the call alone, and a submit nothing. **A kept strand and a kept map node each still hold the
+/// key they last served**, until they serve another or these strands are closed: so up to 64 keys
+/// outlive their work. A key should be cheap to keep and own nothing heavy -- an id, not the object
+/// it names.
 ///
 /// Every member is callable from any thread. What `Strand` says about a task, the current executor,
 /// a throw out of `resume()`, posted calls, the `try` members and destruction holds for each key's
@@ -545,9 +548,9 @@ class KeyedStrands final
 
     /// Queues @p fn, a callable, on @p key's strand to run as one task. Callable from any thread.
     ///
-    /// As `Strand::post`: held by value in one allocation -- plus, for a key that has no strand
-    /// right now, what making its strand costs -- and dropped uncalled once these strands are
-    /// closed.
+    /// As `Strand::post`: held by value in one allocation, and dropped uncalled once these strands
+    /// are closed. @p fn is moved in under the registry's lock: its move constructor must not submit
+    /// to any key of these strands.
     /// @param key The key. @param fn The callable, called with no arguments.
     template <typename F>
         requires std::invocable<std::decay_t<F>&> && std::constructible_from<std::decay_t<F>, F>
@@ -556,7 +559,9 @@ class KeyedStrands final
         std::ignore = _registry->offerCall(key, std::forward<F>(fn));
     }
 
-    /// Queues @p fn on @p key's strand, unless these strands are closed. As `Strand::tryPost`.
+    /// Queues @p fn on @p key's strand, unless these strands are closed. As `Strand::tryPost`, and
+    /// @p fn is moved in under the registry's lock: its move constructor must not submit to any key
+    /// of these strands.
     /// @param key The key. @param fn The callable; moved from only where this returns true.
     /// @return Whether it was queued.
     template <typename F>

@@ -28,6 +28,11 @@ workflow refuses one without a section here.
     and is unaffected: every queue there is built over the reactor, and every `pop()` parks either
     on that reactor or outside any executor, so the executor it comes back to is the one it came back
     to before. morph's handlers, which parked on a strand, come back to it now, which is the fix.
+- **`core::net::resumeSoonOn` is `core::net::detail::resumeSoonOn`**, and takes the chain's
+  unowned root instead of a work-item factory. It is `ResultAwaitable`'s out-of-line completion
+  hook and has no other caller.
+  - *Migration*: none expected -- fastcached, endo, contour, tuidu, `dbtool` and morph call it
+    nowhere. A transport completes an operation through `ResultAwaitable::complete`.
 
 ### Added
 
@@ -99,7 +104,9 @@ workflow refuses one without a section here.
     `EventLoop` (G2); a strand-bound coroutine hops back with `co_await ResumeOn { strand }`.
 - **`core::async::testing::ManualExecutor`** (`<core/async/testing/ManualExecutor.hpp>`): an
   executor a test drains by hand (`runOne`, `drain`, `pending`) that states itself as the current
-  executor while it does. The first public test double of `core::async`.
+  executor while it does. `drain(bound)` stops after `DrainBound` (2^20) resumptions by default and
+  throws `std::length_error` if work is still queued, so work that requeues itself for ever fails
+  a case instead of hanging it. The first public test double of `core::async`.
 - A design note, *Strands and the resume context* (`docs/design/strands.md`).
 
 ### Changed
@@ -113,17 +120,18 @@ workflow refuses one without a section here.
   erase, and the drain resumes an entry in place rather than moving it out first. Measured with the
   new `[bench]` cases (`core-cpp-net_backend-test "[bench]"`, gcc-release, median of five on an
   idle host): a completion through a drain-step callback went from 120.4 to 83.4 ns for a
-  detached chain, and from 122.6 to 79.3 ns for a chain a caller owns. Nothing else a caller can observe changed:
-  the ordering (a waiter resumes in its callback's position), teardown (a detached chain is freed,
-  a borrowed one resumed) and take-back paths are the same, and each is a case in
-  `CompletionClaim_test.cpp`.
+  detached chain, and from 122.6 to 79.3 ns for a chain a caller owns. The ordering (a waiter
+  resumes in its callback's position), teardown (a detached chain is freed, a borrowed one resumed)
+  and take-back paths are the same, and each is a case in `CompletionClaim_test.cpp`. Two things a
+  caller can observe did change:
+  - a frameless park holding both of its handle's watch slots gets one callback per report that
+    flags both, not two;
+  - at teardown, a readiness callback still queued is dropped with its park still marked queued,
+    so a requeue for the same reason during teardown is suppressed rather than queued again.
   - A readiness callback that completes one waiter, the common case, has that waiter held in a
     slot and resumed by the drain straight after it returns, with no queue entry made for it; a
     readiness report reaches its park through the handle's watch instead of probing the park
     table; and `EventLoop`'s queue entry is back to 56 bytes from 64.
-  - `resumeSoonOn(EventLoop&, std::coroutine_handle<>, ...)`, `ResultAwaitable`'s out-of-line hook
-    in `<core/net/IoAwaitable.hpp>`, takes the chain's unowned root instead of a work-item factory.
-    No consumer calls it; a transport completes an operation through `ResultAwaitable::complete`.
 - **A loop in its steady state allocates nothing per completion or per timer firing.** Measured by
   fastcached as allocations per request, and now asserted over 256 turns in
   `CallbackAllocation_test.cpp`. Four allocations are gone: the ready queue is a ring that keeps its
@@ -132,6 +140,13 @@ workflow refuses one without a section here.
   answer into a heap string when it is armed, only when that answer is read; a fired or cancelled
   timer's park is recycled like every other; and a turn collects its due deadlines into a vector
   it keeps.
+- **Against fastcached's own reactor**, measured by fastcached on this release's `core::net`
+  (release/next-031 at b0c82a4) at 64 connections: fewer syscalls per request than the reactor,
+  6.0 allocations per request against its 12.6, and total CPU per request at parity within the
+  noise. User CPU is not yet at parity: its medians are still about 1 µs per request higher, with
+  the runs' ranges overlapping, and a profile puts core-cpp at 7.6% of samples where the reactor's
+  own code was 3.6%. What remains is tracked as core-cpp#52 (reusing a socket's park across its
+  operations).
 
 ### Fixed
 
@@ -144,6 +159,14 @@ workflow refuses one without a section here.
   about 1,460 dispatches each, where 32 pairs made 64,000 in 0.28 s. A park is now queued once per
   reason (a cancel or an abandonment behind a queued readiness still queues), and 64 pairs make
   128,000 round trips in 0.65 s.
+
+### Known issues
+
+- **`DetachedTask` under clang-cl at `-O0`** can read its return object back from a frame that
+  has already been freed, when its first suspension hands it to something that runs it to its end
+  before `await_suspend` returns -- a pool thread, or an inline executor (core-cpp#51). Debug
+  builds with clang-cl only: `cl`, clang and GCC elsewhere, and clang-cl with optimisation, are
+  unaffected.
 
 ## [0.3.0] - 2026-09-24
 

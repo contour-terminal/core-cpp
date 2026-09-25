@@ -726,6 +726,29 @@ template <typename Predicate>
     return true;
 }
 
+/// Calls `waitIdle()` on a thread of its own and waits a bounded time for it to return. Where it
+/// does not, it says so -- how long, and how many keys still had a strand -- and closes the strands,
+/// which ends the wait, so the case fails rather than hangs.
+/// @param strands The strands.
+/// @return Whether `waitIdle()` returned on its own within the budget.
+[[nodiscard]] bool waitIdleWithin(Strands& strands)
+{
+    auto returned = std::atomic<bool> { false };
+    auto waiter = std::thread { [&strands, &returned] {
+        strands.waitIdle();
+        returned.store(true);
+    } };
+    auto const inTime = waitUntil([&returned] { return returned.load(); });
+    if (!inTime)
+    {
+        UNSCOPED_INFO("waitIdle() had not returned after " << Budget.count() << " s; " << strands.size()
+                                                            << " key(s) still had a strand");
+        strands.close(); // wakes the wait
+    }
+    waiter.join();
+    return inTime;
+}
+
 /// Per-key overlap accounting for the concurrency cases.
 struct PerKey
 {
@@ -838,19 +861,24 @@ TEST_CASE("A key's strand retiring while other threads re-activate that key neve
     auto pool = core::async::ThreadPoolExecutor { 4 };
     {
         auto strands = Strands { pool };
-        auto producer = [&strands, &probe] {
+        auto producersDone = std::atomic<int> { 0 };
+        auto producer = [&strands, &probe, &producersDone] {
             for (auto const index: std::views::iota(0, PerProducer))
             {
                 keyedTick(&strands, &probe, 0);
                 if (index % 64 == 0)
                     std::this_thread::yield();
             }
+            producersDone.fetch_add(1);
         };
         auto first = std::thread { producer };
         auto second = std::thread { producer };
+        // A post never blocks, so a producer that has not finished within the budget is wedged:
+        // said here, before the joins below would hang on it.
+        CHECK(waitUntil([&producersDone] { return producersDone.load() == 2; }));
         first.join();
         second.join();
-        strands.waitIdle();
+        CHECK(waitIdleWithin(strands));
         CHECK(strands.size() == 0);
     }
     CHECK(probe.finished.load() == 2 * PerProducer);
@@ -876,7 +904,7 @@ TEST_CASE("waitIdle waits for every key's work, including work that work submits
                 done->fetch_add(1);
             }(&strands, key, &finished);
 
-        strands.waitIdle();
+        CHECK(waitIdleWithin(strands));
         // Every one of the sixteen, not merely the eight submitted from here.
         CHECK(finished.load() == 16);
         CHECK(strands.size() == 0);
@@ -893,7 +921,7 @@ TEST_CASE("waitIdle returns after a key's first hand-off was refused", "[KeyedSt
     REQUIRE(task.done());
     CHECK_THROWS_AS(task.result(), std::runtime_error);
     REQUIRE(strands.size() == 0); // or waitIdle below would never return
-    strands.waitIdle();
+    CHECK(waitIdleWithin(strands));
     CHECK(order.empty());
 }
 
