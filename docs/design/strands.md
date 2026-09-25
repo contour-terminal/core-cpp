@@ -127,6 +127,24 @@ have, and each was added as the smallest thing that meets it:
   strand. An around-task hook costs one branch per task where it is unset, and `KeyedStrands`'
   hook is given the key, because morph finds the session by the model instance the key names.
 
+### Sealing: a teardown with no window
+
+`close()` drops what is queued, and has to: it is also the destructor, which cannot wait for work
+that may never end. A consumer that wants its queued work run drains first -- `waitIdle()`, or the
+base pumped until `idle()` -- and closes after, but between the drain and the close more work can
+arrive: a handler's finish, a coroutine that parked on the strand and is handed back. `close()`
+drops it, and with it whatever it had to settle; nothing outside the strand can close that window,
+because admission is decided under the strand's lock. morph's own `StrandExecutor` avoided it by
+waiting for in-flight work.
+
+`seal()` moves the end of admission ahead of the drain. After it the `try` members refuse under the
+same lock that queues -- so an offer racing the seal is either queued before it, and runs, or
+refused after it, and handed back -- `post` and `submit` drop as a closed strand's do, and queued
+work runs as before. For `KeyedStrands` the registry seals every key's strand under its own lock,
+which `offer` holds across its lookup and queueing, and refuses keys that have no strand; kept
+strands are neither handed out nor kept again once sealed. The sequence is then seal, drain,
+close, and nothing is admitted that the drain does not see.
+
 ### Reclaimed strands are kept
 
 A key with no work has no strand, which is what keeps a program keyed by connection from holding

@@ -9,6 +9,20 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Added
+
+- **`seal()` on `Strand` and `KeyedStrands`: stop admitting work, keep running what is queued.**
+  `close()` drops the queue, so a teardown of "stop the handlers, drain, close" dropped whatever
+  arrived between the drain and the close -- a task's finish, a coroutine's resumption -- and
+  leaked its frame and whatever it was to settle (found by morph's switch review). After `seal()`
+  the `try` members return false and leave the work with the caller, `post` and `submit` drop it as
+  a closed strand's do, and what was queued before runs on the base, so `idle()` and `waitIdle()`
+  then mean sealed and drained. For `KeyedStrands` it holds for every key, including one that
+  arrives later -- no strand is made for it -- and no kept strand is handed out again. The teardown
+  that loses nothing is `seal()`, then `waitIdle()` (or, on the single-threaded WebAssembly build,
+  the base run until `idle()`), then `close()`. Idempotent; `close()` is unchanged. A
+  patch-compatible addition.
+
 ## [0.4.0] - 2026-09-25
 
 ### Breaking

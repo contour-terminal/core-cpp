@@ -294,6 +294,11 @@ Written for 0.4.0 after morph's `StrandExecutor` (morph PR #806); see
   which has no `waitIdle()`, a host that wants queued work to run pumps its base until `idle()`
   before destroying the strands; destroying or closing them drops what is queued without waiting,
   since nothing else can be running.
+- **`seal()`** (0.4.1) stops admitting work and keeps running what is queued: the `try` members
+  refuse and hand the work back, `post` and `submit` drop it, and for `KeyedStrands` every key is
+  sealed, one that arrives later included. The teardown that loses nothing is `seal()`, then
+  `waitIdle()` (or the base pumped until `idle()`), then `close()`: `close()` alone drops what is
+  queued, and a drain before it leaves a window in which work arrives and is dropped.
 - `ExecutorScope` (`<core/async/ExecutorContext.hpp>`) marks the calling thread as running a task
   of an executor, for as long as it lives; scopes nest and restore on every exit. `EventLoop` holds
   one per turn, `ThreadPoolExecutor` one per worker thread, `Strand` one per batch, and
