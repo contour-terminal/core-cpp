@@ -822,6 +822,95 @@ TEST_CASE("Work a refused hand-off frees is dropped, not refused, when it submit
 #endif
 }
 
+#if !defined(_MSC_VER) || defined(__clang__)
+namespace
+{
+
+/// Submits a coroutine to a strand from its destructor, recording what that submit throws.
+class StartWhenFreed
+{
+  public:
+    StartWhenFreed(Strand* strand, std::coroutine_handle<> handle, bool* threw) noexcept:
+        _strand(strand), _handle(handle), _threw(threw)
+    {
+    }
+    StartWhenFreed(StartWhenFreed&& other) noexcept:
+        _strand(std::exchange(other._strand, nullptr)), _handle(other._handle), _threw(other._threw)
+    {
+    }
+    StartWhenFreed(StartWhenFreed const&) = delete;
+    StartWhenFreed& operator=(StartWhenFreed const&) = delete;
+    StartWhenFreed& operator=(StartWhenFreed&&) = delete;
+
+    ~StartWhenFreed()
+    {
+        if (_strand == nullptr)
+            return;
+        try
+        {
+            _strand->submit(_handle);
+        }
+        catch (...)
+        {
+            *_threw = true;
+        }
+    }
+
+  private:
+    Strand* _strand;
+    std::coroutine_handle<> _handle;
+    bool* _threw;
+};
+
+/// A detached flow queued on @p strand, carrying a @c StartWhenFreed.
+DetachedTask startsWhenFreed(Strand* strand, StartWhenFreed guard, int* ran)
+{
+    (void) guard;
+    co_await ResumeOn { *strand };
+    ++*ran;
+}
+
+} // namespace
+#endif
+
+TEST_CASE("A task on another strand, started by abandoned work as it is freed, can still submit to the "
+          "refusing strand",
+          "[Strand][exceptions]")
+{
+#if defined(_MSC_VER) && !defined(__clang__)
+    SKIP("under MSVC's cl a throw out of resume() on a strand terminates the process "
+         "(core-cpp.strand-throw-canary)");
+#else
+    // The abandoned frame's destructor starts a task on a second strand, whose base runs it inline --
+    // still inside the first strand's drop. That task's own hop back to the first strand is not a
+    // resubmit from the abandoned work, and must reach the first strand's base. Before the fix the
+    // drop's marker covered everything that ran synchronously inside it, and the hop was dropped.
+    auto refusing = RefusingExecutor {};
+    auto inlineBase = InlineExecutor {};
+    auto first = Strand { refusing };
+    auto second = Strand { inlineBase };
+    auto seen = std::vector<Sighting> {};
+    auto threw = false;
+    auto ran = 0;
+
+    auto hopper = hopAndLook(&first, &seen);
+    auto const thrower = throwOnResume(&first, &seen, true);
+    first.submit(thrower.handle());
+    startsWhenFreed(&first, StartWhenFreed { &second, hopper.handle(), &threw }, &ran);
+
+    refusing.refuse(1);
+    CHECK_THROWS_AS(refusing.drain(), std::runtime_error);
+    CHECK_FALSE(threw);
+    CHECK(ran == 0);
+    // The hopper ran on the second strand and queued itself on the first, whose base now has it.
+    CHECK(refusing.pending() == 1);
+    std::ignore = refusing.drain();
+    CHECK(hopper.done());
+    REQUIRE(seen.size() == 3); // the thrower's sighting, then the hopper's two
+    CHECK(seen[2].onStrand);
+#endif
+}
+
 TEST_CASE("A base that refuses the pump's hand-back between turns does not wedge the strand",
           "[Strand][exceptions]")
 {
