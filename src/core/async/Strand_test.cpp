@@ -1650,7 +1650,7 @@ TEST_CASE("Work offered while another thread seals a strand either runs or is ha
 
     auto producer = [&](std::size_t which) {
         auto& mine = tasks.at(which);
-        mine.reserve(static_cast<std::size_t>(2 * OffersEachSide)); // never reallocated
+        mine.reserve(2 * static_cast<std::size_t>(OffersEachSide)); // never reallocated
         auto refused = 0;
         auto beforeSeal = 0;
         auto afterSeal = 0;
