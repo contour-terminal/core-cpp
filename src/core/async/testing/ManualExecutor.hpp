@@ -76,10 +76,10 @@ class ManualExecutor final: public IExecutor
 
     /// Resumes entries until none is left, including those the resumptions queue.
     /// @return How many were resumed. What one throws propagates, and the rest stay queued.
-    std::size_t drain()
+    std::size_t drain(std::size_t bound = 1U << 20U)
     {
         auto ran = std::size_t { 0 };
-        while (runOne())
+        while (ran < bound && runOne())
             ++ran;
         return ran;
     }

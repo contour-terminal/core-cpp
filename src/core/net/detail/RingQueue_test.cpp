@@ -13,6 +13,7 @@
 #include <memory>
 #include <ranges>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 using core::net::detail::RingQueue;
@@ -30,7 +31,44 @@ std::vector<int> contents(RingQueue<std::unique_ptr<int>> const& queue)
     return values;
 }
 
+/// Moves out of @p from, which a case then inspects.
+template <typename T>
+T moveOutOf(T& from)
+{
+    return std::move(from);
+}
+
+/// Move-assigns @p from to @p to.
+template <typename T>
+void moveAssign(T& to, T& from)
+{
+    to = std::move(from);
+}
+
 } // namespace
+
+TEST_CASE("A moved-from RingQueue is empty, and usable", "[net][ringqueue]")
+{
+    // The implicit move left the source's head and size behind with no slots under them: it
+    // answered not empty, and the next push indexed an empty buffer.
+    auto source = RingQueue<std::unique_ptr<int>> {};
+    source.pushBack(std::make_unique<int>(1));
+    source.pushBack(std::make_unique<int>(2));
+    auto moved = moveOutOf(source);
+    CHECK(contents(moved) == std::vector { 1, 2 });
+    REQUIRE(source.empty());
+    CHECK(source.size() == 0);
+    source.pushBack(std::make_unique<int>(3));
+    CHECK(contents(source) == std::vector { 3 });
+
+    auto target = RingQueue<std::unique_ptr<int>> {};
+    target.pushBack(std::make_unique<int>(9));
+    moveAssign(target, moved);
+    CHECK(contents(target) == std::vector { 1, 2 });
+    REQUIRE(moved.empty());
+    moved.pushBack(std::make_unique<int>(4));
+    CHECK(contents(moved) == std::vector { 4 });
+}
 
 TEST_CASE("RingQueue keeps FIFO order at both ends, across the wrap and across growth", "[net][ringqueue]")
 {

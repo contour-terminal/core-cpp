@@ -217,6 +217,62 @@ TEST_CASE("Outside every executor's task there is no current executor", "[Strand
     CHECK(ResumeTarget::currentOr(fallback).executor() == &fallback);
 }
 
+namespace
+{
+
+/// Moves out of @p from, which a case then inspects: what a moved-from object promises.
+template <typename T>
+T moveOutOf(T& from)
+{
+    return std::move(from);
+}
+
+/// Move-assigns @p from to @p to.
+template <typename T>
+void moveAssign(T& to, T& from)
+{
+    to = std::move(from);
+}
+
+/// Hops back onto @p executor for ever: work that requeues itself on every resumption.
+Task<void> requeueForever(ManualExecutor* executor)
+{
+    while (true)
+        co_await ResumeOn { *executor };
+}
+
+} // namespace
+
+TEST_CASE("A moved-from ResumeTarget names nothing", "[Strand][context]")
+{
+    // The implicit move moved the keep-alive out and copied the executor pointer: the source still
+    // answered true, and a submit through it reached an executor it no longer kept alive.
+    auto executor = ManualExecutor {};
+    auto source = ResumeTarget { executor };
+    auto const moved = moveOutOf(source);
+    CHECK(moved.executor() == &executor);
+    CHECK_FALSE(source);
+    CHECK(source.executor() == nullptr);
+
+    auto assigned = ResumeTarget {};
+    auto other = ResumeTarget { executor };
+    moveAssign(assigned, other);
+    CHECK(assigned.executor() == &executor);
+    CHECK_FALSE(other);
+}
+
+TEST_CASE("ManualExecutor::drain gives up after its bound on work that requeues itself for ever",
+          "[ManualExecutor]")
+{
+    // A regression that requeues work for ever used to hang drain(), and with it the case; now it
+    // fails the case, naming the bound.
+    auto executor = ManualExecutor {};
+    auto spinner = requeueForever(&executor);
+    executor.submit(spinner.handle());
+    CHECK_THROWS_AS(executor.drain(64), std::length_error);
+    CHECK(executor.pending() == 1);
+}
+
 TEST_CASE("Nested executor scopes restore their predecessors, also when unwound by a throw",
           "[Strand][context]")
 {

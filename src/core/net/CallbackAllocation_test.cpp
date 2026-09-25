@@ -20,6 +20,7 @@
 #include <coroutine>
 #include <cstddef>
 #include <cstdlib>
+#include <functional>
 #include <new>
 #include <ranges>
 #include <tuple>
@@ -43,6 +44,9 @@ bool checkedIterators() noexcept
 /// Every global `operator new` and `operator new[]` this process has served.
 std::atomic<std::size_t> allocations { 0 };
 
+/// Fails the next allocation, once.
+std::atomic<bool> failNextAllocation { false };
+
 /// Serves a counted allocation from `malloc`, so a sanitizer's interception of `malloc` still sees
 /// it.
 /// @param size The size asked for.
@@ -50,6 +54,8 @@ std::atomic<std::size_t> allocations { 0 };
 /// @throws std::bad_alloc If `malloc` refuses.
 void* countedAllocation(std::size_t size)
 {
+    if (failNextAllocation.exchange(false))
+        throw std::bad_alloc {};
     allocations.fetch_add(1, std::memory_order_relaxed);
     if (auto* const storage = std::malloc(size == 0 ? 1 : size))
         return storage;
@@ -159,6 +165,59 @@ class TimerCompletion
     core::net::TimerId _timer {};
 };
 
+/// An operation completed by whoever holds it, with no timer of its own: a case completes it from a
+/// callback that does something else too.
+class ManualCompletion
+{
+  public:
+    /// @param loop The loop the resumption runs on; must outlive this.
+    explicit ManualCompletion(core::net::EventLoop& loop) noexcept: _loop(&loop) {}
+
+    /// @return One operation, completed by @c complete.
+    [[nodiscard]] core::net::IoAwaitable wait() { return core::net::IoAwaitable { &arm, &retire, this }; }
+
+    /// Completes the parked operation with a count of @p value, if one is parked.
+    /// @param value The count.
+    void complete(std::size_t value)
+    {
+        if (auto* const operation = std::exchange(_operation, nullptr))
+            operation->complete(value);
+    }
+
+  private:
+    static void arm(void* owner, core::net::IoAwaitable& self)
+    {
+        auto* const source = static_cast<ManualCompletion*>(owner);
+        source->_operation = &self;
+        self.cancelThrough(*source->_loop, core::net::ParkId::invalid());
+    }
+
+    static void retire(void* owner, void* awaitable) noexcept
+    {
+        auto* const source = static_cast<ManualCompletion*>(owner);
+        if (source->_operation == awaitable)
+            source->_operation = nullptr;
+    }
+
+    core::net::EventLoop* _loop;
+    core::net::IoAwaitable* _operation = nullptr;
+};
+
+/// Awaits one operation, counting a value.
+/// @param source The owner. @param completed Counts it.
+core::async::Task<void> awaitOne(ManualCompletion* source, std::size_t* completed)
+{
+    if ((co_await source->wait()).has_value())
+        ++*completed;
+}
+
+/// A timer callback that runs whatever the case scripted.
+/// @param state A @c std::function<void()>.
+void runScript(void* state)
+{
+    (*static_cast<std::function<void()>*>(state))();
+}
+
 /// A timer that re-arms itself each time it fires: the owner's own scaffolding above, with no
 /// operation completed and no waiter resumed.
 struct Rearming
@@ -225,6 +284,49 @@ void operator delete(void* storage, std::size_t /*size*/) noexcept
 void operator delete[](void* storage, std::size_t /*size*/) noexcept
 {
     std::free(storage);
+}
+
+TEST_CASE("A completion held in the callback's slot survives the callback's next queueing failing to "
+          "allocate",
+          "[EventLoop][turn][ordering]")
+{
+    // The callback completes one operation -- its waiter goes into the callback's slot -- and then
+    // queues another waiter, which moves the slot's waiter into the callback's range first. That
+    // took the waiter out of the slot and only then made room for it: a failed allocation dropped
+    // it, and the completed flow never resumed.
+    auto clock = core::platform::ManualClock {};
+    auto loop = core::net::testing::TestLoop { clock };
+    auto source = ManualCompletion { loop };
+    auto completed = std::size_t { 0 };
+    auto flow = awaitOne(&source, &completed);
+    flow.handle().resume();
+    auto other = std::coroutine_handle<> {};
+    auto otherResumes = std::size_t { 0 };
+    auto waiter = parkForever(&other, &otherResumes);
+    waiter.handle().resume();
+    REQUIRE(other);
+
+    auto refused = false;
+    auto script = std::function<void()> { [&] {
+        source.complete(5);
+        failNextAllocation.store(true);
+        try
+        {
+            loop.resumeSoon(core::async::ParkedWork { .resume = other });
+        }
+        catch (std::bad_alloc const&)
+        {
+            refused = true;
+        }
+        failNextAllocation.store(false);
+    } };
+    std::ignore = loop.addTimer(clock.now(), &runScript, &script);
+    std::ignore = loop.drain();
+
+    CHECK(refused);
+    CHECK(completed == 1);
+    CHECK(flow.done());
+    CHECK(otherResumes == 0);
 }
 
 TEST_CASE("A drain-step callback that queues nothing costs no allocation", "[EventLoop][turn][ordering]")
