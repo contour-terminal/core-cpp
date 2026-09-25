@@ -804,7 +804,7 @@ struct ParkSelf
 ///
 /// The statement after the `co_await` is load-bearing under MSVC's `cl` at /O2 (19.51): a frame
 /// destroyed at a suspension point with nothing after it in the body there never destroyed its
-/// by-value parameters, so the sentinel read "not freed" for a frame that was.
+/// by-value parameters, so the sentinel read "not freed" for a frame that was (core-cpp#54).
 DetachedTask parkDetached(std::coroutine_handle<>* self, FrameSentinel sentinel)
 {
     (void) sentinel;
