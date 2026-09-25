@@ -37,16 +37,20 @@ core_cpp_add_module(async KIND INTERFACE
         Awaitable.hpp
         Cancellation.hpp
         DetachedTask.hpp
+        ExecutorContext.hpp
         IExecutor.hpp
         Join.hpp
+        KeyedStrands.hpp
         ParkedWork.hpp
         ResumeOn.hpp
         StopToken.hpp
+        Strand.hpp
         SyncRun.hpp
         Task.hpp
         UniqueCoroHandle.hpp
         WhenAll.hpp
         WhenAny.hpp
+        testing/ManualExecutor.hpp
         ${_coreCppAsyncThreadedHeaders}
     PUBLIC_LIBS ${_coreCppAsyncLibs})
 
@@ -68,8 +72,10 @@ set(_coreCppAsyncStopTokenTests
     AsTask_test.cpp
     AsyncQueue_test.cpp
     Awaitable_test.cpp
+    KeyedStrands_test.cpp
     ParkedWork_test.cpp
     StopToken_test.cpp
+    Strand_test.cpp
     Task_test.cpp
     WhenAll_test.cpp
     WhenAny_test.cpp)

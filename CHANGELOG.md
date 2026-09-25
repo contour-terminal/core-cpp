@@ -9,6 +9,57 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Breaking
+
+- **A consumer parked on `AsyncQueue::pop` resumes on the executor it was running on when it
+  parked**, not on the executor the queue was constructed over -- on a push, a `close()` and a stop
+  request alike (see *Added*, the current-executor context). The queue's executor is now the
+  fallback, used only for a consumer that parked while no executor was current. The old behaviour
+  sent a coroutine that parked on a `Strand` back off it, onto the queue's executor, where it raced
+  the state the strand serialises (found by morph, PR #806).
+  - *Migration*: a consumer that runs on the queue's own executor -- the usual shape -- sees no
+    change. One that parks while running on a different executor now comes back there; if it
+    relied on arriving on the queue's executor, hop explicitly after the pop with
+    `co_await ResumeOn { queueExecutor }`. An `IExecutor` of your own that resumes coroutines
+    should state itself with `core::async::ExecutorScope` around the resumption (as
+    `testing::ManualExecutor` does), or its coroutines keep the old behaviour.
+
+### Added
+
+- **`core::async::Strand`** (`<core/async/Strand.hpp>`): an `IExecutor` over any `IExecutor` that
+  runs what it is given one task at a time, FIFO -- a task being one resumption, from the submit to
+  the next suspension. `co_await ResumeOn { strand }` hops onto it; `runningHere()` asks whether
+  the calling thread is inside one of its tasks. One coroutine pump per strand, queued on the base
+  once however many tasks arrive while it is busy, runs at most `StrandOptions::batch` (32) tasks
+  per turn before it hands the base back. A task that throws out of `resume()` propagates to
+  whoever resumed the pump and does not wedge the strand or lose the tasks behind it. Destroying a
+  strand drops what is queued -- a chain rooted in a `DetachedTask` is freed, a `Task`-owned
+  coroutine is left to its owner -- and waits for a task running on another thread. Written after
+  morph's `StrandExecutor`, which consumers should replace with it.
+- **`core::async::KeyedStrands<Key, Hash, KeyEqual>`** (`<core/async/KeyedStrands.hpp>`): one
+  strand per key over a shared base, made when a key gets work and reclaimed when it runs out.
+  `submit(key, ...)`, `co_await strands.resumeOn(key)`, `runningHere(key)`, `runningAnyHere()`,
+  `size()`, and `waitIdle()`, which blocks until no key has work, asserts when called from one of
+  its own tasks, and is declared only where threads exist. A coroutine that parked while its key's
+  strand was reclaimed comes back to the key, never to a second strand beside it.
+- **The current-executor context** (`<core/async/ExecutorContext.hpp>`): `ExecutorScope` marks the
+  calling thread as running a task of an executor, nests, and restores on every exit;
+  `currentExecutor()` answers the innermost; `ResumeTarget` is what an awaitable holds across a
+  suspension to resume there, with `ResumeTarget::currentOr(fallback)`. `core::net::EventLoop`
+  states itself once per turn (and around its teardown drains), `ThreadPoolExecutor` once per
+  worker thread, a strand once per batch. The scope is two thread-local stores and no allocation;
+  on the loop it is paid per turn, not per resumption, because G2 puts every resumption inside one
+  turn's step 2. Measured on the drain path against 0.3.0 (gcc-release, one
+  pinned core, 4M resumptions, best of 35): 38.9 against 38.2 ns per resumption with one
+  resumption per turn, 19.4 against 19.7 with a turn of 64 -- inside the run-to-run spread of
+  38-48 ns.
+  - `core::net`'s socket operations and timers do not read it and keep resuming on their
+    `EventLoop` (G2); a strand-bound coroutine hops back with `co_await ResumeOn { strand }`.
+- **`core::async::testing::ManualExecutor`** (`<core/async/testing/ManualExecutor.hpp>`): an
+  executor a test drains by hand (`runOne`, `drain`, `pending`) that states itself as the current
+  executor while it does. The first public test double of `core::async`.
+- A design note, *Strands and the resume context* (`docs/design/strands.md`).
+
 ### Changed
 
 - **A socket completion costs less on the loop's thread.** `ResultAwaitable::complete` hands its

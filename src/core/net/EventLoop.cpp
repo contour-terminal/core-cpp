@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/EventLoop.hpp>
 
+#include <core/async/ExecutorContext.hpp>
 #include <core/net/SocketContract.hpp>
 #include <core/net/detail/ReadyBatch.hpp>
 #include <core/net/detail/ScopeGuard.hpp>
@@ -87,6 +88,11 @@ EventLoop::~EventLoop()
     // destroyed with this loop or is already gone. Running it here would be the one path on which
     // a callback reaches an object whose loop has stopped existing.
     auto ownedQueue = setAsideOwnedReady();
+
+    // What the drains below resume runs with this loop current, as in a turn: a flow that unwinds
+    // through an awaitable which reads the context sees the loop it was on. One scope, like the
+    // turn's, and for the same reason: the pointer stores are the whole cost.
+    auto const current = async::ExecutorScope { *this };
 
     // **The inbound queue is NOT swept, and that is a decision rather than an omission.** Work
     // handed over and not yet accepted by a turn is DROPPED: never resumed, never unwound.
@@ -303,6 +309,12 @@ RunOnceResult EventLoop::turn(std::optional<platform::SteadyDuration> maxWait, s
               "loop -- run(), runOnce() and blockOn() all reach here (G1: exactly one thread "
               "dequeues a loop)");
     auto const onWorker = detail::WorkerIdentity::Scope { _worker };
+    // This loop is the current executor for the whole turn (core::async::ExecutorScope), so an
+    // awaitable that another thread completes -- AsyncQueue::pop -- sends a flow this turn resumed
+    // back here. Once per turn rather than once per resumption: G2 puts every resumption inside
+    // step 2 of a turn, so the answer cannot change between them, and a scope costs two
+    // thread-local stores and no allocation however many flows the drain resumes.
+    auto const current = async::ExecutorScope { *this };
 
     auto result = RunOnceResult {};
 

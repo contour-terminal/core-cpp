@@ -6,6 +6,7 @@
 
 #include <core/async/Awaitable.hpp>
 #include <core/async/Cancellation.hpp>
+#include <core/async/ExecutorContext.hpp>
 #include <core/async/IExecutor.hpp>
 #include <core/async/ParkedWork.hpp>
 #include <core/async/StopToken.hpp>
@@ -97,6 +98,16 @@ struct AsyncQueuePush
 /// inline would run the consumer's next step inside that lock, on the producer's thread, at a
 /// point where the consumer may call back into the producer's object.
 ///
+/// ## Where the consumer resumes
+///
+/// **On the executor it was running on when it parked**, read from the current-executor context
+/// (`ExecutorContext.hpp`) in `pop()`'s `await_suspend`: a consumer on an `EventLoop` comes back
+/// to that loop, one on a `Strand` to that strand. Only a consumer that parked outside every
+/// executor's task -- driven by hand, or by an executor that does not state itself -- comes back
+/// on the executor this queue was constructed over. The push, the close and the stop callback all
+/// resume it the same way. Before 0.4.0 it was always this queue's executor, which sent a consumer
+/// that parked on a strand back off it (found by morph, PR #806).
+///
 /// ## Single consumer, many producers
 ///
 /// One waiter slot. A second concurrent consumer is a programmer error rather than a runtime
@@ -132,9 +143,10 @@ template <typename T>
 class AsyncQueue final
 {
   public:
-    /// Constructs over the executor the consumer runs on.
-    /// @param executor Where a woken consumer is posted. Must outlive this queue and every
-    ///        producer that can reach it.
+    /// Constructs over the executor a consumer is resumed on when it parked outside every
+    /// executor's task.
+    /// @param executor Where a woken consumer is posted when no executor was current as it parked.
+    ///        Must outlive this queue and every producer that can reach it.
     /// @param options Capacity and overflow policy.
     AsyncQueue(IExecutor& executor, AsyncQueueOptions options) noexcept:
         _executor(executor), _options(options)
@@ -161,6 +173,7 @@ class AsyncQueue final
     [[nodiscard]] AsyncQueuePush push(T value)
     {
         auto waiter = ParkedWork {};
+        auto target = ResumeTarget {};
         auto outcome = AsyncQueuePush {};
         {
             auto const guard = std::scoped_lock { _mutex };
@@ -187,13 +200,14 @@ class AsyncQueue final
             // Exactly one of a push, a close or a cancellation can ever obtain a given handle,
             // which is what makes a double resume inexpressible.
             waiter = std::exchange(_waiter, {});
+            target = std::exchange(_waiterTarget, {});
         }
 
         // Outside the lock: the handle is already ours and nobody else can see it, and an
         // executor's submit may perform a syscall. A producer holding a lock of its own across
         // that would serialise its own hot path behind it.
         if (waiter.resume)
-            _executor.submit(waiter);
+            target.submit(std::move(waiter));
         return outcome;
     }
 
@@ -205,14 +219,16 @@ class AsyncQueue final
     void close() noexcept
     {
         auto waiter = ParkedWork {};
+        auto target = ResumeTarget {};
         {
             auto const guard = std::scoped_lock { _mutex };
             _closed.store(true, std::memory_order_release);
             _items.clear();
             waiter = std::exchange(_waiter, {});
+            target = std::exchange(_waiterTarget, {});
         }
         if (waiter.resume)
-            _executor.submit(waiter);
+            target.submit(std::move(waiter));
     }
 
     /// @return Whether `close()` has been called.
@@ -287,6 +303,11 @@ class AsyncQueue final
         /// path instead of parking on an item that is already there — a park nothing would ever
         /// wake, because the push that would have woken it has already happened.
         ///
+        /// Where the consumer will be resumed is read here, once, from the current-executor context
+        /// -- the executor running the consumer now -- with the queue's own executor as the
+        /// fallback, and it travels with the park to whichever of a push, a close or the stop
+        /// callback takes it.
+        ///
         /// The stop callback is registered BEFORE the park is published, and outside the queue's
         /// mutex. A token that is already stopped runs the callback in its constructor, on this
         /// thread, and that callback takes the mutex; registering first means such an inline run
@@ -312,12 +333,15 @@ class AsyncQueue final
             if (_token.stop_possible())
                 _stopReg.emplace(_token, CancelPop { this });
 
+            // Outside the lock: copying it may count a reference, and the lock is the producers'.
+            auto target = ResumeTarget::currentOr(_queue->_executor);
             auto const guard = std::scoped_lock { _queue->_mutex };
             if (!_queue->_items.empty() || _queue->_closed.load(std::memory_order_relaxed) || _cancelled)
                 return false;
             assert(!_queue->_waiter.resume
                    && "AsyncQueue supports one consumer; a second is a programmer error");
             _queue->_waiter = detail::parkedWorkFor(awaiting);
+            _queue->_waiterTarget = std::move(target);
             return true;
         }
 
@@ -349,8 +373,8 @@ class AsyncQueue final
         }
 
       private:
-        /// The stop callback: records the cancellation and hands the parked consumer back to its
-        /// executor, without closing the queue.
+        /// The stop callback: records the cancellation and hands the parked consumer back to the
+        /// executor it parked on, without closing the queue.
         ///
         /// A named functor rather than a lambda in a `StopCallback<std::function<void()>>`: one
         /// pointer of state needs neither an allocation nor an indirect call.
@@ -363,15 +387,17 @@ class AsyncQueue final
             void operator()() const noexcept
             {
                 auto waiter = ParkedWork {};
+                auto target = ResumeTarget {};
                 {
                     auto const guard = std::scoped_lock { _awaiter->_queue->_mutex };
                     _awaiter->_cancelled = true;
                     waiter = std::exchange(_awaiter->_queue->_waiter, {});
+                    target = std::exchange(_awaiter->_queue->_waiterTarget, {});
                 }
                 // Outside the lock, for `push()`'s reason: the executor's own lock must never
                 // nest under this queue's.
                 if (waiter.resume)
-                    _awaiter->_queue->_executor.submit(waiter);
+                    target.submit(std::move(waiter));
             }
 
           private:
@@ -398,6 +424,10 @@ class AsyncQueue final
 
     std::deque<T> _items;
     ParkedWork _waiter {};
+
+    /// Where @c _waiter is resumed: the executor it was running on as it parked, or @c _executor.
+    /// Taken together with @c _waiter, always.
+    ResumeTarget _waiterTarget {};
 
     /// Stored under @c _mutex with release and read outside it with acquire, so a loop condition
     /// can ask without taking the lock. The pairing means a reader that sees `true` also sees the

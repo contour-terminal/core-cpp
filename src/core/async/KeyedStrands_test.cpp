@@ -1,0 +1,375 @@
+// SPDX-License-Identifier: Apache-2.0
+#include <core/async/AsyncQueue.hpp>
+#include <core/async/Awaitable.hpp>
+#include <core/async/DetachedTask.hpp>
+#include <core/async/ExecutorContext.hpp>
+#include <core/async/KeyedStrands.hpp>
+#include <core/async/ResumeOn.hpp>
+#include <core/async/Task.hpp>
+#include <core/async/testing/ManualExecutor.hpp>
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <atomic>
+#include <cstddef>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+#if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
+    #include <core/async/ThreadPoolExecutor.hpp>
+
+    #include <array>
+    #include <chrono>
+    #include <mutex>
+    #include <ranges>
+    #include <thread>
+#endif
+
+using core::async::currentExecutor;
+using core::async::DetachedTask;
+using core::async::Task;
+using core::async::testing::ManualExecutor;
+
+namespace
+{
+
+using Strands = core::async::KeyedStrands<int>;
+using Queue = core::async::AsyncQueue<int>;
+
+static_assert(core::async::awaitReadyIsConstantFalse<Strands::ResumeOnKey>());
+
+/// What a task saw of the strands while it ran.
+struct Look
+{
+    bool onOne { false };   ///< `runningHere(1)`.
+    bool onTwo { false };   ///< `runningHere(2)`.
+    bool onAny { false };   ///< `runningAnyHere()`.
+    bool current { false }; ///< Whether any executor was current.
+};
+
+/// Hops onto @p key's strand and records what it sees there.
+Task<void> lookFrom(Strands* strands, int key, std::vector<Look>* out)
+{
+    co_await strands->resumeOn(key);
+    out->push_back(Look { .onOne = strands->runningHere(1),
+                          .onTwo = strands->runningHere(2),
+                          .onAny = strands->runningAnyHere(),
+                          .current = currentExecutor() != nullptr });
+}
+
+/// Hops onto @p key's strand, records its value, and ends.
+Task<void> append(Strands* strands, int key, std::vector<int>* out, int value)
+{
+    co_await strands->resumeOn(key);
+    out->push_back(value);
+}
+
+/// A frame sentinel, counted when the frame carrying it dies.
+class FrameSentinel
+{
+  public:
+    explicit FrameSentinel(int* destroyed) noexcept: _destroyed(destroyed) {}
+    FrameSentinel(FrameSentinel&& other) noexcept: _destroyed(std::exchange(other._destroyed, nullptr)) {}
+    FrameSentinel(FrameSentinel const&) = delete;
+    FrameSentinel& operator=(FrameSentinel const&) = delete;
+    FrameSentinel& operator=(FrameSentinel&&) = delete;
+
+    ~FrameSentinel()
+    {
+        if (_destroyed != nullptr)
+            ++*_destroyed;
+    }
+
+  private:
+    int* _destroyed;
+};
+
+/// What a keyed consumer saw.
+struct Consumed
+{
+    std::vector<int> seen;   ///< Every value it took.
+    std::vector<bool> onKey; ///< For each value, whether it was on its key's strand.
+    bool closed { false };   ///< Whether it saw the queue close.
+};
+
+/// Hops onto @p key's strand, then pops until the queue closes.
+Task<void> consumeOnKey(Strands* strands, int key, Queue* queue, Consumed* out)
+{
+    co_await strands->resumeOn(key);
+    while (auto item = co_await queue->pop())
+    {
+        out->seen.push_back(*item);
+        out->onKey.push_back(strands->runningHere(key));
+    }
+    out->closed = true;
+}
+
+} // namespace
+
+TEST_CASE("KeyedStrands answers runningHere per key and runningAnyHere for all of them", "[KeyedStrands]")
+{
+    auto base = ManualExecutor {};
+    auto strands = Strands { base };
+    auto looks = std::vector<Look> {};
+
+    auto one = lookFrom(&strands, 1, &looks);
+    auto two = lookFrom(&strands, 2, &looks);
+    one.handle().resume();
+    two.handle().resume();
+    std::ignore = base.drain();
+
+    REQUIRE(looks.size() == 2);
+    CHECK(looks[0].onOne);
+    CHECK_FALSE(looks[0].onTwo);
+    CHECK(looks[0].onAny);
+    CHECK(looks[0].current);
+    CHECK_FALSE(looks[1].onOne);
+    CHECK(looks[1].onTwo);
+    CHECK(looks[1].onAny);
+
+    // And nothing, outside.
+    CHECK_FALSE(strands.runningHere(1));
+    CHECK_FALSE(strands.runningAnyHere());
+}
+
+TEST_CASE("KeyedStrands runs one key's work in FIFO order", "[KeyedStrands]")
+{
+    auto base = ManualExecutor {};
+    auto strands = Strands { base };
+    auto order = std::vector<int> {};
+
+    auto tasks = std::vector<Task<void>> {};
+    for (auto const value: { 0, 1, 2, 3, 4, 5 })
+        tasks.push_back(append(&strands, 7, &order, value));
+    for (auto& task: tasks)
+        task.handle().resume();
+    std::ignore = base.drain();
+    CHECK(order == std::vector { 0, 1, 2, 3, 4, 5 });
+}
+
+TEST_CASE("An idle key's strand is reclaimed, and a later submit makes a new one", "[KeyedStrands]")
+{
+    auto base = ManualExecutor {};
+    auto strands = Strands { base };
+    auto order = std::vector<int> {};
+    CHECK(strands.size() == 0);
+
+    auto first = append(&strands, 1, &order, 10);
+    auto second = append(&strands, 2, &order, 20);
+    auto third = append(&strands, 3, &order, 30);
+    first.handle().resume();
+    second.handle().resume();
+    third.handle().resume();
+    CHECK(strands.size() == 3);
+
+    std::ignore = base.drain();
+    CHECK(order.size() == 3);
+    // Every key ran out of work, so every strand is gone: one per key ever seen would grow without
+    // bound in a program keyed by connection or by model instance.
+    CHECK(strands.size() == 0);
+
+    auto again = append(&strands, 1, &order, 11);
+    again.handle().resume();
+    CHECK(strands.size() == 1);
+    std::ignore = base.drain();
+    CHECK(order.back() == 11);
+    CHECK(strands.size() == 0);
+}
+
+TEST_CASE("A coroutine that parked while its key's strand was reclaimed comes back to that key",
+          "[KeyedStrands][AsyncQueue][context]")
+{
+    // The resume target a parked coroutine holds names a strand that went idle and was reclaimed
+    // while it waited. It must neither dangle nor come back on a strand of its own beside the key's
+    // new one: it comes back to the key.
+    auto base = ManualExecutor {};
+    auto foreign = ManualExecutor {};
+    auto strands = Strands { base };
+    auto queue = Queue { foreign, core::async::AsyncQueueOptions {} };
+    auto out = Consumed {};
+    auto order = std::vector<int> {};
+
+    auto consumer = consumeOnKey(&strands, 5, &queue, &out);
+    consumer.handle().resume();
+    std::ignore = base.drain();
+    REQUIRE(queue.hasWaiter());
+    CHECK(strands.size() == 0);
+
+    // Another task on the same key, queued but not run, so the key has a live strand again.
+    auto other = append(&strands, 5, &order, 1);
+    other.handle().resume();
+    CHECK(strands.size() == 1);
+
+    std::ignore = queue.push(42);
+    CHECK(foreign.pending() == 0);
+    // Still one strand for the key: the resumption joined it rather than making a second.
+    CHECK(strands.size() == 1);
+    std::ignore = base.drain();
+    std::ignore = foreign.drain();
+
+    CHECK(order == std::vector { 1 });
+    REQUIRE(out.seen == std::vector { 42 });
+    CHECK(out.onKey == std::vector { true });
+
+    queue.close();
+    std::ignore = base.drain();
+    CHECK(out.closed);
+    CHECK(strands.size() == 0);
+}
+
+TEST_CASE("KeyedStrands destroyed with work queued drops it, freeing what nobody owns", "[KeyedStrands]")
+{
+    auto base = ManualExecutor {};
+    auto ran = 0;
+    auto ended = 0;
+    {
+        auto strands = Strands { base };
+        [](Strands* on, int* count, FrameSentinel sentinel) -> DetachedTask {
+            (void) sentinel;
+            co_await on->resumeOn(3);
+            ++*count;
+        }(&strands, &ran, FrameSentinel { &ended });
+        CHECK(strands.size() == 1);
+        CHECK(ended == 0);
+    }
+    // The detached chain was freed with the strands, never run.
+    CHECK(ended == 1);
+    CHECK(ran == 0);
+    std::ignore = base.drain();
+    CHECK(ran == 0);
+}
+
+#if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
+
+namespace
+{
+
+using namespace std::chrono_literals;
+
+/// How long a case waits for other threads before it calls the machine wedged.
+constexpr auto Budget = 60s;
+
+/// Polls @p done on a monotonic clock until it holds or the budget runs out.
+/// @return Whether it held.
+template <typename Predicate>
+[[nodiscard]] bool waitUntil(Predicate done)
+{
+    auto const deadline = std::chrono::steady_clock::now() + Budget;
+    while (!done())
+    {
+        if (std::chrono::steady_clock::now() >= deadline)
+            return false;
+        std::this_thread::sleep_for(1ms);
+    }
+    return true;
+}
+
+/// Per-key overlap accounting for the concurrency cases.
+struct PerKey
+{
+    std::array<std::atomic<int>, 4> inside {}; ///< Tasks of each key inside right now.
+    std::atomic<int> overlaps { 0 };           ///< Times a task found its own key busy.
+    std::atomic<int> maxDistinct { 0 };        ///< Most keys seen inside at once.
+    std::atomic<int> busyKeys { 0 };           ///< Keys with a task inside right now.
+    std::atomic<int> finished { 0 };           ///< Tasks that have ended.
+};
+
+/// Hops onto @p key's strand and holds it for a while, counting company of the same key and of
+/// the others.
+DetachedTask keyedProbe(Strands* strands, PerKey* probe, int key)
+{
+    co_await strands->resumeOn(key);
+    auto& mine = probe->inside.at(static_cast<std::size_t>(key));
+    if (mine.fetch_add(1) != 0)
+        probe->overlaps.fetch_add(1);
+    auto const busy = probe->busyKeys.fetch_add(1) + 1;
+    auto seen = probe->maxDistinct.load();
+    while (busy > seen && !probe->maxDistinct.compare_exchange_weak(seen, busy))
+    {
+    }
+    std::this_thread::sleep_for(200us);
+    probe->busyKeys.fetch_sub(1);
+    mine.fetch_sub(1);
+    probe->finished.fetch_add(1);
+}
+
+} // namespace
+
+TEST_CASE("Different keys run concurrently and the same key never overlaps", "[KeyedStrands][threads]")
+{
+    constexpr auto PerKeyCount = 200;
+    auto probe = PerKey {};
+    auto pool = core::async::ThreadPoolExecutor { 4 };
+    {
+        auto strands = Strands { pool };
+        for ([[maybe_unused]] auto const round: std::views::iota(0, PerKeyCount))
+            for (auto const key: { 0, 1, 2, 3 })
+                keyedProbe(&strands, &probe, key);
+        auto const done = waitUntil([&probe] { return probe.finished.load() == 4 * PerKeyCount; });
+        INFO("finished " << probe.finished.load() << " of " << 4 * PerKeyCount);
+        REQUIRE(done);
+    }
+    CHECK(probe.overlaps.load() == 0);
+    // Four keys on four threads, each holding its strand for 200us at a time: a KeyedStrands that
+    // serialised every key through one strand would never have two busy at once.
+    CHECK(probe.maxDistinct.load() >= 2);
+}
+
+TEST_CASE("Two keys each waiting for the other to start both finish", "[KeyedStrands][threads]")
+{
+    // A rendezvous only concurrency can satisfy: each task holds its key's strand until the other
+    // key's task has started. Serialised through one strand, the first would wait out its budget.
+    auto started = std::array<std::atomic<bool>, 2> {};
+    auto met = std::array<std::atomic<bool>, 2> {};
+    auto finished = std::atomic<int> { 0 };
+    auto pool = core::async::ThreadPoolExecutor { 2 };
+    {
+        auto strands = Strands { pool };
+        for (auto const key: { 0, 1 })
+            [](Strands* on, int mine, decltype(started)* begun, decltype(met)* both, std::atomic<int>* done)
+                -> DetachedTask {
+                co_await on->resumeOn(mine);
+                auto const me = static_cast<std::size_t>(mine);
+                begun->at(me).store(true);
+                auto const deadline = std::chrono::steady_clock::now() + 10s;
+                while (!begun->at(1 - me).load() && std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::sleep_for(1ms);
+                both->at(me).store(begun->at(1 - me).load());
+                done->fetch_add(1);
+            }(&strands, key, &started, &met, &finished);
+        REQUIRE(waitUntil([&finished] { return finished.load() == 2; }));
+    }
+    CHECK(met[0].load());
+    CHECK(met[1].load());
+}
+
+TEST_CASE("waitIdle waits for every key's work, including work that work submits", "[KeyedStrands][threads]")
+{
+    auto finished = std::atomic<int> { 0 };
+    auto pool = core::async::ThreadPoolExecutor { 4 };
+    {
+        auto strands = Strands { pool };
+        for (auto const key: { 0, 1, 2, 3, 4, 5, 6, 7 })
+            [](Strands* on, int mine, std::atomic<int>* done) -> DetachedTask {
+                co_await on->resumeOn(mine);
+                std::this_thread::sleep_for(2ms);
+                // A follow-up on the next key, submitted from inside the work being waited for.
+                [](Strands* again, int next, std::atomic<int>* count) -> DetachedTask {
+                    co_await again->resumeOn(next);
+                    std::this_thread::sleep_for(2ms);
+                    count->fetch_add(1);
+                }(on, mine + 1, done);
+                done->fetch_add(1);
+            }(&strands, key, &finished);
+
+        strands.waitIdle();
+        // Every one of the sixteen, not merely the eight submitted from here.
+        CHECK(finished.load() == 16);
+        CHECK(strands.size() == 0);
+    }
+}
+
+#endif

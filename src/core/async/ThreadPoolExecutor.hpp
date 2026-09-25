@@ -15,6 +15,7 @@
     #error "core::async::ThreadPoolExecutor needs threads; single-threaded Emscripten has none"
 #endif
 
+#include <core/async/ExecutorContext.hpp>
 #include <core/async/IExecutor.hpp>
 #include <core/async/ParkedWork.hpp>
 
@@ -125,7 +126,9 @@ class ThreadPoolExecutor final: public IExecutor
         }
 
         // Stopped, so nothing will pick it up. Resumed here rather than dropped: an unresumed
-        // coroutine never frees its frame.
+        // coroutine never frees its frame. With this pool current, because it is still the pool's
+        // work: an awaitable it parks on comes back here, and so inline again.
+        auto const scope = ExecutorScope { *this };
         entry.resume();
     }
 
@@ -154,8 +157,12 @@ class ThreadPoolExecutor final: public IExecutor
 
     /// One worker: takes handles off the queue and resumes them until the queue is empty and the
     /// pool is stopping.
+    ///
+    /// The thread runs nothing but this pool's work, so the pool is its current executor for its
+    /// whole life: one scope, rather than one per resumption.
     void worker()
     {
+        auto const scope = ExecutorScope { *this };
         while (true)
         {
             auto entry = detail::Parked {};
