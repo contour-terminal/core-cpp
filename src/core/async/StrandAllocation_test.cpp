@@ -146,6 +146,7 @@ TEST_CASE("A submit whose allocation fails changes nothing, whichever allocation
     // nothing scheduled -- a pump published as scheduled that nobody will run is a strand no later
     // submit can restart, and a queued task whose submitter was told no runs anyway.
     auto failures = 0;
+    auto reachedSuccess = false;
     for (auto const failAt: { 0, 1, 2, 3, 4, 5, 6, 7 })
     {
         auto base = core::async::testing::ManualExecutor {};
@@ -170,6 +171,7 @@ TEST_CASE("A submit whose allocation fails changes nothing, whichever allocation
         {
             INFO("the first submit needed " << failAt << " allocation(s)");
             CHECK(failures > 0);
+            reachedSuccess = true;
             break;
         }
         ++failures;
@@ -182,6 +184,9 @@ TEST_CASE("A submit whose allocation fails changes nothing, whichever allocation
         CHECK(order == std::vector { 2 });
         CHECK_FALSE(refused.done());
     }
+    // Every allocation a first submit makes was failed once: the loop ended on a submit that needed
+    // no more, not by running out of positions to try.
+    CHECK(reachedSuccess);
 }
 
 TEST_CASE("A strand whose replacement pump cannot be allocated keeps its queue and restarts on the "

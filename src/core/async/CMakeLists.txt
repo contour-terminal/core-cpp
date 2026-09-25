@@ -144,7 +144,7 @@ if(CORE_CPP_TESTING AND NOT EMSCRIPTEN)
     target_link_libraries(core-cpp-strand-throw-canary PRIVATE core::async core::testing_dialogs)
     core_cpp_apply_toolchain(core-cpp-strand-throw-canary)
     add_test(NAME core-cpp.strand-throw-canary COMMAND core-cpp-strand-throw-canary)
-    set(_coreCppStrandTerminates "core::async::Strand: a task threw out of resume\(\)")
+    set(_coreCppStrandTerminates "core::async::Strand: a task threw out of resume[(][)]")
     set(_coreCppStrandPropagates "strand-throw-canary: the task behind it ran")
     if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
         set_tests_properties(core-cpp.strand-throw-canary PROPERTIES
