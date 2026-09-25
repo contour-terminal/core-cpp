@@ -600,7 +600,7 @@ namespace detail
             {
                 auto const lock = std::scoped_lock { _mutex };
                 // `work` drops when this returns, outside the lock, freeing what nobody owns.
-                if (_closed || FreeingAbandoned::active(abandonOwner()))
+                if (_closed || _sealed || FreeingAbandoned::active(abandonOwner()))
                     return;
                 if (_retired)
                     rerouted.emplace(std::move(work));
@@ -630,7 +630,7 @@ namespace detail
             auto enqueued = Enqueued {};
             {
                 auto const lock = std::scoped_lock { _mutex };
-                if (_closed || FreeingAbandoned::active(abandonOwner()))
+                if (_closed || _sealed || FreeingAbandoned::active(abandonOwner()))
                     return false;
                 assert(!_retired && "a keyed strand is offered work through its registry");
                 enqueued = enqueueLocked([&work] { return StrandTask { Parked { std::move(work) } }; });
@@ -653,7 +653,7 @@ namespace detail
             auto enqueued = Enqueued {};
             {
                 auto const lock = std::scoped_lock { _mutex };
-                if (_closed || FreeingAbandoned::active(abandonOwner()))
+                if (_closed || _sealed || FreeingAbandoned::active(abandonOwner()))
                     return false;
                 assert(!_retired && "a keyed strand is offered work through its registry");
                 enqueued = enqueueLocked(
@@ -681,7 +681,7 @@ namespace detail
         [[nodiscard]] Enqueued enqueue(Make make)
         {
             auto const lock = std::scoped_lock { _mutex };
-            assert(!_closed && !_retired);
+            assert(!_closed && !_sealed && !_retired);
             return enqueueLocked(std::move(make));
         }
 
@@ -783,6 +783,16 @@ namespace detail
             dropped.clear();
             if (idlePump)
                 idlePump.destroy();
+        }
+
+        /// Stops admitting work: from now on a submit or a post drops it, as a closed strand does,
+        /// and the `try` members refuse it; what is queued keeps running. Idempotent. Called by the
+        /// owner -- a `KeyedStrands` holding its registry's lock, so that no key's strand admits work
+        /// the registry has stopped admitting.
+        void seal()
+        {
+            auto const lock = std::scoped_lock { _mutex };
+            _sealed = true;
         }
 
         /// Retires this strand if it has nothing queued: from now on it hands what it is given to
@@ -1189,6 +1199,7 @@ namespace detail
         std::size_t _handOffs { 0 };
         StrandReclaim _reclaim;
         bool _closed { false };  ///< The owner is gone; nothing runs any more.
+        bool _sealed { false };  ///< Admits nothing more; what is queued still runs.
         bool _retired { false }; ///< The owner reclaimed it; work goes to the owner.
     };
 
@@ -1382,8 +1393,15 @@ class Strand final: public IExecutor
     /// members. Idempotent; the destructor calls it.
     void close() { _core->close(); }
 
-    /// Stops admitting work, and keeps running what is queued. Idempotent.
-    void seal() {}
+    /// Stops admitting work, and keeps running what is queued: the first step of a teardown that
+    /// loses nothing -- `seal()`, then drain (`idle()`, or the base run until it is), then `close()`.
+    ///
+    /// After it, `tryPost` and `trySubmit` return false and leave the work with the caller, which
+    /// can run it itself; `post` and `submit` drop it, as a closed strand does -- which includes a
+    /// coroutine that parked on this strand and comes back. Work queued before it runs on the base
+    /// as usual, so `idle()` then means sealed and drained. `close()` afterwards behaves as ever.
+    /// Idempotent; there is no unsealing.
+    void seal() { _core->seal(); }
 
     /// @return Whether nothing is queued or running -- what a single-threaded host pumps its base
     ///         until, before it destroys the strand. Racy by nature where other threads submit.

@@ -218,7 +218,7 @@ namespace detail
             auto node = _strands.extract(slot);
             auto answer = RetireAnswer::PumpEnds;
             // Both vectors had their room reserved at construction: keeping allocates nothing.
-            if (pump == PumpOnRetire::MayWait && !_closed && _spareStrands.size() < SpareStrands)
+            if (pump == PumpOnRetire::MayWait && !_closed && !_sealed && _spareStrands.size() < SpareStrands)
             {
                 _spareStrands.push_back(std::move(node.mapped()));
                 answer = RetireAnswer::PumpWaits;
@@ -232,6 +232,18 @@ namespace detail
             // A strand not kept is still referenced by its pump, which is running this: dropping
             // the registry's reference here frees nothing.
             return answer;
+        }
+
+        /// Seals every key's strand, and refuses every key's work from now on -- a key with no
+        /// strand gets none. See `KeyedStrands::seal`.
+        void seal()
+        {
+            auto const lock = std::scoped_lock { _mutex };
+            _sealed = true;
+            // Under the registry's lock, which `offer` holds across its lookup and queueing: no key's
+            // strand admits work after this that the registry would have refused.
+            for (auto const& [key, strand]: _strands)
+                strand->seal();
         }
 
         /// Closes every strand and refuses what arrives later. See `~KeyedStrands`.
@@ -308,7 +320,7 @@ namespace detail
             try
             {
                 auto const lock = std::scoped_lock { _mutex };
-                if (_closed)
+                if (_closed || _sealed)
                     return false;
                 auto slot = _strands.find(key);
                 auto const made = slot == _strands.end();
@@ -422,6 +434,7 @@ namespace detail
         std::vector<std::shared_ptr<KeyStrandType>> _spareStrands;
         std::vector<NodeType> _spareNodes; ///< Map nodes kept for reuse, empty.
         bool _closed { false };
+        bool _sealed { false }; ///< Admits nothing more; queued work still runs.
     };
 
 } // namespace detail
@@ -592,8 +605,15 @@ class KeyedStrands final
     /// destructor calls it.
     void close() { _registry->close(); }
 
-    /// Stops admitting work, and keeps running what is queued. Idempotent.
-    void seal() {}
+    /// Stops admitting work for every key, and keeps running what is queued: as `Strand::seal`,
+    /// for all of them at once.
+    ///
+    /// A key that has no strand when it arrives gets none -- it is refused, or dropped, as a key
+    /// with one is -- and no kept strand is handed out again. Queued work runs and its strands
+    /// retire as they run dry, so `idle()` and `waitIdle()` then mean sealed and drained. The
+    /// teardown that loses nothing is `seal()`, then `waitIdle()` -- or, on the single-threaded
+    /// WebAssembly build, the base run until `idle()` -- then `close()`. Idempotent.
+    void seal() { _registry->seal(); }
 
     /// @return Whether no key has work queued or running: what a single-threaded host pumps its
     ///         base until before it destroys these strands. Racy by nature where other threads

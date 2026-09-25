@@ -970,34 +970,42 @@ TEST_CASE("waitIdle returns after a key's first hand-off was refused", "[KeyedSt
 TEST_CASE("Work offered to many keys while another thread seals them either runs or is handed back",
           "[KeyedStrands][seal][threads]")
 {
-    static constexpr auto PerProducer = 4000;
+    static constexpr auto RefusalsEach = 64;
     auto pool = core::async::ThreadPoolExecutor { 4 };
     auto strands = Strands { pool };
-    auto ranOnStrand = std::atomic<int> { 0 };
-    auto ranByProducer = std::atomic<int> { 0 };
-    auto producersDone = std::atomic<int> { 0 };
+    auto ran = std::atomic<int> { 0 };
     auto offered = std::atomic<int> { 0 };
+    auto refusedTotal = std::atomic<int> { 0 };
+    auto producersDone = std::atomic<int> { 0 };
+    auto const deadline = std::chrono::steady_clock::now() + Budget;
 
     auto producer = [&](int firstKey) {
-        for (auto const index: std::views::iota(0, PerProducer))
+        auto refused = 0;
+        for (auto index = 0; refused < RefusalsEach && std::chrono::steady_clock::now() < deadline; ++index)
         {
-            auto call = [&ranOnStrand] { ranOnStrand.fetch_add(1); };
-            if (!strands.tryPost(firstKey + (index % 8), call))
-                ranByProducer.fetch_add(1);
+            auto call = [&ran] { ran.fetch_add(1); };
+            // Keys come and go: some have a strand when the seal lands, some would need a new one.
+            if (!strands.tryPost(firstKey + (index % 16), call))
+            {
+                ++refused;
+                call();
+            }
             offered.fetch_add(1);
         }
+        refusedTotal.fetch_add(refused);
         producersDone.fetch_add(1);
     };
     auto first = std::thread { producer, 0 };
-    auto second = std::thread { producer, 4 };
-    CHECK(waitUntil([&offered] { return offered.load() >= PerProducer; }));
+    auto second = std::thread { producer, 8 };
+    CHECK(waitUntil([&offered] { return offered.load() >= 2000; }));
     strands.seal();
     CHECK(waitUntil([&producersDone] { return producersDone.load() == 2; }));
     first.join();
     second.join();
     CHECK(waitIdleWithin(strands)); // sealed and drained
     CHECK(strands.size() == 0);
-    CHECK(ranOnStrand.load() + ranByProducer.load() == 2 * PerProducer);
+    CHECK(refusedTotal.load() >= 2 * RefusalsEach);
+    CHECK(ran.load() == offered.load());
 }
 
 #endif

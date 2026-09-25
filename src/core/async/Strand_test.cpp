@@ -1572,49 +1572,57 @@ TEST_CASE("Work offered while another thread seals a strand either runs or is ha
           "[Strand][seal][threads]")
 {
     // Producers offer callables and coroutines through the try members, and run what is refused
-    // themselves; a third thread seals the strand halfway. Every piece of work must have run exactly
-    // once, on the strand or on its producer: a piece accepted and then dropped is the window seal()
+    // themselves, until each has been refused often enough to know the seal landed in the middle of
+    // its stream; a third thread seals the strand. Every piece of work must have run exactly once,
+    // on the strand or on its producer: a piece accepted and then dropped is the window seal()
     // exists to close.
-    static constexpr auto PerProducer = 4000;
+    static constexpr auto RefusalsEach = 64;
     auto pool = core::async::ThreadPoolExecutor { 4 };
     auto strand = Strand { pool };
-    auto ranOnStrand = std::atomic<int> { 0 };
-    auto ranByProducer = std::atomic<int> { 0 };
-    auto producersDone = std::atomic<int> { 0 };
+    auto ran = std::atomic<int> { 0 };
     auto offered = std::atomic<int> { 0 };
+    auto refusedTotal = std::atomic<int> { 0 };
+    auto producersDone = std::atomic<int> { 0 };
     auto tasks = std::array<std::vector<Task<void>>, 2> {};
-    for (auto& perProducer: tasks)
-    {
-        perProducer.reserve(PerProducer);
-        for ([[maybe_unused]] auto const index: std::views::iota(0, PerProducer))
-            perProducer.push_back(countWhenRun(&ranOnStrand));
-    }
+    auto const deadline = std::chrono::steady_clock::now() + Budget;
 
     auto producer = [&](std::size_t which) {
-        for (auto const index: std::views::iota(0, PerProducer))
+        auto& mine = tasks.at(which);
+        mine.reserve(1U << 16U);
+        auto refused = 0;
+        while (refused < RefusalsEach && std::chrono::steady_clock::now() < deadline && mine.size() < mine.capacity())
         {
-            auto call = [&ranOnStrand] { ranOnStrand.fetch_add(1); };
+            auto call = [&ran] { ran.fetch_add(1); };
             if (!strand.tryPost(call))
-                ranByProducer.fetch_add(1);
-            auto const handle = tasks.at(which).at(static_cast<std::size_t>(index)).handle();
-            if (!strand.trySubmit(handle))
-                handle.resume(); // counts into ranOnStrand too: it is the same body
+            {
+                ++refused;
+                call();
+            }
+            mine.push_back(countWhenRun(&ran));
+            if (auto const handle = mine.back().handle(); !strand.trySubmit(handle))
+            {
+                ++refused;
+                handle.resume();
+            }
             offered.fetch_add(2);
         }
+        refusedTotal.fetch_add(refused);
         producersDone.fetch_add(1);
     };
     auto first = std::thread { producer, std::size_t { 0 } };
     auto second = std::thread { producer, std::size_t { 1 } };
-    CHECK(waitUntil([&offered] { return offered.load() >= PerProducer; }));
+    CHECK(waitUntil([&offered] { return offered.load() >= 2000; }));
     strand.seal();
     CHECK(waitUntil([&producersDone] { return producersDone.load() == 2; }));
     first.join();
     second.join();
     CHECK(waitUntil([&strand] { return strand.idle(); }));
 
-    CHECK(ranOnStrand.load() + ranByProducer.load() == 4 * PerProducer);
-    for (auto const& perProducer: tasks)
-        CHECK(std::ranges::all_of(perProducer, [](Task<void> const& task) { return task.done(); }));
+    // Both producers saw the seal; and nothing offered was lost on either side of it.
+    CHECK(refusedTotal.load() >= 2 * RefusalsEach);
+    CHECK(ran.load() == offered.load());
+    for (auto const& mine: tasks)
+        CHECK(std::ranges::all_of(mine, [](Task<void> const& task) { return task.done(); }));
 }
 
 #endif
