@@ -709,14 +709,21 @@ DetachedTask keyedProbe(Strands* strands, PerKey* probe, int key)
 
 /// The same accounting as @c keyedProbe, for a task that holds its strand for no time at all, so
 /// that its key goes idle -- and is retired -- as often as a producer lets it.
-DetachedTask keyedTick(Strands* strands, PerKey* probe, int key)
+///
+/// Posted as a callable, not started as a `DetachedTask` that hops onto the key: a detached flow
+/// whose first suspension hands it to a pool thread that runs it to its end can be freed before
+/// its own ramp has returned, and clang-cl at -O0 reads the ramp's return object back from the
+/// freed frame (core-cpp#51). That is a `DetachedTask` defect, not what this case is about.
+/// @param strands The strands. @param probe The accounting. @param key The key.
+void keyedTick(Strands* strands, PerKey* probe, int key)
 {
-    co_await strands->resumeOn(key);
-    auto& mine = probe->inside.at(static_cast<std::size_t>(key));
-    if (mine.fetch_add(1) != 0)
-        probe->overlaps.fetch_add(1);
-    mine.fetch_sub(1);
-    probe->finished.fetch_add(1);
+    strands->post(key, [probe, key] {
+        auto& mine = probe->inside.at(static_cast<std::size_t>(key));
+        if (mine.fetch_add(1) != 0)
+            probe->overlaps.fetch_add(1);
+        mine.fetch_sub(1);
+        probe->finished.fetch_add(1);
+    });
 }
 
 } // namespace
