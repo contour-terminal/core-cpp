@@ -134,8 +134,7 @@ namespace detail
         /// @param options How each key's strand shares the base.
         /// @param aroundTask Called around every task, with its key; may be unset.
         /// @throws std::bad_alloc Not noexcept: MSVC's `unordered_map` allocates even empty.
-        KeyedStrandsRegistry(IExecutor& base, StrandOptions options, KeyedAroundTask<Key> aroundTask)
-            :
+        KeyedStrandsRegistry(IExecutor& base, StrandOptions options, KeyedAroundTask<Key> aroundTask):
             _base(base), _options(options), _aroundTask(aroundTask)
         {
         }
