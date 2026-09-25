@@ -171,6 +171,36 @@ namespace detail
         reaper.bury(dead);
     }
 
+    /// Marks the calling thread as freeing work a refused hand-off abandoned, for as long as it
+    /// lives: a submit the freed frames' destructors make to the same strand -- or, for a keyed
+    /// strand, to any key of the same `KeyedStrands` -- on this thread is dropped, as a closed
+    /// strand drops it, instead of scheduling a pump on the base that has just refused one and
+    /// throwing out of a destructor.
+    class FreeingAbandoned final
+    {
+      public:
+        /// @param owner The strand, or the keyed family, whose work is being freed.
+        explicit FreeingAbandoned(void const* owner) noexcept: _previous(std::exchange(slot(), owner)) {}
+        FreeingAbandoned(FreeingAbandoned const&) = delete;
+        FreeingAbandoned(FreeingAbandoned&&) = delete;
+        FreeingAbandoned& operator=(FreeingAbandoned const&) = delete;
+        FreeingAbandoned& operator=(FreeingAbandoned&&) = delete;
+        ~FreeingAbandoned() { slot() = _previous; }
+
+        /// @param owner A strand, or a keyed family.
+        /// @return Whether the calling thread is freeing work @p owner abandoned.
+        [[nodiscard]] static bool active(void const* owner) noexcept { return slot() == owner; }
+
+      private:
+        [[nodiscard]] static void const*& slot() noexcept
+        {
+            constinit thread_local void const* freeing = nullptr;
+            return freeing;
+        }
+
+        void const* _previous;
+    };
+
     /// A first-in first-out queue of parked work that allocates nothing until it is first used.
     ///
     /// A `std::deque` allocates its map and a first block when it is constructed, on some standard
@@ -297,8 +327,9 @@ namespace detail
             try
             {
                 auto const lock = std::scoped_lock { _mutex };
-                if (_closed)
-                    return; // `entry` drops the work outside the lock, freeing what nobody owns.
+                // `entry` drops the work outside the lock, freeing what nobody owns.
+                if (_closed || FreeingAbandoned::active(abandonOwner()))
+                    return;
                 if (_retired)
                     rerouted.emplace(entry.take());
                 else
@@ -347,20 +378,23 @@ namespace detail
         /// a chain nobody owns is freed, and a coroutine a `Task` owns is left to its owner. The
         /// caller's own work is taken back out, its claim disarmed, and the exception rethrown to
         /// it. The strand is then idle, and a keyed strand is retired through its owner, so the
-        /// next submit starts afresh.
+        /// next submit starts afresh. A submit that the abandoned frames' destructors make to this
+        /// strand as they are freed is dropped (see @c FreeingAbandoned).
         /// @param pump The pump, published as scheduled.
         /// @param withdraw The coroutine whose submit published it, to take back on a refusal.
         void queueOnBase(std::coroutine_handle<> pump, std::coroutine_handle<> withdraw)
         {
+            // Held across the base's answer: a base that resumes inline runs the pump inside its
+            // `submit`, and a task there may let go of the strand's last owner -- after which the
+            // pump ends and frees its own reference too, before the lock below is taken. And on a
+            // refusal a keyed strand is erased from its registry.
+            auto const keep = shared_from_this();
             try
             {
                 _base.submit(pump);
             }
             catch (...)
             {
-                // The owner may let go of this strand below -- a keyed strand is erased from its
-                // registry -- and the pump, which also holds it, may be freed with it.
-                auto const keep = shared_from_this();
                 auto taken = Parked {};
                 auto dropped = std::vector<Parked> {};
                 auto orphan = std::coroutine_handle<> {};
@@ -372,7 +406,7 @@ namespace detail
                     endHandOffLocked();
                 }
                 disarm(taken);
-                dropped.clear();
+                freeAbandoned(dropped);
                 if (orphan)
                     orphan.destroy();
                 retireIdle();
@@ -459,6 +493,20 @@ namespace detail
       private:
         friend StrandPump runStrandPump(std::shared_ptr<StrandCore> strand);
         friend struct StrandPump::promise_type;
+
+        /// @return What a @c FreeingAbandoned names for this strand: its keyed family, or itself.
+        [[nodiscard]] void const* abandonOwner() const noexcept
+        {
+            return _family != nullptr ? _family : static_cast<void const*>(this);
+        }
+
+        /// Frees what a refused hand-off abandoned, with a resubmit from its destructors dropped.
+        /// @param dropped The abandoned work.
+        void freeAbandoned(std::vector<Parked>& dropped) const noexcept
+        {
+            auto const freeing = FreeingAbandoned { abandonOwner() };
+            dropped.clear();
+        }
 
         /// Ends one hand-off to the base, waking a close that waits for it. Holds the lock.
         void endHandOffLocked() noexcept
@@ -666,10 +714,15 @@ namespace detail
             }
             catch (...)
             {
-                auto const lock = std::scoped_lock { _mutex };
-                _pump = {};
-                _phase = _closed ? StrandPhase::Exited : StrandPhase::Idle;
-                notifySettledLocked();
+                {
+                    auto const lock = std::scoped_lock { _mutex };
+                    _pump = {};
+                    _phase = _closed ? StrandPhase::Exited : StrandPhase::Idle;
+                    notifySettledLocked();
+                }
+                // A keyed strand left with nothing queued would otherwise stay registered, idle,
+                // with no pump to retire it.
+                retireIdle();
                 throw;
             }
 
@@ -717,7 +770,7 @@ namespace detail
                     dropped = _queue.takeAll();
                     orphan = unscheduleLocked();
                 }
-                dropped.clear();
+                freeAbandoned(dropped);
                 if (orphan)
                     orphan.destroy();
                 retireIdle();
@@ -847,8 +900,11 @@ namespace detail
 /// strand hands it its pump is not running this strand: the `submit` that handed it over throws,
 /// with its own work taken back out, and everything else queued -- including work another thread
 /// queued behind the scheduled pump and was told was accepted -- is dropped as `close()` drops it. The
-/// strand is then idle, and the next submit starts it afresh. A refusal between two turns, which
-/// nobody could be told about, runs the next turn on the thread the strand already has.
+/// strand is then idle, and the next submit starts it afresh. A frame freed by that drop whose
+/// destructor submits to the strand again -- to any key of the same `KeyedStrands`, for a keyed
+/// strand -- has that work dropped too, on that thread, rather than handed to the base that has just
+/// refused: it would throw out of a destructor. A refusal between two turns, which nobody could be
+/// told about, runs the next turn on the thread the strand already has.
 ///
 /// **Destruction.** Tasks still queued are dropped, never run: a chain rooted in a `DetachedTask`
 /// is freed, and a coroutine a `Task` owns is left to its owner, suspended. A task running on

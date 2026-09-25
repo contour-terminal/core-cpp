@@ -66,7 +66,10 @@ drain slot for ever, and the loop's own `dispatchBatch` would bound nothing.
   means the base is not running this strand, so the queue is abandoned as destruction abandons it,
   the refused submitter gets its exception and its own work back, and the strand starts afresh on
   the next submit. `~Strand` waits for a hand-off still inside the base's `submit`, or it would
-  free the work that submitter is about to be given back.
+  free the work that submitter is about to be given back. A frame freed by the abandonment may
+  submit to the strand again from its destructor; handing that to the base that has just refused
+  would throw out of the destructor, so the thread doing the freeing drops it, as a closed strand
+  would.
 - **Swallowing what a task throws** (morph logged it): `core::async` has no logger and depends on
   nothing, and a strand that hid an exception would make a bug quiet. What a task throws out of
   `resume()` -- which no coroutine type of this module does -- propagates to whoever resumed the

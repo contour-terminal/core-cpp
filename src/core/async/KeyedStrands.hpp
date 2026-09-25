@@ -92,6 +92,10 @@ namespace detail
         /// @param work The coroutine to resume on it.
         void submit(Key const& key, ParkedWork work)
         {
+            // Work a refused hand-off abandoned is being freed on this thread, and one of its
+            // destructors submits again: dropped, freeing what nobody owns (see Strand.hpp).
+            if (FreeingAbandoned::active(this))
+                return;
             auto const handle = work.resume;
             auto pump = std::coroutine_handle<> {};
             // Held, not borrowed: once the pump is queued the strand can run, retire and let go of

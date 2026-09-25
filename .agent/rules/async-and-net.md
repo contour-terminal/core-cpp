@@ -626,6 +626,18 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   own entry while it is still inside the base's `submit`: the refusal then resumes a freed frame
   (ASan). `_handOffs` counts them, and `close()` waits for zero as it waits for `Running`. Between
   turns a refusal keeps the thread instead: there is nobody to tell.
+- **A hand-off holds its strand across the base's `submit`, accepted or not.** A base that resumes
+  inline runs the pump inside that call, a task there may release the strand's last owner, and the
+  pump then ends and drops its own reference -- all before `submit` returns to a hand-off that
+  still has to end its count under the strand's lock (ASan heap-use-after-free, review round 3;
+  the `keep` had been taken on the refusal path only).
+- **Abandoned work is freed with its resubmits dropped.** A refused hand-off leaves the strand idle
+  and open, so a destructor of a freed frame that submits to it again scheduled a new pump on the
+  base that had just refused, and threw out of a noexcept destructor. `detail::FreeingAbandoned`
+  marks the freeing thread; `StrandCore::submit` and the keyed registry drop what that thread
+  submits to the same strand or family. Every path that ends a strand's pump by failure -- a
+  refused hand-off, a refused replacement, a replacement that cannot be allocated -- also retires a
+  keyed strand left empty, or `waitIdle()` never returns.
 - **A strand's pump decides "idle" in its own `await_suspend`, under the strand's lock**, so a
   submit either sees it running and only queues, or sees it suspended and may queue it on the base.
   Deciding before suspending lets a submit on another thread resume a pump that has not suspended.

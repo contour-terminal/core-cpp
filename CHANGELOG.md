@@ -41,11 +41,13 @@ workflow refuses one without a section here.
   under MSVC's `cl`, where it ends the process with a message**: an exception crossing the strand's
   coroutine frames was measured corrupting the thread's executor scopes on `cl-release`
   (`core-cpp.strand-throw-canary`). An allocation that fails leaves the strand as it was: `submit`
-  throws with nothing queued. **A refused hand-off abandons the strand's queued work**: a base
+  throws with nothing queued, and a key's strand whose replacement pump cannot be made is retired
+  if nothing is queued on it. **A refused hand-off abandons the strand's queued work**: a base
   whose `submit` throws when the strand hands it its pump makes that `submit` throw, and the rest
   of the queue -- work other threads queued meanwhile included -- is dropped as destruction drops
-  it; a `KeyedStrands` key's strand is retired with it. `~Strand` waits for a hand-off still inside
-  the base's `submit`. Destroying a strand drops what is
+  it; a `KeyedStrands` key's strand is retired with it. What a frame freed by that drop submits to
+  the same strand (or `KeyedStrands`) from its destructor is dropped as well, not handed to the
+  refusing base. `~Strand` waits for a hand-off still inside the base's `submit`. Destroying a strand drops what is
   queued -- a chain rooted in a `DetachedTask` is freed, a `Task`-owned coroutine is left to its
   owner -- and waits for a task running on another thread, but not for the task it is called
   from: a task may release the last reference to the strand's owner. The strand's state outlives
