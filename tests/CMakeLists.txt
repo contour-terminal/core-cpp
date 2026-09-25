@@ -633,6 +633,16 @@ if(WIN32)
     endforeach()
 endif()
 
+# The benchmark behind the 0.4.0 CHANGELOG's numbers for the current-executor context
+# (bench/ExecutorContextBench.cpp, which says how to run it). Built so it cannot rot, and registered
+# with nothing: a benchmark reports, it asserts nothing ctest could judge. POSIX only, because it
+# reads user CPU with getrusage.
+if(UNIX AND NOT EMSCRIPTEN AND TARGET core::net)
+    add_executable(core-cpp-bench-executor-context bench/ExecutorContextBench.cpp)
+    target_link_libraries(core-cpp-bench-executor-context PRIVATE core::net)
+    core_cpp_apply_toolchain(core-cpp-bench-executor-context)
+endif()
+
 # The WebAssembly smoke, which is a program rather than a Catch2 binary and needs a link flag of
 # its own. Its own directory, so that flag reaches nothing else. Empty off Emscripten.
 add_subdirectory(wasm)
