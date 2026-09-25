@@ -150,11 +150,12 @@ class ScopedOutput
 /// assertion unwinds: leaving a category pointing at a destroyed local sink would corrupt
 /// every later test in the binary.
 ///
-/// Thread safety: emitting into a captured category and reading the capture (@c text,
-/// @c contains, @c count, @c lines) are safe from any thread at once; every append and every
-/// read takes one mutex. A test whose code under test logs from its own threads needs nothing
-/// more. Construction and destruction are not: like @c ScopedOutput, they reassign each
-/// category's sink, so construct and destroy this while no other thread logs.
+/// Thread safety: emitting into a captured category is safe from any thread, and so are
+/// @c snapshot, @c contains, @c count and @c lines, which read under the same mutex every append
+/// takes. @c text is the one exception: it hands out a reference to the buffer itself, so it is
+/// valid only while no thread logs into the capture -- after the writers are joined, say. Read
+/// with @c snapshot while they run. Construction and destruction reassign each category's sink,
+/// so, like @c ScopedOutput, construct and destroy this while no other thread logs.
 class ScopedCapture
 {
   public:
@@ -167,9 +168,15 @@ class ScopedCapture
     ScopedCapture(ScopedCapture&&) = delete;
     ScopedCapture& operator=(ScopedCapture&&) = delete;
 
-    /// @return A copy of everything written to the captured categories so far, verbatim. A copy,
-    ///         because another thread may be appending to what it was taken from.
-    [[nodiscard]] std::string text() const;
+    /// @return Everything written to the captured categories so far, verbatim.
+    ///
+    /// A reference to the buffer itself, read without the lock: call it only while no thread
+    /// logs into the capture. While one may, use @c snapshot.
+    [[nodiscard]] std::string const& text() const noexcept { return _text; }
+
+    /// @return A copy of everything written to the captured categories so far, taken under the
+    ///         lock, so it is safe while other threads log into the capture.
+    [[nodiscard]] std::string snapshot() const;
 
     /// @param needle The substring to look for.
     /// @return Whether any captured output contains @p needle.

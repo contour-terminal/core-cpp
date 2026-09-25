@@ -279,7 +279,7 @@ ScopedCapture::~ScopedCapture()
     }
 }
 
-std::string ScopedCapture::text() const
+std::string ScopedCapture::snapshot() const
 {
     auto const guard = std::scoped_lock { _mutex };
     return _text;

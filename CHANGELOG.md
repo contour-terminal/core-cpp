@@ -9,19 +9,19 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
-### Changed
+### Added
 
-- **`core::log::ScopedCapture` is thread-safe for emitting and reading.** Its sink appended to a
-  `std::string` without a lock, so a test whose code logged from two threads corrupted the heap
-  (contour's Windows test crash). Every append, and `text()`, `contains()`, `count()` and
-  `lines()`, now take one mutex. **`text()` returns a copy** (`std::string`, not
-  `std::string const&`), because a reference would be read while another thread appends; binding
-  it to `auto const&` or comparing it still compiles, while a `std::string_view` kept from it now
-  dangles at the end of the statement. Construction and destruction still reassign each category's
-  sink, so they stay single-threaded, as with `ScopedOutput`.
+- **`core::log::ScopedCapture::snapshot()`**: a copy of what the capture holds, taken under its
+  lock, for reading while other threads still log into it. `text()` is unchanged -- a reference to
+  the buffer itself -- and is valid only while no thread logs into the capture, once the writers
+  are joined.
 
 ### Fixed
 
+- **`core::log::ScopedCapture` takes lines from several threads at once.** Its sink appended to a
+  `std::string` without a lock, so a test whose code logged from two threads corrupted the heap
+  (contour's Windows test crash). Every append now takes a mutex, and so do `contains()`,
+  `count()`, `lines()` and the new `snapshot()`. No signature changes.
 - **`DetachedTask` no longer reads a freed frame under clang-cl at `-O0`** (core-cpp#51). A
   trivial empty return object is returned in a register, and clang-cl without optimisation kept the
   starting call's copy of it in the coroutine frame and reloaded it from there after the first

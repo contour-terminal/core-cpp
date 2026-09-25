@@ -17,6 +17,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <coroutine>
 #include <cstddef>
@@ -25,6 +27,7 @@
 #include <cstring>
 #include <new>
 #include <ranges>
+#include <span>
 #include <utility>
 
 #if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
@@ -107,6 +110,49 @@ void revokePages([[maybe_unused]] void* base, [[maybe_unused]] std::size_t lengt
 #endif
 }
 
+/// Gives @p length bytes at @p base back to the system, revoked or not.
+void unmapPages(void* base, [[maybe_unused]] std::size_t length) noexcept
+{
+#ifdef _WIN32
+    VirtualFree(base, 0, MEM_RELEASE);
+#elifndef __EMSCRIPTEN__
+    munmap(base, length);
+#else
+    std::free(base);
+#endif
+}
+
+/// A revoked block, kept so a case can give its address space back once nothing can read it.
+struct RevokedBlock
+{
+    void* base;
+    std::size_t length;
+};
+
+/// Room for every block the cases here revoke: the pool case revokes two or three per flow. A
+/// block past it stays mapped, which costs address space and nothing else.
+constexpr auto RevokedCapacity = std::size_t { 16384 };
+
+/// The revoked blocks not yet given back, filled from any thread through @c revokedCount.
+std::array<RevokedBlock, RevokedCapacity> revokedBlocks {};
+
+/// How many blocks have been revoked since they were last given back.
+std::atomic<std::size_t> revokedCount { 0 };
+
+/// Unmaps every revoked block. Called only once nothing can free another, at the end of a case.
+///
+/// Without it every guarded frame stays mapped for the life of the process: the pool case alone
+/// maps a page or more per flow, 8 MB of address space on x86-64 and 32 MB with 16 KB pages, and
+/// a revoked Windows page keeps its commit charge.
+/// @return How many blocks were revoked, which says the guard was engaged at all.
+std::size_t returnRevokedPages() noexcept
+{
+    auto const revoked = revokedCount.exchange(0);
+    for (auto const& block: std::span { revokedBlocks }.first(std::min(revoked, RevokedCapacity)))
+        unmapPages(block.base, block.length);
+    return revoked;
+}
+
 /// Serves an allocation from guarded pages, or from `malloc`, behind its header.
 void* allocate(std::size_t size)
 {
@@ -131,10 +177,14 @@ void release(void* storage) noexcept
         return;
     auto header = BlockHeader {};
     std::memcpy(&header, static_cast<std::byte*>(storage) - sizeof(BlockHeader), sizeof header);
-    if (header.backing == Backing::Pages)
-        revokePages(header.base, header.length);
-    else
+    if (header.backing == Backing::Heap)
+    {
         std::free(header.base);
+        return;
+    }
+    revokePages(header.base, header.length);
+    if (auto const slot = revokedCount.fetch_add(1); slot < RevokedCapacity)
+        revokedBlocks.at(slot) = RevokedBlock { .base = header.base, .length = header.length };
 }
 
 /// Guards the calling thread's allocations for as long as it lives.
@@ -208,6 +258,7 @@ TEST_CASE("A DetachedTask finished inside its first await is not read by its ram
         auto const guard = GuardedFrames {};
         finishedInsideItsAwait(&ran);
     }
+    CHECK(returnRevokedPages() >= std::size_t { 1 }); // the frame, at least, was guarded
     CHECK(ran == 1);
 }
 
@@ -256,6 +307,7 @@ TEST_CASE("A DetachedTask that hops onto another thread which finishes it is not
         auto const guard = GuardedFrames {};
         closeOnLoop(&loop, &closed);
     }
+    CHECK(returnRevokedPages() >= std::size_t { 1 });
     CHECK(closed.load() == 1);
 }
 
@@ -275,6 +327,7 @@ TEST_CASE("DetachedTasks hopping onto a pool that finishes them at teardown are 
             closeOnLoop(&pool, &closed);
         }
     } // teardown: the pool finishes what is still queued, then joins
+    CHECK(returnRevokedPages() >= std::size_t { Flows }); // every flow's frame was guarded
     CHECK(closed.load() == Flows);
 }
 

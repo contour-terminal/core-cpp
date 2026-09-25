@@ -7,14 +7,17 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <vector>
 
 // Single-threaded WebAssembly has no threads to start (Part I §1).
@@ -470,33 +473,72 @@ TEST_CASE("ScopedCapture enables and restores what it captures", "[log][logsink]
     CHECK(&category.sink() == before);
 }
 
+TEST_CASE("ScopedCapture's text() is still a reference into the capture", "[log][logsink]")
+{
+    // 0.4.1's signature, kept: a patch release does not change it. A by-value text() would turn a
+    // caller's `std::string_view v = capture.text();` into a dangling view without a diagnostic.
+    auto const capture = core::log::ScopedCapture { "test.capturetext" };
+    static_assert(std::is_same_v<decltype(capture.text()), std::string const&>);
+    static_assert(noexcept(capture.text()));
+    static_assert(std::is_same_v<decltype(capture.snapshot()), std::string>);
+    CHECK(&capture.text() == &capture.text());
+}
+
 #if CORE_CPP_TEST_THREADS
 TEST_CASE("ScopedCapture takes lines from several threads while it is read", "[log][logsink][threads]")
 {
     // contour's Windows heap crash: a test logged into a capture from two threads, and the sink
-    // appended to one std::string unguarded. Readers poll while the writers run, because a read
-    // racing an append that reallocates is the other half of it. Rounds, because an unguarded
-    // append does not fail every time.
+    // appended to one std::string unguarded. Readers poll while the writers run, through the
+    // locking readers, because a read racing an append that reallocates is the other half of it.
+    // Rounds, because an unguarded append does not fail every time.
     static constexpr auto Rounds = 20;
     static constexpr auto ThreadCount = 4;
     static constexpr auto LinesPerThread = 500;
+    // Per round, for a cold two-core runner under a sanitizer; a round takes milliseconds.
+    static constexpr auto Budget = std::chrono::seconds { 120 };
 
     auto category = TestCategory { "test.capturethreads" };
     for ([[maybe_unused]] auto const round: std::views::iota(0, Rounds))
     {
         auto capture = core::log::ScopedCapture { "test.capturethreads" };
         auto running = std::atomic<int> { ThreadCount };
+        auto written = std::atomic<int> { 0 };
         auto writers = std::vector<std::thread> {};
         for (auto const worker: std::views::iota(0, ThreadCount))
-            writers.emplace_back([&category, &running, worker] {
+            writers.emplace_back([&category, &running, &written, worker] {
                 for (auto const line: std::views::iota(0, LinesPerThread))
+                {
                     category.value()("worker {} line {}", worker, line);
+                    written.fetch_add(1);
+                }
                 running.fetch_sub(1);
             });
-        while (running.load() != 0)
+
+        auto const deadline = std::chrono::steady_clock::now() + Budget;
+        while (running.load() != 0 && std::chrono::steady_clock::now() < deadline)
         {
             [[maybe_unused]] auto const seen = capture.contains("worker 0 line");
-            [[maybe_unused]] auto const text = capture.text();
+            [[maybe_unused]] auto const text = capture.snapshot();
+        }
+        if (auto const stillRunning = running.load(); stillRunning != 0)
+        {
+            // Joining a writer that never returns would hang, and a hang names nothing. Say what
+            // was waited for and whether it was still moving, then end the process: Catch2 reports
+            // the abort against this case.
+            auto const before = written.load();
+            std::this_thread::sleep_for(std::chrono::seconds { 1 });
+            auto const after = written.load();
+            // std::cerr is unbuffered, so this is out before the abort.
+            std::cerr << std::format(
+                "ScopedCapture threads: {} of {} writers still running after {}s; {} of {} "
+                "lines written, {} over the last second\n",
+                stillRunning,
+                ThreadCount,
+                Budget.count(),
+                after,
+                ThreadCount * LinesPerThread,
+                after == before ? "none" : "more");
+            std::abort();
         }
         for (auto& writer: writers)
             writer.join();
@@ -508,6 +550,8 @@ TEST_CASE("ScopedCapture takes lines from several threads while it is read", "[l
         // breaks the total above.
         for (auto const worker: std::views::iota(0, ThreadCount))
             CHECK(capture.count(std::format("worker {} line ", worker)) == std::size_t { LinesPerThread });
+        // Once every writer is joined, the reference and the copy agree.
+        CHECK(capture.snapshot() == capture.text());
     }
 }
 #endif

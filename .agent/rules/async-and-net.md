@@ -652,13 +652,17 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   (C1001) -- core-cpp#54 has the repro. It is the destroy-while-suspended path an executor's
   teardown takes; `src/core/async/StrandTestSupport.hpp`'s `parkDetached` is the shape to copy.
   No canary: #54 carries the repro.
-- **A coroutine type whose frame frees itself has a non-trivial destructor.** A trivial empty
-  return object comes back in a register, and clang-cl at `-O0` reloads the ramp's copy of it from
-  the frame after the first suspension -- which a pool thread, a loop on another thread or an inline
-  resume may already have freed (core-cpp#51). `DetachedTask`'s destructor, defaulted out of line
-  and so user-provided, is what moves it to a caller-owned return slot; `= default` in the class
-  would not, and a `static_assert` beside it says so. `async-detached-frame` turns
-  freed frames into inaccessible pages, so the read faults rather than passing.
+- **An eagerly started coroutine type whose frame frees itself has a non-trivial destructor.**
+  The hazard needs both halves. Started eagerly (`initial_suspend` is `suspend_never`), the body
+  runs inside the ramp and can suspend into a pool thread, a loop on another thread or an inline
+  resume that runs it to its end; freeing itself (`final_suspend` is `suspend_never`), that end
+  frees the frame -- all before the ramp returns. A trivial empty return object comes back in a
+  register, and clang-cl at `-O0` reloads the ramp's copy of it from that frame on the way out
+  (core-cpp#51). `DetachedTask`'s destructor, defaulted out of line and so user-provided, moves it
+  to a caller-owned return slot; `= default` in the class would not, and a `static_assert` beside
+  it says so. A lazily started self-freeing type such as `detail::StrandPump` (`suspend_always`
+  first) is not exposed: nothing can resume it before its ramp has returned. `async-detached-frame`
+  turns freed frames into inaccessible pages, so the read faults rather than passing.
 - **A kept strand goes to another key only when nothing else references it.** `KeyedStrands`
   keeps retired strands for reuse; one a parked coroutine still holds through its `ResumeTarget`
   must keep serving its own key, or the coroutine comes back on the wrong one. The test is
