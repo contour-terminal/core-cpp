@@ -1635,6 +1635,7 @@ TEST_CASE("Work offered while another thread seals a strand either runs or is ha
     // on the strand or on its producer: a piece accepted and then dropped is the window seal()
     // exists to close.
     static constexpr auto RefusalsEach = 64;
+    static constexpr auto OffersEachSide = 1 << 14;
     // Declared before the pool and the strand, so it outlives them: a case that times out with
     // tasks still queued then reads red, rather than having the pool resume freed frames.
     auto tasks = std::array<std::vector<Task<void>>, 2> {};
@@ -1644,15 +1645,31 @@ TEST_CASE("Work offered while another thread seals a strand either runs or is ha
     auto offered = std::atomic<int> { 0 };
     auto refusedTotal = std::atomic<int> { 0 };
     auto producersDone = std::atomic<int> { 0 };
+    auto sealIssued = std::atomic<bool> { false };
     auto const deadline = std::chrono::steady_clock::now() + Budget;
 
     auto producer = [&](std::size_t which) {
         auto& mine = tasks.at(which);
-        mine.reserve(1U << 16U);
+        mine.reserve(static_cast<std::size_t>(2 * OffersEachSide)); // never reallocated
         auto refused = 0;
-        while (refused < RefusalsEach && std::chrono::steady_clock::now() < deadline
-               && mine.size() < mine.capacity())
+        auto beforeSeal = 0;
+        auto afterSeal = 0;
+        while (refused < RefusalsEach && std::chrono::steady_clock::now() < deadline)
         {
+            // Bounded on both sides of the seal: a producer that got through its share before the
+            // seal waits for it rather than running out of offers, and a seal that refuses nothing
+            // fails the case once the share after it is spent, not on the budget.
+            if (!sealIssued.load())
+            {
+                if (beforeSeal == OffersEachSide)
+                {
+                    std::this_thread::yield();
+                    continue;
+                }
+                ++beforeSeal;
+            }
+            else if (afterSeal++ == OffersEachSide)
+                break;
             auto call = [&ran] {
                 ran.fetch_add(1);
             };
@@ -1674,8 +1691,11 @@ TEST_CASE("Work offered while another thread seals a strand either runs or is ha
     };
     auto first = std::thread { producer, std::size_t { 0 } };
     auto second = std::thread { producer, std::size_t { 1 } };
-    CHECK(waitUntil([&offered] { return offered.load() >= 2000; }));
+    // Sealed as soon as the stream is going -- polled without a sleep, so the seal lands in it.
+    while (offered.load() < 2000 && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
     strand.seal();
+    sealIssued.store(true);
     CHECK(waitUntil([&producersDone] { return producersDone.load() == 2; }));
     first.join();
     second.join();

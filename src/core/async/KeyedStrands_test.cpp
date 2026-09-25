@@ -1037,21 +1037,37 @@ TEST_CASE("Work offered to many keys while another thread seals them either runs
           "[KeyedStrands][seal][threads]")
 {
     static constexpr auto RefusalsEach = 64;
+    static constexpr auto OffersEachSide = 1 << 14;
     auto pool = core::async::ThreadPoolExecutor { 4 };
     auto strands = Strands { pool };
     auto ran = std::atomic<int> { 0 };
     auto offered = std::atomic<int> { 0 };
     auto refusedTotal = std::atomic<int> { 0 };
     auto producersDone = std::atomic<int> { 0 };
+    auto sealIssued = std::atomic<bool> { false };
     auto const deadline = std::chrono::steady_clock::now() + Budget;
 
     auto producer = [&](int firstKey) {
         auto refused = 0;
         auto index = 0;
-        // Capped as the Strand case is, so a seal that refuses nothing fails at once, not on the
-        // budget.
-        while (refused < RefusalsEach && index < (1 << 16) && std::chrono::steady_clock::now() < deadline)
+        auto beforeSeal = 0;
+        auto afterSeal = 0;
+        // Bounded as the Strand case is, on both sides of the seal: a producer that got through its
+        // share first waits for the seal, and a seal that refuses nothing fails once the share after
+        // it is spent, not on the budget.
+        while (refused < RefusalsEach && std::chrono::steady_clock::now() < deadline)
         {
+            if (!sealIssued.load())
+            {
+                if (beforeSeal == OffersEachSide)
+                {
+                    std::this_thread::yield();
+                    continue;
+                }
+                ++beforeSeal;
+            }
+            else if (afterSeal++ == OffersEachSide)
+                break;
             auto call = [&ran] {
                 ran.fetch_add(1);
             };
@@ -1068,8 +1084,10 @@ TEST_CASE("Work offered to many keys while another thread seals them either runs
     };
     auto first = std::thread { producer, 0 };
     auto second = std::thread { producer, 8 };
-    CHECK(waitUntil([&offered] { return offered.load() >= 2000; }));
+    while (offered.load() < 2000 && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
     strands.seal();
+    sealIssued.store(true);
     CHECK(waitUntil([&producersDone] { return producersDone.load() == 2; }));
     first.join();
     second.join();
