@@ -22,13 +22,23 @@
 #include <cstdlib>
 #include <new>
 #include <ranges>
-#include <string>
 #include <tuple>
 #include <utility>
-#include <vector>
 
 namespace
 {
+
+/// @return Whether the standard library allocates a debugging proxy per container: MSVC's checked
+///         iterators, on in its Debug runtime. A function rather than a constant, so the case
+///         below branches on it at run time and every compiler keeps both branches.
+bool checkedIterators() noexcept
+{
+#ifdef _ITERATOR_DEBUG_LEVEL
+    return _ITERATOR_DEBUG_LEVEL != 0;
+#else
+    return false;
+#endif
+}
 
 /// Every global `operator new` and `operator new[]` this process has served.
 std::atomic<std::size_t> allocations { 0 };
@@ -284,8 +294,11 @@ TEST_CASE("A drain-step callback that resumes a parked waiter costs no allocatio
     CHECK(callbackTurn == idleTurn);
 }
 
-TEST_CASE("A frame-free completion of a detached chain allocates nothing once warm",
-          "[EventLoop][turn][alloc]")
+namespace
+{
+
+/// The measurement of the case below, which a build with checked iterators cannot make.
+void completionAllocatesNothing()
 {
     // The whole of what a parked socket operation costs the loop per completion, measured over many
     // turns rather than one: a timer park, the owner's callback queued and run in the drain step,
@@ -295,14 +308,6 @@ TEST_CASE("A frame-free completion of a detached chain allocates nothing once wa
     // FIFO that never grows; every parked operation's default answer spelled a sentence into a
     // `std::string`; a fired or cancelled timer's park was freed rather than kept; and each firing
     // collected its ids into a vector of its own.
-    // A standard library that allocates a debugging proxy per container -- MSVC's checked iterators
-    // in a Debug build -- allocates for every empty string and vector a turn makes, so the count
-    // there is its bookkeeping, not the loop's. Asked of the library rather than of the build.
-    auto const probe = allocations.load();
-    auto const empty = std::string {}.empty() && std::vector<int> {}.empty();
-    if (!empty || allocations.load() != probe)
-        SKIP("this standard library allocates a proxy per container, so allocations do not count the loop's");
-
     auto clock = core::platform::ManualClock {};
     auto loop = core::net::testing::TestLoop { clock };
     auto source = TimerCompletion { loop, clock };
@@ -348,4 +353,18 @@ TEST_CASE("A frame-free completion of a detached chain allocates nothing once wa
     stop = true;
     std::ignore = loop.runOnce();
     std::ignore = loop.runOnce();
+}
+
+} // namespace
+
+TEST_CASE("A frame-free completion of a detached chain allocates nothing once warm",
+          "[EventLoop][turn][alloc]")
+{
+    // MSVC's checked iterators allocate a debugging proxy for every string and container a turn
+    // constructs or moves, so the count in such a build is that bookkeeping, not the loop's. A
+    // runtime probe for it was tried and misread one CI toolchain, so this asks the library's own
+    // switch.
+    if (checkedIterators())
+        SKIP("the standard library's checked iterators allocate a proxy per container");
+    completionAllocatesNothing();
 }
