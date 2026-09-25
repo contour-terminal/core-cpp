@@ -623,6 +623,9 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   race twice.
 - **A strand's destructor drops what is queued and waits for what is running on another thread**,
   never from inside its own task (that would wait for itself) and never where there are no threads.
+  Destruction from inside its own task is SUPPORTED, not a precondition: morph's CI deadlocked twice
+  on a completion frame releasing the strand's owner on the strand. The `runningHere()` check in
+  `StrandCore::close` is what makes it safe, and the lifetime cases fail as a timeout without it.
   It cannot take back a pump already queued on the base, which is why the state is shared with the
   pump and the pump ends when it finds it closed. The base must outlive the strand and run what the
   strand queued there.

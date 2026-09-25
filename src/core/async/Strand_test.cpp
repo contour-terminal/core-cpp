@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <tuple>
@@ -473,6 +474,70 @@ TEST_CASE("A coroutine on a strand parked on AsyncQueue::pop unwinds on the stra
     CHECK_FALSE(queue.hasWaiter());
 }
 
+namespace
+{
+
+/// An object that owns a strand, the way morph's backend owned its StrandExecutor: whatever holds
+/// the last reference to it decides where the strand's destructor runs.
+class StrandOwner
+{
+  public:
+    explicit StrandOwner(IExecutor& base): _strand(base) {}
+
+    /// @return The strand this owner's work runs on.
+    [[nodiscard]] Strand& strand() noexcept { return _strand; }
+
+  private:
+    Strand _strand;
+};
+
+/// Hops onto the owner's strand and, from inside that task, releases the last reference to the
+/// owner -- so `~Strand` runs inside one of its own tasks. morph's CI hit exactly this twice: a
+/// completion's frame held the owner and was destroyed on the strand.
+Task<void> releaseOwnerFromItsStrand(std::shared_ptr<StrandOwner>* holder, std::atomic<bool>* released)
+{
+    co_await ResumeOn { (*holder)->strand() };
+    holder->reset();
+    // Reached only if the destructor did not wait for the task it was called from.
+    released->store(true);
+}
+
+/// Hops onto @p strand and records that it ran.
+Task<void> runOn(Strand* strand, int* ran)
+{
+    co_await ResumeOn { *strand };
+    ++*ran;
+}
+
+} // namespace
+
+TEST_CASE("A strand destroyed from inside one of its own tasks neither waits for itself nor runs what "
+          "is queued behind",
+          "[Strand][lifetime]")
+{
+    auto base = ManualExecutor {};
+    auto released = std::atomic<bool> { false };
+    auto ranBehind = 0;
+    auto holder = std::make_shared<StrandOwner>(base);
+
+    auto releaser = releaseOwnerFromItsStrand(&holder, &released);
+    auto behind = runOn(&holder->strand(), &ranBehind);
+    releaser.handle().resume();
+    behind.handle().resume();
+    std::ignore = base.drain();
+
+    // The task that destroyed its strand ran to its end: the destructor did not wait for it.
+    CHECK(released.load());
+    CHECK(releaser.done());
+    CHECK(holder == nullptr);
+    // What was queued behind it was dropped with the strand -- left to the Task that owns it --
+    // and the pump, which outlived the strand, ended without running anything more.
+    CHECK(ranBehind == 0);
+    CHECK_FALSE(behind.done());
+    CHECK(base.pending() == 0);
+    CHECK(currentExecutor() == nullptr);
+}
+
 #if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
 
 namespace
@@ -657,6 +722,27 @@ TEST_CASE("A coroutine on a strand parked on AsyncQueue::pop unwinds on the stra
     }
     CHECK(out.end == ConsumerEnd::Cancelled);
     CHECK(out.cancelledOnStrand);
+}
+
+TEST_CASE("A strand destroyed from inside one of its own tasks on a pool thread does not deadlock",
+          "[Strand][lifetime][threads]")
+{
+    // The same, on a pool thread, where the wait the destructor skips would otherwise block that
+    // thread for ever: the shape morph's CI deadlocked on.
+    auto released = std::atomic<bool> { false };
+    auto holder = std::shared_ptr<StrandOwner> {};
+    auto releaser = std::optional<Task<void>> {};
+    {
+        auto pool = core::async::ThreadPoolExecutor { 2 };
+        holder = std::make_shared<StrandOwner>(pool);
+        releaser.emplace(releaseOwnerFromItsStrand(&holder, &released));
+        releaser->handle().resume();
+        auto const done = waitUntil([&released] { return released.load(); });
+        INFO("the task that released the strand's owner " << (done ? "finished" : "never finished"));
+        REQUIRE(done);
+    }
+    CHECK(holder == nullptr);
+    CHECK(releaser->done());
 }
 
 #endif

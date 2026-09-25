@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -30,6 +31,7 @@
 
 using core::async::currentExecutor;
 using core::async::DetachedTask;
+using core::async::IExecutor;
 using core::async::Task;
 using core::async::testing::ManualExecutor;
 
@@ -240,6 +242,59 @@ TEST_CASE("KeyedStrands destroyed with work queued drops it, freeing what nobody
     CHECK(ran == 0);
     std::ignore = base.drain();
     CHECK(ran == 0);
+}
+
+namespace
+{
+
+/// An object that owns keyed strands, released from inside one of their tasks.
+class KeyedOwner
+{
+  public:
+    explicit KeyedOwner(IExecutor& base): _strands(base) {}
+
+    /// @return The strands this owner's work runs on.
+    [[nodiscard]] Strands& strands() noexcept { return _strands; }
+
+  private:
+    Strands _strands;
+};
+
+/// Hops onto key 1 and, from inside that task, releases the last reference to the owner.
+Task<void> releaseKeyedOwner(std::shared_ptr<KeyedOwner>* holder, std::atomic<bool>* released)
+{
+    co_await (*holder)->strands().resumeOn(1);
+    holder->reset();
+    released->store(true);
+}
+
+} // namespace
+
+TEST_CASE("KeyedStrands destroyed from inside one of its own tasks neither waits for itself nor runs "
+          "what is queued",
+          "[KeyedStrands][lifetime]")
+{
+    auto base = ManualExecutor {};
+    auto released = std::atomic<bool> { false };
+    auto order = std::vector<int> {};
+    auto holder = std::make_shared<KeyedOwner>(base);
+
+    auto releaser = releaseKeyedOwner(&holder, &released);
+    auto sameKey = append(&holder->strands(), 1, &order, 1);
+    auto otherKey = append(&holder->strands(), 2, &order, 2);
+    releaser.handle().resume();
+    sameKey.handle().resume();
+    otherKey.handle().resume();
+    std::ignore = base.drain();
+
+    CHECK(released.load());
+    CHECK(releaser.done());
+    CHECK(holder == nullptr);
+    // Key 2's task could have run before key 1's release, since the keys are independent: which
+    // one the base takes first is its business. What cannot happen is either running AFTER.
+    CHECK((order.empty() || order == std::vector { 2 }));
+    CHECK_FALSE(sameKey.done());
+    CHECK(base.pending() == 0);
 }
 
 #if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)

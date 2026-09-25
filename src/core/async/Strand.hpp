@@ -592,7 +592,9 @@ namespace detail
 /// **Destruction.** Tasks still queued are dropped, never run: a chain rooted in a `DetachedTask`
 /// is freed, and a coroutine a `Task` owns is left to its owner, suspended. A task running on
 /// another thread is waited for (not where threads do not exist, and not from inside one of the
-/// strand's own tasks, which the strand finishes once it returns). The base must outlive the
+/// strand's own tasks, which the strand finishes once it returns). So a task may release the last
+/// reference to the strand's owner: the destructor returns at once, the task runs to its end, and
+/// the pump then ends without running anything more. The base must outlive the
 /// strand and run what the strand queued on it: a pump queued there finds the strand closed and
 /// ends.
 class Strand final: public IExecutor

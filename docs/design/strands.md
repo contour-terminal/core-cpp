@@ -77,6 +77,18 @@ where threads exist and unless the destructor is called from inside one of the s
 under single-threaded WebAssembly a running task can only be on the destroying thread's own stack.
 The base executor must outlive the strand and run what the strand queued on it.
 
+**Destroying a strand from inside one of its own tasks is supported, and deferred by design.**
+morph's CI deadlocked on this twice: a completion's frame held the last reference to the object
+that owned the strand, released it on the strand, and the destructor waited for its own in-flight
+task. Here the destructor asks `runningHere()` first and does not wait when the answer is yes; the
+state it would otherwise protect is the one it shares with the pump, so nothing is freed under the
+running task. The task runs to its end; the pump then finds the strand closed, takes nothing more
+and ends, releasing the last reference. What was queued behind the task is dropped, as for any
+destruction. The same holds for `KeyedStrands`: the key whose task destroys it is not waited for,
+and every other key's running task is. No ownership pattern is required of the caller -- no weak
+reference, no posted release -- and `Strand_test.cpp` and `KeyedStrands_test.cpp` each have the case,
+under a hand-driven executor and, for `Strand`, on a pool thread.
+
 `KeyedStrands` retires a key's strand when its queue runs dry, under its registry's lock and the
 strand's, in that order everywhere. A retired strand is not reused; one that is still referenced
 (below) hands what it is given back to the registry, which gives it to the key's current strand or

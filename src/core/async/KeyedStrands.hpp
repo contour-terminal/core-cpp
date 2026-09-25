@@ -215,7 +215,8 @@ class KeyedStrands final
 
     /// Closes every key's strand, as `~Strand` does: queued work is dropped, freeing what nobody
     /// owns, and a task running on another thread is waited for. Work that arrives afterwards --
-    /// a coroutine that parked on one of these strands and is resumed later -- is dropped too.
+    /// a coroutine that parked on one of these strands and is resumed later -- is dropped too. Called
+    /// from inside a task of one of these strands, it does not wait for that task, as `~Strand` does not.
     ~KeyedStrands() { _registry->close(); }
 
     /// Awaitable that continues the awaiting coroutine on one key's strand.

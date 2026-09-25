@@ -34,7 +34,8 @@ workflow refuses one without a section here.
   per turn before it hands the base back. A task that throws out of `resume()` propagates to
   whoever resumed the pump and does not wedge the strand or lose the tasks behind it. Destroying a
   strand drops what is queued -- a chain rooted in a `DetachedTask` is freed, a `Task`-owned
-  coroutine is left to its owner -- and waits for a task running on another thread. Written after
+  coroutine is left to its owner -- and waits for a task running on another thread, but not for
+  the task it is called from: a task may release the last reference to the strand's owner. Written after
   morph's `StrandExecutor`, which consumers should replace with it.
 - **`core::async::KeyedStrands<Key, Hash, KeyEqual>`** (`<core/async/KeyedStrands.hpp>`): one
   strand per key over a shared base, made when a key gets work and reclaimed when it runs out.
