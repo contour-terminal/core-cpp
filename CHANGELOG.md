@@ -11,17 +11,23 @@ workflow refuses one without a section here.
 
 ### Added
 
-- **`seal()` on `Strand` and `KeyedStrands`: stop admitting work, keep running what is queued.**
-  `close()` drops the queue, so a teardown of "stop the handlers, drain, close" dropped whatever
-  arrived between the drain and the close -- a task's finish, a coroutine's resumption -- and
-  leaked its frame and whatever it was to settle (found by morph's switch review). After `seal()`
-  the `try` members return false and leave the work with the caller, `post` and `submit` drop it as
-  a closed strand's do, and what was queued before runs on the base, so `idle()` and `waitIdle()`
-  then mean sealed and drained. For `KeyedStrands` it holds for every key, including one that
-  arrives later -- no strand is made for it -- and no kept strand is handed out again. The teardown
-  that loses nothing is `seal()`, then `waitIdle()` (or, on the single-threaded WebAssembly build,
-  the base run until `idle()`), then `close()`. Idempotent; `close()` is unchanged. A
-  patch-compatible addition.
+- **`seal()` on `Strand` and `KeyedStrands`: close the offer door, keep running what is queued
+  and what comes back.** `close()` drops the queue, so a teardown of "stop the handlers, drain,
+  close" dropped whatever arrived between the drain and the close -- a task's finish, a
+  coroutine's resumption -- and leaked its frame and whatever it was to settle (found by morph's
+  switch review). After `seal()`, `tryPost` and `trySubmit` return false and leave the work with
+  the caller, for `KeyedStrands` for every key, a key with no strand included. `post` and `submit`
+  are still admitted until `close()`: `submit` is how a coroutine the strand already admitted
+  comes back -- `ResumeOn`, `resumeOn(key)`, an `AsyncQueue` push, close or stop -- and dropping it
+  would free a detached chain without its finish. Queued work runs as usual, and no kept
+  `KeyedStrands` strand is handed out or kept once sealed.
+  - **What a drain can see:** `idle()` and `waitIdle()` then mean nothing queued and nothing
+    running. A coroutine suspended off the strand -- on a socket, a timer, an `AsyncQueue` -- is
+    invisible to both and may still come back, so a consumer counts its own in-flight work (morph:
+    its stop signal plus the runs it tracks). The teardown that loses nothing is `seal()`, then that
+    count and `waitIdle()` both done (on the single-threaded WebAssembly build, the base run until
+    they are), then `close()`.
+  - Idempotent; `close()` is unchanged. A patch-compatible addition.
 
 ## [0.4.0] - 2026-09-25
 

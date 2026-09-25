@@ -146,6 +146,14 @@ namespace detail
         MayWait, ///< The owner may keep the strand for reuse, its pump waiting, idle, to be queued again.
     };
 
+    /// What a sealed strand does with work offered to it.
+    enum class WhenSealed : std::uint8_t
+    {
+        Admit = 0, ///< A `post` or `submit`: admitted until the strand is closed, since it is how work
+                   ///< the strand already admitted comes back.
+        Refuse,    ///< A `tryPost` or `trySubmit`: refused, and left with the caller.
+    };
+
     /// The owner's answer to a strand that asked to be retired.
     enum class RetireAnswer : std::uint8_t
     {
@@ -599,8 +607,9 @@ namespace detail
             try
             {
                 auto const lock = std::scoped_lock { _mutex };
-                // `work` drops when this returns, outside the lock, freeing what nobody owns.
-                if (_closed || _sealed || FreeingAbandoned::active(abandonOwner()))
+                // `work` drops when this returns, outside the lock, freeing what nobody owns. Not
+                // refused by a seal: this is how a coroutine the strand admitted comes back.
+                if (_closed || FreeingAbandoned::active(abandonOwner()))
                     return;
                 if (_retired)
                     rerouted.emplace(std::move(work));
@@ -640,20 +649,22 @@ namespace detail
             return true;
         }
 
-        /// Queues a call made from @p fn unless the strand is closed. Only for a strand that never
-        /// retires. The call is allocated before the lock is taken and made under it, so a closed
-        /// strand leaves @p fn as it was.
+        /// Queues a call made from @p fn unless the strand is closed, or sealed and @p whenSealed
+        /// refuses. Only for a strand that never retires. The call is allocated before the lock is
+        /// taken and made under it, so a refusal leaves @p fn as it was.
         /// @param fn The callable.
+        /// @param whenSealed Whether a seal refuses it.
         /// @return Whether it was queued.
         /// @throws What the base's `submit` throws, what making the call throws, `std::bad_alloc`.
         template <typename Arg>
-        [[nodiscard]] bool offerCall(Arg&& fn)
+        [[nodiscard]] bool offerCall(Arg&& fn, WhenSealed whenSealed)
         {
             auto storage = CallStorage<PostedCallOf<std::decay_t<Arg>>> {};
             auto enqueued = Enqueued {};
             {
                 auto const lock = std::scoped_lock { _mutex };
-                if (_closed || _sealed || FreeingAbandoned::active(abandonOwner()))
+                if (_closed || (_sealed && whenSealed == WhenSealed::Refuse)
+                    || FreeingAbandoned::active(abandonOwner()))
                     return false;
                 assert(!_retired && "a keyed strand is offered work through its registry");
                 enqueued = enqueueLocked(
@@ -681,7 +692,7 @@ namespace detail
         [[nodiscard]] Enqueued enqueue(Make make)
         {
             auto const lock = std::scoped_lock { _mutex };
-            assert(!_closed && !_sealed && !_retired);
+            assert(!_closed && !_retired);
             return enqueueLocked(std::move(make));
         }
 
@@ -785,10 +796,9 @@ namespace detail
                 idlePump.destroy();
         }
 
-        /// Stops admitting work: from now on a submit or a post drops it, as a closed strand does,
-        /// and the `try` members refuse it; what is queued keeps running. Idempotent. Called by the
-        /// owner -- a `KeyedStrands` holding its registry's lock, so that no key's strand admits work
-        /// the registry has stopped admitting.
+        /// Closes the offer door: from now on @c trySubmit and a refusing @c offerCall refuse, and
+        /// leave the work with the caller. A submit and an admitting post are still admitted -- that
+        /// is how work already admitted comes back -- and what is queued keeps running. Idempotent.
         void seal()
         {
             auto const lock = std::scoped_lock { _mutex };
@@ -1199,7 +1209,7 @@ namespace detail
         std::size_t _handOffs { 0 };
         StrandReclaim _reclaim;
         bool _closed { false };  ///< The owner is gone; nothing runs any more.
-        bool _sealed { false };  ///< Admits nothing more; what is queued still runs.
+        bool _sealed { false };  ///< The `try` members refuse; everything else is as before.
         bool _retired { false }; ///< The owner reclaimed it; work goes to the owner.
     };
 
@@ -1346,7 +1356,8 @@ class Strand final: public IExecutor
     /// Queues @p fn, a callable, to run as one task. Callable from any thread.
     ///
     /// The callable is held by value in one allocation, freed once it has run. What it throws takes
-    /// the way a task's throw takes (see the class). A closed strand drops it without calling it.
+    /// the way a task's throw takes (see the class). A closed strand drops it without calling it; a
+    /// sealed one still admits it.
     /// @param fn The callable, called with no arguments; its result is ignored.
     /// @throws What the base's `submit` throws, what copying or moving @p fn throws, `std::bad_alloc`;
     ///         nothing is queued then.
@@ -1354,11 +1365,11 @@ class Strand final: public IExecutor
         requires std::invocable<std::decay_t<F>&> && std::constructible_from<std::decay_t<F>, F>
     void post(F&& fn)
     {
-        std::ignore = _core->offerCall(std::forward<F>(fn));
+        std::ignore = _core->offerCall(std::forward<F>(fn), detail::WhenSealed::Admit);
     }
 
-    /// Queues @p fn, unless the strand is closed -- for work that must run somewhere, which the
-    /// caller then runs itself.
+    /// Queues @p fn, unless the strand is closed or sealed -- for work that must run somewhere, which
+    /// the caller then runs itself.
     ///
     /// @p fn is moved into the strand under its lock, which is how a closed strand can leave it
     /// untouched: its move constructor must not submit to this strand.
@@ -1369,10 +1380,10 @@ class Strand final: public IExecutor
         requires std::invocable<F&> && std::move_constructible<F>
     [[nodiscard]] bool tryPost(F& fn)
     {
-        return _core->offerCall(std::move(fn));
+        return _core->offerCall(std::move(fn), detail::WhenSealed::Refuse);
     }
 
-    /// Queues @p handle, borrowed, unless the strand is closed.
+    /// Queues @p handle, borrowed, unless the strand is closed or sealed.
     /// @param handle The coroutine to resume on the strand.
     /// @return Whether it was queued.
     /// @throws As @c submit does.
@@ -1382,7 +1393,7 @@ class Strand final: public IExecutor
         return _core->trySubmit(work);
     }
 
-    /// Queues @p work, unless the strand is closed.
+    /// Queues @p work, unless the strand is closed or sealed.
     /// @param work The coroutine and its claim; moved from only where this returns true.
     /// @return Whether it was queued.
     /// @throws As @c submit does, with @p work as it was.
@@ -1393,14 +1404,20 @@ class Strand final: public IExecutor
     /// members. Idempotent; the destructor calls it.
     void close() { _core->close(); }
 
-    /// Stops admitting work, and keeps running what is queued: the first step of a teardown that
-    /// loses nothing -- `seal()`, then drain (`idle()`, or the base run until it is), then `close()`.
+    /// Closes the offer door, and keeps running what is queued and what comes back: the first step of
+    /// a teardown that loses nothing -- `seal()`, then drain, then `close()`.
     ///
     /// After it, `tryPost` and `trySubmit` return false and leave the work with the caller, which
-    /// can run it itself; `post` and `submit` drop it, as a closed strand does -- which includes a
-    /// coroutine that parked on this strand and comes back. Work queued before it runs on the base
-    /// as usual, so `idle()` then means sealed and drained. `close()` afterwards behaves as ever.
-    /// Idempotent; there is no unsealing.
+    /// can run it itself. `post` and `submit` are still admitted until `close()`: `submit` is how a
+    /// coroutine the strand already admitted comes back -- `ResumeOn`, and an `AsyncQueue` push,
+    /// close or stop through its `ResumeTarget` -- and dropping it would free a detached chain
+    /// without its finish, or leave its awaiter waiting for ever. Queued work runs as usual.
+    ///
+    /// **`idle()` then means nothing queued and nothing running, and no more than that.** A
+    /// coroutine suspended off the strand -- on a socket, a timer, an `AsyncQueue` -- is invisible
+    /// to it and may still come back. A consumer counts its own in-flight work (morph: its stop
+    /// signal plus the runs it tracks) and drains until that count and `idle()` both say done, and
+    /// only then closes. `close()` afterwards behaves as ever. Idempotent; there is no unsealing.
     void seal() { _core->seal(); }
 
     /// @return Whether nothing is queued or running -- what a single-threaded host pumps its base

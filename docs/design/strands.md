@@ -137,13 +137,24 @@ drops it, and with it whatever it had to settle; nothing outside the strand can 
 because admission is decided under the strand's lock. morph's own `StrandExecutor` avoided it by
 waiting for in-flight work.
 
-`seal()` moves the end of admission ahead of the drain. After it the `try` members refuse under the
-same lock that queues -- so an offer racing the seal is either queued before it, and runs, or
-refused after it, and handed back -- `post` and `submit` drop as a closed strand's do, and queued
-work runs as before. For `KeyedStrands` the registry seals every key's strand under its own lock,
-which `offer` holds across its lookup and queueing, and refuses keys that have no strand; kept
-strands are neither handed out nor kept again once sealed. The sequence is then seal, drain,
-close, and nothing is admitted that the drain does not see.
+`seal()` closes the *offer* door ahead of the drain: `tryPost` and `trySubmit` refuse under the same
+lock that queues, so an offer racing the seal is either queued before it, and runs, or refused
+after it, and handed back. **It does not close the return door.** `post` and `submit` stay admitted
+until `close()`, because a plain `submit` is how every coroutine the strand already admitted comes
+back -- `ResumeOn`, `resumeOn(key)`, and an `AsyncQueue`'s push, close and stop through the
+`ResumeTarget` it took. A first version refused those too, and the review found what that does: a
+handler parked on a queue when the seal lands is dropped when the push hands it back, its detached
+chain freed without its finish, or its awaiter left waiting -- the very loss the seal exists to
+prevent, moved earlier (0.4.1's review, H1).
+
+So a drain after a seal waits for two things, and the strand can see only one. `idle()` and
+`waitIdle()` answer whether anything is queued or running; a coroutine suspended off the strand is
+invisible to them, and the consumer is the only one that knows it is out there. morph counts its
+in-flight runs and stops them; the sequence is seal, then drain until that count and `idle()` both
+say done, then close. For `KeyedStrands` the registry is the offer door -- every `try` goes through
+its `offer` under its lock -- and a key's strand is only ever submitted to, so it carries no seal of
+its own; a strand made after the seal, for work coming back to a key that had none, is not kept
+for reuse, and no kept strand is handed out.
 
 ### Reclaimed strands are kept
 

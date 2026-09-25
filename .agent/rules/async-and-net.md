@@ -638,11 +638,14 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   so a throw leaves nothing queued. And a key's strand made for a submit that then could not take
   the work is removed under the same lock hold: before, it stayed registered with nothing to
   retire it (the `KeyedStrands` case of the allocation test, which fails each allocation in turn).
-- **The end of admission is decided under the lock that queues.** `seal()` sets its flag under
-  the strand's lock -- the registry's, for `KeyedStrands`, which `offer` holds across lookup and
-  queueing -- so an offer racing it is queued before it and runs, or refused after it and handed
-  back. A flag read outside that lock reopens the window `seal()` exists to close: work accepted
-  and then dropped (the `[seal][threads]` cases; a seal that drops the queue fails them).
+- **`seal()` closes the offer door, never the return door.** The `try` members refuse under the
+  lock that queues -- the registry's, for `KeyedStrands`, which `offer` holds across lookup and
+  queueing -- so an offer racing the seal is queued before it and runs, or refused after it and
+  handed back. Plain `submit` and `post` stay admitted until `close()`: a `submit` is how an
+  admitted coroutine comes back (`ResumeOn`, a `ResumeTarget` from an `AsyncQueue` push, close or
+  stop), and refusing it dropped a parked handler after the seal -- 0.4.1's review H1, the
+  `[seal][AsyncQueue]` cases. `idle()` cannot see a coroutine suspended off the strand; the consumer
+  counts those.
 - **A kept strand goes to another key only when nothing else references it.** `KeyedStrands`
   keeps retired strands for reuse; one a parked coroutine still holds through its `ResumeTarget`
   must keep serving its own key, or the coroutine comes back on the wrong one. The test is

@@ -155,8 +155,9 @@ namespace detail
             _spareNodes.reserve(SpareStrands);
         }
 
-        /// Queues @p work on @p key's strand, making the strand if the key has none. After the
-        /// registry closed, the work is dropped, which frees what nobody owns.
+        /// Queues @p work on @p key's strand, making the strand if the key has none -- also once the
+        /// registry is sealed, since this is how a coroutine it admitted comes back. After it closed,
+        /// the work is dropped, which frees what nobody owns.
         /// @param key The key.
         /// @param work The coroutine to resume on it.
         void submit(Key const& key, ParkedWork work)
@@ -164,7 +165,8 @@ namespace detail
             try
             {
                 // `work` drops when this returns, if it was refused, freeing what nobody owns.
-                std::ignore = offer(key, [&work] { return StrandTask { Parked { std::move(work) } }; });
+                std::ignore = offer(
+                    key, WhenSealed::Admit, [&work] { return StrandTask { Parked { std::move(work) } }; });
             }
             catch (...)
             {
@@ -175,22 +177,24 @@ namespace detail
             }
         }
 
-        /// Queues @p work on @p key's strand unless the registry is closed.
+        /// Queues @p work on @p key's strand unless the registry is closed or sealed.
         /// @return Whether it was queued; where not, @p work is as it was.
         [[nodiscard]] bool trySubmit(Key const& key, ParkedWork& work)
         {
-            return offer(key, [&work] { return StrandTask { Parked { std::move(work) } }; });
+            return offer(
+                key, WhenSealed::Refuse, [&work] { return StrandTask { Parked { std::move(work) } }; });
         }
 
-        /// Queues a call made from @p fn on @p key's strand unless the registry is closed. The call
-        /// is allocated before any lock is taken and made under it.
+        /// Queues a call made from @p fn on @p key's strand unless the registry is closed, or sealed
+        /// and @p whenSealed refuses. The call is allocated before any lock is taken and made under it.
         /// @return Whether it was queued; where not, @p fn is as it was.
         template <typename Arg>
-        [[nodiscard]] bool offerCall(Key const& key, Arg&& fn)
+        [[nodiscard]] bool offerCall(Key const& key, Arg&& fn, WhenSealed whenSealed)
         {
             auto storage = CallStorage<PostedCallOf<std::decay_t<Arg>>> {};
-            return offer(key,
-                         [&storage, &fn] { return StrandTask { storage.construct(std::forward<Arg>(fn)) }; });
+            return offer(key, whenSealed, [&storage, &fn] {
+                return StrandTask { storage.construct(std::forward<Arg>(fn)) };
+            });
         }
 
         /// Calls the keyed around-task hook. @pre @c hooked.
@@ -234,16 +238,15 @@ namespace detail
             return answer;
         }
 
-        /// Seals every key's strand, and refuses every key's work from now on -- a key with no
-        /// strand gets none. See `KeyedStrands::seal`.
+        /// Closes the offer door for every key. See `KeyedStrands::seal`.
+        ///
+        /// The registry is the door: every offer to a key -- `tryPost`, `trySubmit` -- comes through
+        /// `offer`, which reads this under the same lock it queues under. A key's strand itself is
+        /// only ever submitted to, which a seal admits, so it needs no flag of its own.
         void seal()
         {
             auto const lock = std::scoped_lock { _mutex };
             _sealed = true;
-            // Under the registry's lock, which `offer` holds across its lookup and queueing: no key's
-            // strand admits work after this that the registry would have refused.
-            for (auto const& [key, strand]: _strands)
-                strand->seal();
         }
 
         /// Closes every strand and refuses what arrives later. See `~KeyedStrands`.
@@ -300,13 +303,15 @@ namespace detail
         /// very coroutine being queued, which another thread can resume, and so destroy, the moment
         /// the strand's lock is released.
         /// @param key The key.
+        /// @param whenSealed Whether a seal refuses the task.
         /// @param make Makes the task; not called where this returns false.
-        /// @return False where the registry is closed, or this thread is freeing work one of its
-        ///         strands abandoned (see `detail::FreeingAbandoned`).
+        /// @return False where the registry is closed, or sealed and @p whenSealed refuses, or this
+        ///         thread is freeing work one of its strands abandoned (see
+        ///         `detail::FreeingAbandoned`).
         /// @throws What the base's `submit` throws, what @p make throws, `std::bad_alloc`. A strand
         ///         made for the key that could not take the task is removed again.
         template <typename Make>
-        [[nodiscard]] bool offer(Key const& key, Make make)
+        [[nodiscard]] bool offer(Key const& key, WhenSealed whenSealed, Make make)
         {
             if (FreeingAbandoned::active(this))
                 return false;
@@ -320,7 +325,7 @@ namespace detail
             try
             {
                 auto const lock = std::scoped_lock { _mutex };
-                if (_closed || _sealed)
+                if (_closed || (_sealed && whenSealed == WhenSealed::Refuse))
                     return false;
                 auto slot = _strands.find(key);
                 auto const made = slot == _strands.end();
@@ -377,7 +382,10 @@ namespace detail
             auto const unreferenced = [](std::shared_ptr<KeyStrandType> const& spare) noexcept {
                 return spare.use_count() == 1 + StrandCore::PumpReferences;
             };
-            if (auto const found = std::ranges::find_if(_spareStrands, unreferenced);
+            // Sealed, nothing kept is handed out again (nor, in `retire`, kept): a strand made now
+            // serves the work that is still coming back, and goes when it runs dry.
+            if (auto const found =
+                    _sealed ? _spareStrands.end() : std::ranges::find_if(_spareStrands, unreferenced);
                 found != _spareStrands.end())
             {
                 // Given the key while still kept: if copying the key throws, the strand stays kept.
@@ -434,7 +442,7 @@ namespace detail
         std::vector<std::shared_ptr<KeyStrandType>> _spareStrands;
         std::vector<NodeType> _spareNodes; ///< Map nodes kept for reuse, empty.
         bool _closed { false };
-        bool _sealed { false }; ///< Admits nothing more; queued work still runs.
+        bool _sealed { false }; ///< The `try` members refuse; `submit` and `post` are admitted.
     };
 
 } // namespace detail
@@ -561,18 +569,19 @@ class KeyedStrands final
 
     /// Queues @p fn, a callable, on @p key's strand to run as one task. Callable from any thread.
     ///
-    /// As `Strand::post`: held by value in one allocation, and dropped uncalled once these strands
-    /// are closed. @p fn is moved in under the registry's lock: its move constructor must not submit
-    /// to any key of these strands.
+    /// As `Strand::post`: held by value in one allocation, admitted after a seal, and dropped
+    /// uncalled once these strands are closed. @p fn is moved in under the registry's lock: its move
+    /// constructor must not submit to any key of these strands.
     /// @param key The key. @param fn The callable, called with no arguments.
     template <typename F>
         requires std::invocable<std::decay_t<F>&> && std::constructible_from<std::decay_t<F>, F>
     void post(Key const& key, F&& fn)
     {
-        std::ignore = _registry->offerCall(key, std::forward<F>(fn));
+        std::ignore = _registry->offerCall(key, std::forward<F>(fn), detail::WhenSealed::Admit);
     }
 
-    /// Queues @p fn on @p key's strand, unless these strands are closed. As `Strand::tryPost`, and
+    /// Queues @p fn on @p key's strand, unless these strands are closed or sealed. As
+    /// `Strand::tryPost`, and
     /// @p fn is moved in under the registry's lock: its move constructor must not submit to any key
     /// of these strands.
     /// @param key The key. @param fn The callable; moved from only where this returns true.
@@ -581,10 +590,10 @@ class KeyedStrands final
         requires std::invocable<F&> && std::move_constructible<F>
     [[nodiscard]] bool tryPost(Key const& key, F& fn)
     {
-        return _registry->offerCall(key, std::move(fn));
+        return _registry->offerCall(key, std::move(fn), detail::WhenSealed::Refuse);
     }
 
-    /// Queues @p handle, borrowed, on @p key's strand, unless these strands are closed.
+    /// Queues @p handle, borrowed, on @p key's strand, unless these strands are closed or sealed.
     /// @param key The key. @param handle The coroutine to resume there.
     /// @return Whether it was queued.
     [[nodiscard]] bool trySubmit(Key const& key, std::coroutine_handle<> handle)
@@ -593,7 +602,7 @@ class KeyedStrands final
         return _registry->trySubmit(key, work);
     }
 
-    /// Queues @p work on @p key's strand, unless these strands are closed.
+    /// Queues @p work on @p key's strand, unless these strands are closed or sealed.
     /// @param key The key. @param work The coroutine and its claim; moved from only where this
     ///        returns true.
     /// @return Whether it was queued.
@@ -605,14 +614,18 @@ class KeyedStrands final
     /// destructor calls it.
     void close() { _registry->close(); }
 
-    /// Stops admitting work for every key, and keeps running what is queued: as `Strand::seal`,
-    /// for all of them at once.
+    /// Closes the offer door for every key, and keeps running what is queued and what comes back:
+    /// as `Strand::seal`, for all of them at once.
     ///
-    /// A key that has no strand when it arrives gets none -- it is refused, or dropped, as a key
-    /// with one is -- and no kept strand is handed out again. Queued work runs and its strands
-    /// retire as they run dry, so `idle()` and `waitIdle()` then mean sealed and drained. The
-    /// teardown that loses nothing is `seal()`, then `waitIdle()` -- or, on the single-threaded
-    /// WebAssembly build, the base run until `idle()` -- then `close()`. Idempotent.
+    /// `tryPost` and `trySubmit` are refused for every key, one with no strand included, and no
+    /// strand is made for it. `post` and `submit` are still admitted until `close()`, a key with
+    /// no strand included -- a coroutine parked on a key's strand comes back that way -- and a
+    /// strand made for one is not kept for reuse once it runs dry; no kept strand is handed out
+    /// after the seal. `idle()` and `waitIdle()` then mean nothing queued and nothing running on
+    /// any key: a coroutine suspended off its key's strand is invisible to both, so a consumer
+    /// counts its own in-flight work and waits for it too before `close()`. The teardown that loses
+    /// nothing is `seal()`; then that count and `waitIdle()` -- or, on the single-threaded
+    /// WebAssembly build, the base run until both say done; then `close()`. Idempotent.
     void seal() { _registry->seal(); }
 
     /// @return Whether no key has work queued or running: what a single-threaded host pumps its
