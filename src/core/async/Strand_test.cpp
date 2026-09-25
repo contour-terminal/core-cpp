@@ -23,6 +23,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -542,6 +543,48 @@ TEST_CASE("A strand destroyed from inside one of its own tasks neither waits for
 namespace
 {
 
+/// A base that resumes what it is given inside `submit`, with itself current: the executor on which
+/// a hand-off and everything it starts run on the submitter's own stack.
+class InlineExecutor final: public IExecutor
+{
+  public:
+    using IExecutor::submit;
+
+    void submit(std::coroutine_handle<> handle) override { submit(ParkedWork { .resume = handle }); }
+
+    void submit(ParkedWork work) override
+    {
+        auto entry = core::async::detail::Parked { std::move(work) };
+        auto const scope = ExecutorScope { *this };
+        entry.resume();
+    }
+};
+
+} // namespace
+
+TEST_CASE("A strand whose inline base runs a task that destroys the strand's owner is not touched after",
+          "[Strand][lifetime]")
+{
+    // The hand-off that queued the pump runs it inside the base's submit; the task releases the last
+    // reference to the owner, the pump ends, and the strand's state goes with it -- all before that
+    // submit returns to the hand-off, which used to lock the freed state to end the hand-off
+    // (ASan: heap-use-after-free).
+    auto base = InlineExecutor {};
+    auto released = std::atomic<bool> { false };
+    auto holder = std::make_shared<StrandOwner>(base);
+
+    auto releaser = releaseOwnerFromItsStrand(&holder, &released);
+    releaser.handle().resume();
+
+    CHECK(released.load());
+    CHECK(holder == nullptr);
+    CHECK(releaser.done());
+    CHECK(currentExecutor() == nullptr);
+}
+
+namespace
+{
+
 /// Hops onto the owner's strand, releases the last reference to the owner from inside that task,
 /// and THEN parks on @p queue: the resume target it takes names a strand that no longer exists.
 DetachedTask releaseOwnerThenPop(std::shared_ptr<StrandOwner>* holder,
@@ -673,6 +716,110 @@ TEST_CASE("A base that refuses the strand's pump leaves the strand usable, and t
     CHECK_FALSE(refused.done());
     REQUIRE(seen.size() == 1);
     CHECK(seen[0].onStrand);
+}
+
+#if !defined(_MSC_VER) || defined(__clang__)
+namespace
+{
+
+/// What a @c ResubmitWhenFreed saw.
+struct Resubmits
+{
+    int freed { 0 };      ///< Times a frame carrying one was freed.
+    bool threw { false }; ///< Whether the submit from its destructor threw.
+};
+
+/// Submits to a strand from its destructor: a frame that, as it is freed, hands work back to the
+/// strand that frees it. What that submit throws is recorded, not let out of the destructor.
+class ResubmitWhenFreed
+{
+  public:
+    ResubmitWhenFreed(Strand* strand, Resubmits* out) noexcept: _strand(strand), _out(out) {}
+    ResubmitWhenFreed(ResubmitWhenFreed&& other) noexcept:
+        _strand(std::exchange(other._strand, nullptr)), _out(other._out)
+    {
+    }
+    ResubmitWhenFreed(ResubmitWhenFreed const&) = delete;
+    ResubmitWhenFreed& operator=(ResubmitWhenFreed const&) = delete;
+    ResubmitWhenFreed& operator=(ResubmitWhenFreed&&) = delete;
+
+    ~ResubmitWhenFreed()
+    {
+        if (_strand == nullptr)
+            return;
+        ++_out->freed;
+        try
+        {
+            _strand->submit(std::noop_coroutine());
+        }
+        catch (...)
+        {
+            _out->threw = true;
+        }
+    }
+
+  private:
+    Strand* _strand;
+    Resubmits* _out;
+};
+
+/// A detached flow queued on @p strand, carrying a @c ResubmitWhenFreed.
+DetachedTask resubmitsWhenFreed(Strand* strand, ResubmitWhenFreed guard, int* ran)
+{
+    (void) guard;
+    co_await ResumeOn { *strand };
+    ++*ran;
+}
+
+} // namespace
+#endif
+
+TEST_CASE("Work a refused hand-off frees is dropped, not refused, when it submits to the strand again",
+          "[Strand][exceptions]")
+{
+#if defined(_MSC_VER) && !defined(__clang__)
+    SKIP("under MSVC's cl a throw out of resume() on a strand terminates the process "
+         "(core-cpp.strand-throw-canary)");
+#else
+    // The task's throw ends the pump and the base refuses its replacement, which abandons the queue.
+    // Before the fix the abandoned frame was freed with the strand idle and open: its destructor's
+    // submit made a new pump, handed it to the same refusing base, and threw out of a destructor.
+    auto base = RefusingExecutor {};
+    auto strand = Strand { base };
+    auto seen = std::vector<Sighting> {};
+    auto resubmits = Resubmits {};
+    auto ran = 0;
+
+    auto const thrower = throwOnResume(&strand, &seen, true);
+    strand.submit(thrower.handle());
+    resubmitsWhenFreed(&strand, ResubmitWhenFreed { &strand, &resubmits }, &ran);
+    REQUIRE(strand.queued() == 2);
+
+    base.refuse(2);
+    // What leaves is the refusal of the replacement pump, not the task's own exception.
+    auto thrown = std::string {};
+    try
+    {
+        std::ignore = base.drain();
+    }
+    catch (std::exception const& error)
+    {
+        thrown = error.what();
+    }
+    CHECK(thrown == "the base executor refuses");
+    base.refuse(0);
+    CHECK(resubmits.freed == 1);
+    CHECK_FALSE(resubmits.threw);
+    CHECK(ran == 0);
+    CHECK(strand.queued() == 0);
+    CHECK(base.pending() == 0);
+
+    // The strand still takes work.
+    auto after = lookOnce(&strand, &seen);
+    strand.submit(after.handle());
+    std::ignore = base.drain();
+    CHECK(after.done());
+#endif
 }
 
 TEST_CASE("A base that refuses the pump's hand-back between turns does not wedge the strand",

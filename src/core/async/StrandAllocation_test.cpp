@@ -9,6 +9,7 @@
 // running. This binary replaces the global allocation functions so a case can fail exactly the
 // next one, which is why it is a binary of its own: a replacement reaches every test linked beside
 // it.
+#include <core/async/KeyedStrands.hpp>
 #include <core/async/ResumeOn.hpp>
 #include <core/async/Strand.hpp>
 #include <core/async/Task.hpp>
@@ -219,5 +220,28 @@ TEST_CASE("A strand whose replacement pump cannot be allocated keeps its queue a
     strand.submit(next.handle());
     std::ignore = base.drain();
     CHECK(order == std::vector { 1, 2 });
+#endif
+}
+
+TEST_CASE("A key whose replacement pump cannot be allocated leaves no strand behind", "[Strand][exceptions]")
+{
+#if defined(_MSC_VER) && !defined(__clang__)
+    SKIP("under MSVC's cl a throw out of resume() on a strand terminates the process "
+         "(core-cpp.strand-throw-canary)");
+#else
+    // The key's strand ran dry with its pump dead and no replacement: before the fix it stayed in
+    // the registry, idle, with nothing left to retire it -- size() 1, and waitIdle() for ever.
+    auto base = core::async::testing::ManualExecutor {};
+    auto strands = core::async::KeyedStrands<int> { base };
+
+    auto const thrower = throwAndFailNextAllocation(true);
+    strands.submit(3, thrower.handle());
+    CHECK_THROWS_AS(base.drain(), std::bad_alloc);
+    allocationsBeforeFailure = -1;
+    CHECK(strands.size() == 0);
+    #if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
+    if (strands.size() == 0)
+        strands.waitIdle();
+    #endif
 #endif
 }

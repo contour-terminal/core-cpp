@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <exception>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -327,6 +328,181 @@ TEST_CASE("A key whose first hand-off the base refuses leaves no strand behind",
     CHECK_THROWS_AS(task.result(), std::runtime_error);
     CHECK(strands.size() == 0);
     CHECK(order.empty());
+}
+
+#if !defined(_MSC_VER) || defined(__clang__)
+namespace
+{
+
+/// A base that refuses the next @c refuse submits, and otherwise queues like @c ManualExecutor.
+class RefusingExecutor final: public IExecutor
+{
+  public:
+    using IExecutor::submit;
+
+    /// Refuses the next @p count submits.
+    /// @param count How many.
+    void refuse(int count) noexcept { _refuse = count; }
+
+    void submit(std::coroutine_handle<> handle) override { submit(ParkedWork { .resume = handle }); }
+
+    void submit(ParkedWork work) override
+    {
+        if (_refuse > 0)
+        {
+            --_refuse;
+            throw std::runtime_error { "refused" };
+        }
+        _inner.submit(std::move(work));
+    }
+
+    /// @return How many entries were resumed.
+    std::size_t drain() { return _inner.drain(); }
+
+    /// @return How many entries are queued.
+    [[nodiscard]] std::size_t pending() const { return _inner.pending(); }
+
+  private:
+    ManualExecutor _inner;
+    int _refuse { 0 };
+};
+
+/// A coroutine whose `resume()` throws -- see `Strand_test.cpp`.
+class ThrowingResume
+{
+  public:
+    struct promise_type
+    {
+        [[nodiscard]] ThrowingResume get_return_object() noexcept
+        {
+            return ThrowingResume { std::coroutine_handle<promise_type>::from_promise(*this) };
+        }
+        [[nodiscard]] std::suspend_always initial_suspend() const noexcept { return {}; }
+        [[nodiscard]] std::suspend_always final_suspend() const noexcept { return {}; }
+        void return_void() const noexcept {}
+        [[noreturn]] void unhandled_exception() const { throw; }
+    };
+
+    explicit ThrowingResume(std::coroutine_handle<promise_type> handle) noexcept: _handle(handle) {}
+    ThrowingResume(ThrowingResume const&) = delete;
+    ThrowingResume(ThrowingResume&&) = delete;
+    ThrowingResume& operator=(ThrowingResume const&) = delete;
+    ThrowingResume& operator=(ThrowingResume&&) = delete;
+    ~ThrowingResume() { _handle.destroy(); }
+
+    [[nodiscard]] std::coroutine_handle<> handle() const noexcept { return _handle; }
+
+  private:
+    std::coroutine_handle<promise_type> _handle;
+};
+
+/// Throws out of `resume()`.
+ThrowingResume throwOnResume(bool really)
+{
+    if (really)
+        throw std::logic_error { "a task that throws out of resume()" };
+    co_return;
+}
+
+/// What a @c ResubmitWhenFreed saw.
+struct Resubmits
+{
+    int freed { 0 };      ///< Times a frame carrying one was freed.
+    bool threw { false }; ///< Whether the submit from its destructor threw.
+};
+
+/// Submits to one key from its destructor, recording rather than letting out what that throws.
+class ResubmitWhenFreed
+{
+  public:
+    ResubmitWhenFreed(Strands* strands, int key, Resubmits* out) noexcept:
+        _strands(strands), _key(key), _out(out)
+    {
+    }
+    ResubmitWhenFreed(ResubmitWhenFreed&& other) noexcept:
+        _strands(std::exchange(other._strands, nullptr)), _key(other._key), _out(other._out)
+    {
+    }
+    ResubmitWhenFreed(ResubmitWhenFreed const&) = delete;
+    ResubmitWhenFreed& operator=(ResubmitWhenFreed const&) = delete;
+    ResubmitWhenFreed& operator=(ResubmitWhenFreed&&) = delete;
+
+    ~ResubmitWhenFreed()
+    {
+        if (_strands == nullptr)
+            return;
+        ++_out->freed;
+        try
+        {
+            _strands->submit(_key, std::noop_coroutine());
+        }
+        catch (...)
+        {
+            _out->threw = true;
+        }
+    }
+
+  private:
+    Strands* _strands;
+    int _key;
+    Resubmits* _out;
+};
+
+/// A detached flow queued on @p key, carrying a @c ResubmitWhenFreed.
+DetachedTask resubmitsWhenFreed(Strands* strands, int key, ResubmitWhenFreed guard, int* ran)
+{
+    (void) guard;
+    co_await strands->resumeOn(key);
+    ++*ran;
+}
+
+} // namespace
+#endif
+
+TEST_CASE("Work a key's refused hand-off frees is dropped, not refused, when it submits to the key again",
+          "[KeyedStrands][exceptions]")
+{
+#if defined(_MSC_VER) && !defined(__clang__)
+    SKIP("under MSVC's cl a throw out of resume() on a strand terminates the process "
+         "(core-cpp.strand-throw-canary)");
+#else
+    // As for a Strand: the destructor's submit found the key's strand still registered and open,
+    // queued its pump on the refusing base, and threw out of a destructor.
+    auto base = RefusingExecutor {};
+    auto strands = Strands { base };
+    auto resubmits = Resubmits {};
+    auto ran = 0;
+
+    auto const thrower = throwOnResume(true);
+    strands.submit(1, thrower.handle());
+    resubmitsWhenFreed(&strands, 1, ResubmitWhenFreed { &strands, 1, &resubmits }, &ran);
+
+    base.refuse(2);
+    // What leaves is the refusal of the replacement pump, not the task's own exception.
+    auto thrown = std::string {};
+    try
+    {
+        std::ignore = base.drain();
+    }
+    catch (std::exception const& error)
+    {
+        thrown = error.what();
+    }
+    CHECK(thrown == "refused");
+    base.refuse(0);
+    CHECK(resubmits.freed == 1);
+    CHECK_FALSE(resubmits.threw);
+    CHECK(ran == 0);
+    CHECK(strands.size() == 0);
+    CHECK(base.pending() == 0);
+
+    // The key still takes work.
+    auto order = std::vector<int> {};
+    auto after = append(&strands, 1, &order, 7);
+    after.handle().resume();
+    std::ignore = base.drain();
+    CHECK(order == std::vector { 7 });
+#endif
 }
 
 #if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
