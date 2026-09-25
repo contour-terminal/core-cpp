@@ -32,6 +32,7 @@
 #include <core/async/Task.hpp>
 #include <core/net/IoResult.hpp>
 #include <core/net/NetError.hpp>
+#include <core/net/detail/CompletionHook.hpp>
 #include <core/net/detail/ParkId.hpp>
 
 #include <cassert>
@@ -64,25 +65,6 @@ class EventLoop;
 /// @param loop The loop the park belongs to.
 /// @param park The park to cancel.
 void requestCancelOn(EventLoop& loop, ParkId park) noexcept;
-
-namespace detail
-{
-    /// Internal since 0.4.0: `ResultAwaitable` is its one caller, and a transport completes an
-    /// operation through `ResultAwaitable::complete`.
-    ///
-    /// Hands @p waiter to @p loop's ready queue, to be resumed in its drain step, out of line for the
-    /// same reason as @c requestCancelOn. Loop thread only, as @c EventLoop::resumeSoon.
-    ///
-    /// **The waiter must take itself back out of the queue if its frame is destroyed first**
-    /// (@c cancelPendingOn), as @c ResultAwaitable's destructor does: the claim the queue entry holds
-    /// on @p unownedRoot is an @c async::detail::CountedClaim, which relies on exactly that.
-    /// @param loop The loop to resume on.
-    /// @param waiter The suspended coroutine.
-    /// @param unownedRoot The root of @p waiter's chain where nobody owns it -- the loop is then to
-    ///        free the chain rather than resume it if it is torn down first -- or an empty handle
-    ///        (@c async::detail::unownedRootOf).
-    void resumeSoonOn(EventLoop& loop, std::coroutine_handle<> waiter, std::coroutine_handle<> unownedRoot) noexcept;
-} // namespace detail
 
 /// Takes @p waiter back out of @p loop's ready queue, where @c detail::resumeSoonOn put it, because its
 /// frame is being destroyed before the loop reached it. Loop thread only.

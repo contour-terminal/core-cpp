@@ -742,7 +742,7 @@ template <typename Predicate>
     if (!inTime)
     {
         UNSCOPED_INFO("waitIdle() had not returned after " << Budget.count() << " s; " << strands.size()
-                                                            << " key(s) still had a strand");
+                                                           << " key(s) still had a strand");
         strands.close(); // wakes the wait
     }
     waiter.join();

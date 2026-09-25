@@ -50,6 +50,7 @@ set(_coreCppNetSubset
     HostDrivenBackend.cpp
     InterruptibleSleep.cpp
     IoAwaitable.cpp
+    detail/CompletionHook.hpp
     detail/ParkId.hpp
     detail/ParkTable.hpp
     detail/ReadyBatch.hpp
@@ -153,6 +154,7 @@ core_cpp_add_module(net KIND STATIC
         UdpSocket.hpp
         WithTimeout.hpp
         WriteQueue.hpp
+        detail/CompletionHook.hpp
         detail/ParkId.hpp
         detail/ParkTable.hpp
         detail/ReadinessSlot.hpp

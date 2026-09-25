@@ -47,6 +47,7 @@
 #include <core/async/ParkedWork.hpp>
 #include <core/async/Task.hpp>
 #include <core/net/IoBackend.hpp>
+#include <core/net/detail/CompletionHook.hpp>
 #include <core/net/detail/ParkTable.hpp>
 #include <core/net/detail/RingQueue.hpp>
 #include <core/net/detail/ScopeGuard.hpp>
@@ -174,13 +175,6 @@ struct RunOnceResult
 
 class DelayAwaiter;
 class WaitHandleAwaiter;
-class EventLoop;
-
-namespace detail
-{
-    /// `ResultAwaitable`'s out-of-line completion hook; see `IoAwaitable.hpp`.
-    void resumeSoonOn(EventLoop& loop, std::coroutine_handle<> waiter, std::coroutine_handle<> unownedRoot) noexcept;
-} // namespace detail
 
 /// Single-threaded cooperative scheduler driving coroutine flows over handle readiness and
 /// deadlines, and an @c async::IExecutor.
