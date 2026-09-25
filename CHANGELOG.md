@@ -26,7 +26,8 @@ workflow refuses one without a section here.
     invisible to both and may still come back, so a consumer counts its own in-flight work (morph:
     its stop signal plus the runs it tracks). The teardown that loses nothing is `seal()`, then that
     count and `waitIdle()` both done (on the single-threaded WebAssembly build, the base run until
-    they are), then `close()`.
+    they are), then `close()`. `post` is new work too: a producer that posts must stop, or offer
+    through `tryPost`, before `waitIdle()`.
   - Idempotent; `close()` is unchanged. A patch-compatible addition.
 
 ## [0.4.0] - 2026-09-25

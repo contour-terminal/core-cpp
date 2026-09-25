@@ -624,7 +624,8 @@ class KeyedStrands final
     /// after the seal. `idle()` and `waitIdle()` then mean nothing queued and nothing running on
     /// any key: a coroutine suspended off its key's strand is invisible to both, so a consumer
     /// counts its own in-flight work and waits for it too before `close()`. The teardown that loses
-    /// nothing is `seal()`; then that count and `waitIdle()` -- or, on the single-threaded
+    /// nothing is `seal()`; then that count and `waitIdle()` -- `post` being new work too, a producer
+    /// that posts stops, or offers through `tryPost`, before it -- or, on the single-threaded
     /// WebAssembly build, the base run until both say done; then `close()`. Idempotent.
     void seal() { _registry->seal(); }
 

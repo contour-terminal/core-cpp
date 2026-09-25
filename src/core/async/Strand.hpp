@@ -1417,7 +1417,9 @@ class Strand final: public IExecutor
     /// coroutine suspended off the strand -- on a socket, a timer, an `AsyncQueue` -- is invisible
     /// to it and may still come back. A consumer counts its own in-flight work (morph: its stop
     /// signal plus the runs it tracks) and drains until that count and `idle()` both say done, and
-    /// only then closes. `close()` afterwards behaves as ever. Idempotent; there is no unsealing.
+    /// only then closes. `post` is new work too: a producer that posts must stop, or offer through
+    /// `tryPost`, before the drain. `close()` afterwards behaves as ever. Idempotent; there is no
+    /// unsealing.
     void seal() { _core->seal(); }
 
     /// @return Whether nothing is queued or running -- what a single-threaded host pumps its base

@@ -9,6 +9,7 @@
 #include <core/async/ResumeOn.hpp>
 #include <core/async/StopToken.hpp>
 #include <core/async/Strand.hpp>
+#include <core/async/StrandTestSupport.hpp>
 #include <core/async/Task.hpp>
 #include <core/async/testing/ManualExecutor.hpp>
 
@@ -1254,39 +1255,13 @@ TEST_CASE("A coroutine parked off the strand when it is sealed comes back to it,
     strand.close();
 }
 
-namespace
-{
-
-/// Records the awaiting coroutine's handle and stays suspended.
-struct ParkSelf
-{
-    std::coroutine_handle<>* self;
-    [[nodiscard]] bool await_ready() const noexcept { return false; }
-    void await_suspend(std::coroutine_handle<> handle) const noexcept { *self = handle; }
-    void await_resume() const noexcept {}
-};
-
-/// A detached chain that parks at once, carrying a sentinel: its frame is its root.
-///
-/// The statement after the `co_await` is load-bearing under MSVC's `cl` at /O2 (19.51): a frame
-/// destroyed at a suspension point with nothing after it in the body there never destroyed its
-/// by-value parameters, so the sentinel read "not freed" for a frame that was (core-cpp#54).
-DetachedTask parkDetached(std::coroutine_handle<>* self, FrameSentinel sentinel)
-{
-    (void) sentinel;
-    co_await ParkSelf { self };
-    *self = {};
-}
-
-} // namespace
-
 TEST_CASE("A trySubmit a sealed strand refuses leaves the caller an armed claim", "[Strand][seal]")
 {
     auto base = ManualExecutor {};
     auto strand = Strand { base };
     auto destroyed = 0;
     auto root = std::coroutine_handle<> {};
-    parkDetached(&root, FrameSentinel { &destroyed });
+    core::async::test::parkDetached(&root, FrameSentinel { &destroyed });
     REQUIRE(root);
     auto work = ParkedWork { .resume = root, .abandon = core::async::detail::claimOn(root) };
     REQUIRE(work.abandon.armed());

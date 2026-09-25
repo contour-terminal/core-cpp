@@ -646,6 +646,12 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   stop), and refusing it dropped a parked handler after the seal -- 0.4.1's review H1, the
   `[seal][AsyncQueue]` cases. `idle()` cannot see a coroutine suspended off the strand; the consumer
   counts those.
+- **Under MSVC `cl` 19.51 at /O2, keep a statement after a coroutine's last `co_await`.** A frame
+  destroyed at a suspension point with nothing after it in the body never destroys its by-value
+  parameters there, and moving them into a local instead is an internal compiler error
+  (C1001) -- core-cpp#54 has the repro. It is the destroy-while-suspended path an executor's
+  teardown takes; `src/core/async/StrandTestSupport.hpp`'s `parkDetached` is the shape to copy.
+  No canary: #54 carries the repro.
 - **A kept strand goes to another key only when nothing else references it.** `KeyedStrands`
   keeps retired strands for reuse; one a parked coroutine still holds through its `ResumeTarget`
   must keep serving its own key, or the coroutine comes back on the wrong one. The test is
