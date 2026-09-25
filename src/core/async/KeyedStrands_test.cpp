@@ -801,10 +801,15 @@ struct ParkSelf
 };
 
 /// A detached chain that parks at once, carrying a sentinel: its frame is its root.
+///
+/// The statement after the `co_await` is load-bearing under MSVC's `cl` at /O2 (19.51): a frame
+/// destroyed at a suspension point with nothing after it in the body there never destroyed its
+/// by-value parameters, so the sentinel read "not freed" for a frame that was.
 DetachedTask parkDetached(std::coroutine_handle<>* self, FrameSentinel sentinel)
 {
     (void) sentinel;
     co_await ParkSelf { self };
+    *self = {};
 }
 
 } // namespace
