@@ -174,6 +174,13 @@ struct RunOnceResult
 
 class DelayAwaiter;
 class WaitHandleAwaiter;
+class EventLoop;
+
+namespace detail
+{
+    /// `ResultAwaitable`'s out-of-line completion hook; see `IoAwaitable.hpp`.
+    void resumeSoonOn(EventLoop& loop, std::coroutine_handle<> waiter, std::coroutine_handle<> unownedRoot) noexcept;
+} // namespace detail
 
 /// Single-threaded cooperative scheduler driving coroutine flows over handle readiness and
 /// deadlines, and an @c async::IExecutor.
@@ -620,9 +627,9 @@ class EventLoop: public async::IExecutor
     void resumeSoon(async::ParkedWork work);
 
     /// A frame-free operation's completion, and nothing else: see @c resumeCompleted.
-    friend void resumeSoonOn(EventLoop& loop,
-                             std::coroutine_handle<> waiter,
-                             std::coroutine_handle<> unownedRoot) noexcept;
+    friend void detail::resumeSoonOn(EventLoop& loop,
+                                     std::coroutine_handle<> waiter,
+                                     std::coroutine_handle<> unownedRoot) noexcept;
 
     /// Parks @p entry: registers its handle with the backend if it names one, arms its deadline if
     /// it has one, and files it so a cancel can find it by id.

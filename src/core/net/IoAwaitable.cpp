@@ -23,9 +23,9 @@ void requestCancelOn(EventLoop& loop, ParkId park) noexcept
     loop.requestCancel(park);
 }
 
-void resumeSoonOn(EventLoop& loop,
-                  std::coroutine_handle<> waiter,
-                  std::coroutine_handle<> unownedRoot) noexcept
+void detail::resumeSoonOn(EventLoop& loop,
+                          std::coroutine_handle<> waiter,
+                          std::coroutine_handle<> unownedRoot) noexcept
 {
     loop.resumeCompleted(waiter, unownedRoot);
 }
