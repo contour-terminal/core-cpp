@@ -176,11 +176,18 @@ namespace detail
     /// strand, to any key of the same `KeyedStrands` -- on this thread is dropped, as a closed
     /// strand drops it, instead of scheduling a pump on the base that has just refused one and
     /// throwing out of a destructor.
+    ///
+    /// Only the destructors themselves: a task that one of them starts on an executor that runs it
+    /// inline -- another strand over an inline base -- runs under an executor scope of its own, and
+    /// what it submits here is not a resubmit of abandoned work, so it is handed on as usual.
     class FreeingAbandoned final
     {
       public:
         /// @param owner The strand, or the keyed family, whose work is being freed.
-        explicit FreeingAbandoned(void const* owner) noexcept: _previous(std::exchange(slot(), owner)) {}
+        explicit FreeingAbandoned(void const* owner) noexcept:
+            _previous(std::exchange(slot(), Freeing { .owner = owner, .scope = ExecutorScope::innermost() }))
+        {
+        }
         FreeingAbandoned(FreeingAbandoned const&) = delete;
         FreeingAbandoned(FreeingAbandoned&&) = delete;
         FreeingAbandoned& operator=(FreeingAbandoned const&) = delete;
@@ -188,17 +195,29 @@ namespace detail
         ~FreeingAbandoned() { slot() = _previous; }
 
         /// @param owner A strand, or a keyed family.
-        /// @return Whether the calling thread is freeing work @p owner abandoned.
-        [[nodiscard]] static bool active(void const* owner) noexcept { return slot() == owner; }
+        /// @return Whether the calling thread is freeing work @p owner abandoned, and is not inside
+        ///         a task some executor started since.
+        [[nodiscard]] static bool active(void const* owner) noexcept
+        {
+            auto const& freeing = slot();
+            return freeing.owner == owner && freeing.scope == ExecutorScope::innermost();
+        }
 
       private:
-        [[nodiscard]] static void const*& slot() noexcept
+        /// What is being freed, and the executor scope that was innermost when it began.
+        struct Freeing
         {
-            constinit thread_local void const* freeing = nullptr;
+            void const* owner { nullptr };
+            ExecutorScope const* scope { nullptr };
+        };
+
+        [[nodiscard]] static Freeing& slot() noexcept
+        {
+            constinit thread_local Freeing freeing {};
             return freeing;
         }
 
-        void const* _previous;
+        Freeing _previous;
     };
 
     /// A first-in first-out queue of parked work that allocates nothing until it is first used.

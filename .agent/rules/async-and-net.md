@@ -635,7 +635,9 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   and open, so a destructor of a freed frame that submits to it again scheduled a new pump on the
   base that had just refused, and threw out of a noexcept destructor. `detail::FreeingAbandoned`
   marks the freeing thread; `StrandCore::submit` and the keyed registry drop what that thread
-  submits to the same strand or family. Every path that ends a strand's pump by failure -- a
+  submits to the same strand or family -- but only while the executor scope it recorded is still
+  the innermost: a task a destructor starts on another strand over an inline base runs inside the
+  drop too, and its hop back was dropped silently (review round 3's re-check). Every path that ends a strand's pump by failure -- a
   refused hand-off, a refused replacement, a replacement that cannot be allocated -- also retires a
   keyed strand left empty, or `waitIdle()` never returns.
 - **A strand's pump decides "idle" in its own `await_suspend`, under the strand's lock**, so a
