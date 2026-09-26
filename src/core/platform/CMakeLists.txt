@@ -91,5 +91,8 @@ core_cpp_add_test(platform
         SystemPipe_test.cpp
         UserPaths_test.cpp
         Wakeup_test.cpp
+    # The Windows half of a POSIX guarantee: FD_CLOEXEC there, no inheritable handle here.
+    SOURCES_WINDOWS
+        windows/SystemPipeInheritance_test.cpp
     SOURCES_EMSCRIPTEN
         ${_coreCppPlatformSubsetTests})

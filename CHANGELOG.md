@@ -34,6 +34,12 @@ workflow refuses one without a section here.
   to judge the link by bits recorded on the link itself. `createDirectory` refuses a path that is
   already there, directory or file, with "File exists", where it used to succeed. What the fake
   still does not model is tabled in `docs/modules/platform.md`.
+- **A Windows `SystemPipe`'s sockets are no longer inherited by child processes** (core-cpp#28).
+  `::socket()` and `::accept()` hand back inheritable handles there, so a consumer that spawned a
+  process -- contour's and endo's shells -- handed the child the loop's wakeup channel, and a child
+  that kept it open could hold it alive after the parent closed its end. The sockets are made with
+  `WSA_FLAG_NO_HANDLE_INHERIT` and the accepted one has its inheritance cleared, as POSIX already
+  sets `FD_CLOEXEC`.
 
 ## [0.4.3] - 2026-09-26
 

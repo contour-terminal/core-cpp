@@ -277,12 +277,22 @@ namespace
         return same(aName, bPeer) && same(bName, aPeer);
     }
 
+    /// @return A TCP socket no child process inherits, or @c InvalidSocket. `::socket()` hands back
+    ///         an inheritable handle, so a consumer that spawns a process -- a terminal's shell --
+    ///         would hand it the loop's wakeup channel (core-cpp#28). Overlapped, as `::socket()`'s
+    ///         are.
+    [[nodiscard]] SOCKET makeUninheritedSocket() noexcept
+    {
+        return ::WSASocketW(
+            AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
+    }
+
     /// One attempt at a connected loopback TCP socket pair.
     /// @param out The two connected sockets {accepted-server, client} on success.
     /// @return True on success.
     [[nodiscard]] bool tryMakeLoopbackPair(std::array<SOCKET, 2>& out) noexcept
     {
-        auto listener = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        auto listener = makeUninheritedSocket();
         if (listener == InvalidSocket)
             return false;
 
@@ -308,7 +318,7 @@ namespace
             return false;
         }
 
-        auto client = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        auto client = makeUninheritedSocket();
         if (client == InvalidSocket)
         {
             cleanupListener();
@@ -325,6 +335,13 @@ namespace
         cleanupListener();
         if (server == InvalidSocket)
         {
+            closesocket(client);
+            return false;
+        }
+        // What accept() hands back is not documented to carry the listener's no-inherit flag.
+        if (SetHandleInformation(reinterpret_cast<HANDLE>(server), HANDLE_FLAG_INHERIT, 0) == 0)
+        {
+            closesocket(server);
             closesocket(client);
             return false;
         }
