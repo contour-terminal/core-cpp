@@ -84,7 +84,7 @@ test gives it, for code that takes its environment by reference instead of readi
 Imported from endo's `src/testing` at `f774a210`. Each undoes what it did when it goes out of
 scope, so a failing assertion cannot leak the change into the next test. Prefer a test double
 where the code under test takes one (`FakeEnvironment`,
-`core::platform::testing::InMemoryFileSystem`, `TestEnvironmentProvider`): these fixtures change
+`core::platform::testing::InMemoryFileSystem`, `TestProcessEnvironment`): these fixtures change
 state that the whole test binary shares.
 
 | Header | What it has |

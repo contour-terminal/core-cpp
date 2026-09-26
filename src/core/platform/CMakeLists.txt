@@ -7,23 +7,25 @@
 set(_coreCppPlatformSubset FileUri.cpp GlobMatch.cpp PathUtils.cpp)
 set(_coreCppPlatformSubsetTests
     Clock_test.cpp
-    EnvironmentProvider_test.cpp
     FileInfoProvider_test.cpp
     FileUri_test.cpp
     GlobMatch_test.cpp
     PathUtils_test.cpp
     PlatformError_test.cpp
+    ProcessEnvironment_test.cpp
     StringUtils_test.cpp
-    Types_test.cpp)
+    Types_test.cpp
+    WorkingDirectory_test.cpp)
 
-# The POSIX providers, which nativeEnvironmentProvider() and nativeFileInfoProvider() return on
-# every POSIX system. Emscripten's libc serves them too, over its own environment and virtual
-# filesystem, so they are part of the subset.
+# The POSIX providers, which nativeProcessEnvironment(), nativeFileInfoProvider() and
+# nativeWorkingDirectory() return on every POSIX system. Emscripten's libc serves them too, over its
+# own environment and virtual filesystem, so they are part of the subset.
 set(_coreCppPlatformPosixProviders
-    posix/PosixEnvironmentProvider.cpp
-    posix/PosixEnvironmentProvider.hpp
+    posix/PosixProcessEnvironment.cpp
+    posix/PosixProcessEnvironment.hpp
     posix/PosixFileInfoProvider.cpp
-    posix/PosixFileInfoProvider.hpp)
+    posix/PosixFileInfoProvider.hpp
+    posix/PosixWorkingDirectory.cpp)
 
 # Sockets back SystemPipe on Windows: a loopback pair mapped to a waitable event.
 set(_coreCppPlatformLibs "")
@@ -34,7 +36,6 @@ endif()
 core_cpp_add_module(platform KIND STATIC
     HEADERS
         Clock.hpp
-        EnvironmentProvider.hpp
         FileInfoProvider.hpp
         FileSystem.hpp
         FileUri.hpp
@@ -43,6 +44,7 @@ core_cpp_add_module(platform KIND STATIC
         NativeFileSystem.hpp
         PathUtils.hpp
         PlatformError.hpp
+        ProcessEnvironment.hpp
         SignalHandler.hpp
         StringUtils.hpp
         SystemInfo.hpp
@@ -51,9 +53,11 @@ core_cpp_add_module(platform KIND STATIC
         UserPaths.hpp
         Wakeup.hpp
         WinsockInit.hpp
+        WorkingDirectory.hpp
         testing/InMemoryFileSystem.hpp
         testing/MockFileInfoProvider.hpp
-        testing/TestEnvironmentProvider.hpp
+        testing/TestProcessEnvironment.hpp
+        testing/TestWorkingDirectory.hpp
     SOURCES
         ${_coreCppPlatformSubset}
         NativeFileSystem.cpp
@@ -69,12 +73,13 @@ core_cpp_add_module(platform KIND STATIC
     SOURCES_BSD
         posix/PosixWakeup.cpp
     SOURCES_WINDOWS
-        windows/WindowsEnvironmentProvider.cpp
-        windows/WindowsEnvironmentProvider.hpp
         windows/WindowsFileInfoProvider.cpp
         windows/WindowsFileInfoProvider.hpp
+        windows/WindowsProcessEnvironment.cpp
+        windows/WindowsProcessEnvironment.hpp
         windows/WindowsTypes.cpp
         windows/WindowsWakeup.cpp
+        windows/WindowsWorkingDirectory.cpp
     SOURCES_EMSCRIPTEN
         ${_coreCppPlatformSubset}
         ${_coreCppPlatformPosixProviders}
@@ -94,5 +99,6 @@ core_cpp_add_test(platform
     # The Windows half of a POSIX guarantee: FD_CLOEXEC there, no inheritable handle here.
     SOURCES_WINDOWS
         windows/SystemPipeInheritance_test.cpp
+        windows/WideEnvironment_test.cpp
     SOURCES_EMSCRIPTEN
         ${_coreCppPlatformSubsetTests})

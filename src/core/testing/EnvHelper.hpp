@@ -17,7 +17,7 @@ namespace core::testing
 /// @brief Cross-platform setenv for tests.
 ///
 /// Prefer injecting a @c core::testing::FakeEnvironment or a
-/// @c core::platform::testing::TestEnvironmentProvider where the code under test takes one: the
+/// @c core::platform::testing::TestProcessEnvironment where the code under test takes one: the
 /// process environment is shared by every thread and every test in the binary. This is for code
 /// that reads the process environment itself, or passes it on to a child process.
 ///

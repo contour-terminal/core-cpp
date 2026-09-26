@@ -4,7 +4,9 @@
 #include <core/Environment.hpp>
 
 #include <filesystem>
+#include <initializer_list>
 #include <optional>
+#include <string>
 
 namespace core::platform
 {
@@ -23,6 +25,22 @@ namespace core::platform
         return std::filesystem::path(*home);
     if (auto const home = environment.get("USERPROFILE"))
         return std::filesystem::path(*home);
+    return std::nullopt;
+}
+
+/// @brief Returns the current user's login name.
+///
+/// Tries USER, then LOGNAME (both POSIX), then USERNAME (Windows); an empty value counts as unset.
+///
+/// @param environment The environment to read the variables from: by default the process
+///                    environment as it is now, as for homeDirectory().
+/// @return The login name, or std::nullopt if none of the variables is set.
+[[nodiscard]] inline auto userName(core::Environment const& environment = core::LiveEnvironment {})
+    -> std::optional<std::string>
+{
+    for (auto const* const name: { "USER", "LOGNAME", "USERNAME" })
+        if (auto value = environment.get(name); value && !value->empty())
+            return value;
     return std::nullopt;
 }
 

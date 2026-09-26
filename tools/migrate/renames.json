@@ -717,13 +717,13 @@
     {
       "kind": "include",
       "from": "platform/EnvironmentProvider.hpp",
-      "to": "core/platform/EnvironmentProvider.hpp",
+      "to": "core/platform/ProcessEnvironment.hpp",
       "profiles": [
         "endo",
         "tuidu"
       ],
       "target": {
-        "header": "core/platform/EnvironmentProvider.hpp"
+        "header": "core/platform/ProcessEnvironment.hpp"
       }
     },
     {
@@ -943,13 +943,13 @@
     {
       "kind": "include",
       "from": "platform/posix/PosixEnvironmentProvider.hpp",
-      "to": "core/platform/posix/PosixEnvironmentProvider.hpp",
+      "to": "core/platform/posix/PosixProcessEnvironment.hpp",
       "profiles": [
         "endo",
         "tuidu"
       ],
       "target": {
-        "header": "core/platform/posix/PosixEnvironmentProvider.hpp",
+        "header": "core/platform/posix/PosixProcessEnvironment.hpp",
         "public": false
       }
     },
@@ -980,25 +980,25 @@
     {
       "kind": "include",
       "from": "platform/testing/TestEnvironmentProvider.hpp",
-      "to": "core/platform/testing/TestEnvironmentProvider.hpp",
+      "to": "core/platform/testing/TestProcessEnvironment.hpp",
       "profiles": [
         "endo",
         "tuidu"
       ],
       "target": {
-        "header": "core/platform/testing/TestEnvironmentProvider.hpp"
+        "header": "core/platform/testing/TestProcessEnvironment.hpp"
       }
     },
     {
       "kind": "include",
       "from": "platform/windows/WindowsEnvironmentProvider.hpp",
-      "to": "core/platform/windows/WindowsEnvironmentProvider.hpp",
+      "to": "core/platform/windows/WindowsProcessEnvironment.hpp",
       "profiles": [
         "endo",
         "tuidu"
       ],
       "target": {
-        "header": "core/platform/windows/WindowsEnvironmentProvider.hpp",
+        "header": "core/platform/windows/WindowsProcessEnvironment.hpp",
         "public": false
       }
     },
@@ -2568,30 +2568,32 @@
     {
       "kind": "symbol",
       "from": "endo::platform::EnvironmentProvider",
-      "to": "core::platform::EnvironmentProvider",
+      "to": "core::platform::ProcessEnvironment",
       "profiles": [
         "endo",
         "tuidu"
       ],
       "target": {
-        "header": "core/platform/EnvironmentProvider.hpp",
-        "symbol": "core::platform::EnvironmentProvider",
+        "header": "core/platform/ProcessEnvironment.hpp",
+        "symbol": "core::platform::ProcessEnvironment",
         "public": true
-      }
+      },
+      "note": "core-cpp 0.5.0 (core-cpp#7): a core::Environment; set/unset/exportVariable/setAndExport return std::expected<void, PlatformError>; changeDirectory/currentDirectory moved to core::platform::WorkingDirectory (nativeWorkingDirectory(), testing::TestWorkingDirectory); homeDirectory/userName/configHome are the free functions of core/platform/UserPaths.hpp."
     },
     {
       "kind": "symbol",
       "from": "platform::EnvironmentProvider",
-      "to": "core::platform::EnvironmentProvider",
+      "to": "core::platform::ProcessEnvironment",
       "profiles": [
         "endo",
         "tuidu"
       ],
       "target": {
-        "header": "core/platform/EnvironmentProvider.hpp",
-        "symbol": "core::platform::EnvironmentProvider",
+        "header": "core/platform/ProcessEnvironment.hpp",
+        "symbol": "core::platform::ProcessEnvironment",
         "public": true
-      }
+      },
+      "note": "core-cpp 0.5.0 (core-cpp#7): a core::Environment; set/unset/exportVariable/setAndExport return std::expected<void, PlatformError>; changeDirectory/currentDirectory moved to core::platform::WorkingDirectory (nativeWorkingDirectory(), testing::TestWorkingDirectory); homeDirectory/userName/configHome are the free functions of core/platform/UserPaths.hpp."
     },
     {
       "kind": "symbol",
@@ -3223,7 +3225,7 @@
         "endo"
       ],
       "target": {
-        "header": "core/platform/EnvironmentProvider.hpp",
+        "header": "core/platform/UserPaths.hpp",
         "symbol": "core::platform::configHome",
         "public": true
       }
@@ -3236,7 +3238,7 @@
         "endo"
       ],
       "target": {
-        "header": "core/platform/EnvironmentProvider.hpp",
+        "header": "core/platform/UserPaths.hpp",
         "symbol": "core::platform::configHome",
         "public": true
       }
@@ -3353,7 +3355,7 @@
         "endo"
       ],
       "target": {
-        "header": "core/platform/EnvironmentProvider.hpp",
+        "header": "core/platform/UserPaths.hpp",
         "symbol": "core::platform::homeDirectory",
         "public": true
       }
@@ -3366,7 +3368,7 @@
         "endo"
       ],
       "target": {
-        "header": "core/platform/EnvironmentProvider.hpp",
+        "header": "core/platform/UserPaths.hpp",
         "symbol": "core::platform::homeDirectory",
         "public": true
       }
@@ -4685,14 +4687,14 @@
     {
       "kind": "symbol",
       "from": "endo::TestEnvironment",
-      "to": "core::platform::testing::TestEnvironmentProvider",
+      "to": "core::platform::testing::TestProcessEnvironment",
       "profiles": [
         "endo",
         "tuidu"
       ],
       "target": {
-        "header": "core/platform/testing/TestEnvironmentProvider.hpp",
-        "symbol": "core::platform::testing::TestEnvironmentProvider"
+        "header": "core/platform/testing/TestProcessEnvironment.hpp",
+        "symbol": "core::platform::testing::TestProcessEnvironment"
       }
     },
     {

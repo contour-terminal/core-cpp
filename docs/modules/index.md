@@ -77,7 +77,7 @@ subset builds, and CI runs its tests under node:
 |---|---|
 | base, log, cli | fully |
 | async | everything except `ThreadPoolExecutor.hpp` |
-| platform | Types (with `NativeHandle`), PlatformError, Clock, StringUtils, PathUtils, GlobMatch, FileUri, and the POSIX `EnvironmentProvider` and `FileInfoProvider` behind `nativeEnvironmentProvider()` and `nativeFileInfoProvider()` |
+| platform | Types (with `NativeHandle`), PlatformError, Clock, StringUtils, PathUtils, GlobMatch, FileUri, and the POSIX `ProcessEnvironment`, `FileInfoProvider` and `WorkingDirectory` behind `nativeProcessEnvironment()`, `nativeFileInfoProvider()` and `nativeWorkingDirectory()` |
 | net | `net_types` today; `IoBackend`, `EventLoop`, timers, `DeadlineTimer`, `WithTimeout`, the host-driven backend and the test doubles from Tasks B3 to B5; never sockets, DNS, TLS or HTTP |
 | testing | fully (the Windows parts are no-ops) |
 | tui | never |

@@ -41,10 +41,11 @@ src/core/
   cli/                      core::cli (crispy): CLI, App
   platform/                 core::platform (endo platform, one merged Clock): Clock, Types,
                             PlatformError, Wakeup, SignalHandler, SystemPipe, WinsockInit,
-                            MessageQueue, FileSystem, FileInfoProvider, EnvironmentProvider,
+                            MessageQueue, FileSystem, FileInfoProvider, ProcessEnvironment,
                             UserPaths, PathUtils, GlobMatch, FileUri, SystemInfo, StringUtils;
                             posix/ linux/ windows/ are private; testing/ holds the fakes
-                            (InMemoryFileSystem, MockFileInfoProvider, TestEnvironmentProvider)
+                            (InMemoryFileSystem, MockFileInfoProvider, TestProcessEnvironment,
+                            TestWorkingDirectory)
   async/                    core::async, header-only: StopToken (std:: or the fallback); Task,
                             UniqueCoroHandle, Cancellation, Awaitable, whenAll/whenAny (contour);
                             executors, AsyncQueue (planned, B1)

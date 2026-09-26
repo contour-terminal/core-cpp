@@ -27,6 +27,38 @@ workflow refuses one without a section here.
     `Iocp` shift down by one, so a value stored or sent as an integer is re-read by name
     (`toString`). A Windows test double that stood in for the loop's backend and expected a
     socket from the factories needs a completion port, or drives an `ISocket` of its own.
+- **`core::platform::EnvironmentProvider` is `ProcessEnvironment`, a `core::Environment`; the
+  working directory has its own seam; Windows reads and writes the environment in UTF-8**
+  (core-cpp#7). Two seams answered "read `HOME`", with two doubles a mixed test had to keep
+  agreeing. `core::Environment` is now the one read seam, and `ProcessEnvironment` -- what a shell
+  writes -- derives from it, so code that only reads is handed the same object and
+  `testing::TestProcessEnvironment` is the double for both. `set`, `unset`, `exportVariable` and
+  `setAndExport` return `std::expected<void, PlatformError>`, where they returned `void` and dropped
+  the error; a name that is empty or holds `=` or NUL, or a value that holds NUL, is
+  `PlatformError::InvalidArgument` (a new enumerator, last, so no other value moves).
+  `changeDirectory` and `currentDirectory` move to `core::platform::WorkingDirectory`
+  (`nativeWorkingDirectory()`, `testing::TestWorkingDirectory`), and `homeDirectory`, `userName`
+  and `configHome` are the free functions of `<core/platform/UserPaths.hpp>` over a
+  `core::Environment const&` (`userName` is new there). On Windows, `core::LiveEnvironment`,
+  `core::setProcessEnvironmentVariable` and `unsetProcessEnvironmentVariable` go through
+  `GetEnvironmentVariableW`/`SetEnvironmentVariableW`, converting to and from UTF-8, where the
+  code-page API mangled a value such as a user profile path outside the ANSI code page; a name or
+  value that is not UTF-8 is refused (`std::errc::invalid_argument`), and `ProcessEnvironment::keys()`
+  converts UTF-16 names rather than narrowing them a code unit at a time. The read seam's
+  interface is unchanged.
+  - *Migration*: `<core/platform/EnvironmentProvider.hpp>` is `<core/platform/ProcessEnvironment.hpp>`;
+    `EnvironmentProvider` is `ProcessEnvironment`, `nativeEnvironmentProvider()` is
+    `nativeProcessEnvironment()`, and `testing::TestEnvironmentProvider` is
+    `testing::TestProcessEnvironment` (`<core/platform/testing/TestProcessEnvironment.hpp>`), which no
+    longer takes an initial directory. Handle or discard the `std::expected` from every `set`,
+    `unset`, `exportVariable` and `setAndExport` (`std::ignore = env.set(...)` where a failure is
+    acceptable). Replace `env.changeDirectory(p)` and `env.currentDirectory()` with a
+    `WorkingDirectory&` the object is given -- `nativeWorkingDirectory()` in a composition root,
+    `testing::TestWorkingDirectory(initial)` with `addValidPath` in a test -- and
+    `env.homeDirectory()`, `env.userName()` and `env.configHome()` with
+    `core::platform::homeDirectory(env)`, `userName(env)` and `configHome(env)`. A function that
+    only reads can take a `core::Environment const&` and be handed either double. contour, which
+    uses only `core::Environment`, changes nothing.
 
 ### Added
 

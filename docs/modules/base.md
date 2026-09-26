@@ -62,8 +62,11 @@ as `core::log::fatal()` and the `SoftRequire()` macro.
 Code that reads an environment variable takes a `core::Environment const&` rather than calling
 `getenv()`, so a test hands it a `core::testing::FakeEnvironment`
 (`<core/testing/Environment.hpp>`, in [testing](testing.md)) instead of changing the process's
-environment. `core::platform::EnvironmentProvider` ([platform](platform.md)) is a second such
-seam; [core-cpp#7](https://github.com/contour-terminal/core-cpp/issues/7) merges them.
+environment. It is the one read seam: `core::platform::ProcessEnvironment`
+([platform](platform.md)), which a shell uses to set and export variables, is a `core::Environment`
+too, so code that only reads is handed the same object (core-cpp#7). On Windows the reads and
+writes go through the wide API, converting to and from UTF-8, so a value outside the ANSI code
+page reads intact; a name or value that is not UTF-8 is refused there.
 
 A process that must change its own environment, because a child process inherits it, calls
 `core::setProcessEnvironmentVariable()` and `core::unsetProcessEnvironmentVariable()`, never

@@ -21,4 +21,5 @@ TEST_CASE("PlatformError.toString", "[platform]")
     CHECK(toString(PlatformError::ProcessGroupFailed) == "process group failed");
     CHECK(toString(PlatformError::TerminalControlFailed) == "terminal control failed");
     CHECK(toString(PlatformError::NotImplemented) == "not implemented");
+    CHECK(toString(PlatformError::InvalidArgument) == "invalid argument");
 }

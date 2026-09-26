@@ -24,8 +24,9 @@ the interrupt throttle.
 | `<core/platform/MessageQueue.hpp>` | `MessageQueue<T>`, a thread-safe queue that can raise a `Wakeup` on every push |
 | `<core/platform/FileSystem.hpp>`, `<core/platform/NativeFileSystem.hpp>` | the `FileSystem` interface, errors as `std::expected`, a lazy recursive walk as a `core::Generator`; `NativeFileSystem` over `std::filesystem` |
 | `<core/platform/FileInfoProvider.hpp>` | `FileInfoProvider`, a directory listing with `stat(2)` metadata (`FileEntry`), a single file or a glob pattern |
-| `<core/platform/EnvironmentProvider.hpp>` | `EnvironmentProvider`: variables with a set-then-export model, the working directory, `homeDirectory()`, `userName()`, `configHome()` |
-| `<core/platform/UserPaths.hpp>` | `homeDirectory()` and `configHome()` over a `core::Environment`, by default the process environment |
+| `<core/platform/ProcessEnvironment.hpp>` | `ProcessEnvironment`, a `core::Environment` a shell writes: variables with a set-then-export model, each write a `std::expected`; `isValidEnvironmentName()` |
+| `<core/platform/WorkingDirectory.hpp>` | `WorkingDirectory`: `changeDirectory()` and `currentDirectory()` |
+| `<core/platform/UserPaths.hpp>` | `homeDirectory()`, `userName()` and `configHome()` over a `core::Environment`, by default the process environment |
 | `<core/platform/PathUtils.hpp>` | path spelling: `normalizePath()`, `joinPath()`, `absolutePath()`, `canonicalCasePath()`, `stripTrailingSeparator()`, `isCaseOnlyRename()`, `resolveDevicePath()` |
 | `<core/platform/GlobMatch.hpp>` | `globMatchFilename()` (`*`, `?`, `[...]`) and `containsGlobChars()` |
 | `<core/platform/FileUri.hpp>` | RFC 3986 percent-encoding and RFC 8089 `file://` URIs |
@@ -34,8 +35,10 @@ the interrupt throttle.
 
 The test doubles are in `testing/` and in `core::platform::testing`:
 `testing::InMemoryFileSystem` (a `FileSystem` held in maps, with symlinks, permissions and
-refused paths), `testing::MockFileInfoProvider` and `testing::TestEnvironmentProvider`, which never
-touches the process environment.
+refused paths), `testing::MockFileInfoProvider`, `testing::TestProcessEnvironment`, which never
+touches the process environment and, being a `core::Environment` as well, is the one double for
+code that reads and code that writes, and `testing::TestWorkingDirectory`, which never changes
+directory.
 
 `InMemoryFileSystem` answers as `NativeFileSystem` does wherever it models the behaviour: `isExecutableFile`,
 `permissions` and `setPermissions` follow a symlink to its target (a dangling link is not
@@ -50,14 +53,16 @@ so a test that depends on one of these belongs against the real filesystem:
 | Directory semantics | permissions, ordering and `.`/`..` from the OS | a key set; permissions are consulted by `isExecutableFile` and the refused-path list only |
 | `putback()` of a character the file does not hold | may fail; libc++ refuses it, libstdc++ and MSVC accept | always accepted |
 | `unget()` after a put-back character was read | hands the put-back character out again | steps back to the file's own byte |
- The native implementations of `FileInfoProvider` and
-`EnvironmentProvider` are in the private `posix/` and `windows/` directories, which no consumer
-includes; a composition root gets them from `nativeEnvironmentProvider()` and
-`nativeFileInfoProvider()`, each a `std::unique_ptr` to the interface:
+ The native implementations of `FileInfoProvider`,
+`ProcessEnvironment` and `WorkingDirectory` are in the private `posix/` and `windows/` directories,
+which no consumer includes; a composition root gets them from `nativeFileInfoProvider()`,
+`nativeProcessEnvironment()` and `nativeWorkingDirectory()`, each a `std::unique_ptr` to the
+interface:
 
 | Factory | Windows | Linux, macOS, the BSDs | Emscripten |
 |---|---|---|---|
-| `nativeEnvironmentProvider()` (`<core/platform/EnvironmentProvider.hpp>`) | `GetEnvironmentVariableA`/`SetEnvironmentVariableA`, names case-insensitive | the POSIX provider: reads through `core::LiveEnvironment`, exports through `core::setProcessEnvironmentVariable()` | the POSIX provider, over the environment Emscripten's libc keeps for the module (under node a fixed default set, not the host's) |
+| `nativeProcessEnvironment()` (`<core/platform/ProcessEnvironment.hpp>`) | reads through `core::LiveEnvironment` and exports through `core::setProcessEnvironmentVariable()`, both over `GetEnvironmentVariableW`/`SetEnvironmentVariableW` in UTF-8; names case-insensitive | the POSIX one: reads through `core::LiveEnvironment`, exports through `core::setProcessEnvironmentVariable()` | the POSIX one, over the environment Emscripten's libc keeps for the module (under node a fixed default set, not the host's) |
+| `nativeWorkingDirectory()` (`<core/platform/WorkingDirectory.hpp>`) | `std::filesystem::current_path`, reported in the capitalization the filesystem stores | `chdir(2)` and `std::filesystem::current_path` | the POSIX one, over Emscripten's virtual filesystem |
 | `nativeFileInfoProvider()` (`<core/platform/FileInfoProvider.hpp>`) | `std::filesystem`: the read-only flag as permissions, no blocks, device or inode | the POSIX provider: `lstat(2)` for every field, symlinks as links with their targets, and the blocks, device and inode | the POSIX provider, over Emscripten's virtual filesystem; a relative symlink target reads resolved against the link's directory there (3.1.56 at least) |
 
 The POSIX file-info provider was endo's `LinuxFileInfoProvider`, which used nothing Linux-specific;
@@ -101,11 +106,13 @@ Logic that schedules against a deadline takes an `IClock&` rather than calling
 - **`Types.hpp` does not include `<Windows.h>`.** `NativeHandle` is `void*` and `ProcessId`
   `unsigned long` there, and the calls into the Windows API are out of line. endo's copy defined
   `STDIN_FILENO` and the `SIG*` numbers on Windows for its process code; core-cpp's does not.
-- **The process environment is written in one place.** `PosixEnvironmentProvider` exports through
-  `core::setProcessEnvironmentVariable()` (in [base](base.md)), never `setenv()`.
+- **The process environment is written in one place.** `ProcessEnvironment` exports through
+  `core::setProcessEnvironmentVariable()` (in [base](base.md)), never `setenv()`, and reports what
+  it refused: a name that is empty or holds `=` or NUL, a value that holds NUL, and on Windows text
+  that is not UTF-8.
 - **`UserPaths` reads through a `core::Environment`**, so a test passes a
   `core::testing::FakeEnvironment`. Its default argument is a `core::LiveEnvironment`, so
-  `homeDirectory()` and `configHome()` called without one read the process environment (on
+  `homeDirectory()`, `userName()` and `configHome()` called without one read the process environment (on
   Windows the operating system's block) through the same body the tests run.
 - **`Wakeup`'s constructor throws** `std::runtime_error` when the operating system refuses the
   eventfd, self-pipe or event, which it does only when descriptors, handles or kernel memory are
@@ -118,8 +125,8 @@ Logic that schedules against a deadline takes an `IClock&` rather than calling
 
 The row in the module table says `PLATFORMS wasm-subset`. Under single-threaded Emscripten only
 Types, PlatformError, Clock, StringUtils, PathUtils, GlobMatch, FileUri and the POSIX
-`EnvironmentProvider` and `FileInfoProvider` (behind `nativeEnvironmentProvider()` and
-`nativeFileInfoProvider()`) build (the `SOURCES_EMSCRIPTEN` list), and their tests run under
+`ProcessEnvironment`, `FileInfoProvider` and `WorkingDirectory` (behind
+`nativeProcessEnvironment()`, `nativeFileInfoProvider()` and `nativeWorkingDirectory()`) build (the `SOURCES_EMSCRIPTEN` list), and their tests run under
 node. Clock needs no threads; its test of
 concurrent `CachedClock` refreshes is compiled only where threads exist. There is no separate
 `NativeHandle.hpp`: `NativeHandle` is part of `Types.hpp`, as it is in endo.

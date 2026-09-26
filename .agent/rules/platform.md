@@ -42,9 +42,9 @@ Origin: [endo `AGENT.md`, "New Platform Feature"](https://github.com/contour-ter
 which also says: **do not bypass the platform layer.** A direct `::stat`, `std::getenv` or
 `CreateFileW` in another module is a seam that tests cannot replace.
 
-- **The environment is read in one place**, `EnvironmentProvider` (or `core::Environment`, which
-  [core-cpp#7](https://github.com/contour-terminal/core-cpp/issues/7) merges with it), so a test
-  sets it with `testing::TestEnvironmentProvider` or `core::testing::FakeEnvironment` rather than
+- **The environment is read in one place**, `core::Environment`, which `ProcessEnvironment` is too
+  since [core-cpp#7](https://github.com/contour-terminal/core-cpp/issues/7), so a test
+  sets it with `testing::TestProcessEnvironment` or `core::testing::FakeEnvironment` rather than
   mutating the process's environment, which is shared by every thread and every test in the
   binary. **It is written in one place too:** `core::setProcessEnvironmentVariable()`, never
   `setenv()`, which clang-tidy's `concurrency-mt-unsafe` rejects along with `getenv()`.
@@ -114,6 +114,4 @@ reads there. Anything else in the module may use all of these freely. See
 
 ## Open work
 
-- **[core-cpp#7](https://github.com/contour-terminal/core-cpp/issues/7)** — unify
-  `core::Environment` (`core::base`, from crispy) with `core::platform::EnvironmentProvider`
-  into one injectable seam.
+None recorded. core-cpp#7, the one entry here, landed in 0.5.0.
