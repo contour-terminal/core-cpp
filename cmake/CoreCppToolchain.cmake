@@ -217,6 +217,18 @@ if(CORE_CPP_CLANG_TIDY)
         message(FATAL_ERROR "CORE_CPP_CLANG_TIDY is ON but no clang-tidy was found; "
                             "install the pinned one with: python scripts/tool-versions.py --install")
     endif()
+    # find_program keeps a value the user set, so `-DCORE_CPP_CLANG_TIDY_EXE=clang-tidy` stays a bare
+    # name. CXX_CLANG_TIDY resolved that through PATH; an OBJECT_DEPENDS (core_cpp_tidy_inputs) does
+    # not, and Ninja refuses every analysed compile over an input named `clang-tidy` that no rule
+    # makes. So the analyser is a full path from here on.
+    if(NOT IS_ABSOLUTE "${CORE_CPP_CLANG_TIDY_EXE}")
+        find_program(_coreCppTidyResolved NAMES "${CORE_CPP_CLANG_TIDY_EXE}" NO_CACHE)
+        if(NOT _coreCppTidyResolved)
+            message(FATAL_ERROR "CORE_CPP_CLANG_TIDY_EXE is '${CORE_CPP_CLANG_TIDY_EXE}', which is not a "
+                                "path and names no program on PATH.")
+        endif()
+        set(CORE_CPP_CLANG_TIDY_EXE "${_coreCppTidyResolved}")
+    endif()
     execute_process(COMMAND "${CORE_CPP_CLANG_TIDY_EXE}" --version
                     OUTPUT_VARIABLE _coreCppTidyBanner ERROR_QUIET)
     string(REGEX MATCH "version ([0-9]+\\.[0-9]+\\.[0-9]+)" _coreCppTidyMatch "${_coreCppTidyBanner}")
@@ -244,6 +256,9 @@ endif()
 ## then meant "clean under whatever rules were in force when each object was built", not under
 ## today's. As OBJECT_DEPENDS, a change to any of them rebuilds, and so re-analyses, what it
 ## governs. A source outside the source tree (a generated one) gets the analyser alone.
+##
+## The walk runs at configure time, so a `.clang-tidy` ADDED to a directory later is not a dependency
+## until the next configure; editing or deleting one that exists is seen at once.
 function(core_cpp_tidy_inputs source outVar)
     set(inputs "${CORE_CPP_CLANG_TIDY_EXE}")
     cmake_path(IS_PREFIX CORE_CPP_SOURCE_DIR "${source}" NORMALIZE underSourceTree)
