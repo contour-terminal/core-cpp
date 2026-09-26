@@ -3,7 +3,7 @@
 
 #include <core/platform/Wakeup.hpp>
 #include <core/tui/TerminalProtocols.hpp>
-#include <core/tui/windows/Win32Utf.hpp>
+#include <core/tui/detail/Utf16ToUtf8.hpp>
 
 #include <array>
 #include <span>
@@ -32,6 +32,10 @@ struct TerminalInput::NativeState
     UINT originalOutputCp = 0;                  ///< Console output code page (0 = not saved).
     UINT originalInputCp = 0;                   ///< Console input code page (0 = not saved).
     HANDLE resizeEvent = nullptr;               ///< Manual-reset event for resize notification.
+
+    /// Console input's UTF-16 to UTF-8. Kept across reads, because the two surrogates of one
+    /// character are two key events and can arrive in two reads (core-cpp#20).
+    detail::Utf16ToUtf8 utf16;
 };
 
 TerminalInput::TerminalInput(): _native(std::make_unique<NativeState>())
@@ -190,7 +194,7 @@ auto TerminalInput::readReadyInput() -> std::vector<InputEvent>
         {
             auto const wc = rec.Event.KeyEvent.uChar.UnicodeChar;
             if (wc != 0)
-                appendUtf16AsUtf8(vtData, wc);
+                _native->utf16.append(vtData, static_cast<char16_t>(wc));
         }
         else if (rec.EventType == WINDOW_BUFFER_SIZE_EVENT)
         {

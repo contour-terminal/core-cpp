@@ -929,3 +929,37 @@ TEST_CASE("VtParser.Escape.alt_backspace_reaches_its_default_binding", "[tui,vtp
     REQUIRE(key.has_value());
     CHECK(KeyBindings::defaults().lookup(*key) == EditAction::DeleteBigWordBackward);
 }
+
+// ============================================================================
+// UTF-8 validation (core-cpp#20)
+// ============================================================================
+
+TEST_CASE("VtParser.Utf8.a_four_byte_sequence_is_one_codepoint", "[tui,vtparser]")
+{
+    auto const key = parseKey("\xF0\x9F\x98\x80");
+    REQUIRE(key.has_value());
+    CHECK(key->codepoint == U'\U0001F600');
+}
+
+TEST_CASE("VtParser.Utf8.what_is_not_a_scalar_value_is_dropped", "[tui,vtparser]")
+{
+    // Each of these decodes, by arithmetic alone, to something no UTF-8 decoder may produce: an
+    // encoded surrogate (the CESU-8 halves of U+1F600, as the Windows console input used to
+    // deliver them), an overlong encoding at each width, and a value above U+10FFFF.
+    auto const invalid = GENERATE(std::string_view { "\xED\xA0\xBD" },
+                                  std::string_view { "\xED\xB8\x80" },
+                                  std::string_view { "\xC0\xAF" },
+                                  std::string_view { "\xE0\x80\xAF" },
+                                  std::string_view { "\xF0\x80\x80\xAF" },
+                                  std::string_view { "\xF4\x90\x80\x80" });
+    CAPTURE(invalid);
+    auto parser = VtParser {};
+    CHECK(parser.feed(invalid).empty());
+
+    // And the parser is back in the ground state: the next byte is itself.
+    auto const next = parser.feed("a");
+    REQUIRE(next.size() == 1);
+    auto const* key = std::get_if<KeyEvent>(next.data());
+    REQUIRE(key != nullptr);
+    CHECK(key->codepoint == U'a');
+}

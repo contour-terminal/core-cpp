@@ -16,6 +16,13 @@ workflow refuses one without a section here.
   by a plain Backspace, so a modal took the Escape as cancel and `DeleteBigWordBackward` could fire
   only under the Kitty keyboard protocol. Both now decode to one `KeyCode::Backspace` with
   `Modifier::Alt`. No signature changes.
+- **A character outside the BMP typed or pasted into a Windows console arrives as valid UTF-8**
+  (core-cpp#20). The console delivers U+1F600 as two key events, one per surrogate, and each was
+  encoded on its own (CESU-8), which `VtParser` then decoded to two lone surrogates. The Windows
+  input now pairs surrogates across reads (`detail::Utf16ToUtf8`, which replaces the private
+  `windows/Win32Utf.hpp`), and an unpaired one becomes U+FFFD. `VtParser` drops what no UTF-8
+  decoder may produce, on every platform: an encoded surrogate, an overlong encoding and a value
+  above U+10FFFF. No public signature changes.
 
 ## [0.4.3] - 2026-09-26
 

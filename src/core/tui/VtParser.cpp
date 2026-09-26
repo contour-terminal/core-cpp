@@ -1198,8 +1198,16 @@ void VtParser::emitUtf8(std::vector<InputEvent>& events)
         cp = static_cast<char32_t>(((bytes[0] & 0x07) << 18) | ((bytes[1] & 0x3F) << 12)
                                    | ((bytes[2] & 0x3F) << 6) | (bytes[3] & 0x3F));
 
-    if (cp != 0)
-        events.emplace_back(KeyEvent { .key = keyCodeFromCodepoint(cp), .codepoint = cp });
+    // Arithmetic alone decodes things no UTF-8 decoder may produce, and each is dropped here as an
+    // invalid lead byte is dropped above: an overlong encoding (the shortest form is the only
+    // valid one), an encoded surrogate -- which is what CESU-8 input decodes to, and what the
+    // Windows console arm used to deliver for every character outside the BMP (core-cpp#20) -- and
+    // a value above U+10FFFF.
+    auto const overlong = (len == 2 && cp < 0x80) || (len == 3 && cp < 0x800) || (len == 4 && cp < 0x10000);
+    auto const surrogate = cp >= 0xD800 && cp <= 0xDFFF;
+    if (cp == 0 || overlong || surrogate || cp > 0x10FFFF)
+        return;
+    events.emplace_back(KeyEvent { .key = keyCodeFromCodepoint(cp), .codepoint = cp });
 }
 
 } // namespace core::tui

@@ -1842,13 +1842,13 @@
     {
       "kind": "include",
       "from": "tui/platform/Win32Utf.hpp",
-      "to": "core/tui/windows/Win32Utf.hpp",
+      "to": "core/tui/detail/Utf16ToUtf8.hpp",
       "profiles": [
         "endo",
         "tuidu"
       ],
       "target": {
-        "header": "core/tui/windows/Win32Utf.hpp",
+        "header": "core/tui/detail/Utf16ToUtf8.hpp",
         "public": false
       }
     },
@@ -1934,6 +1934,15 @@
       "target": {
         "header": "core/tui/runtime/testing/ScriptedInputSource.hpp"
       }
+    },
+    {
+      "kind": "removed",
+      "from": "core::tui::appendUtf16AsUtf8",
+      "profiles": [
+        "endo",
+        "tuidu"
+      ],
+      "note": "it encoded each UTF-16 code unit on its own, so a surrogate pair became CESU-8 (core-cpp#20). Its replacement is the private core::tui::detail::Utf16ToUtf8 (core/tui/detail/Utf16ToUtf8.hpp), which keeps a high surrogate until its low half arrives."
     },
     {
       "kind": "removed",

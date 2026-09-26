@@ -10,8 +10,8 @@ Its consumers are endo, tuidu, fastcached's console tools and Lightweight's `dbt
 ## Two targets, and the leaf stays a leaf
 
 - **`core::tui_output` depends on `core::base` only**: `TerminalOutput`, `SgrBuilder`,
-  `SyncGuard`, `TerminalProtocols`, `CursorShape`, `Error`, and the private `platform/PosixIO`
-  and `Win32Utf`. Lightweight's `dbtool` links only this, to draw progress and colour without
+  `SyncGuard`, `TerminalProtocols`, `CursorShape`, `Error`, and the private `posix/PosixIO`
+  and `detail/Utf16ToUtf8`. Lightweight's `dbtool` links only this, to draw progress and colour without
   taking an event loop, libunicode or coroutines. An include of libunicode or `core::async` in
   a leaf file is a layering violation even if it links.
 - **`core::tui` is everything else** and may depend on `platform`, `async`, `net`, libunicode,

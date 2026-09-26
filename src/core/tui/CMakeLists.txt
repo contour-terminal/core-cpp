@@ -22,13 +22,13 @@ core_cpp_add_module(tui_output KIND STATIC
     SOURCES
         SgrBuilder.cpp
         TerminalOutput.cpp
+        detail/Utf16ToUtf8.hpp
         detail/XtVersion.hpp
     SOURCES_POSIX
         posix/PosixIO.hpp
         posix/TerminalOutput.cpp
     SOURCES_WINDOWS
         windows/TerminalOutput.cpp
-        windows/Win32Utf.hpp
     PRIVATE_LIBS core::base)
 
 # Image decoding is the one part with an option of its own: stb is fetched only with
@@ -200,7 +200,8 @@ core_cpp_add_module(tui KIND STATIC
 core_cpp_add_test(tui NAME tui_output
     SOURCES
         TerminalOutput_test.cpp
-        TerminalProtocols_test.cpp)
+        TerminalProtocols_test.cpp
+        detail/Utf16ToUtf8_test.cpp)
 
 # One binary for the module. windows/TerminalInput_test.cpp is Windows-only: it drives the console
 # API directly, and serialises its cases on a named mutex because they share the one console the

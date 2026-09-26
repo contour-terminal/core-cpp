@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/tui/TerminalOutput.hpp>
 
+#include <core/tui/detail/Utf16ToUtf8.hpp>
 #include <core/tui/detail/XtVersion.hpp>
-#include <core/tui/windows/Win32Utf.hpp>
 
 #include <cstring>
 #include <span>
@@ -50,6 +50,7 @@ namespace
         WriteFile(hStdout, Query, static_cast<DWORD>(std::strlen(Query)), &written, nullptr);
 
         std::string response;
+        auto utf16 = detail::Utf16ToUtf8 {};
 
         // Wait for response with timeout, processing input records
         auto const deadline = GetTickCount64() + static_cast<ULONGLONG>(timeoutMs);
@@ -81,7 +82,7 @@ namespace
                 {
                     auto const wc = record.Event.KeyEvent.uChar.UnicodeChar;
                     if (wc != 0)
-                        appendUtf16AsUtf8(response, wc);
+                        utf16.append(response, static_cast<char16_t>(wc));
                 }
             }
 
