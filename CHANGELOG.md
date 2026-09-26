@@ -7,7 +7,7 @@ release may break the API; every break is listed under **Breaking** with a migra
 release tag `vX.Y.Z` equals the version in `project(core-cpp VERSION X.Y.Z)`, and the release
 workflow refuses one without a section here.
 
-## [Unreleased]
+## [0.4.3] - 2026-09-26
 
 ### Changed
 
@@ -23,6 +23,10 @@ workflow refuses one without a section here.
   (1-2%) slower at the median, for the park lookup's two extra branches. No signature changes:
   ids are still never handed out twice, so a late cancel or a ready entry for a retired operation
   still finds nothing, and an idle socket's park is still uncounted, silent and narrowed as before.
+  A closed socket's slot hands its park back to the loop's spare list (capped at 64), so a burst
+  of connections leaves no burst's worth of parks behind. Measured in fastcached (memcached and
+  redis at 1, 16 and 64 connections, quiet host): the park path falls from about 1.5% to 0.7-0.9%
+  of samples, roughly 0.2 µs per request, with syscalls and allocations unchanged.
 
 ## [0.4.2] - 2026-09-26
 

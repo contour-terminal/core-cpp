@@ -9,7 +9,7 @@ as a subproject. This is how endo, fastcached, tuidu, Lightweight's `dbtool` and
 CPMAddPackage(
     NAME core-cpp
     GITHUB_REPOSITORY contour-terminal/core-cpp
-    GIT_TAG v0.4.2
+    GIT_TAG v0.4.3
     SYSTEM YES              # core-cpp headers never trip your -Werror
     EXCLUDE_FROM_ALL YES    # build only what you link
     OPTIONS "CORE_CPP_WITH_TUI ON" "CORE_CPP_WITH_TLS OFF")
