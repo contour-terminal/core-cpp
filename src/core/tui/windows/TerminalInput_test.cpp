@@ -26,6 +26,7 @@
 
 using core::tui::DecModeStatus;
 using core::tui::InputEvent;
+using core::tui::KeyEvent;
 using core::tui::MockTerminalOutput;
 using core::tui::ResizeEvent;
 using core::tui::Terminal;
@@ -257,6 +258,60 @@ TEST_CASE("On Windows a console size record arrives as a resize carrying the win
     // the buffer can be taller than what is drawn, and a dashboard sized to it would draw off-screen.
     CHECK(resize->columns == expected->columns);
     CHECK(resize->rows == expected->rows);
+}
+
+namespace
+{
+
+/// Writes one key-down record carrying the UTF-16 code unit @p unit into the console input.
+/// @return Whether the console took it.
+[[nodiscard]] bool writeKeyUnit(HANDLE console, wchar_t unit)
+{
+    auto record = INPUT_RECORD {};
+    record.EventType = KEY_EVENT;
+    record.Event.KeyEvent.bKeyDown = TRUE;
+    record.Event.KeyEvent.wRepeatCount = 1;
+    record.Event.KeyEvent.uChar.UnicodeChar = unit;
+    auto written = DWORD { 0 };
+    return WriteConsoleInputW(console, &record, 1, &written) != 0 && written == 1;
+}
+
+/// @return The code points of the key events in @p events, in order.
+[[nodiscard]] std::vector<char32_t> keyCodepoints(std::vector<InputEvent> const& events)
+{
+    auto codepoints = std::vector<char32_t> {};
+    for (auto const& event: events)
+        if (auto const* key = std::get_if<KeyEvent>(&event))
+            codepoints.push_back(key->codepoint);
+    return codepoints;
+}
+
+} // namespace
+
+TEST_CASE("On Windows a surrogate pair split across two reads is one character", "[TerminalInput]")
+{
+    // core-cpp#20, at the seam that fixes it: the console delivers U+1F600 as two key events, one per
+    // surrogate, and they can arrive in two reads. The UTF-16 converter lives in the input's own
+    // state for exactly that reason; one made per read would turn each half into U+FFFD.
+    auto const console = ConsoleStandardHandles {};
+    REQUIRE(console.locked());
+    if (!console.available())
+        SKIP("this process is attached to no console, so CONIN$ cannot be opened to write key records into");
+
+    auto input = TerminalInput {};
+    REQUIRE(input.initialize());
+    FlushConsoleInputBuffer(console.input());
+
+    auto const wroteHigh = writeKeyUnit(console.input(), static_cast<wchar_t>(0xD83D));
+    auto const firstRead = wroteHigh ? input.readReadyInput() : std::vector<InputEvent> {};
+    auto const wroteLow = writeKeyUnit(console.input(), static_cast<wchar_t>(0xDE00));
+    auto const secondRead = wroteLow ? input.readReadyInput() : std::vector<InputEvent> {};
+    input.shutdown();
+
+    REQUIRE(wroteHigh);
+    REQUIRE(wroteLow);
+    CHECK(keyCodepoints(firstRead).empty());
+    CHECK(keyCodepoints(secondRead) == std::vector<char32_t> { U'\U0001F600' });
 }
 
 TEST_CASE("On Windows resizing the console buffer is reported to raw-mode input", "[TerminalInput]")
