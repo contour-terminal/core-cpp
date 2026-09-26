@@ -3,8 +3,8 @@
 # Nightly checks against the projects core-cpp shares code with. Not a required check: a red run
 # here says something upstream moved, and is acted on, not merged around.
 #
-# For now it has one job. The consumer builds against core-cpp's master are added once the
-# consumers have migrated (Phase C of the implementation plan).
+# The consumer builds against core-cpp's master are added once the consumers have migrated (Phase C
+# of the implementation plan).
 name: Downstream
 
 on:
@@ -50,3 +50,52 @@ jobs:
             fi
           done
           exit "$drift"
+
+  # Has any provenance row's upstream moved since the commit it was synced at? The ctest
+  # core-cpp.upstream-drift can only skip (77) on a CI runner, because it needs the upstream
+  # checkouts beside core-cpp, so on every push its coverage is zero (core-cpp#33). This is the one
+  # configuration that answers the question: the three upstreams checked out in full as siblings, and
+  # the checker run without --no-fetch's shortcut. Drift is REPORTED, not failed -- exit 0 with the
+  # list, which is the checker's own contract -- while a row the checkouts prove malformed fails
+  # (1), and so does a skip (77): here every checkout is present, so a skip means this job is wrong.
+  upstream-drift:
+    name: provenance rows against their upstreams
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: core-cpp
+      - uses: actions/checkout@v4
+        with:
+          repository: contour-terminal/contour
+          path: contour
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: contour-terminal/endo
+          path: endo
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: LASTRADA-Software/fastcached
+          path: fastcached
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compare every provenance row with its upstream
+        working-directory: core-cpp
+        run: |
+          set +e
+          python scripts/check-upstream-drift.py | tee "$RUNNER_TEMP/drift.txt"
+          status=${PIPESTATUS[0]}
+          set -e
+          { echo '```'; cat "$RUNNER_TEMP/drift.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          case "$status" in
+            0) ;;
+            77) echo "::error::the checker could not read an upstream, though all three are checked out"; exit 1 ;;
+            *) echo "::error::a provenance row is malformed on its upstream side (exit $status)"; exit 1 ;;
+          esac

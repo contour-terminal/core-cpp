@@ -38,7 +38,11 @@ header guard, SPDX line, house style). Three things hold it true:
 - **Drift is reported by a tool, not by reading.** `python scripts/check-upstream-drift.py` fetches
   each upstream and reports, per row, the commits that touched the file since its synced SHA. It is
   `core-cpp.upstream-drift` under `ctest -L hygiene`, and skips (exit 77) on a machine without the
-  upstream checkouts rather than passing. Run for v0.1.0 against fetched upstreams: 433 rows with an
+  upstream checkouts rather than passing -- which is every CI runner, so on a push only its
+  self-test runs. The question itself is answered nightly, by the `upstream-drift` job of
+  `.github/workflows/downstream.yml`, which checks the three upstreams out beside core-cpp and runs
+  the checker against them: drift is listed in the job summary, and a malformed row or an unread
+  upstream fails it (core-cpp#33). Run for v0.1.0 against fetched upstreams: 433 rows with an
   upstream, 0 drifted.
 
 **A row is not a licence to re-sync by overwriting.** A `-` in its notes means nothing is left to say

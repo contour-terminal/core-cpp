@@ -38,6 +38,12 @@ workflow refuses one without a section here.
   link, a link whose text and URL disagree, and a heading with no entries. The ctest runs that
   offline; CI's `style` job also runs it `--online`, which refuses an entry whose issue has closed,
   and one whose state could not be read. It has a self-test.
+- **A nightly job answers whether a provenance row's upstream has moved** (core-cpp#33).
+  `core-cpp.upstream-drift` needs the upstream checkouts beside core-cpp, so it skips on every CI
+  runner and its coverage there was zero. The `upstream-drift` job of `downstream.yml` checks out
+  contour, endo and fastcached with full history as siblings and runs the checker: drift is listed
+  in the job summary, and a row the checkouts prove malformed, or an upstream the checker could not
+  read, fails the job.
 
 ### Changed
 
