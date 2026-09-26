@@ -427,8 +427,8 @@ Task<void> unixProbe(EventLoop* loop, core::net::IListener* listener, std::strin
 /// Deliberately NOT std::filesystem::exists: a bound AF_UNIX socket on Windows is a reparse
 /// point that exists() tries to follow and cannot, so it THROWS ERROR_CANT_ACCESS_FILE on
 /// exactly the files this asks about. Reading the parent directory's entries answers from the
-/// name alone, which is why WindowsListener::probeUnixSocketOwner reaches for FindFirstFileA
-/// rather than a stat too.
+/// name alone, which is why the Windows path claim (`windows/UnixSocketPath.cpp`) reaches for
+/// FindFirstFileA rather than a stat too.
 [[nodiscard]] bool socketFileExists(std::filesystem::path const& path)
 {
     auto ec = std::error_code {};

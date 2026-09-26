@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 /// Every @c IoBackend must be behaviourally interchangeable — the whole point of the
-/// interface is that swapping poll(2) for epoll, kqueue or WaitForMultipleObjects
+/// interface is that swapping poll(2) for epoll, kqueue or a completion port
 /// changes only what a wait costs. These cases therefore run the SAME scenario
 /// against every backend built on this platform, so a divergence fails here rather
 /// than surfacing as a hang in whatever happens to use the native one.

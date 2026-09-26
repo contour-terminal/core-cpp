@@ -37,8 +37,8 @@ namespace
 /// `posix/AdoptListener_test.cpp`, and for the same reason: what `adoptListener` is for is a
 /// socket this library did not make.
 ///
-/// Deliberately BLOCKING, because that is what such a socket is; `WindowsListener::adopt` is what
-/// associates the readiness event and puts it into non-blocking mode.
+/// Deliberately BLOCKING, because that is what such a socket is; `IocpListener::adopt` is what
+/// associates it with the loop's completion port.
 struct RawListener
 {
     SOCKET socket = core::net::detail::InvalidSocket;

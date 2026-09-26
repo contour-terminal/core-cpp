@@ -26,10 +26,10 @@ SOCKET openTcpSocket() noexcept
     return ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 }
 
-/// A listening loopback socket with an FD_ACCEPT event, exactly as WindowsListener::bind
-/// builds one — raw rather than through the listener, because the race this is about lives
-/// between two Winsock calls the listener makes back to back and cannot be opened from
-/// outside it. Closes both handles on destruction.
+/// A listening loopback socket with an FD_ACCEPT event, as the readiness listener built one
+/// until 0.5.0 -- raw, because the race this is about lives between two Winsock calls, and
+/// `NetworkEvents.cpp`, which it covers, still serves `IocpBackend`'s socket-writability bridge. Closes both
+/// handles on destruction.
 class AcceptFixture
 {
   public:

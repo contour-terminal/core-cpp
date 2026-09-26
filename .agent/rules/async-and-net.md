@@ -1261,10 +1261,9 @@ get right, and each one is a defect that has already happened.
   it turned an abort into a spurious EOF on a healthy socket. **Every transport the library hands
   out declares it**, because the interface's default is a no-op and a transport whose reads park
   cannot retire them with one; `core-cpp.cancel-read-declared` refuses a class that inherits it.
-  `WindowsSocket`'s read is an ordinary coroutine parked on the loop, so its `cancelRead` takes that
-  frame back with `EventLoop::cancelPending` and hands it back to the loop's ready queue to
-  complete with `Cancelled` -- the detach-then-complete order `PosixSocket` uses, resumed by the
-  loop rather than inside the call. Origin:
+  `IocpSocket`'s `cancelRead` on a read the kernel holds SETTLES rather than resolving inline: it
+  asks the kernel for the operation back and completes the read with `Cancelled` when the
+  completion reports, resumed by the loop rather than inside the call. Origin:
   [fastcached#710](https://github.com/LASTRADA-Software/fastcached/issues/710),
   [fastcached#884](https://github.com/LASTRADA-Software/fastcached/issues/884).
 - **`read`'s buffer must be non-empty**, because `0` already means "the peer finished sending"
@@ -1335,11 +1334,10 @@ in-process doubles (`testing::DatagramBus`, `testing::InMemorySocket`, the parki
   may block. What bounds it is the socket's own `SO_RCVTIMEO`/`SO_SNDTIMEO`, armed before the
   socket is handed over; a non-positive `setReceiveDeadline` removes the bound, as it does
   everywhere.
-- **One socket-error table per platform** (`detail/SocketErrors.hpp`). The datagram and blocking
-  transports use it; `PosixSocket`, `WindowsSocket` and the dial primitives still carry private
-  switches, which is the debt this rule names rather than a design: a private switch is the shape
-  that lacked a row and turned a firewall's `EACCES` into an unclassified `SystemError` upstream.
-  A new transport uses the shared table, and moving the other three onto it is owed.
+- **One socket-error table per platform** (`detail/SocketErrors.hpp`). Every transport and both
+  platforms' dials read their errors through it since Task B13; a private switch is the shape that
+  lacked a row and turned a firewall's `EACCES` into an unclassified `SystemError` upstream, so a
+  new transport uses the shared table too.
 
 ## TLS
 
