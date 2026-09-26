@@ -44,6 +44,10 @@ workflow refuses one without a section here.
   contour, endo and fastcached with full history as siblings and runs the checker: drift is listed
   in the job summary, and a row the checkouts prove malformed, or an upstream the checker could not
   read, fails the job.
+- **`core-cpp.iterator-debug-canary` proves the MSVC Debug runtime's iterator checks are live**
+  (core-cpp#11). In every MSVC-driver Debug build (`cl-debug`, `clangcl-debug`) it indexes a
+  `std::vector` out of range and passes only on the runtime's own `vector subscript out of range`;
+  a build where `_ITERATOR_DEBUG_LEVEL` fell below 2 reads the element instead, and fails.
 
 ### Changed
 

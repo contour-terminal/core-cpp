@@ -130,8 +130,15 @@ presets, scripts and paths.
   green. Origin: [fastcached#315](https://github.com/LASTRADA-Software/fastcached/issues/315).
 - **Nothing in core-cpp states that level; it follows from `_DEBUG`, from the runtime flavour,
   from the build type.** Any of those moving removes the checks with no warning while the leg
-  stays green. A must-die canary is the remedy fastcached uses; core-cpp's is
-  [core-cpp#11](https://github.com/contour-terminal/core-cpp/issues/11).
+  stays green. So a must-die canary states it, as fastcached's does: `core-cpp.iterator-debug-canary`
+  (`tests/IteratorDebugCanary.cpp`), registered in every MSVC-driver Debug build, indexes a
+  `std::vector` out of range and passes only on the runtime's own `vector subscript out of range`
+  ([core-cpp#11](https://github.com/contour-terminal/core-cpp/issues/11)). Its registration does not
+  depend on the level, or it would abstain in exactly the build that lost it.
+- **The Debug runtime ends a failed check with `__fastfail`**, which ctest scores as a crash
+  (`0xc0000409`) that no `PASS_REGULAR_EXPRESSION` overrides, and which `core::testing_dialogs`'
+  invalid-parameter handler never sees. The canary installs a CRT report hook that passes the
+  runtime's report on to stderr and exits with a plain failure first.
 
 ## No executable raises a modal error dialog, and the build installs that
 
@@ -469,8 +476,3 @@ toward "nothing unusual here". Read the body. Target `std::views::iota`; for `ar
 `std::span{argv, argc}.subspan(1)`. Origin:
 [fastcached#1452](https://github.com/LASTRADA-Software/fastcached/issues/1452).
 
-## Open work
-
-- **[core-cpp#11](https://github.com/contour-terminal/core-cpp/issues/11)** — a must-die canary
-  that proves `cl-debug` runs with `_ITERATOR_DEBUG_LEVEL=2`, accepted only on the runtime's own
-  `subscript out of range` diagnostic.

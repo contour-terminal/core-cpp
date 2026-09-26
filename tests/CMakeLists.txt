@@ -679,6 +679,24 @@ if(WIN32)
     endforeach()
 endif()
 
+# The MSVC Debug runtime's iterator checks are live (core-cpp#11): tests/IteratorDebugCanary.cpp
+# indexes a vector out of range and must be stopped by the runtime's own `vector subscript out of
+# range`. Registered in EVERY MSVC-driver Debug build, whatever `_ITERATOR_DEBUG_LEVEL` turns out to
+# be -- a registration conditioned on the level would abstain in exactly the build that lost it --
+# and judged by the diagnostic, never by an exit code: the line the program prints when the read
+# RETURNED is the failure.
+if(WIN32 AND CORE_CPP_MSVC_DRIVER AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_executable(core-cpp-iterator-debug-canary IteratorDebugCanary.cpp)
+    target_link_libraries(core-cpp-iterator-debug-canary PRIVATE core::testing_dialogs)
+    core_cpp_apply_toolchain(core-cpp-iterator-debug-canary)
+    add_test(NAME core-cpp.iterator-debug-canary COMMAND core-cpp-iterator-debug-canary)
+    set_tests_properties(core-cpp.iterator-debug-canary PROPERTIES
+        PASS_REGULAR_EXPRESSION "vector subscript out of range"
+        FAIL_REGULAR_EXPRESSION "the out-of-range index returned"
+        TIMEOUT 60
+        LABELS "core-cpp;canary")
+endif()
+
 # The benchmark behind the 0.4.0 CHANGELOG's numbers for the current-executor context
 # (bench/ExecutorContextBench.cpp, which says how to run it). Built so it cannot rot, and registered
 # with nothing: a benchmark reports, it asserts nothing ctest could judge. POSIX only, because it
