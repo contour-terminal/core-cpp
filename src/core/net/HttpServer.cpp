@@ -197,8 +197,8 @@ namespace
             if (request.error().code != NetErrorCode::Eof)
             {
                 auto const status = request.error().code == NetErrorCode::MessageTooLarge ? 413 : 400;
-                static_cast<void>(
-                    co_await writeResponse(socket, HttpResponse::withStatus(status, std::string {})));
+                std::ignore =
+                    co_await writeResponse(socket, HttpResponse::withStatus(status, std::string {}));
                 // The request was refused before it was read to its end, so bytes of it may still
                 // be unread here, and a bare close over them is a reset that destroys the refusal
                 // (core-cpp#35). No loop is at hand in `serve`, so each read of the drain carries
@@ -225,7 +225,7 @@ namespace
         {
             response = HttpResponse::withStatus(500, std::string {});
         }
-        static_cast<void>(co_await writeResponse(socket, std::move(response)));
+        std::ignore = co_await writeResponse(socket, std::move(response));
     }
 } // namespace
 
