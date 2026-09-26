@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 namespace core::tui
@@ -1042,6 +1043,28 @@ void VtParser::dispatchCsi(char finalByte, std::vector<InputEvent>& events)
 
         auto const mods = decodeWin32Modifiers(controlKeyState);
         auto const isAltGr = isAltGrKeyState(controlKeyState);
+
+        // A character outside the BMP is two keys, one per UTF-16 surrogate (core-cpp#20): the high
+        // half is held until the key carrying the low half, which may come in a later read, and
+        // only the pair is a character. A half that cannot be paired decodes to nothing, as an
+        // encoded surrogate does in the UTF-8 path.
+        if (unicodeChar >= 0xD800 && unicodeChar <= 0xDBFF)
+        {
+            _pendingHighSurrogate = static_cast<char16_t>(unicodeChar);
+            return;
+        }
+        if (unicodeChar >= 0xDC00 && unicodeChar <= 0xDFFF)
+        {
+            auto const high = std::exchange(_pendingHighSurrogate, char16_t { 0 });
+            if (high == 0)
+                return;
+            auto const cp =
+                static_cast<char32_t>(0x10000 + (((high - 0xD800) << 10) | (unicodeChar - 0xDC00)));
+            events.emplace_back(
+                KeyEvent { .key = keyCodeFromCodepoint(cp), .modifiers = mods, .codepoint = cp });
+            return;
+        }
+        _pendingHighSurrogate = 0;
 
         // Try special key mapping (Backspace, Enter, arrows, F-keys, etc.)
         if (auto const mapped = mapWin32VkToKeyCode(vkCode))

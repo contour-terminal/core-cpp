@@ -171,7 +171,9 @@ workflow refuses one without a section here.
   (core-cpp#20). The console delivers U+1F600 as two key events, one per surrogate, and each was
   encoded on its own (CESU-8), which `VtParser` then decoded to two lone surrogates. The Windows
   input now pairs surrogates across reads (`detail::Utf16ToUtf8`, which replaces the private
-  `windows/Win32Utf.hpp`), and an unpaired one becomes U+FFFD. `VtParser` drops what no UTF-8
+  `windows/Win32Utf.hpp`), and an unpaired one becomes U+FFFD. In Win32 input mode, where the
+  console reports each surrogate as its own `CSI ... _` key, `VtParser` pairs the two keys the same
+  way, across reads, and drops a half it cannot pair. `VtParser` drops what no UTF-8
   decoder may produce, on every platform: an encoded surrogate, an overlong encoding and a value
   above U+10FFFF. No public signature changes.
 - **The vendoring tool refuses a `DEST` that is a symbolic link** (core-cpp#25). CMake's `EXISTS`

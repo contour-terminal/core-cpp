@@ -86,6 +86,11 @@ class VtParser
     std::string _dcsBuf;    ///< Buffer for DCS (Device Control String) payload.
     int _utf8Remaining = 0; ///< Expected remaining UTF-8 continuation bytes.
 
+    /// A Win32-input-mode key's high surrogate, waiting for the key that carries its low half, or 0.
+    /// The console reports a character outside the BMP as two keys, one per UTF-16 unit, and they
+    /// may arrive in two reads (core-cpp#20).
+    char16_t _pendingHighSurrogate = 0;
+
     /// @brief Abandons a sequence whose buffer has grown past its cap.
     ///
     /// Clears @p buffer, gives its storage back and returns the parser to Ground, so a sequence

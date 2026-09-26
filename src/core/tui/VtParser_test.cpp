@@ -934,6 +934,48 @@ TEST_CASE("VtParser.Escape.alt_backspace_reaches_its_default_binding", "[tui,vtp
 // UTF-8 validation (core-cpp#20)
 // ============================================================================
 
+TEST_CASE("VtParser.Win32Input.a_surrogate_pair_is_one_codepoint", "[tui,vtparser]")
+{
+    // In Win32 input mode the console reports U+1F600 as two key events, one per UTF-16 surrogate,
+    // each its own CSI Vk;Sc;Uc;Kd;Cs;Rc _ -- the same split core-cpp#20 fixed for plain console
+    // records, one layer up. Each half on its own is not a character.
+    auto const high = std::string_view { "\x1b[0;0;55357;1;0;1_" };
+    auto const low = std::string_view { "\x1b[0;0;56832;1;0;1_" };
+
+    SECTION("in one read")
+    {
+        auto parser = VtParser {};
+        auto const events = parser.feed(std::string { high } + std::string { low });
+        REQUIRE(events.size() == 1);
+        auto const* key = std::get_if<KeyEvent>(events.data());
+        REQUIRE(key != nullptr);
+        CHECK(key->codepoint == U'\U0001F600');
+    }
+
+    SECTION("across two reads, with the high half's key-up between them")
+    {
+        auto parser = VtParser {};
+        CHECK(parser.feed(high).empty());
+        CHECK(parser.feed("\x1b[0;0;55357;0;0;1_").empty());
+        auto const events = parser.feed(low);
+        REQUIRE(events.size() == 1);
+        auto const* key = std::get_if<KeyEvent>(events.data());
+        REQUIRE(key != nullptr);
+        CHECK(key->codepoint == U'\U0001F600');
+    }
+
+    SECTION("a half that cannot be paired is dropped, and what follows is itself")
+    {
+        auto parser = VtParser {};
+        CHECK(parser.feed(low).empty());
+        auto const events = parser.feed(std::string { high } + "\x1b[65;30;97;1;0;1_");
+        REQUIRE(events.size() == 1);
+        auto const* key = std::get_if<KeyEvent>(events.data());
+        REQUIRE(key != nullptr);
+        CHECK(key->codepoint == U'a');
+    }
+}
+
 TEST_CASE("VtParser.Utf8.a_four_byte_sequence_is_one_codepoint", "[tui,vtparser]")
 {
     auto const key = parseKey("\xF0\x9F\x98\x80");
