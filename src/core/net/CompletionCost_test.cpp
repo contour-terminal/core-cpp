@@ -197,57 +197,78 @@ TEST_CASE("Socket completion cost over connected pairs", "[.][bench][net][socket
 TEST_CASE("Park filed and taken per socket operation", "[.][bench][net][park]")
 {
     // What a socket operation pays the loop's bookkeeping when it has to wait, with no kernel wait
-    // and no readiness: file a frameless read park on the socket's kept registration, then take it,
-    // as `PosixSocket::armRead` and `takeRead` do. The registration is attached and armed for
-    // reading by the first park and never touched again, so this is the loop's own work alone --
-    // core-cpp#52's target, which the ping-pong above spreads over a syscall-heavy round trip.
+    // and no readiness: a frameless read park filed on the socket's kept registration and taken
+    // again, as `PosixSocket::armRead` and `takeRead` do, from inside a turn as they are. Over 1
+    // socket, and over 256 each holding a parked read at once, which is what a server's table
+    // looks like. The registrations are attached and armed for reading by the first park and never
+    // touched again, so this is the loop's own work alone -- core-cpp#52's target, which the
+    // ping-pong above spreads over a syscall-heavy round trip.
     constexpr auto Operations = std::size_t { 2'000'000 };
     constexpr auto Runs = std::size_t { 5 };
 
-    auto backend = core::net::makeBackend(core::net::preferredBackendKind());
-    REQUIRE(backend != nullptr);
-    auto loop = EventLoop { *backend };
-    auto descriptors = std::array<int, 2> {};
-    REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM, 0, descriptors.data()) == 0);
-    auto const fd = descriptors[0];
-    auto const onReady = [](void*, core::net::ParkWake) {
-    };
-
-    auto samples = std::array<double, Runs> {};
-    for (auto& sample: samples)
+    for (auto const sockets: { std::size_t { 1 }, std::size_t { 256 } })
     {
-        auto const started = std::chrono::steady_clock::now();
-        auto refused = std::size_t { 0 };
-        for ([[maybe_unused]] auto const operation: std::views::iota(std::size_t { 0 }, Operations))
-        {
-            auto const park = loop.registerPark(
-                core::net::ParkEntry::onReadyCallback(onReady,
-                                                      nullptr,
-                                                      fd,
-                                                      core::net::DefaultHandleKind,
-                                                      core::net::Interest::Read,
-                                                      core::net::RegistrationLifetime::UntilClosed));
-            if (!park)
-                ++refused;
-            loop.unregisterPark(park);
-        }
-        auto const elapsed = std::chrono::steady_clock::now() - started;
-        REQUIRE(refused == 0);
-        sample = std::chrono::duration<double, std::nano>(elapsed).count() / static_cast<double>(Operations);
-    }
-    CHECK(loop.parkedWaiterCount() == 0);
-    loop.notifyHandleClosing(fd, core::net::FdWakePolicy::Resume);
-    std::ignore = ::close(descriptors[0]);
-    std::ignore = ::close(descriptors[1]);
+        auto backend = core::net::makeBackend(core::net::preferredBackendKind());
+        REQUIRE(backend != nullptr);
+        auto loop = EventLoop { *backend };
+        auto descriptors = std::vector<std::array<int, 2>>(sockets);
+        for (auto& pair: descriptors)
+            REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM, 0, pair.data()) == 0);
+        auto parks = std::vector<core::net::ParkId>(sockets);
+        auto const onReady = [](void*, core::net::ParkWake) {
+        };
 
-    std::ranges::sort(samples);
-    std::cout << std::format(
-        "park filed and taken, backend {}: median {:.1f} ns/op (min {:.1f}, max {:.1f}); "
-        "{} operations x {} runs\n",
-        core::net::toString(core::net::preferredBackendKind()),
-        samples[Runs / 2],
-        samples.front(),
-        samples.back(),
-        Operations,
-        Runs);
+        auto samples = std::array<double, Runs> {};
+        auto refused = std::size_t { 0 };
+        for (auto& sample: samples)
+        {
+            auto elapsed = std::chrono::steady_clock::duration {};
+            // Posted, so the operations run on the loop's thread inside a turn, as a socket's do.
+            loop.post([&] {
+                auto const started = std::chrono::steady_clock::now();
+                for ([[maybe_unused]] auto const round:
+                     std::views::iota(std::size_t { 0 }, Operations / sockets))
+                {
+                    for (auto const index: std::views::iota(std::size_t { 0 }, sockets))
+                    {
+                        parks[index] = loop.registerPark(core::net::ParkEntry::onReadyCallback(
+                            onReady,
+                            nullptr,
+                            descriptors[index][0],
+                            core::net::DefaultHandleKind,
+                            core::net::Interest::Read,
+                            core::net::RegistrationLifetime::UntilClosed));
+                        if (!parks[index])
+                            ++refused;
+                    }
+                    for (auto const park: parks)
+                        loop.unregisterPark(park);
+                }
+                elapsed = std::chrono::steady_clock::now() - started;
+            });
+            std::ignore = loop.runOnce(std::chrono::milliseconds { 0 });
+            sample = std::chrono::duration<double, std::nano>(elapsed).count()
+                     / static_cast<double>(Operations / sockets * sockets);
+        }
+        CHECK(refused == 0);
+        CHECK(loop.parkedWaiterCount() == 0);
+        for (auto const& pair: descriptors)
+        {
+            loop.notifyHandleClosing(pair[0], core::net::FdWakePolicy::Resume);
+            std::ignore = ::close(pair[0]);
+            std::ignore = ::close(pair[1]);
+        }
+
+        std::ranges::sort(samples);
+        std::cout << std::format(
+            "park filed and taken, backend {}, {} sockets: median {:.1f} ns/op (min {:.1f}, "
+            "max {:.1f}); {} operations x {} runs\n",
+            core::net::toString(core::net::preferredBackendKind()),
+            sockets,
+            samples[Runs / 2],
+            samples.front(),
+            samples.back(),
+            Operations,
+            Runs);
+    }
 }
