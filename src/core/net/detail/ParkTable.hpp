@@ -17,6 +17,11 @@
 /// stale request from a live one; a counter that never wraps in a session is that field, folded
 /// into the name. Sixty-four bits rather than thirty-two: four billion parks is five days for a
 /// server doing ten thousand a second.
+///
+/// **A socket operation's park is the one exception to "a slot needs a generation field", and it
+/// has one.** Its storage is kept across the socket's operations (@c ParkTable::openResident), so
+/// its id is the slot and a per-slot generation instead, tagged so the two kinds never meet -- still
+/// never handed out twice, so still the generation check.
 
 #include <core/async/ParkedWork.hpp>
 #include <core/net/IoBackend.hpp>
@@ -344,6 +349,11 @@ namespace detail
 
         std::optional<platform::SteadyTimePoint> deadline; ///< Set while this park waits on one.
         std::uint64_t sequence = 0;                        ///< Tie-break so equal deadlines fire FIFO.
+
+        /// The resident slot this park is the storage of, or `ParkTable::NoResidentSlot` for a park
+        /// filed in the id map. Set when the table makes the park for a slot, and kept by it across
+        /// every operation the slot files; see @c ParkTable::openResident.
+        std::uint32_t residentSlot = UINT32_MAX;
     };
 
     /// The one backend registration a loop keeps for a handle parked on with
@@ -380,6 +390,12 @@ namespace detail
         Park* writerPark = nullptr; ///< See @c readerPark.
 
         bool narrowQueued = false; ///< Whether a wait has already asked for it to be narrowed.
+
+        /// The resident slots the handle's read and write operations are filed in, opened the first
+        /// time each direction parks and closed with the watch; `ParkTable::NoResidentSlot` until
+        /// then. See @c ParkTable::openResident.
+        std::uint32_t readerResident = UINT32_MAX;
+        std::uint32_t writerResident = UINT32_MAX; ///< See @c readerResident.
     };
 
     /// The parks one loop holds, keyed by id: an open-addressing table with linear probing.
@@ -587,6 +603,7 @@ namespace detail
             park->queuedWake = ParkWake::Ready;
             park->deadline.reset();
             park->sequence = 0;
+            park->residentSlot = NoResidentSlot;
             _spare.push_back(std::move(park));
         }
 
@@ -645,7 +662,20 @@ namespace detail
         /// @param id The park to look up.
         /// @return The park, or null if it is no longer here — which is what a cancel request for
         ///         a park that has already resumed resolves to.
-        [[nodiscard]] Park* find(ParkId id) noexcept { return _parks.find(id); }
+        [[nodiscard]] Park* find(ParkId id) noexcept
+        {
+            // An empty watch slot is asked about once per operation that parks, and names nothing:
+            // answered without a probe.
+            if (!id)
+                return nullptr;
+            if (!isResident(id))
+                return _parks.find(id);
+            auto const slot = slotOf(id);
+            if (slot >= _resident.size())
+                return nullptr;
+            auto* const park = _resident[slot].park.get();
+            return park != nullptr && park->id == id ? park : nullptr;
+        }
 
         /// @param waiter The parked coroutine.
         /// @return The park holding it, or @c ParkId::invalid().
@@ -713,6 +743,16 @@ namespace detail
             _parks.forEach(
                 [&taken](ParkId, std::unique_ptr<Park>& park) { taken.push_back(std::move(park)); });
             _parks.clear();
+            // A resident park holding an operation goes out with the rest; an idle one holds
+            // nothing and goes with its slot. The slots themselves stay, with their generations,
+            // because a watch may still name one and a name must never come round again.
+            for (auto& slot: _resident)
+            {
+                if (slot.park != nullptr && slot.park->id)
+                    taken.push_back(std::move(slot.park));
+                slot.park.reset();
+            }
+            _activeResidents = 0;
             _byWaiter.clear();
             _byHandle.clear();
             _readiness = 0;
@@ -726,13 +766,17 @@ namespace detail
         [[nodiscard]] std::vector<ParkId> ids() const
         {
             auto found = std::vector<ParkId> {};
-            found.reserve(_parks.size());
+            found.reserve(size());
             _parks.forEachId([&found](ParkId id) { found.push_back(id); });
+            if (_activeResidents != 0)
+                for (auto const& slot: _resident)
+                    if (slot.park != nullptr && slot.park->id)
+                        found.push_back(slot.park->id);
             return found;
         }
 
         /// @return How many parks are held, of every kind.
-        [[nodiscard]] std::size_t size() const noexcept { return _parks.size(); }
+        [[nodiscard]] std::size_t size() const noexcept { return _parks.size() + _activeResidents; }
 
         /// @return How many of them are waiting on a deadline.
         [[nodiscard]] std::size_t timerCount() const noexcept { return _liveTimers; }
@@ -800,6 +844,117 @@ namespace detail
                 }
                 pruneTimers();
             }
+        }
+
+        /// No resident slot: what a watch holds before its direction first parks, and what
+        /// @c openResident answers when the id space for slots is spent.
+        static constexpr std::uint32_t NoResidentSlot = UINT32_MAX;
+
+        /// @param id A park's id.
+        /// @return Whether @p id names a resident park rather than one in the id map.
+        [[nodiscard]] static constexpr bool isResident(ParkId id) noexcept
+        {
+            return (id.value & ResidentTag) != 0;
+        }
+
+        /// Opens a resident slot: storage for one direction of one handle's parks, kept across the
+        /// operations that direction files, so an operation that has to wait costs no id-map insert,
+        /// no erase, and no park made or recycled (core-cpp#52).
+        ///
+        /// **Each operation still gets an id of its own**, and the id is still the generation check:
+        /// it is the slot and a per-slot generation, and the generation moves on for every
+        /// operation, so a cancel for a finished operation finds nothing in the storage the next one
+        /// uses. Generations survive the slot's reuse by another handle, so no id comes round again
+        /// in a loop's life.
+        /// @return The slot, or @c NoResidentSlot if every slot the id space holds is taken -- the
+        ///         caller then files the ordinary way.
+        [[nodiscard]] std::uint32_t openResident()
+        {
+            if (!_freeResident.empty())
+            {
+                auto const slot = _freeResident.back();
+                _freeResident.pop_back();
+                _resident[slot].kept = true;
+                return slot;
+            }
+            if (_resident.size() > MaxResidentSlot)
+                return NoResidentSlot;
+            _resident.push_back(ResidentSlot { .park = nullptr, .generation = 0, .kept = true });
+            // Never more free slots than slots, so `freeResident` -- `noexcept` -- never grows it.
+            _freeResident.reserve(_resident.size());
+            return static_cast<std::uint32_t>(_resident.size() - 1);
+        }
+
+        /// @param slot A slot from @c openResident.
+        /// @return The slot's park to fill in for its next operation; or null while an operation
+        ///         still holds it, or once the slot's generations are spent, and either way the
+        ///         caller files the ordinary way. Every field of an idle park holds its default but
+        ///         @c residentSlot.
+        [[nodiscard]] Park* idleResident(std::uint32_t slot)
+        {
+            auto& resident = _resident[slot];
+            if (resident.generation >= MaxResidentGeneration)
+                return nullptr;
+            if (resident.park == nullptr)
+            {
+                resident.park = std::make_unique<Park>();
+                resident.park->residentSlot = slot;
+            }
+            return resident.park->id ? nullptr : resident.park.get();
+        }
+
+        /// Files the operation @c idleResident's park has been filled in with.
+        ///
+        /// Only a frameless readiness park that takes a slot on its handle's watch is filed here: no
+        /// waiter to index, no deadline, and never the handle index, because the watch names it.
+        /// @param slot The slot whose park was filled in.
+        /// @return The operation's id, never zero and never handed out before.
+        [[nodiscard]] ParkId addResident(std::uint32_t slot) noexcept
+        {
+            auto& resident = _resident[slot];
+            auto& park = *resident.park;
+            park.id =
+                ParkId { ResidentTag | (std::uint64_t { slot } << GenerationBits) | ++resident.generation };
+            park.sequence = _nextSequence++;
+            ++_readiness;
+            ++_activeResidents;
+            return park.id;
+        }
+
+        /// Ends the operation @p park holds: its id finds nothing from here on, and the park is kept
+        /// for the slot's next operation -- or, once the slot's watch has gone, the slot is freed.
+        /// @param park A resident park holding an operation.
+        void retireResident(Park& park) noexcept
+        {
+            dropHandleIndex(park);
+            park.id = ParkId::invalid();
+            park.handler = ReadinessHandler {};
+            park.loop = nullptr;
+            park.handle = platform::InvalidHandle;
+            park.attached = false;
+            park.watch = nullptr;
+            park.onReady = nullptr;
+            park.callbackState = nullptr;
+            park.ownedByLoop = false;
+            park.readinessQueued = false;
+            park.queuedWake = ParkWake::Ready;
+            park.sequence = 0;
+            --_activeResidents;
+            if (!_resident[park.residentSlot].kept)
+                freeResident(park.residentSlot);
+        }
+
+        /// The watch that held @p slot has gone. An idle slot is freed now; one an operation still
+        /// holds is freed when that operation retires, so its park is not reused under it.
+        /// @param slot A slot from @c openResident, or @c NoResidentSlot, which is ignored.
+        void closeResident(std::uint32_t slot) noexcept
+        {
+            if (slot == NoResidentSlot)
+                return;
+            auto& resident = _resident[slot];
+            resident.kept = false;
+            if (resident.park == nullptr || !resident.park->id)
+                freeResident(slot);
         }
 
       private:
@@ -894,7 +1049,49 @@ namespace detail
         /// memory for ever.
         static constexpr std::size_t MaxSpareParks = 64;
 
+        /// One resident slot: its park, the generation its latest operation's id carried, and
+        /// whether a watch still holds it.
+        struct ResidentSlot
+        {
+            std::unique_ptr<Park> park;
+            std::uint64_t generation = 0;
+            bool kept = false;
+        };
+
+        /// A resident id is this bit, the slot above @c GenerationBits and the generation below.
+        /// The id-map counter never reaches the bit, so the two kinds of id never meet.
+        static constexpr std::uint64_t ResidentTag = std::uint64_t { 1 } << 63U;
+        static constexpr unsigned GenerationBits = 40;
+
+        /// A trillion operations per slot, then the slot is retired for good rather than wrapped,
+        /// which is what keeps "never handed out before" true. At a million operations a second on
+        /// one socket, twelve days.
+        static constexpr std::uint64_t MaxResidentGeneration = (std::uint64_t { 1 } << GenerationBits) - 1;
+
+        /// The highest slot: eight million, two per socket for four million open sockets.
+        static constexpr std::size_t MaxResidentSlot = (std::size_t { 1 } << (63U - GenerationBits)) - 1;
+
+        /// @param id A resident id.
+        /// @return Its slot.
+        [[nodiscard]] static constexpr std::size_t slotOf(ParkId id) noexcept
+        {
+            return static_cast<std::size_t>((id.value & ~ResidentTag) >> GenerationBits);
+        }
+
+        /// Hands @p slot out again, unless its generations are spent.
+        /// @param slot A slot no watch and no operation holds.
+        void freeResident(std::uint32_t slot) noexcept
+        {
+            auto& resident = _resident[slot];
+            resident.kept = false;
+            if (resident.generation < MaxResidentGeneration)
+                _freeResident.push_back(slot);
+        }
+
         ParkMap _parks;
+        std::vector<ResidentSlot> _resident;
+        std::vector<std::uint32_t> _freeResident;
+        std::size_t _activeResidents = 0; ///< Resident parks an operation holds.
         std::vector<std::unique_ptr<Park>> _spare;
         std::size_t _readiness = 0; ///< Parks holding a handle key, indexed or watched.
         std::unordered_map<void*, ParkId> _byWaiter;

@@ -833,6 +833,18 @@ get right, and each one is a defect that has already happened.
     away. `SocketRegistration_test.cpp`
     scripts a socket that is readable AND writable on every wait, and a parked write finishes only
     because of this; without it the write never moves.
+  - **A socket operation's park storage is kept; its id is not.** A frameless one-direction park
+    on a watch is filed in a resident slot the watch keeps for that direction
+    (`ParkTable::openResident`), so the operation that waits costs no id-map insert or erase and no
+    park made or recycled (core-cpp#52: about 33 to 18 ns per park filed and taken with 256 live, 22
+    to 18 with one). The
+    id is the slot and a per-slot generation that moves on for every operation, so it is still the
+    generation check: a cancel resolved a turn late, or a ready entry queued for an operation retired
+    earlier in the same drain, finds nothing in the storage the next operation uses. What stays
+    exactly as it was is everything a slot means: the watch slot is released when the operation is
+    taken, so an idle socket's park is not counted, hears nothing, and narrows as an empty slot
+    always did. `ParkReuse_test.cpp` holds all four at the loop interface. A second park asked
+    for while the slot's is held takes the ordinary path, so the slot guard sees what it always saw.
 
   **The turn did not change, and it was measured before deciding so.** Readiness dispatched in step
   4 is still resumed in the next turn's step 2. On the same echo a sampled profile puts about 9% of

@@ -14,7 +14,8 @@
 /// `clang++ -E`; the issue's 99.4% from `clang++ -H` counted headers the rest of the interface
 /// includes too).
 ///
-/// **The id IS the generation check.** Ids are allocated from one never-reused 64-bit counter, so a
+/// **The id IS the generation check.** No id is handed out twice in a loop's life -- most come from
+/// one 64-bit counter, and a socket operation's from its resident slot's own generation -- so a
 /// cancel request that arrives after its park is gone finds nothing, however many parks have been
 /// made since. See `detail/ParkTable.hpp`.
 

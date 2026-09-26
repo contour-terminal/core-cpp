@@ -9,6 +9,21 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Changed
+
+- **A socket operation that has to wait no longer files and takes a park in the loop's id map**
+  (core-cpp#52). A frameless one-direction park on a handle's kept registration -- what
+  `PosixSocket` files for every read or write that waits -- is now filed in storage the handle's
+  watch keeps for that direction, and gets an id made of that storage's slot and a generation that
+  moves on per operation. The operation no longer costs an id-map insert and erase or a park made
+  and recycled. The `[park]` bench in `core-cpp-net-test` (gcc-release, epoll, median of 5 runs,
+  three interleaved rounds) goes from 33.1-33.8 to 17.8-18.6 ns per park filed and taken with 256
+  parks live, and from 21.3-22.4 to 17.6-19.2 ns with one. The socket ping-pong bench's user time
+  is within its own noise either way. The timer path's drain-step completion bench is about 1 ns
+  (1-2%) slower at the median, for the park lookup's two extra branches. No signature changes:
+  ids are still never handed out twice, so a late cancel or a ready entry for a retired operation
+  still finds nothing, and an idle socket's park is still uncounted, silent and narrowed as before.
+
 ## [0.4.2] - 2026-09-26
 
 ### Added

@@ -357,6 +357,7 @@ core_cpp_add_test(net
         testing/TestLoop_test.cpp
     # POSIX-only, each for its own reason. `ReactorSocket_test` names PosixSocket directly, and
     # `SocketRegistration_test` counts what PosixSocket's kept registration costs the backend.
+    # `ParkReuse_test` drives the loop's park interface with raw `socketpair` descriptors.
     # `CompletionCost_test` is a benchmark that reports USER time apart from system time, which it
     # reads with `getrusage`.
     # `SocketDecorator_test` needs a WRITE that parks, and assumes no send buffer takes 8MiB: on
@@ -373,6 +374,7 @@ core_cpp_add_test(net
     # Ruling R40 keeps out of this module.
     SOURCES_POSIX
         CompletionCost_test.cpp
+        ParkReuse_test.cpp
         ReactorSocket_test.cpp
         SocketDecorator_test.cpp
         SocketRegistration_test.cpp

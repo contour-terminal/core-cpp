@@ -16,12 +16,14 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <ranges>
+#include <tuple>
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
@@ -148,6 +150,7 @@ TEST_CASE("ParkTable hands a recycled park back reset", "[net][parktable]")
     park->readinessQueued = true;
     park->queuedWake = ParkWake::Abandoned;
     park->deadline = clock.now() + std::chrono::seconds { 1 };
+    park->residentSlot = 5;
     auto const id = table.add(std::move(park));
     auto taken = table.take(id);
     REQUIRE(taken != nullptr);
@@ -176,6 +179,7 @@ TEST_CASE("ParkTable hands a recycled park back reset", "[net][parktable]")
     CHECK(again->queuedWake == ParkWake::Ready);
     CHECK(!again->deadline.has_value());
     CHECK(again->sequence == 0);
+    CHECK(again->residentSlot == ParkTable::NoResidentSlot);
 }
 
 TEST_CASE("ParkTable does not hand out again a park recycled while it still holds work", "[net][parktable]")
@@ -192,4 +196,177 @@ TEST_CASE("ParkTable does not hand out again a park recycled while it still hold
     table.recycle(std::move(park));
     auto again = table.acquire();
     CHECK_FALSE(again->parked);
+}
+
+namespace
+{
+/// Fills @p park in as `EventLoop::registerPark` fills a socket operation's: frameless, on a
+/// handle's watch.
+/// @param park The resident park to fill.
+/// @param watch The watch it takes a slot on.
+/// @param state What its callback is handed.
+void fillAsOperation(Park& park, HandleWatch& watch, void* state)
+{
+    park.handle = someHandle();
+    park.onReady = [](void*, ParkWake) {
+    };
+    park.callbackState = state;
+    park.watch = &watch;
+}
+
+/// @return Whether @p ids holds @p id.
+bool holds(std::vector<ParkId> const& ids, ParkId id)
+{
+    return std::ranges::find(ids, id) != ids.end();
+}
+} // namespace
+
+TEST_CASE("A resident park gets an id per operation, and a retired id finds nothing",
+          "[net][parktable][resident]")
+{
+    auto table = ParkTable {};
+    auto watch = HandleWatch {};
+    auto const slot = table.openResident();
+    REQUIRE(slot != ParkTable::NoResidentSlot);
+
+    auto* const park = table.idleResident(slot);
+    REQUIRE(park != nullptr);
+    fillAsOperation(*park, watch, &table);
+    auto const first = table.addResident(slot);
+    CHECK(ParkTable::isResident(first));
+    CHECK(table.find(first) == park);
+    CHECK(table.idleResident(slot) == nullptr); // an operation holds it
+    CHECK(table.readinessCount() == 1);
+    CHECK(table.size() == 1);
+    CHECK(holds(table.ids(), first));
+    CHECK(table.take(first) == nullptr); // retired, never taken
+
+    table.retireResident(*park);
+    CHECK(table.find(first) == nullptr);
+    CHECK(table.readinessCount() == 0); // an idle park is not counted
+    CHECK(table.size() == 0);
+    CHECK(table.ids().empty());
+
+    // The next operation: the same storage, a new name, and the old name still finds nothing.
+    auto* const again = table.idleResident(slot);
+    CHECK(again == park);
+    fillAsOperation(*again, watch, &table);
+    auto const second = table.addResident(slot);
+    CHECK(second != first);
+    CHECK(table.find(first) == nullptr);
+    CHECK(table.find(second) == park);
+    table.retireResident(*again);
+}
+
+TEST_CASE("A retired resident park keeps nothing of its operation", "[net][parktable][resident]")
+{
+    auto table = ParkTable {};
+    auto watch = HandleWatch {};
+    auto const slot = table.openResident();
+    auto* const park = table.idleResident(slot);
+    REQUIRE(park != nullptr);
+    fillAsOperation(*park, watch, &table);
+    std::ignore = table.addResident(slot);
+    park->readinessQueued = true;
+    park->queuedWake = ParkWake::Abandoned;
+
+    table.retireResident(*park);
+    CHECK(park->id == ParkId::invalid());
+    CHECK(park->handle == core::platform::InvalidHandle);
+    CHECK(park->onReady == nullptr);
+    CHECK(park->callbackState == nullptr);
+    CHECK(park->watch == nullptr);
+    CHECK(!park->readinessQueued);
+    CHECK(park->queuedWake == ParkWake::Ready);
+    CHECK(!park->handleIndexed);
+    CHECK(park->residentSlot == slot); // still the slot's
+}
+
+TEST_CASE("A resident slot closed while idle is reopened, and never repeats an id",
+          "[net][parktable][resident]")
+{
+    auto table = ParkTable {};
+    auto watch = HandleWatch {};
+    auto seen = std::vector<ParkId> {};
+    auto slot = table.openResident();
+    for ([[maybe_unused]] auto const handle: std::views::iota(0, 3))
+    {
+        for ([[maybe_unused]] auto const operation: std::views::iota(0, 4))
+        {
+            auto* const park = table.idleResident(slot);
+            REQUIRE(park != nullptr);
+            fillAsOperation(*park, watch, &table);
+            auto const id = table.addResident(slot);
+            CHECK(!holds(seen, id));
+            seen.push_back(id);
+            table.retireResident(*park);
+        }
+        table.closeResident(slot);
+        auto const reopened = table.openResident();
+        CHECK(reopened == slot); // the freed slot is handed out again
+        slot = reopened;
+    }
+    for (auto const id: seen)
+        CHECK(table.find(id) == nullptr);
+    table.closeResident(slot);
+}
+
+TEST_CASE("A resident slot closed under a filed operation is freed when that operation retires",
+          "[net][parktable][resident]")
+{
+    auto table = ParkTable {};
+    auto watch = HandleWatch {};
+    auto const slot = table.openResident();
+    auto* const park = table.idleResident(slot);
+    REQUIRE(park != nullptr);
+    fillAsOperation(*park, watch, &table);
+    auto const filed = table.addResident(slot);
+
+    // The handle closes with its read still parked: the park outlives its watch until its owner
+    // takes it, and the slot is not handed out meanwhile.
+    park->watch = nullptr;
+    table.closeResident(slot);
+    CHECK(table.find(filed) == park);
+    CHECK(table.readinessCount() == 1);
+    auto const other = table.openResident();
+    CHECK(other != slot);
+
+    table.retireResident(*park);
+    CHECK(table.find(filed) == nullptr);
+    CHECK(table.readinessCount() == 0);
+    CHECK(table.openResident() == slot); // freed by the retire
+    table.closeResident(slot);
+    table.closeResident(other);
+}
+
+TEST_CASE("takeAll hands out the resident parks an operation holds, and only those",
+          "[net][parktable][resident]")
+{
+    auto table = ParkTable {};
+    auto watch = HandleWatch {};
+    auto const busy = table.openResident();
+    auto const idle = table.openResident();
+    auto* const park = table.idleResident(busy);
+    REQUIRE(park != nullptr);
+    fillAsOperation(*park, watch, &table);
+    auto const filed = table.addResident(busy);
+    REQUIRE(table.idleResident(idle) != nullptr);
+    auto const ordinary = table.add(table.acquire());
+    CHECK(!ParkTable::isResident(ordinary));
+
+    auto const taken = table.takeAll();
+    CHECK(taken.size() == 2);
+    CHECK(std::ranges::any_of(taken, [park](auto const& each) { return each.get() == park; }));
+    CHECK(table.size() == 0);
+    CHECK(table.readinessCount() == 0);
+    CHECK(table.find(filed) == nullptr);
+
+    // A slot a watch still holds keeps working after the sweep, under a name never used before.
+    auto* const fresh = table.idleResident(busy);
+    REQUIRE(fresh != nullptr);
+    fillAsOperation(*fresh, watch, &table);
+    auto const next = table.addResident(busy);
+    CHECK(next != filed);
+    CHECK(table.find(next) == fresh);
+    table.retireResident(*fresh);
 }

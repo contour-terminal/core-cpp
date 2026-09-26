@@ -1224,6 +1224,13 @@ ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
     if (!entry.work.resume && entry.onExpired == nullptr && entry.onReady == nullptr)
         return ParkId::invalid();
 
+    // A socket operation that has to wait, the once-per-request case, is filed in the storage its
+    // handle keeps for that direction. Anything else, or that storage still held, comes below; the
+    // test before the call is what every other kind of park pays for it.
+    if (entry.onReady != nullptr && entry.lifetime == RegistrationLifetime::UntilClosed)
+        if (auto const resident = registerResident(entry, refusal))
+            return *resident;
+
     auto park = _parks.acquire();
     park->loop = this;
     park->handle = entry.handle;
@@ -1364,6 +1371,60 @@ ParkId EventLoop::registerPark(ParkEntry entry, NetError* refusal)
     return id;
 }
 
+std::optional<ParkId> EventLoop::registerResident(ParkEntry const& entry, NetError* refusal)
+{
+    auto const oneDirection = entry.interest == Interest::Read || entry.interest == Interest::Write;
+    if (entry.onReady == nullptr || entry.work.resume || entry.deadline.has_value()
+        || entry.handle == platform::InvalidHandle || entry.lifetime != RegistrationLifetime::UntilClosed
+        || !oneDirection)
+        return std::nullopt;
+
+    auto watched = watchHandle(entry.handle, entry.kind, entry.interest);
+    if (!watched)
+    {
+        // Refused as the ordinary path refuses, and for its reasons. There is no coroutine to hand
+        // back: this path only ever files a frameless park.
+        if (refusal != nullptr)
+            *refusal = std::move(watched.error());
+        return ParkId::invalid();
+    }
+    auto& watch = **watched;
+    auto const reads = entry.interest == Interest::Read;
+    auto& slot = reads ? watch.readerResident : watch.writerResident;
+    if (slot == detail::ParkTable::NoResidentSlot)
+        slot = _parks.openResident();
+    auto* const park = slot == detail::ParkTable::NoResidentSlot ? nullptr : _parks.idleResident(slot);
+    if (park == nullptr)
+        return std::nullopt;
+
+    park->loop = this;
+    park->handle = entry.handle;
+    park->onReady = entry.onReady;
+    park->callbackState = entry.callbackState;
+    park->watch = &watch;
+    auto const id = _parks.addResident(slot);
+
+    // The slot, as `registerPark` takes it and for its reasons: a live park still named there is a
+    // second operation armed over the first, which ends the process naming the handle.
+    auto& named = reads ? watch.reader : watch.writer;
+    if (named)
+    {
+        auto* displaced = _parks.find(named);
+        if (reads)
+            contract::claimReadSlot(displaced, entry.handle);
+        else
+            contract::claimWriteSlot(displaced, entry.handle);
+        _parks.fileByHandle(named);
+    }
+    named = id;
+    (reads ? watch.readerPark : watch.writerPark) = park;
+
+    // As `registerPark`: a park filed outside a turn asks for the turn that will reach it.
+    if (!isOnWorkerThread())
+        armHostWake();
+    return id;
+}
+
 void EventLoop::unregisterPark(ParkId park) noexcept
 {
     // The same predicate the turn and the destructor use: this loop's own thread, or nobody
@@ -1371,6 +1432,22 @@ void EventLoop::unregisterPark(ParkId park) noexcept
     assert(teardownIsSerialisedWithDispatch()
            && "EventLoop::unregisterPark from a second thread while another is driving this loop: "
               "post() a call to it instead");
+    // A resident park -- a socket operation filed in its handle's kept storage -- gives its slot
+    // back as below, and is then kept for that direction's next operation rather than taken out of
+    // an id map. Nothing else differs: it holds no coroutine and no registration of its own.
+    if (detail::ParkTable::isResident(park))
+    {
+        if (!_abandoned.empty())
+            _abandoned.erase(park);
+        auto* const resident = _parks.find(park);
+        if (resident == nullptr)
+            return;
+        if (auto* const watch = resident->watch; hasInterest(releaseWatchSlot(*resident), Interest::Write))
+            narrowWatch(*watch, Interest::Read);
+        _parks.retireResident(*resident);
+        return;
+    }
+
     auto entry = _parks.take(park);
     // The abandon mark goes with the park, on every path that takes one. `wakeReasonOf` consumes
     // it one turn later on the ordinary path, but a park closed under `FdWakePolicy::Cancel` and
@@ -1605,6 +1682,10 @@ void EventLoop::dropWatch(platform::NativeHandle handle) noexcept
     for (auto const slot: { found->second->reader, found->second->writer })
         if (auto* const park = _parks.find(slot); park != nullptr && park->watch == found->second.get())
             park->watch = nullptr;
+    // And the storage its operations were filed in: freed now where idle, or when the operation
+    // still parked there is taken.
+    _parks.closeResident(found->second->readerResident);
+    _parks.closeResident(found->second->writerResident);
     _backend.detach(found->second->handler);
     _watches.erase(found);
 }

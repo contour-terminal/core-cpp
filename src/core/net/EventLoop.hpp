@@ -838,6 +838,18 @@ class EventLoop: public async::IExecutor
                                                                             HandleKind kind,
                                                                             Interest interest);
 
+    /// Files @p entry in the resident park its handle's watch keeps for that direction, if it is
+    /// the shape one holds: a frameless readiness park asking for exactly one direction on the
+    /// registration kept for the handle's life -- a socket operation that has to wait
+    /// (core-cpp#52). Everything a park filed the ordinary way answers is the same; what it saves is
+    /// the id-map insert and erase and the park made and recycled, per operation.
+    /// @param entry What @c registerPark was handed.
+    /// @param refusal Where a backend refusal goes, as for @c registerPark.
+    /// @return The park's id; @c ParkId::invalid() if the backend refused; nullopt if @p entry is
+    ///         not that shape, or its direction's resident park is still held -- then the caller
+    ///         files it the ordinary way, and the slot guard sees what it always saw.
+    [[nodiscard]] std::optional<ParkId> registerResident(ParkEntry const& entry, NetError* refusal);
+
     /// Frees the slot @p park holds on its handle's watch, if it holds one. The registration stays.
     /// @param park The park being taken, cancelled or unparked.
     /// @return What the freed slot was for, or @c Interest::None if @p park held none.
