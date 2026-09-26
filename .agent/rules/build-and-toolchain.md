@@ -476,3 +476,12 @@ toward "nothing unusual here". Read the body. Target `std::views::iota`; for `ar
 `std::span{argv, argc}.subspan(1)`. Origin:
 [fastcached#1452](https://github.com/LASTRADA-Software/fastcached/issues/1452).
 
+## Open work
+
+- **[core-cpp#38](https://github.com/contour-terminal/core-cpp/issues/38)** — two halves left. The
+  `windows (clang-tidy)` job runs but is not yet one of `ci-ok`'s needs, until the findings its
+  first run reported in the allocation tests are resolved. And no job runs a sanitiser over a
+  Windows source: measured on 2026-09-26, `clangcl-debug` with `CORE_CPP_SANITIZERS=address`
+  configures but does not compile, because the Debug CRT refuses ASan (`-MDd not allowed with
+  -fsanitize=address`), and `clangcl-release` with it does not link, because on the MSVC driver
+  `core_cpp_apply_toolchain` passes no sanitiser flag to the link step (`__asan_init` unresolved).
