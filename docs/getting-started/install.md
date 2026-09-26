@@ -4,7 +4,7 @@ core-cpp installs as the CMake package `core-cpp`. A consumer of the installed p
 same names a source build's aliases have:
 
 ```cmake
-find_package(core-cpp 0.4 CONFIG REQUIRED)
+find_package(core-cpp 0.5 CONFIG REQUIRED)
 target_link_libraries(app PRIVATE core::net)
 ```
 
@@ -51,7 +51,7 @@ installed `core::tui`, Catch2 for an installed `core::testing_main`.
 ## Versions
 
 The version file is `SameMinorVersion` while core-cpp is 0.x, because a minor release may break
-the API: `find_package(core-cpp 0.4)` accepts 0.4.z and refuses 0.5.0.
+the API: `find_package(core-cpp 0.5)` accepts 0.5.z and refuses 0.6.0.
 
 ## As a subproject: CORE_CPP_INSTALL
 
@@ -67,7 +67,7 @@ that is not in any export set.
 ```
 
 ```cmake
-CPMAddPackage(NAME core-cpp GITHUB_REPOSITORY contour-terminal/core-cpp GIT_TAG v0.4.3
+CPMAddPackage(NAME core-cpp GITHUB_REPOSITORY contour-terminal/core-cpp GIT_TAG v0.5.0
               OPTIONS "CORE_CPP_INSTALL ON")
 ```
 
