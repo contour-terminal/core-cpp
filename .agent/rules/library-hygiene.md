@@ -197,6 +197,8 @@ packagers get no new dependency. The contract is in
 
 ## Open work
 
+- **[core-cpp#55](https://github.com/contour-terminal/core-cpp/issues/55)** — a vcpkg port, now
+  that a release exports its targets.
 - **[core-cpp#8](https://github.com/contour-terminal/core-cpp/issues/8)** — graduate
   fastcached's Logger, Base64/Sha256, Cli Options and EnumTable when a second consumer needs
   them.
