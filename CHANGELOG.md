@@ -21,6 +21,14 @@ workflow refuses one without a section here.
   holds, so it adds nothing to a task and costs one load where a hook asks. Additive; no signature
   changes.
 
+### Fixed
+
+- **`NativeFileSystem` reports a failure on a path the ANSI code page cannot spell** (core-cpp#26).
+  Its error messages spelled the path with `path::string()`, which on Windows narrows through the
+  code page: such a name was mangled, and MSVC's conversion throws there, so the error path itself
+  threw out of `readFile`, `rename`, `listDirectory` and the rest. The messages now spell the path
+  in UTF-8, as the paths core-cpp hands back already are. POSIX was unaffected.
+
 ## [0.4.3] - 2026-09-26
 
 ### Changed

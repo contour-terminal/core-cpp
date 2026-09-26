@@ -991,3 +991,37 @@ TEST_CASE("the model copies onto an open destination in place", "[FileSystem]")
     (*stream)->read(&byte, 1);
     CHECK(byte == 'n');
 }
+
+TEST_CASE("NativeFileSystem reports a failure on a path the narrow encoding cannot spell, in UTF-8",
+          "[FileSystem][native]")
+{
+    // The error messages used to spell the path with path::string(), which on Windows narrows
+    // through the ANSI code page: a name the code page cannot hold was mangled, and MSVC's
+    // conversion THROWS there, so reporting the failure threw out of the error path itself
+    // (core-cpp#26). Invisible on POSIX, where the narrow encoding is UTF-8.
+    auto const& fs = core::platform::NativeFileSystem::instance();
+    auto const dir = core::testing::ScopedTempDir { "core_fs_utf8_message" };
+    auto const missing = dir.path() / std::filesystem::path { std::u8string { u8"日本" } }
+                         / std::filesystem::path { std::u8string { u8"ファイル.txt" } };
+    auto const spelled = std::string { "日本" };
+
+    auto const read = fs.readFile(missing);
+    REQUIRE_FALSE(read.has_value());
+    CHECK(read.error().find(spelled) != std::string::npos);
+
+    auto const written = fs.writeFile(missing, "content");
+    REQUIRE_FALSE(written.has_value());
+    CHECK(written.error().find(spelled) != std::string::npos);
+
+    auto const size = fs.fileSize(missing);
+    REQUIRE_FALSE(size.has_value());
+    CHECK(size.error().find(spelled) != std::string::npos);
+
+    auto const listed = fs.listDirectory(missing.parent_path());
+    REQUIRE_FALSE(listed.has_value());
+    CHECK(listed.error().find(spelled) != std::string::npos);
+
+    auto const renamed = fs.rename(missing, dir.path() / "elsewhere.txt");
+    REQUIRE_FALSE(renamed.has_value());
+    CHECK(renamed.error().find(spelled) != std::string::npos);
+}
