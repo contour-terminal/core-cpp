@@ -10,8 +10,6 @@
 
 #include <core/net/windows/InvalidSocket.hpp>
 #include <core/net/windows/IocpSocket.hpp>
-#include <core/net/windows/WindowsListener.hpp>
-#include <core/net/windows/WindowsSocket.hpp>
 #include <core/platform/WinsockInit.hpp>
 
 namespace core::net::testing
@@ -86,8 +84,6 @@ platform::NativeHandle nativeHandleOf(ISocket const& socket) noexcept
 {
     if (auto const* iocp = dynamic_cast<IocpSocket const*>(&socket))
         return handleOf(iocp->native());
-    if (auto const* wfmo = dynamic_cast<WindowsSocket const*>(&socket))
-        return handleOf(wfmo->native());
     return platform::InvalidHandle;
 }
 
@@ -95,8 +91,6 @@ platform::NativeHandle nativeHandleOf(IListener const& listener) noexcept
 {
     if (auto const* iocp = dynamic_cast<IocpListener const*>(&listener))
         return handleOf(iocp->native());
-    if (auto const* wfmo = dynamic_cast<WindowsListener const*>(&listener))
-        return handleOf(wfmo->native());
     return platform::InvalidHandle;
 }
 

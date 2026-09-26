@@ -247,7 +247,7 @@ class ScriptedBackend: public IoBackend
     /// A double is only useful while a case written against it would also pass on a
     /// real backend. Two rules every real backend keeps, and this one did not:
     /// `Interest::None` is silent (poll clears the pollfd, epoll drops the
-    /// registration, kqueue deletes both filters, Wfmo skips the entry), and a
+    /// registration, kqueue deletes both filters), and a
     /// direction that was never asked for is never reported. A muted or wrong-direction
     /// step therefore dispatches nothing — the wait still CONSUMES it, because a wait
     /// did happen and the kernel simply had nothing for this registration.

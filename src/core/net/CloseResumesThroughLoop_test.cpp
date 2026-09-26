@@ -294,16 +294,13 @@ TEST_CASE("close() and cancelRead() settle a parked read at once and resume it t
                 // The waiter had NOT run when the verb returned: it is the loop's to resume ...
                 CHECK_FALSE(ranInside);
                 // ... and the loop did: in the turn that ran the verb on the reactors, one turn later
-                // where the wait needs one more dispatch -- WFMO's closed event is reported on the
-                // next turn, and IOCP settles a retired real read when the kernel hands it back.
+                // where IOCP settles a retired real read when the kernel hands it back.
                 CHECK(reader.resolved);
                 CHECK(turns <= 2);
                 // What it resolved to is unchanged: a Cancelled VALUE, because the flow is alive and
-                // asked about a read the resource took away. (WindowsSocket's closed-socket read
-                // answers BadHandle after a close, as ClosedParkIdle_test records.)
+                // asked about a read the resource took away.
                 CHECK_FALSE(reader.hasValue);
-                if (verb == Retire::CancelRead || backend.name != "wfmo")
-                    CHECK(reader.code == NetErrorCode::Cancelled);
+                CHECK(reader.code == NetErrorCode::Cancelled);
             }
         }
     }
@@ -355,9 +352,9 @@ TEST_CASE(
     // The owner's `conn->close(); connections.erase(id);` in one turn. The waiter is queued by the
     // verb and resumed a turn later, after the socket is gone, so nothing on its way back may read
     // the socket: a frame-free transport settled a value that does not refer to it, and a
-    // coroutine-shaped one (WindowsSocket) must see that the socket is gone and unwind. Before the
-    // fix, WFMO's `parkUntilReady` resumed on its normal path and wrote into the freed socket --
-    // silent here, a heap-use-after-free under AddressSanitizer.
+    // coroutine-shaped one must see that the socket is gone and unwind. Before the fix, the
+    // removed WFMO transport's `parkUntilReady` resumed on its normal path and wrote into the freed
+    // socket -- silent here, a heap-use-after-free under AddressSanitizer.
     for (auto const& backend: BackendMatrix)
     {
         auto source = core::net::makeBackend(backend.kind);
@@ -386,11 +383,6 @@ TEST_CASE(
                 CHECK_FALSE(outcome.read.hasValue);
                 if (!outcome.unwound)
                     CHECK(outcome.read.code == NetErrorCode::Cancelled);
-                // WFMO's read is a coroutine that runs AFTER the socket went, so it must unwind: an
-                // answer means it read `_readRetired` from the freed socket -- a failure without a
-                // sanitizer, which no Windows CI job runs.
-                if (backend.name == "wfmo")
-                    CHECK(outcome.unwound);
             }
         }
     }
@@ -403,14 +395,10 @@ TEST_CASE(
     // `ResultAwaitable`'s destructor branch: settled, handed to the loop, and the awaiting frame
     // destroyed before the loop reached it. The ready queue must lose the handle with the frame,
     // or the next drain resumes freed storage.
-    //
-    // WFMO is not in this case, and the reason is not this branch: its read is coroutine-shaped,
-    // so its park is a `waitReadable` coroutine park, and destroying a frame parked on one is not
-    // supported on any path (the park names the frame, and `WaitHandleAwaiter` has no destructor).
     for (auto const& backend: BackendMatrix)
     {
         auto source = core::net::makeBackend(backend.kind);
-        if (!source || backend.name == "wfmo")
+        if (!source)
             continue;
         for (auto const verb: { Retire::Close, Retire::CancelRead })
         {
@@ -458,15 +446,10 @@ TEST_CASE("Teardown resumes a borrowed flow whose socket destroying a spawned ro
     // drained after step 5, so the flow stayed suspended with its operation still naming the loop,
     // and destroying it after the loop called into freed storage. The fix drains what step 5
     // queues: the flow unwinds (an abandoned operation throws) before the loop is gone.
-    //
-    // WFMO is not in this case: its read parks a `waitReadable` COROUTINE park, which step 2 queues
-    // and step 3 resumes before any root is destroyed. A borrowed flow's token is its own, so it
-    // re-parks, and step 4 drops that park; the frame is left suspended, as it was before 0.2.1,
-    // but nothing in it names the loop, so its owner may destroy it afterwards.
     for (auto const& backend: BackendMatrix)
     {
         auto source = core::net::makeBackend(backend.kind);
-        if (!source || backend.name == "wfmo")
+        if (!source)
             continue;
         DYNAMIC_SECTION("backend=" << backend.name)
         {

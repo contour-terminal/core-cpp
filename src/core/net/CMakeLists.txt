@@ -109,9 +109,9 @@ endif()
 # The module's root holds only platform-independent code. What one platform needs lives in posix/,
 # linux/ (epoll), bsd/ (kqueue, for Apple and the BSDs) and windows/, and the source lists below
 # choose it, so no file there guards itself with an #ifdef of its platform. contour's
-# PollEventSource.cpp is split along its #ifdef into posix/PollBackend.cpp and
-# windows/WfmoBackend.cpp, and so is the socket pair of testing/InMemoryTransport.cpp, into
-# testing/posix/ and testing/windows/. One exception remains: BackendParity_test.cpp keeps three
+# PollEventSource.cpp was split along its #ifdef into posix/PollBackend.cpp and a Windows half,
+# the WFMO backend, which 0.5.0 removed (core-cpp#6); the socket pair of
+# testing/InMemoryTransport.cpp is split the same way, into testing/posix/ and testing/windows/. One exception remains: BackendParity_test.cpp keeps three
 # POSIX-only cases (a closed descriptor's registration, descriptor exhaustion, a muted registration
 # whose peer hangs up), and the includes they need, under #ifndef _WIN32.
 core_cpp_add_module(net KIND STATIC
@@ -204,7 +204,6 @@ core_cpp_add_module(net KIND STATIC
         detail/DialPrimitives.hpp
         detail/PeerAddress.hpp
         detail/SocketErrors.hpp
-        detail/WaitChunking.hpp
         detail/WakeupChannel.hpp
     SOURCES_POSIX
         detail/WouldBlock.hpp
@@ -255,14 +254,8 @@ core_cpp_add_module(net KIND STATIC
         windows/UnixSocketPath.hpp
         windows/WaitCompletionPacket.cpp
         windows/WaitCompletionPacket.hpp
-        windows/WfmoBackend.cpp
-        windows/WfmoBackend.hpp
-        windows/WindowsListener.cpp
-        windows/WindowsListener.hpp
         windows/WindowsLoopback.cpp
         windows/WindowsLoopback.hpp
-        windows/WindowsSocket.cpp
-        windows/WindowsSocket.hpp
         windows/WinsockError.hpp
     SOURCES_EMSCRIPTEN
         ${_coreCppNetSubset}
@@ -365,7 +358,7 @@ core_cpp_add_test(net
     # `SocketDecorator_test` needs a WRITE that parks, and assumes no send buffer takes 8MiB: on
     # Windows a non-blocking send takes all of it at once (measured, Task B7b), so its third
     # section would retire nothing. `CancelRead_test` left this list with Task B7b, when `IocpSocket`
-    # implemented `cancelRead`; since Task B13 `WindowsSocket` does too, and it runs on every backend.
+    # implemented `cancelRead`, and it runs on every backend.
     #
     # `posix/AdoptListener_test` is the exception to that sentence: it is NOT a POSIX-only
     # BEHAVIOUR, it is a POSIX-only way to ARRANGE one. `adoptListener` exists for a listening
@@ -395,8 +388,6 @@ core_cpp_add_test(net
         windows/PortSharing_test.cpp
         windows/SocketErrors_test.cpp
         windows/UnixListener_test.cpp
-        windows/WfmoBackend_test.cpp
-        windows/WindowsSocket_test.cpp
     LABELS loopback
     # A reactor defect does not fail a case here, it HANGS it: a lost readiness wake-up parks a
     # flow with nothing left to resume it. Each such case bounds its own wait and says what it

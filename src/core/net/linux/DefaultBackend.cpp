@@ -30,10 +30,9 @@ std::unique_ptr<IoBackend> makeBackend(BackendKind kind)
             return backend->good() ? std::unique_ptr<IoBackend> { std::move(backend) } : nullptr;
         }
 
-        // Not built here: kqueue is the BSDs', IOCP and Wfmo are Windows'.
+        // Not built here: kqueue is the BSDs', IOCP is Windows'.
         case BackendKind::Kqueue:
         case BackendKind::Iocp:
-        case BackendKind::Wfmo: return nullptr;
 
         // Reachable everywhere, and not through here — see posix/DefaultBackend.cpp.
         case BackendKind::HostDriven:

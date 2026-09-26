@@ -2,7 +2,7 @@
 #include <core/net/ISocket.hpp>
 #include <core/net/IoAwaitable.hpp>
 #include <core/net/SocketDeadline.hpp>
-#include <core/net/testing/InMemoryTransport.hpp>
+#include <core/net/testing/InMemorySocket.hpp>
 #include <core/net/testing/TestLoop.hpp>
 #include <core/platform/Clock.hpp>
 
@@ -72,9 +72,8 @@ TEST_CASE("a non-positive ceiling arms nothing", "[net]")
     // on the loop's next turn — a knob documented as "no ceiling" that turns off the CONNECTION.
     auto clock = core::platform::ManualClock {};
     auto loop = core::net::testing::TestLoop { clock };
-    auto pair = core::net::testing::makeSocketPair(loop);
-    REQUIRE(pair.has_value());
-    auto target = SocketDeadlineTarget { .socket = pair->first.get() };
+    auto pair = core::net::testing::InMemorySocketPair::create();
+    auto target = SocketDeadlineTarget { .socket = pair.client.get() };
 
     CHECK_FALSE(armSocketDeadline(&loop, std::chrono::milliseconds { 0 }, &target).has_value());
     CHECK_FALSE(armSocketDeadline(&loop, std::chrono::milliseconds { -1 }, &target).has_value());
@@ -82,7 +81,7 @@ TEST_CASE("a non-positive ceiling arms nothing", "[net]")
     CHECK(loop.pendingTimers() == 0);
 
     loop.drain();
-    CHECK_FALSE(pair->first->isClosed());
+    CHECK_FALSE(pair.client->isClosed());
     CHECK_FALSE(target.expired);
 
     // And a positive one does arm, so the three refusals above are refusals rather than a helper
@@ -96,11 +95,10 @@ TEST_CASE("an expired deadline records why before it closes the socket", "[net]"
 {
     auto clock = core::platform::ManualClock {};
     auto loop = core::net::testing::TestLoop { clock };
-    auto pair = core::net::testing::makeSocketPair(loop);
-    REQUIRE(pair.has_value());
+    auto pair = core::net::testing::InMemorySocketPair::create();
 
     auto target = SocketDeadlineTarget {};
-    auto recorder = CloseRecorder { std::move(pair->first), &target };
+    auto recorder = CloseRecorder { std::move(pair.client), &target };
     target.socket = &recorder;
 
     auto const timer = armSocketDeadline(&loop, std::chrono::milliseconds { 100 }, &target);
@@ -126,11 +124,10 @@ TEST_CASE("a deadline dropped before it expires closes nothing and records nothi
     // went away for its own reasons.
     auto clock = core::platform::ManualClock {};
     auto loop = core::net::testing::TestLoop { clock };
-    auto pair = core::net::testing::makeSocketPair(loop);
-    REQUIRE(pair.has_value());
+    auto pair = core::net::testing::InMemorySocketPair::create();
 
     auto target = SocketDeadlineTarget {};
-    auto recorder = CloseRecorder { std::move(pair->first), &target };
+    auto recorder = CloseRecorder { std::move(pair.client), &target };
     target.socket = &recorder;
 
     {

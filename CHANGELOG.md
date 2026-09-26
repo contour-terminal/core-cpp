@@ -9,6 +9,25 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Breaking
+
+- **The WFMO backend is removed: the completion port is Windows' only backend** (core-cpp#6).
+  `BackendKind::Wfmo`, `WfmoBackend` and the readiness socket transport it drove
+  (`WindowsSocket`, `WindowsListener`) are gone, after the release in which IOCP was the default
+  and WFMO a fallback. `makeDefaultBackend()` on Windows no longer falls back: a completion port
+  the kernel refuses to create is handle exhaustion, and it propagates. `listen`, `listenUnix`,
+  `adoptListener`, `adoptSocket` and the dials refuse a loop whose backend lends no completion port
+  with `NetErrorCode::Unsupported`, where they used to hand out a readiness socket. Two defects of
+  the removed transport go with it: a closed socket's parked read now answers `Cancelled` on every
+  platform, where `WindowsSocket` answered `BadHandle` (core-cpp#46), and the WFMO-only
+  destruction gap of core-cpp#50 has nothing left to apply to. `connectUnix`'s socket on Windows is
+  now made uninheritable, as every other one is (core-cpp#28).
+  - *Migration*: no consumer names any of these; a program that did replaces
+    `makeBackend(BackendKind::Wfmo)` with `makeDefaultBackend()`. `BackendKind`'s enumerators after
+    `Iocp` shift down by one, so a value stored or sent as an integer is re-read by name
+    (`toString`). A Windows test double that stood in for the loop's backend and expected a
+    socket from the factories needs a completion port, or drives an `ISocket` of its own.
+
 ### Added
 
 - **`core::async::TaskKind` and `RunTask::kind()`: an around-task hook can tell a coroutine

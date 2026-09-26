@@ -45,9 +45,10 @@ struct BackendUnderTest
 /// from @c makeBackend. `HostDrivenBackend_test` drives the third over
 /// @c testing::ManualHostScheduler instead, on every platform.
 constexpr auto BackendMatrix = std::array {
-    BackendUnderTest { BackendKind::Poll, "poll" },     BackendUnderTest { BackendKind::Epoll, "epoll" },
-    BackendUnderTest { BackendKind::Kqueue, "kqueue" }, BackendUnderTest { BackendKind::Iocp, "iocp" },
-    BackendUnderTest { BackendKind::Wfmo, "wfmo" },
+    BackendUnderTest { BackendKind::Poll, "poll" },
+    BackendUnderTest { BackendKind::Epoll, "epoll" },
+    BackendUnderTest { BackendKind::Kqueue, "kqueue" },
+    BackendUnderTest { BackendKind::Iocp, "iocp" },
 };
 
 } // namespace core::net::testing

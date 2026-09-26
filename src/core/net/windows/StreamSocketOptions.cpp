@@ -93,9 +93,9 @@ void applyStreamSocketOptions(platform::NativeHandle handle, KeepAlive keepAlive
     auto const socket = reinterpret_cast<SOCKET>(handle);
 
     // Windows' close-on-exec: not inherited by a child process. A socket made with
-    // `WSA_FLAG_NO_HANDLE_INHERIT` already is not, but one made by a plain `::socket` -- the WFMO
-    // listener's, which an accepted socket inherits the attribute from, and the readiness dial's --
-    // is, and a process that also spawns children would hand every child an open connection.
+    // `WSA_FLAG_NO_HANDLE_INHERIT` already is not, but one made by a plain `::socket` -- the
+    // readiness dial's, or an adopted one -- is, and a process that also spawns children would hand
+    // every child an open connection.
     std::ignore = ::SetHandleInformation(reinterpret_cast<HANDLE>(socket), HANDLE_FLAG_INHERIT, 0);
 
     int const one = 1;

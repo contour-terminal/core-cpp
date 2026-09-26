@@ -76,9 +76,9 @@ TEST_CASE("a muted registration is silent on the scripted backend too", "[net][b
 {
     // The rule this double was breaking. `Interest::None` means "mute the handle
     // without detaching it", and every real backend keeps it: poll clears the pollfd,
-    // epoll drops the registration out of the set, kqueue deletes both filters, Wfmo
-    // skips the entry. A case that mutes a registration and scripts it readable
-    // therefore gets silence on four kernels -- and, until this was fixed, a dispatch
+    // epoll drops the registration out of the set, kqueue deletes both filters. A case
+    // that mutes a registration and scripts it readable therefore gets silence on three
+    // kernels -- and, until this was fixed, a dispatch
     // here. That is the worst failure a double has: it makes a case that is wrong
     // everywhere look right where it is written.
     auto backend = ScriptedBackend {};

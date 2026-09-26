@@ -52,7 +52,6 @@ std::unique_ptr<IoBackend> makeBackend(BackendKind kind)
         case BackendKind::Epoll:
         case BackendKind::Kqueue:
         case BackendKind::Iocp:
-        case BackendKind::Wfmo: return nullptr;
 
         // Test doubles: a case constructs the one it wants — see posix/DefaultBackend.cpp.
         case BackendKind::Scripted:

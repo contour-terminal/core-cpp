@@ -25,10 +25,8 @@ std::expected<SocketPair, NetError> makeSocketPair(EventLoop& loop)
     if (!makeLoopbackPair(pair)) // the shared production helper (net/windows/WindowsLoopback)
         return std::unexpected(makeNetError(NetErrorCode::SystemError, WSAGetLastError(), "loopback pair"));
 
-    // The socket the loop's backend drives, which is the one production would hand out: an
-    // IocpSocket over a completion port, a WindowsSocket over WFMO -- so every case that runs over
-    // BackendMatrix exercises both Windows sockets rather than whichever this file named. Which one
-    // that is, is `adoptSocket`'s question, so this file does not ask it a second time.
+    // The socket production would hand out for this loop, which is `adoptSocket`'s question, so
+    // this file does not ask it a second time.
     auto first = adoptSocket(loop, reinterpret_cast<platform::NativeHandle>(pair[0]), {});
     if (!first)
     {

@@ -50,9 +50,8 @@ namespace
         /// The @c detail::DialStep: a completion-port dial where the loop lends a port, the
         /// readiness dial everywhere else.
         ///
-        /// **Asked of the loop, per candidate, rather than chosen at compile time**, because on
-        /// Windows both backends are built and a loop may be driven by either: `BackendKind::Wfmo`
-        /// stays reachable by name for a release after IOCP became the default. The two dials
+        /// **Asked of the loop, per candidate, rather than chosen at compile time**, because the
+        /// loop's backend decides and a test double lends no port. The two dials
         /// differ in the two ways `detail::dialCompletion` states — the outcome is the completion's
         /// status rather than `SO_ERROR`, and a deadline cancels the operation and lets the
         /// completion report rather than settling the dial itself — and a dial that carried the

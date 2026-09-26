@@ -30,10 +30,9 @@ std::unique_ptr<IoBackend> makeBackend(BackendKind kind)
             return backend->good() ? std::unique_ptr<IoBackend> { std::move(backend) } : nullptr;
         }
 
-        // Not built here: epoll is Linux's, IOCP and Wfmo are Windows'.
+        // Not built here: epoll is Linux's, IOCP is Windows'.
         case BackendKind::Epoll:
         case BackendKind::Iocp:
-        case BackendKind::Wfmo: return nullptr;
 
         // Reachable everywhere, and not through here — see posix/DefaultBackend.cpp.
         case BackendKind::HostDriven:

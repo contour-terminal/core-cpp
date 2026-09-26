@@ -2,10 +2,10 @@
 //
 // An AF_UNIX listener on Windows belongs to the loop it is made on, as `listen` and `adoptListener`
 // already do: an IOCP loop -- the Windows default -- gets an `IocpListener` whose accepted sockets
-// are `IocpSocket`s, and `connectUnix` dials an `IocpSocket` there too; a WFMO loop keeps
-// `WindowsListener` and `WindowsSocket`. `listenUnix` used to build the WFMO listener whatever the
-// loop was, so an IOCP loop served AF_UNIX through readiness and handed out `WindowsSocket`s --
-// found through contour, whose daemon listens on a unix socket.
+// are `IocpSocket`s, and `connectUnix` dials an `IocpSocket` there too. `listenUnix` used to build
+// the readiness listener whatever the loop was, so an IOCP loop served AF_UNIX through readiness --
+// found through contour, whose daemon listens on a unix socket. Since 0.5.0 the completion port is
+// the only Windows transport (core-cpp#6).
 
 // winsock2.h MUST precede windows.h / ws2tcpip.h, and afunix.h needs what they declare.
 // clang-format off
@@ -24,8 +24,6 @@
 #include <core/net/WithTimeout.hpp>
 #include <core/net/testing/BackendMatrix.hpp>
 #include <core/net/windows/IocpSocket.hpp>
-#include <core/net/windows/WindowsListener.hpp>
-#include <core/net/windows/WindowsSocket.hpp>
 #include <core/platform/WinsockInit.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -57,7 +55,6 @@ enum class Family : std::uint8_t
 {
     None,       ///< Not reached: the flow failed before it had one.
     Completion, ///< `IocpListener` / `IocpSocket`.
-    Readiness,  ///< `WindowsListener` / `WindowsSocket`.
     Other,      ///< Neither.
 };
 
@@ -65,8 +62,6 @@ enum class Family : std::uint8_t
 {
     if (dynamic_cast<core::net::IocpListener const*>(listener) != nullptr)
         return Family::Completion;
-    if (dynamic_cast<core::net::WindowsListener const*>(listener) != nullptr)
-        return Family::Readiness;
     return Family::Other;
 }
 
@@ -74,8 +69,6 @@ enum class Family : std::uint8_t
 {
     if (dynamic_cast<core::net::IocpSocket const*>(socket) != nullptr)
         return Family::Completion;
-    if (dynamic_cast<core::net::WindowsSocket const*>(socket) != nullptr)
-        return Family::Readiness;
     return Family::Other;
 }
 
@@ -188,9 +181,8 @@ class TempDirectory
 TEST_CASE("A unix listener's socket file goes with it, a stale one is reclaimed and a live one refused",
           "[net][afunix][iocp]")
 {
-    // The path claim both listeners share (`UnixSocketPath.cpp`), through each transport's
-    // listener: `IocpListener::bindUnix` claims a path and deletes its file on close as
-    // `WindowsListener` does.
+    // The path claim (`UnixSocketPath.cpp`), through `IocpListener::bindUnix`: it claims a path
+    // and deletes its file on close.
     for (auto const& backend: BackendMatrix)
     {
         auto source = core::net::makeBackend(backend.kind);
@@ -230,7 +222,7 @@ TEST_CASE("listenUnix and connectUnix belong to the loop's transport family", "[
         DYNAMIC_SECTION("backend=" << backend.name)
         {
             auto loop = EventLoop { *source };
-            auto const expected = loop.completionPort() != nullptr ? Family::Completion : Family::Readiness;
+            auto const expected = Family::Completion;
 
             auto const directory = std::filesystem::temp_directory_path()
                                    / std::format("core-cpp-unix-{}", std::random_device {}());

@@ -24,8 +24,8 @@ project file tree, install paths and the interrupt throttle.
    selection for each platform.
    - **A module's own directory holds only platform-independent code.** A source with one
      `#ifdef` branch per platform is split into those subdirectories rather than kept whole:
-     contour's `PollEventSource.cpp` is `core::net`'s `posix/PollBackend.cpp` and
-     `windows/WfmoBackend.cpp`, epoll is in `linux/` and kqueue in `bsd/`, and each of those
+     contour's `PollEventSource.cpp` became `core::net`'s `posix/PollBackend.cpp` and a
+     `windows/` WFMO backend (removed in 0.5.0), epoll is in `linux/` and kqueue in `bsd/`, and each of those
      directories holds the `DefaultBackend.cpp` the CMakeLists names exactly one of. A public header
      stays portable: a member only one platform uses is declared on all of them. Origin: user
      direction, 2026-09-18 (core-cpp's Task A6).

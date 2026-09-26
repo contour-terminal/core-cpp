@@ -54,8 +54,8 @@ namespace detail
 
 /// The loop a program gets when it has no reason to choose a backend.
 ///
-/// On Linux that is epoll, on macOS and the BSDs kqueue, on Windows the completion port (Wfmo
-/// until Task B7 lands), and under single-threaded WebAssembly the host-driven backend over the
+/// On Linux that is epoll, on macOS and the BSDs kqueue, on Windows the completion port, and
+/// under single-threaded WebAssembly the host-driven backend over the
 /// browser's own timer — which means a `PlatformLoop` there must be PUMPED and neither `run()`
 /// nor `blockOn()` may be called on it. Both assert.
 class PlatformLoop final: private detail::OwnedBackend, public EventLoop

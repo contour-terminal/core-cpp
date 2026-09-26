@@ -6,7 +6,7 @@
 /// overlapped `WSARecv`, `WSASend` and `AcceptEx` completed by the loop's completion port.
 ///
 /// **What makes them different from every other socket in this library is who writes last.** A
-/// readiness socket (`PosixSocket`, `WindowsSocket`) is told that a syscall would now succeed and
+/// readiness socket (`PosixSocket`) is told that a syscall would now succeed and
 /// then performs it, so it decides the outcome itself at the moment it is resumed. Here the KERNEL
 /// performs the operation and the completion reports what it did — so a cancel, a deadline or a
 /// stop cannot settle an operation on its own; it asks the kernel for the operation back
@@ -321,8 +321,8 @@ class IocpListener final: public IListener
         int backlog = 128,
         SocketBufferSizes acceptedBuffers = {});
 
-    /// Binds and listens on the AF_UNIX socket file @p path, claiming it as `WindowsListener`
-    /// does: a stale socket file is reclaimed, a live server's is refused, anything else at the
+    /// Binds and listens on the AF_UNIX socket file @p path, claiming it as `UnixListener`
+    /// does on POSIX: a stale socket file is reclaimed, a live server's is refused, anything else at the
     /// path is never touched. The file goes with the listener when it closes.
     ///
     /// **AcceptEx accepts AF_UNIX connections**, measured on Windows 11 (26200) and asserted by

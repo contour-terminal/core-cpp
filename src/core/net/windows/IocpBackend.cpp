@@ -602,8 +602,7 @@ bool IocpBackend::rearm(Registration& registration, ArmFailure report) noexcept
         case HandleKind::Waitable: {
             // One mechanism, reporting whichever directions the registration asked for:
             // a signalled waitable object says "something happened on this handle", not
-            // which direction — exactly what `WfmoBackend::probeHandle` finds, and it
-            // reports it the same way.
+            // which direction, so it reports every direction the registration asked for.
             if (slot.signal.load(std::memory_order_acquire) != nullptr)
                 break; // already in flight; its completion is what re-arms it
             auto observed = Readiness::None;

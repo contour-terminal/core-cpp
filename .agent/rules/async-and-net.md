@@ -11,8 +11,8 @@ landed the first half of that merge — the ownership rules under "Task ownershi
 code, not a forecast — and Task B3 has landed `IoBackend`, so `EventSource` is gone and the
 backend rules below are live code too. Task B7a landed `IocpBackend` and its readiness bridges, and
 Task B7b the sockets that issue overlapped operations on its port (`IocpSocket`, `IocpListener`, the
-`ConnectEx` dial) -- which is when IOCP became the Windows default; WFMO stays reachable by name for
-one release. The rules are
+`ConnectEx` dial) -- which is when IOCP became the Windows default; 0.5.0 removed the WFMO backend
+and its readiness sockets, so IOCP is Windows' only backend (core-cpp#6). The rules are
 written against the merged design's names, from the design spec,
 [Part I §2](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/specs/2026-09-18-core-cpp-design.md),
 so the tasks that implement it inherit them; each Phase B task extends this file with the rules
@@ -1393,9 +1393,6 @@ stackless event and is safe anywhere. See
 
 ## Open work
 
-- **[core-cpp#6](https://github.com/contour-terminal/core-cpp/issues/6)** — remove `WfmoBackend`
-  and `BackendKind::Wfmo` after one release in which the IOCP backend is the Windows default and
-  green.
 - **[core-cpp#9](https://github.com/contour-terminal/core-cpp/issues/9)** — resolve morph's
   follow-up from its move onto `core::async` (logger, `FileIoOps`, the DateTime clock seam,
   `morph::net` on Windows). The strand half is done: 0.4.0 has `Strand` and `KeyedStrands`, by the

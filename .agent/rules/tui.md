@@ -68,12 +68,10 @@ a handle the loop is already watching.
   That obligation is the rule in [`async-and-net.md`](async-and-net.md), "An object that parks
   flows on a loop takes them back in its own destructor"; here it means **a `TuiRuntime` is
   destroyed before its loop, on the loop's thread**.
-- **Which Windows wait serves the console handle is the backend's choice, not the TUI's.** Both
-  can: WFMO waits on it directly and sweeps its set in chunks past 64 handles, and IOCP reaches it
-  through the waitable-HANDLE bridge (see [`platform.md`](platform.md)). WFMO is still the default
-  Windows backend -- Task B7b is what changes that -- so do not write that the console handle
-  "goes through IOCP"; it goes through whichever backend `makeDefaultBackend()` returned, and the
-  runtime is tested against every one the platform builds.
+- **Which Windows wait serves the console handle is the backend's choice, not the TUI's.** IOCP,
+  Windows' only backend since 0.5.0, reaches it through the waitable-HANDLE bridge (see
+  [`platform.md`](platform.md)); the runtime asks `makeDefaultBackend()` rather than naming it, and
+  is tested against every backend the platform builds.
 - **A handle at its end is never waited on again.** A terminal that hung up, a pipe whose
   writer closed, a console that went away: each stays readable for ever and yields nothing, so a
   flow that re-parks on it is resumed every turn -- 100% CPU, and with `SIGHUP` ignored nothing

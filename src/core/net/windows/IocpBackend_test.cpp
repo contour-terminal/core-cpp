@@ -5,7 +5,7 @@
 ///
 /// What is NOT here is the behaviour every backend shares — that is `BackendParity_test`,
 /// which enumerates `testing::BackendMatrix` and so exercises this backend for every
-/// property it holds in common with poll, epoll, kqueue and Wfmo. These are the ones
+/// property it holds in common with poll, epoll and kqueue. These are the ones
 /// only this backend has:
 ///
 /// - **both waitable-handle bridges**, because the kernel's one
@@ -13,8 +13,8 @@
 ///   so without a case that forces the other the thread-pool path would be compiled by
 ///   CI and run by nobody;
 /// - **`HandleKind::Socket`**, which no other backend can serve: a raw SOCKET is not a
-///   waitable object, so Wfmo cannot be handed one and a parity case could not be
-///   written over it;
+///   waitable object, so a wait-for-objects backend could not be handed one and a
+///   parity case could not be written over it;
 /// - **a completion arriving after its registration is gone**, which is the failure the
 ///   whole slot mechanism exists to prevent and which only a completion-based backend
 ///   can have.
@@ -68,7 +68,7 @@ constexpr auto ReadinessBudget = std::chrono::seconds { 2 };
 
 /// A MANUAL-reset Win32 event, owned.
 ///
-/// Manual-reset for the reason `WfmoBackend_test` gives and one of its own: the
+/// Manual-reset because the thread-pool bridge must see a readiness twice: the
 /// thread-pool bridge is re-armed at the top of every wait, and an auto-reset event
 /// would be consumed by whichever arm got there first, so a readiness could be drained
 /// by a wait that had nothing to do with it.
@@ -250,7 +250,7 @@ TEST_CASE("an IocpBackend registration still ready is reported on the next wait 
     // **Level-triggering, which on a completion port is not free.** An overlapped
     // operation is ONE-SHOT: it completes once and the kernel forgets it. So "a
     // readiness nobody consumed is reported again on the next wait" — which poll,
-    // epoll, kqueue and Wfmo get from their kernels — has to be built here, by
+    // epoll and kqueue get from their kernels — has to be built here, by
     // re-arming every watched registration at the top of every wait.
     //
     // Nothing else in this suite or in `BackendParity_test` asks for a SECOND report:

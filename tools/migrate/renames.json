@@ -474,18 +474,6 @@
     },
     {
       "kind": "include",
-      "from": "net/WaitChunking.hpp",
-      "to": "core/net/detail/WaitChunking.hpp",
-      "profiles": [
-        "contour"
-      ],
-      "target": {
-        "header": "core/net/detail/WaitChunking.hpp",
-        "public": false
-      }
-    },
-    {
-      "kind": "include",
       "from": "net/WithTimeout.hpp",
       "to": "core/net/WithTimeout.hpp",
       "profiles": [
@@ -714,30 +702,6 @@
         "header": "core/testing/ScopedTempDir.hpp"
       },
       "note": "core::testing::ScopedTempDir has no default prefix, and throws where TempDir failed a REQUIRE; path() and operator/ are unchanged"
-    },
-    {
-      "kind": "include",
-      "from": "net/windows/WindowsListener.hpp",
-      "to": "core/net/windows/WindowsListener.hpp",
-      "profiles": [
-        "contour"
-      ],
-      "target": {
-        "header": "core/net/windows/WindowsListener.hpp",
-        "public": false
-      }
-    },
-    {
-      "kind": "include",
-      "from": "net/windows/WindowsSocket.hpp",
-      "to": "core/net/windows/WindowsSocket.hpp",
-      "profiles": [
-        "contour"
-      ],
-      "target": {
-        "header": "core/net/windows/WindowsSocket.hpp",
-        "public": false
-      }
     },
     {
       "kind": "include",
@@ -7405,7 +7369,7 @@
       "profiles": [
         "fastcached"
       ],
-      "note": "core-cpp listeners own their own bind sequence (PosixListener::bind, WindowsListener::bind), so a second one would be a second answer to who owns an address. listen(loop, ListenOptions) is the entry point."
+      "note": "core-cpp listeners own their own bind sequence (PosixListener::bind, IocpListener::bind), so a second one would be a second answer to who owns an address. listen(loop, ListenOptions) is the entry point."
     },
     {
       "kind": "removed",
@@ -8296,6 +8260,38 @@
         "fastcached"
       ],
       "note": "not imported with its neighbours in tests/SocketDecorator.hpp: nothing in core-cpp stages a failing read through it; SocketDecorator is what one is written over"
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::WfmoBackend",
+      "profiles": [
+        "contour"
+      ],
+      "note": "removed in 0.5.0 with the WFMO backend (core-cpp#6): the completion port is Windows' only backend, and IocpSocket/IocpListener its only socket transport. Reach them through listen(), connect() and adoptSocket(), which hand out the loop's transport."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::WindowsSocket",
+      "profiles": [
+        "contour"
+      ],
+      "note": "removed in 0.5.0 with the WFMO backend (core-cpp#6): the completion port is Windows' only backend, and IocpSocket/IocpListener its only socket transport. Reach them through listen(), connect() and adoptSocket(), which hand out the loop's transport."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::WindowsListener",
+      "profiles": [
+        "contour"
+      ],
+      "note": "removed in 0.5.0 with the WFMO backend (core-cpp#6): the completion port is Windows' only backend, and IocpSocket/IocpListener its only socket transport. Reach them through listen(), connect() and adoptSocket(), which hand out the loop's transport."
+    },
+    {
+      "kind": "removed",
+      "from": "core::net::detail::waitChunkCount",
+      "profiles": [
+        "contour"
+      ],
+      "note": "removed in 0.5.0 with the WFMO backend, its only user (core-cpp#6): a completion port has no MAXIMUM_WAIT_OBJECTS to chunk a wait set by."
     }
   ]
 }
