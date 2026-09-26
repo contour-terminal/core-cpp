@@ -235,6 +235,35 @@ if(CORE_CPP_CLANG_TIDY)
     set(CORE_CPP_CLANG_TIDY_COMMAND "${CORE_CPP_CLANG_TIDY_EXE}")
 endif()
 
+## @brief Sets @p outVar to what clang-tidy reads besides the source: every `.clang-tidy` from
+## @p source's directory up to the source tree's root, and the analyser binary itself.
+##
+## Why these are dependencies at all (core-cpp#36): Ninja reruns a statement when an input or its
+## command line changes, and neither of these is either. So editing `.clang-tidy`, or replacing the
+## analyser at an unchanged path, re-analysed nothing whose object was current -- `no work to do`
+## then meant "clean under whatever rules were in force when each object was built", not under
+## today's. As OBJECT_DEPENDS, a change to any of them rebuilds, and so re-analyses, what it
+## governs. A source outside the source tree (a generated one) gets the analyser alone.
+function(core_cpp_tidy_inputs source outVar)
+    set(inputs "${CORE_CPP_CLANG_TIDY_EXE}")
+    cmake_path(IS_PREFIX CORE_CPP_SOURCE_DIR "${source}" NORMALIZE underSourceTree)
+    if(underSourceTree)
+        cmake_path(GET source PARENT_PATH directory)
+        while(TRUE)
+            if(EXISTS "${directory}/.clang-tidy")
+                list(APPEND inputs "${directory}/.clang-tidy")
+            endif()
+            cmake_path(COMPARE "${directory}" EQUAL "${CORE_CPP_SOURCE_DIR}" atRoot)
+            cmake_path(GET directory PARENT_PATH parent)
+            if(atRoot OR parent STREQUAL directory)
+                break()
+            endif()
+            set(directory "${parent}")
+        endwhile()
+    endif()
+    set(${outVar} "${inputs}" PARENT_SCOPE)
+endfunction()
+
 ## @brief Applies core-cpp's toolchain policy to @p target, one of its own compiled targets.
 ##
 ## The C++ standard is a usage requirement of a library (PUBLIC), because its headers
@@ -250,6 +279,23 @@ function(core_cpp_apply_toolchain target)
         CXX_EXTENSIONS OFF
         CXX_SCAN_FOR_MODULES OFF
         CXX_CLANG_TIDY "${CORE_CPP_CLANG_TIDY_COMMAND}")
+    if(CORE_CPP_CLANG_TIDY_COMMAND)
+        get_target_property(sources ${target} SOURCES)
+        get_target_property(sourceDir ${target} SOURCE_DIR)
+        foreach(source IN LISTS sources)
+            if(source MATCHES "^\\$<" OR NOT source MATCHES "\\.(c|cc|cpp|cxx)$")
+                continue()
+            endif()
+            cmake_path(ABSOLUTE_PATH source BASE_DIRECTORY "${sourceDir}" NORMALIZE OUTPUT_VARIABLE absolute)
+            core_cpp_tidy_inputs("${absolute}" inputs)
+            # A source shared by two targets (a runtime twin) is visited twice; append once.
+            get_property(present SOURCE "${absolute}" TARGET_DIRECTORY ${target} PROPERTY OBJECT_DEPENDS)
+            list(REMOVE_ITEM inputs ${present})
+            if(inputs)
+                set_property(SOURCE "${absolute}" TARGET_DIRECTORY ${target} APPEND PROPERTY OBJECT_DEPENDS ${inputs})
+            endif()
+        endforeach()
+    endif()
 
     if(CORE_CPP_MSVC_DRIVER)
         target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${CORE_CPP_MSVC_DRIVER_FLAGS}>)

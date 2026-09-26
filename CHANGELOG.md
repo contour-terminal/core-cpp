@@ -60,6 +60,13 @@ workflow refuses one without a section here.
   the replacement then renamed the link aside and put a real directory in its place: the consumer's
   link was gone, its target untouched, and the sync reported success. `MODE=sync` now refuses such a
   `DEST` by name, before anything is read or written, and says which directory to name instead.
+- **A `clang-tidy` build re-analyses what a changed `.clang-tidy` or a replaced analyser governs**
+  (core-cpp#36). Neither was an input of any compile, so editing a rule, or installing another
+  clang-tidy at the same path, re-analysed nothing whose object was current: `no work to do` meant
+  "clean under the rules in force when each object was built". With `CORE_CPP_CLANG_TIDY` on, every
+  analysed compile now depends on the analyser binary and on every `.clang-tidy` from its source's
+  directory up to the tree's root, and `core-cpp.tidy-inputs` (registered only in a clang-tidy Ninja
+  build, and run by CI's `clang-tidy` job) refuses a build whose statements do not.
 
 ## [0.4.3] - 2026-09-26
 

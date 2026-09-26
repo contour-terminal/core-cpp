@@ -168,6 +168,32 @@ add_test(NAME core-cpp.check-release-selftest
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-release-selftest.cmake")
 set_tests_properties(core-cpp.check-release-selftest PROPERTIES LABELS "core-cpp;hygiene;tree-level" TIMEOUT 60)
 
+# Editing `.clang-tidy`, or replacing the analyser at the same path, must re-analyse what it
+# governs (core-cpp#36): cmake/CoreCppToolchain.cmake makes both OBJECT_DEPENDS of every analysed
+# compile, and check-tidy-inputs.cmake holds the generated build.ninja to it. The check reads THIS
+# build, so it exists only in a clang-tidy build with a Ninja generator; the self-test reads its
+# own fixtures, and runs everywhere. NOT `tree-level`: the check's input is a build, not the tree.
+add_test(NAME core-cpp.tidy-inputs-selftest
+         COMMAND "${CMAKE_COMMAND}"
+                 "-DCHECKER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-tidy-inputs.cmake"
+                 "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/tidy-inputs-selftest"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-tidy-inputs-selftest.cmake")
+set_tests_properties(core-cpp.tidy-inputs-selftest PROPERTIES
+    FAIL_REGULAR_EXPRESSION "CMake Error"
+    LABELS "core-cpp;hygiene"
+    TIMEOUT 60)
+if(CORE_CPP_CLANG_TIDY AND CMAKE_GENERATOR MATCHES "Ninja")
+    add_test(NAME core-cpp.tidy-inputs
+             COMMAND "${CMAKE_COMMAND}"
+                     "-DBUILD_NINJA=${CMAKE_BINARY_DIR}/build.ninja"
+                     "-DROOT=${CORE_CPP_SOURCE_DIR}"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-tidy-inputs.cmake")
+    set_tests_properties(core-cpp.tidy-inputs PROPERTIES
+        FAIL_REGULAR_EXPRESSION "CMake Error"
+        LABELS "core-cpp;hygiene"
+        TIMEOUT 60)
+endif()
+
 # That core_cpp_add_header_self_check() refuses a header needing a neighbour and passes one that
 # does not (core-cpp#31). The check itself IS the build -- if the generated object libraries
 # compile, every public header stood alone -- so what needs a test is the generator, and each case

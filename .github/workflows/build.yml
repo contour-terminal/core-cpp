@@ -796,6 +796,13 @@ jobs:
           echo "$n compile rule(s) run clang-tidy"
           [ "$n" -gt 0 ] || { echo "::error::no compile runs clang-tidy"; exit 1; }
 
+      # CI builds from a clean tree, so it cannot see this defect, only keep it from coming back:
+      # a compile that does not depend on the analyser and its .clang-tidy files is not re-analysed
+      # when either changes (core-cpp#36), which is the local build contributors read. Reads the
+      # configured build.ninja, so it needs no build.
+      - name: Assert every analysed compile depends on the analyser and its .clang-tidy files
+        run: ctest --test-dir out/build/clang-tidy -R '^core-cpp\.tidy-inputs$' --output-on-failure --no-tests=error
+
       # The result is recorded rather than trusted: scripts/tidy-record.py refuses it unless the
       # build passed, the analyser the build resolved is the pin, statements carry it, the log ran
       # to [N/N], and a planted violation is reported -- the conjunction
