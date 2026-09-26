@@ -217,6 +217,71 @@ foreach(row IN LISTS cases)
     endif()
 endforeach()
 
+# Several violations of different rules at once are each reported, and counted (core-cpp#45).
+# Every case above plants ONE, so none of them could see one rule's report mask another's: with
+# five provenance rows missing, the scan once appeared to report a single, unrelated
+# stale-allowlist. The reproduction at 29cddd6 reported all five, but nothing pinned it. This tree
+# has one violation of each of five rules, in five files, plus the provenance violation the
+# stale-allowlist file brings with it (it is under src/core/ and has no row): six in all, and the
+# scanner must name every one and count exactly six.
+set(several
+    "CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\noption(FOO \"x\" ON)\n"
+    "src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foo {} // NOLINT\n"
+    "src/core/foo/Extra.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foo {}\n"
+    "src/core/foo/Main.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace bar {}\n"
+    "src/core/testing/SuppressWindowsDialogsAtStartup.cpp|// SPDX-License-Identifier: Apache-2.0\n")
+# "<rule>|<path>": what the scanner must name, each on a line of its own.
+set(severalExpected
+    "unprefixed-option|CMakeLists.txt"
+    "nolint|src/core/foo/Foo.cpp"
+    "provenance|src/core/foo/Extra.cpp"
+    "namespace-directory|src/core/foo/Main.cpp"
+    "stale-allowlist|src/core/testing/SuppressWindowsDialogsAtStartup.cpp"
+    "provenance|src/core/testing/SuppressWindowsDialogsAtStartup.cpp")
+list(LENGTH severalExpected severalCount)
+set(severalDir "${WORK_DIR}/several")
+core_cpp_selftest_write("${severalDir}" clean)
+core_cpp_selftest_write("${severalDir}" several)
+core_cpp_selftest_scan("${severalDir}" severalRc severalOutput)
+if(severalRc EQUAL 0)
+    list(APPEND failures "several at once: a tree with ${severalCount} violations was not refused")
+else()
+    foreach(expected IN LISTS severalExpected)
+        string(FIND "${expected}" "|" bar)
+        string(SUBSTRING "${expected}" 0 ${bar} rule)
+        math(EXPR pathAt "${bar} + 1")
+        string(SUBSTRING "${expected}" ${pathAt} -1 path)
+        # One report line: "<path>:<line>: [<rule>]" or, for a file-level rule, "<path>: [<rule>]".
+        string(REPLACE "." "\\." pathPattern "${path}")
+        if(NOT severalOutput MATCHES "${pathPattern}(:[0-9-]+)?: \\[${rule}\\]")
+            list(APPEND failures "several at once: [${rule}] in ${path} was not reported: ${severalOutput}")
+        endif()
+    endforeach()
+    if(NOT severalOutput MATCHES "${severalCount} violation\\(s\\)")
+        list(APPEND failures "several at once: the count is not ${severalCount}: ${severalOutput}")
+    endif()
+endif()
+
+# The walk that feeds every rule must find the tree it was given (core-cpp#45). A relative ROOT
+# used to glob nothing, and the scan then reported every allowlist row as stale and no real
+# violation at all -- so the same tree, named relatively, must give the answer it gives absolutely.
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" "-DROOT=several" -P "${SCANNER}"
+    WORKING_DIRECTORY "${WORK_DIR}"
+    RESULT_VARIABLE relativeRc
+    OUTPUT_VARIABLE relativeOut
+    ERROR_VARIABLE relativeErr)
+if(relativeRc EQUAL 0 OR NOT "${relativeOut}${relativeErr}" MATCHES "${severalCount} violation\\(s\\)")
+    list(APPEND failures
+         "relative ROOT: the several-at-once tree named relatively did not report its ${severalCount} violations: ${relativeOut}${relativeErr}")
+endif()
+# And a directory that is not a source tree is refused rather than scanned clean.
+file(MAKE_DIRECTORY "${WORK_DIR}/empty")
+core_cpp_selftest_scan("${WORK_DIR}/empty" emptyRc emptyOutput)
+if(emptyRc EQUAL 0 OR NOT emptyOutput MATCHES "no CMakeLists\.txt")
+    list(APPEND failures "empty ROOT: a directory with nothing in it was not refused as no source tree: ${emptyOutput}")
+endif()
+
 # A file the dispatch drops is a file no rule runs over, and the scanner still reports success: the
 # kind walk skips silently (`if(NOT kind)`), and the count it prints comes from the list it globbed
 # rather than from the files it checked, so the number does not move when the checking stops. That

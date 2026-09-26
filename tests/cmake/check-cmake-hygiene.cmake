@@ -202,6 +202,11 @@ endif()
 if(NOT DEFINED ROOT OR NOT IS_DIRECTORY "${ROOT}")
     message(FATAL_ERROR "check-cmake-hygiene: ROOT ('${ROOT}') is not set or not a directory.")
 endif()
+# A relative ROOT passes the test above and then globs nothing: file(GLOB_RECURSE) does not resolve
+# it the way IS_DIRECTORY does. The scan then checked no file, found no row's file in scope, and
+# reported only the allowlist rows -- every one "stale", because nothing had used them -- while every
+# real violation went unreported (core-cpp#45). Resolved here, against the working directory.
+get_filename_component(ROOT "${ROOT}" ABSOLUTE)
 
 # --- the files ---------------------------------------------------------------------------------------
 
@@ -216,6 +221,14 @@ foreach(top IN ITEMS CMakeLists.txt cmake src tests examples)
     endif()
 endforeach()
 list(SORT scanned)
+# A walk that found nothing checked nothing, and would report success over it. core-cpp's tree always
+# has a top-level CMakeLists.txt, so its absence is the tell.
+if(NOT "CMakeLists.txt" IN_LIST scanned)
+    list(LENGTH scanned foundCount)
+    message(FATAL_ERROR
+        "check-cmake-hygiene: found ${foundCount} file(s) under ROOT ('${ROOT}'), and no CMakeLists.txt "
+        "among them: this is not a source tree, and a scan of it would check nothing.")
+endif()
 
 # "<kind>|<file name regex>"
 set(kinds
