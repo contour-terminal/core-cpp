@@ -325,8 +325,8 @@ because these are about coroutine frames rather than sockets. Each rule has a ca
   ([fastcached#1025](https://github.com/LASTRADA-Software/fastcached/issues/1025));
 - `unownedRoot` is set at every `await_suspend`, by every coroutine type in the module — including
   the combinator runners, which is the hole this task found;
-- a task that owns no frame has no result, and `syncRun`/`syncRunWith`
-  ([fastcached#178](https://github.com/LASTRADA-Software/fastcached/issues/178));
+- a task that owns no frame has no result, and `syncRun`/`syncRunWith` (no upstream issue records
+  this rule; the fastcached#178 cited here until core-cpp#37 is about something else);
 - an executor resumes what it is handed or frees it, never neither;
 - both `IExecutor::submit` overloads are pure, which is what closes the hiding hazard, with
   `using IExecutor::submit;` and two diagnostics behind it — see the fix round, where this bullet
