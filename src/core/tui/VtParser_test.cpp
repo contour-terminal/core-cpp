@@ -912,7 +912,7 @@ TEST_CASE("VtParser.Escape.alt_backspace_is_one_key_not_escape_then_backspace", 
     // xterm, VTE, iTerm and Alacritty send Alt+Backspace as ESC DEL, and Alt+Ctrl+H as ESC BS.
     // Read as "Escape, then reprocess", each became a bare Escape -- a modal's cancel -- followed by
     // a plain Backspace.
-    auto const spelling = GENERATE(std::string_view { "" }, std::string_view { "" });
+    auto const spelling = GENERATE(std::string_view { "\x1b\x7f" }, std::string_view { "\x1b\b" });
     CAPTURE(spelling);
     auto parser = VtParser {};
     auto const events = parser.feed(spelling);
@@ -925,7 +925,7 @@ TEST_CASE("VtParser.Escape.alt_backspace_is_one_key_not_escape_then_backspace", 
 
 TEST_CASE("VtParser.Escape.alt_backspace_reaches_its_default_binding", "[tui,vtparser]")
 {
-    auto const key = parseKey("");
+    auto const key = parseKey("\x1b\x7f");
     REQUIRE(key.has_value());
     CHECK(KeyBindings::defaults().lookup(*key) == EditAction::DeleteBigWordBackward);
 }

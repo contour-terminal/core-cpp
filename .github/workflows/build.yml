@@ -110,9 +110,6 @@ jobs:
           -DWORK_DIR="$RUNNER_TEMP/cmake-hygiene-selftest"
           -P tests/cmake/check-cmake-hygiene-selftest.cmake
 
-      # Every visible configure preset is run by some workflow, or is allowlisted with a reason.
-      # Without it a preset can be offered and run by nothing, which is not a failure anywhere --
-      # it is an absence, and an absent configuration looks exactly like a passing one.
       # Every `## Open work` entry leads with a core-cpp issue, and that issue is still open
       # (core-cpp#12): an entry whose issue closed is a rule that has gone false. The ctest runs
       # the grammar alone; the state needs the network, which this job has.
@@ -141,6 +138,9 @@ jobs:
       - name: Windows clang-tidy script self-test
         run: python scripts/tidy-database-selftest.py
 
+      # Every visible configure preset is run by some workflow, or is allowlisted with a reason.
+      # Without it a preset can be offered and run by nothing, which is not a failure anywhere --
+      # it is an absence, and an absent configuration looks exactly like a passing one.
       # covers: core-cpp.preset-coverage
       - name: Preset coverage
         run: python scripts/check-preset-coverage.py
