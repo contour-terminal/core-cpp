@@ -217,3 +217,18 @@ The shape a procedure takes, from the case that produced the finding:
   is exactly where `warning:` versus `error:` zeroes it in silence.
 - **Prove the instrument with a mutation, not a version check.** A version check proves *a* tool
   exists; a fed violation proves the right tool ran on your code and that its findings are fatal.
+
+# Addendum (2026-09-23): items routed to B13 since this brief was written
+
+Master is f6d669a (B6d, B9, B10, B11, B7b landed). Fix or rule on each; none is optional without a written ruling.
+
+1. **core-cpp#41**: cancelPending leaves a readiness park attached. Fix before v0.1.0, test first.
+2. Triage core-cpp#35 (HttpServer closes only via destructors), #39 (style job wiring), #40 (mojibake gate + banned-token comment), #42 (toolchain-install retries), #43 (ParkId header weight): fix, or label post-0.1.0 with a one-line reason on the issue.
+3. Nine stale `WILL_FAIL` doc comments (WILL_FAIL was removed tree-wide in a48e727): grep `WILL_FAIL` across src/ tests/ docs/ .agent/ and correct each.
+4. Re-decide the EventLoop.cpp canary justification (see the B6 note in progress.md).
+5. B12 re-review (task-B12-rereview1.md, H1): add the regression case that review showed is writable, and correct H1's justification comment.
+6. Five pre-existing clang-tidy findings visible only on Windows: WindowsSocket.hpp:128, platform/Types.hpp:33 (x2), windows/DialPrimitives.cpp:101, SocketsWin32.cpp:92.
+7. Error tables: PosixSocket and WindowsSocket still classify errors themselves. Move them onto detail/SocketErrors (B9's classifySocketError), as B7b did for the IOCP socket. The SocketClosedStates parity test must stay green.
+8. posix/TlsCancelRead_test.cpp: its read-driven case was made POSIX-only because WindowsSocket had no cancelRead. IOCP (with cancelRead) is now the Windows default, so bring it back to every platform if it passes on IOCP.
+9. `check-cancel-read-declared` port (already in item 1 of the brief; B11 noted its grep missed it).
+10. Master CI must be green on the final head, with every job counted against the workflow list, before the release step.

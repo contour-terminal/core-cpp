@@ -2086,3 +2086,186 @@ reference a repository"*. Worth knowing before reaching for it under pressure.
 **Cause not established.** No lane reported an odd worktree message, and I did not guess at one
 while three were running. The `.orphan` directories stay until someone confirms they were empty of
 work.
+
+## Ruling (user, 2026-09-22): fastcached migrates in ONE pull request — C3 and C4 merge
+
+The plan splits fastcached into PR-A (TUI: delete `vendor/`, link `core::tui`) and PR-B (Async/Net
+swap, semantic rename, benchmark gate). **User ruling: one PR.** Work it as one lane, one worktree
+(`D:\fastcached-worktrees\core-cpp`, on a `claude/<issue#>-core-cpp` branch), one tracking issue.
+Keep the plan's internal commit sequence (TUI swap, then the in-tree semantic rename, then the
+Async/Net swap, then the semantic deltas), each commit green, so the review can still read it in
+steps. The benchmark gate (GET within 5% before and after, baseline from a detached worktree at
+`origin/master`) applies to the combined PR. Consumer impact already known from B6: `ShutdownWrite()`
+is called in statement position in about 10 fastcached places, and `BlockingSocket`/`NodeExchange`
+carry `void ... noexcept` overrides that must change shape.
+
+## Ruling (user, 2026-09-22): morph migrates in ONE pull request — C7 and C8 merge
+
+Same shape as fastcached: one lane, one worktree (D:\morph-worktrees\core-cpp), one branch, one tracking
+issue, one PR. Keep the internal order, each commit green: CPM switch, TimeoutScheduler over
+core-cpp timers, base64 and wakeup, then the coroutine spec (docs/spec/core/coroutines.md first),
+awaitable Completion<T>, Task<R> model handlers on the strand. The WebAssembly gates (wasm-ladder,
+wasm-demo) apply to the combined PR. Phase C is now six PRs, one per consumer.
+
+## Ruling (user, 2026-09-22): Phase C ORDER — fastcached first, morph last
+
+The user cares most about fastcached being migrated first. Dispatch order:
+
+1. **fastcached** (C3+C4, one PR) — first, and it starts as soon as v0.1.0 is tagged.
+2. **endo** (C1)
+3. **tuidu** (C2)
+4. **Lightweight** (C5) — independent of the others; placed here.
+5. **contour** (C6) — must still merge after endo and tuidu, per the plan, since both fetch from
+   contour master today.
+6. **morph** (C7+C8, one PR) — last.
+
+Positions 4 and 5 are inferred from the plan's constraints; the user fixed 1, 2, 3 and 6.
+
+Task B6d (shutdownWrite awaitable), B9, B10, B11, B7b: complete -- landed as one batch 8dc3361..f6d669a (12 commits), pushed 2026-09-23, confirmed by ls-remote. Reviews: B9 CHANGES->APPROVE (3681abd), B10+B11 CHANGES->APPROVE (ae6aea6,4bb1feb), B7b CHANGES x2->APPROVE (f45ee2c, stacked as 00adac0..f8a03f8). Batch gates on f6d669a: cl-debug/clangcl-release 46/46 clean-first; clang-debug, gcc-release, asan-ubsan, tsan, clang-tidy (0 findings) 42/42; format 518 clean; mkdocs strict 0. Also fixes master red since B8 (e43dddc: consumer smoke boundPort, C4737 in ReadinessDial_test).
+Ruling: TLS EOF without close_notify is ConnReset, not a clean end -- truncation must be detectable -- costs: consumers see ConnReset from peers that skip close_notify.
+Ruling: IOCP overlapped ops use op-owned buffers (copy in/out) -- abandoned ops must never let the kernel write into caller memory -- costs: a copy on ops that park.
+Routed to B13: 5 pre-existing Windows clang-tidy findings (WindowsSocket.hpp:128, platform/Types.hpp:33 x2, windows/DialPrimitives.cpp:101, SocketsWin32.cpp:92); check-cancel-read-declared port; TlsCancelRead read-driven case back to Windows now IOCP has cancelRead; error-table unification for PosixSocket/WindowsSocket; BlockingListener/AcceptRaw for fastcached admin endpoint (Phase C).
+Lesson (2026-09-23): the batch's local gate list left out cl-release, although CI runs it, and f6d669a went red on C4737 in IocpDial_test (B7b was rebased before e43dddc). Fixed in 8f1c70f. Before a push, a local gate list is counted against build.yml's job list, not recalled from memory.
+Task B13 (pre-release): complete -- 8f1c70f..4829310 (29 commits) pushed 2026-09-23, confirmed by ls-remote. Review CHANGES (4 should-fix) then APPROVE. #41, #39, #40, #42 and #43 fixed; #35 labelled post-0.1.0. Still to do: CI green on 4829310, close #39/#40/#42/#43 by hand, draft and publish v0.1.0, and file a post-0.1.0 issue: no CI job runs clang-tidy on Windows (58 findings had built up).
+v0.1.0 RELEASED 2026-09-23: tag v0.1.0 -> 2348ce7 (annotated 1f54632); release https://github.com/contour-terminal/core-cpp/releases/tag/v0.1.0 published as latest with 2 assets (vendor tarball 1444115 bytes and SHA256SUMS; the checksum was verified locally). release.yml run 35825786491 and build run 35825784385 (28/28) were green. The generated notes were empty because there were no PRs, so the body is the CHANGELOG 0.1.0 intro plus a link. The next cycle is opened with [Unreleased] (1ad8b24). Issues #39, #40, #42 and #43 were closed by hand; #44 was filed (Windows clang-tidy in CI, post-0.1.0). Phase B is COMPLETE. Next: Phase C in the user's order: fastcached (C3+C4, one PR), endo, tuidu, Lightweight, contour, morph (C7+C8, one PR).
+v0.2.0 RELEASED 2026-09-24: tag v0.2.0 -> ec47681, published latest, 2 assets, checksum verified, build 29/29 and docs green. It carries eight items found by the fastcached migration: await_ready/Task ARM64 (#1546), ListenOptions::sharing, stream socket options + SocketBufferSizes, adoptSocket, TestLoop counters, CORE_CPP_MSVC_STATIC_RUNTIME_VARIANTS, the closed-park idle turn, and per-request parity (persistent epoll registration, park recycling). The first windows-11-arm run caught a real #1546 instance in Task's awaiter.
+Ruling (user, 2026-09-23): fastcached must not regress in performance, stability or portability; the gate is parity, judged by deterministic per-request counts because WSL getbench spreads 25-60% per scenario. Parity met: task-perf-report.md.
+Issues filed: #45 (hygiene misreport), #46 (WFMO BadHandle), #47 (HandleWatch pointer), fastcached#1597 (fastcache-cc stale out-of-tree -isystem objects; the local fastcache-cc predates ca8dfc32).
+Next: fastcached C3+C4 draft PR (issue #1596, branch claude/1596-core-cpp), then endo, tuidu, Lightweight, contour, morph.
+
+## 2026-09-24: v0.2.1 published
+Released at a6d49f2 (master build 36021067188: 30/30 success; release run 36021013333; SHA256SUMS verified). The next lane, impl-v030 in D:/core-cpp-wt-v030, fixes the host-driven pump UAF that C78 found. install/export (#5) waits on C78 confirming the need. Version: 0.3.0 if #5 goes in, otherwise 0.2.2.
+
+Ruling (2026-09-24): core-cpp gains install()/export (#5) in v0.3.0 -- morph confirmed it cannot configure top-level otherwise (install(EXPORT morphTargets) needs core-cpp-base and others in an export set) -- if wrong, one unused feature to maintain. Option CORE_CPP_INSTALL defaults to PROJECT_IS_TOP_LEVEL. Next release = 0.3.0 (host-pump UAF fix + install/export).
+
+Task C5: complete (v0.2.1 round) -- Lightweight#626 head 497785c2, CI 30/30, re-review APPROVE. Draft; merging is the user's call.
+
+Task C2: complete (v0.2.1 round) -- tuidu#13 head 9f8a673, CI green, re-review APPROVE. Draft; merging is the user's call.
+
+Ruling (2026-09-24): v0.2.1 moved socket completions to resumeSoon (hot path), so the fastcached per-request parity counts must be re-run. impl-perf runs them once, against the 0.3.0 pin, not against 0.2.1 -- to spend WSL once -- if wrong, one extra measurement round.
+Open: FrameEndpoint_test stall (1 in 2 CI runs on 0.2.1, Release only). Suspect: registerPark slot displacement under NDEBUG. Test pending WSL. 0.3.0 item 3 makes displacement loud in every build.
+
+Task C1: complete (v0.2.1 round) -- endo#187 head 479e3e6d, CI 9/9, re-review APPROVE. Four WSL legs (agent, tsan, gcc, static) are unverified pending WSL. Nit (pre-existing, harmless): Shell.cpp:1531 disable() writes once to a dead fd; FdTerminalOutput::isTerminal reads STDOUT_FILENO (latent). Draft.
+
+Defect (2026-09-24, impl-C6): a spawned root whose completion arrives through a nested Task frame is never unlinked from _roots, so every such flow leaks until ~EventLoop (EventLoop.cpp ~482-503). Routed to 0.3.0 as item 4. 0.3.0 scope is now: host-pump UAF, install/export, displaced-park loud, nested-root leak.
+
+Task C6: v0.2.1 round approved -- contour#2117 head 9ef70f87, CI green, re-review APPROVE. Pending: Fedora offline and Linux ASan runs (WSL second wave). It re-vendors 0.3.0 when tagged. Stays a draft until endo and tuidu merge.
+
+Ruling (2026-09-24): v0.2.1 resumeSoon-at-back changed ordering, so a one-hop yield in fastcached AbandonIfPeerGone now reads stale peer-gone state (counter regression). core-cpp 0.3.0 item 5: a waiter completed by a callback in the drain resumes in that callback's position (before anything queued after it), documented as a guarantee -- restores v0.2.0 order within G2 and keeps consumers from encoding hop counts -- if wrong, a small ordering change to revert.
+
+Task C1: all local gates done at 479e3e6d (5 Linux legs + Windows), CI 9/9. It re-pins to 0.3.0 when tagged (user wants every project on 0.3.0).
+0.3.0 whole-branch review (a6d49f2..a0b130b): CHANGES -- 2 HIGH (off-thread root finish races on _finishedRoots; per-callback deque allocations on the hot path), 3 MEDIUM, 5 LOW. Fix round 1 dispatched to impl-v030.
+User (2026-09-24): every project moves to core-cpp 0.3.0; leftover fastcached worktrees may be removed (bench-base kept until the parity re-run); Docker Desktop recovered on its own at 21:16.
+
+Task C6: every local gate done on 9ef70f87: Fedora offline 25/25, ASan+UBSan 25/25 (Docker recovered via `docker desktop stop --force` + start). It re-vendors 0.3.0 when tagged.
+
+Task C3C4 (v0.2.1 round): every local gate green on c7106927 (local-gate 5138/5137, hygiene 243, asan 5121, TSan clean; Windows x3). The FrameEndpoint flake is open (1 in 2 CI runs; 0 in about 181k repro runs); CI sampling with a case timeline is in progress. It re-pins to 0.3.0 when tagged, then parity counts (impl-perf).
+
+Task C78: morph#806 fix round 3 (df3fbbd9) re-review APPROVE. Two doc nits are folded into the 0.3.0 re-pin. The Windows dialog-suppression commit is in (user request). Pending: the v0.3.0 re-pin, then CI.
+
+## 2026-09-24: v0.3.0 tagged
+The release commit 1ae59fd was fast-forwarded onto master; tag v0.3.0 (object 322967d9). Contents: host-pump UAF, install/export, loud displaced park, nested-root leak, callback-position ordering, dialog-helper gaps, and three review rounds. Pre-release CI 36058623097: 29/29 green. Publication waits on the release workflow and master CI. All six consumer lanes are told to re-pin to v0.3.0 (user: every project on the latest).
+
+## 2026-09-25: v0.3.0 published
+https://github.com/contour-terminal/core-cpp/releases/tag/v0.3.0 (latest). Release workflow success; master build 36061938166: 30/30; SHA256SUMS verified. [Unreleased] opened on master (81f81a2). Consumers are re-pinning.
+
+## 2026-09-25 morning: consumers on v0.3.0
+- C1 endo#187 86d7e725: CI 9/9, full gates incl. Release suites. Done.
+- C2 tuidu#13 ee3e065: CI green, gates. Done.
+- C5 Lightweight#626 08bfeb56: CI 30/30. A LightweightTest ThreadPoolExecutor hang is pre-existing on master (6/200 branch vs 15/200 master). Done.
+- C3C4 fastcached#1598 093cede2: full matrix + CI green; FrameEndpoint 6/6 on 0.3.0 (1 in 14 overall). Parity counts dispatched to impl-perf.
+- C6 contour#2117 afb0d6ed: ImsgServer single-writer fix (RED contract abort, then GREEN), LoopDrain on spawnedCount; all gates green; re-review dispatched. Ruling: no metainfo entry for the imsg fix (narrow hang on master).
+- C78 morph#806: CI 6 red jobs; lane asked for causes.
+- core-cpp-percommit worktree removed (user OK); bench-base kept until parity.
+
+## 2026-09-25: parity FAILS on v0.3.0 (impl-perf)
+user CPU/request +1.3 to +1.7us (mc) and +0.9 to +1.3us (redis) at c16/c64 against base; total mc c16 +3.9%, redis c64 +2.8%. Syscalls and malloc are better than base. Mechanism: the v0.2.1 resumeSoon hop per socket completion (parkedWorkFor/claimOn shared_ptr copy + CAS, a ReadyEntry round trip, Parked::resume disarm, refcount release) plus a ParkMap::find miss. Ruling: core-cpp 0.3.1 wins it back without giving up G2 or the callback-position ordering; fastcached#1598 is not merge-ready until parity. Lane impl-v031 in D:/core-cpp-wt-v031.
+
+User ruling (2026-09-25): strand executors (coroutine-aware) belong in core-cpp; morph must rely on core-cpp async APIs. The morph switch folds into #806 (#806 waits for it). Ruling: one release, 0.4.0 = the completion hot-path perf fix (impl-v031) + Strand/KeyedStrands + a current-executor context that core-cpp awaitables respect. Tagged 0.4.0, not 0.3.1, so the consumers re-pin only once. Strand lane impl-v040 in D:/core-cpp-wt-v040; it rebases onto release/next-031 when that lands.
+
+Task C6: contour#2117 029b3e6d, v0.3.0 round complete (re-review APPROVE, MANIFEST provenance fixed, CI green). Re-vendors 0.4.0 when tagged.
+
+Parity (quiet host) on b7212c6: syscalls and malloc better than base (6.0 vs 12.6 per request); total CPU at parity; user CPU +0.94/+1.32us at c64 (not overlapping). Another v031 round: the one-waiter fast path is not hit, plus park register/unregister churn.
+
+Ruling (2026-09-25): the morph switch plan (C78/switch-plan-040.md) found API gaps; 0.4.0 adds G1 post(F&&) with at most 1 allocation, G2 tryPost/trySubmit on closed strands, G3 an around-task hook (not a Task-local context: that would cost every co_await, fastcached included), G4 wasm teardown semantics plus idle(). G5 (executor adapter) stays in morph.
+
+Ruling (2026-09-25): DetachedTask use-after-free under clang-cl Debug (the ramp reloads its 1-byte return object from a frame that another thread already freed; since 0.3.0 and earlier, affects fastcached, 39 files) goes to its own issue; the strand race test is rewritten so it no longer races a DetachedTask ramp. The fix options (a shared count, a deferred start, a gro shape) are to be measured; target 0.4.x/0.5.0.
+
+Parity (quiet host) on b0c82a4: c64 user CPU ranges overlap base (mc 5.23-6.36 vs 5.93-7.11; redis 8.03-9.19 vs 8.25-9.71); medians +0.87/+1.23us; total CPU within noise with mixed sign; syscalls and malloc better (6.0 vs 10-21). Ruling: meets the overlap bar I set; b0c82a4 is final for 0.4.0; the remaining median gap goes to a follow-up issue (park reuse). Flagged to the user as their call.
+
+The v031 branch is final at b0c82a4 (CI green). Follow-up core-cpp#52 (park reuse, the remaining median user-CPU gap). DetachedTask hazard core-cpp#51.
+
+## 2026-09-25: v0.4.0 tagged
+Release commit e3647c0 fast-forwarded onto master; tag object ec09010e. It holds the hot-path perf fix (impl-v031), strands with G1-G4 and pooling (impl-v040), and the final review fixes. Pre-release CI 36150556371 green. Publication waits on the release workflow and master CI. Next: consumers re-pin to v0.4.0 (morph also switches to core strands); fastcached parity is confirmed once more on the tag.
+
+## 2026-09-25: v0.4.0 published
+https://github.com/contour-terminal/core-cpp/releases/tag/v0.4.0 (latest). Master CI 30/30, release workflow success, SHA256SUMS verified; [Unreleased] reopened.
+
+C2 tuidu#13 on v0.4.0: c4b3caf, CI green, pin-only. Done.
+C78: branch vs master under Valgrind fair-sched within noise.
+
+Risk (2026-09-25): contour#2117 on v0.4.0: Windows msvc-release contour_gui_test exits 0xc0000374 (heap corruption); the previous heads on v0.3.0 passed. C6 is bisecting (page heap / msvc ASan / v0.3.0 A/B). Possible 0.4.0 regression; consumers are not merge-ready until it is explained.
+
+C5 Lightweight#626 on v0.4.0: 515b5756, CI 30/30, pin-only; pre-existing Lightweight async hangs also on master. Done.
+
+Incident (2026-09-25 ~19:30): C: at 0 GB free; WSL Ubuntu-26.04 ext4.vhdx is 562 GB, and its root fs went I/O error / read-only. All lanes told to stop WSL work. Needs the user: free C: (WSL build dirs, compact the vhdx, Docker 50 GB), then wsl --shutdown.
+
+morph switch review (5fbc32ec): CHANGES -- HIGH: TaskResumer drops an armed abandon claim (UAF); HIGH: work between drain() and close() is dropped. Ruling: core-cpp 0.4.1 adds seal() (stop admission, keep draining) -- generic and consumer-facing; morph fixes the rest itself. impl-v040 builds 0.4.1 on release/next-041.
+
+## 2026-09-25 — morph teardown ruling, core-cpp#53, endo green
+- Ruling: morph ModelStrands::teardown picks the order once. Threaded builds use stop→seal→drain→close; single-threaded builds use seal→stop→close, and a native test covers that order. Reason: seal must precede stop only where no thread can post concurrently. Cost if wrong: a late post is refused, which is visible in the tests.
+- Ruling: review item LOW 5 (the session leaks to non-resumption tasks on the key) stays documented in morph. The fix is filed as core-cpp#53, `RunTask::isResumption()`, and is not part of 0.4.1. Reason: this is precision, not correctness. Cost if wrong: morph's session is broader than it needs to be until #53 lands.
+- endo#187: 9/9 checks green after the clang-tidy ccache purge (the AMX link error was a stale cache).
+- C: has 3.1 GB free. WSL is still blocked on the user's cleanup.
+- 0.4.1 review of b440e23..3549c34: CHANGES, 1 High / 4 Low / 2 Nit.
+  - Ruling on H1: seal() closes only the offer door (tryPost/trySubmit). Plain post/submit stay admitted until close(), because plain submit is how admitted coroutines come back (ResumeOn/ResumeTarget) and dropping them loses DetachedTask finishes. idle() cannot see off-strand coroutines, so the consumer counts in-flight work. Cost if wrong: a late plain post runs instead of dropping, until close().
+  - All Lows and Nits go to the same fix round. morph has been told of the semantic change.
+- Ruling (morph#806 teardown): no in-flight handler count in the drain step. Every Task-handler path returns through the try-forms with an inline fallback, and a wait would hang the documented stop-ignoring handler. A direct key-strand capture that returns after close is dropped, as before the seal, and is documented. Cost if wrong: a coroutine outside any handler loses its resumption at close.
+- fastcached#1598: v0.4.0 is clean everywhere except TSan, which waits on WSL; Linux clang-release passed 6/6 samples. Three fastcached DetachedTasks have the #51 shape. Ruling: fix #51 in 0.4.2 right after 0.4.1 tags, not in 0.4.1. Reason: 0.4.1 is in its last CI round, and #51's fix must also be checked against the #54 repro. Cost if wrong: a rare clangcl-debug crash stays until 0.4.2.
+- v0.4.1 tagged: release commit 0774dd4, tag object afdd2776; master fast-forwarded. The release workflow is building; publishing comes after its checks. Next: 0.4.2 = #51 (impl-v040, release/next-042 from 0774dd4). morph has been told to pin v0.4.1.
+- 2026-09-25 ~20:00: all four lanes stopped on the spend limit. The user lifted it, and the lanes were resumed. v0.4.1 PUBLISHED (release workflow, Build and Docs all green; assets vendor tarball + SHA256SUMS; the notes carry the CHANGELOG section). [Unreleased] reopened on master in 1d55e3b. contour#2117: impl-C6 reports a fix at 432b09ab: 150/150 runs clean vs 18 crashes in 300 before it.
+- contour#2117: root cause is contour's own test, NativeController_test, logging from two threads into core::log::ScopedCapture, which is unsynchronised. Fixed with a mutex-guarded SharedLogCapture in 5eb25666: 300/300 and 150/150 clean; CI green on 432b09ab. Re-review dispatched (rereview-C6c). Ruling: core-cpp 0.4.2 makes ScopedCapture thread-safe, so the next consumer can't write the same race. Cost: a mutex in a test/diagnostic path.
+- contour#2117 re-review (rereview-C6c) of 0af674a3..432b09ab: APPROVE. The diff is only NativeController_test.cpp (+72/-1). Every append and read is under the lock, sinks are restored after both threads join, and no other ScopedCapture test case logs from two threads. C6 is done pending merge order (after endo and tuidu).
+- 2026-09-25 ~21:00: the user asked me to restart WSL themselves before leaving it unattended overnight. wsl --shutdown, then start: the ext4 journal recovered (8 orphan inodes), rw OK, 406G free inside. Sparse VHD was refused (it needs --allow-unsafe, a data-corruption warning; not enabled unattended). C: has 4.3 GB free; lanes must keep C: >= 2 GB and delete their own stale trees first.
+- morph#806 re-review of a9f9a64d: CHANGES, new HIGH N1. The threaded seal-before-drain lets an inline handler end (gate.leave on the loop thread) race a same-key queued task on the pool (ActionGate _held/_waiting). Ruling: threaded teardown = stop→drain→seal→drain→close; single-threaded unchanged; still no in-flight count. The first drain serialises up to idle, and after the seal an inline arrival can only coincide with that handler's own pending step. Cost if wrong: one extra drain pass at teardown. Test-first with TSan in WSL.
+- 0.4.2 #51 fixed (release/next-042 faac90e, CI green). Root cause: clang-cl -O0 keeps the trivial DetachedTask's 1-byte return value in the frame and reads it after final_suspend frees the frame. Fix: a user-provided out-of-line defaulted destructor, with static_assert(!trivially destructible). Ruling: accept disabling clang-tidy performance-trivially-destructible (its fix would reintroduce #51; NOLINT is banned). #54 is unaffected. Next: ScopedCapture thread-safe, then one review of 1d55e3b..head.
+- ~23:55: C: fell to 1.1 GB. Cause: D: is a Dev Drive backed by C:\DevDriveX.vhdx, so the Windows trees on D: grow C:. I deleted the finished B-phase build trees (core-cpp-wt-b*/out/build, about 60 GB), and C: went back to 5.1 GB (the Dev Drive image trims). All lanes now gate Windows builds on C: >= 2 GB too.
+- fastcached#1598: TSan is clean on 9452d2a8 (4 targets), so all v0.4.0 gates are green; C3C4 cleaned its trees (22 GB on D:). impl-perf is dispatched for the parity check on the v0.4.0 tag.
+- fastcached parity on v0.4.0: total CPU, syscalls and malloc are at parity or better. User CPU misses the overlap bar on 3/6 rows (+0.6 µs, offset by lower sys time). See task-perf-parity-040.md. Ruling: this is reported to the user as a miss on the user-CPU bar. core-cpp#52 (park reuse) becomes the next core-cpp work after 0.4.2, and fastcached re-measures on it. Cost if wrong: the user may accept total-CPU parity, and #52 costs a release cycle.
+- 0.4.2 review: CHANGES (1M 2L 2N). Ruling on M1: keep ScopedCapture::text() const& (valid while no thread logs) and add a locking snapshot(). Changing the signature in a patch breaks &text()/decltype and lets a string_view dangle silently. Cost: a slightly larger API. L1, L2, N1 fixed; N2 confirmed from the CI logs.
+- 0.4.2 re-review: APPROVE (2 nits). Nit 2 (the DetachedTask CHANGELOG overstatement) was fixed in the release commit; nit 1 was skipped ([slot] vs .at). Tagged v0.4.2: release commit 1d7e951, tag object 6ff0beea; master fast-forwarded. Waiting on the release workflow before publishing. fastcached and morph were told to re-pin to v0.4.2.
+- v0.4.2 PUBLISHED (release, build and docs green; the notes are the CHANGELOG section). [Unreleased] reopened on master.
+- Dispatched impl-v040 on core-cpp#52 (park reuse) for 0.4.3, release/next-043 from 054c12b. impl-perf re-measures before the tag.
+- fastcached#1598 re-pinned to v0.4.2 at 0da433ac: clangcl-debug (the #51 leg) 5061/5061, cl-debug 5061/5061, WSL clang-debug 5121/5121, TSan clean, CI 26/26. Still a draft; the parity re-measure waits for #52 (0.4.3).
+- #52 (release/next-043 9ed7f56, CI green): a resident per-watch-direction park slot with a generation id; −46% per park at 256 sockets and −16% at 1 socket. The implementer estimates 15–45 ns of the ~600 ns fastcached user-CPU gap. Review (review-v040) and the fastcached re-measure (impl-perf, base / 0.4.2 / 043) were dispatched in parallel.
+- #52 review: CHANGES, 1M 2L 2N. Ruling on M1: freeResident recycles the Park through recycle() (capped at 64) and keeps the generation. The cost is one allocation per connection direction beyond the cap, instead of retaining a burst's memory for ever.
+- #52 re-measure (impl-perf, 9ed7f56, contended run, load median 3.5): the park path falls from 1.5–1.6% to 0.7% of samples, about 0.2 µs per request, 5–15× the implementer's estimate. 043 vs base: syscalls, malloc and total CPU at parity, and the user-CPU ranges overlap on 6/6 rows, but the ranges were 2–4× wider than in the quiet run. Ruling: a quiet rerun (load < 4) on the final 043 head after the M1 fix, before tagging.
+- #52 re-review of 9ed7f56..5274a66: APPROVE (1 nit: the ForTesting seam and retainedParkCount sit in an installed detail header; accepted). The tag waits for CI on 5274a66 and impl-perf's quiet re-measure.
+- #52 quiet re-measure at 5274a66 (load 2.0–3.4): syscalls, malloc and total CPU at parity or better (total −0.93..+0.63 µs); user-CPU ranges overlap on 5/6 rows, mc c64 misses by 0.10 µs (median +0.95); core-cpp's sample share is 7.2% vs 3.3%. Tagged v0.4.3: 76ef2d0, tag object 6319c79b. The CHANGELOG carries the fastcached figure. Waiting on the release workflow to publish; fastcached re-pins after.
+- v0.4.3 PUBLISHED; [Unreleased] reopened on master.
+- All consumers dispatched to v0.4.3 per the user's latest-version rule: endo (C1), tuidu (C2), Lightweight (C5), contour re-vendor (C6), fastcached (C3C4), morph (C78). Each runs one local build, C:-guarded, with CI for the rest.
+- fastcached#1598 on v0.4.3 (c52f38fb): all gates and CI green; the PR body carries the parity section. tuidu#13 on v0.4.3 (002daf1): green. endo#187 (a08c4250): the .deb job failed in 34 s, under investigation.
+- Lightweight#626 on v0.4.3 (e57bc30b): CI 30/30 after one rerun. The 'Windows Tests (SQL Server)' leg segfaulted once in DocExampleTests Doc.Meetings, which is Lightweight code this PR doesn't touch; one occurrence, noted in the hand-off.
+- morph#806 on v0.4.3 (d65f0d59): CI 40/40, cl-debug 1683/1683, ASan 10/10, WSL gcc-debug 1879/1879. Ready for hand-off. endo#187 (a08c4250): 9/9 green; endo#190 filed for the ccache/-march=native problem.
+- contour#2117 re-vendored at v0.4.3 (cbbe4bb4, 429 files, MANIFEST OK): CI green; the msvc-release contour_gui_test subset is 50/50. ALL SIX consumer PRs are on v0.4.3 with CI green, as drafts. #51 and #52 closed. Remaining: the user's rulings (fastcached perf bar, merges contour-last, reporting #54 to MS), housekeeping (worktrees, disk image compaction).
+- 2026-09-26: the user asked for core-cpp#53. Ruling: an enum class TaskKind {Callable, Resumption} with RunTask::kind(), per design-principles (no bool). A patch release, 0.4.4. Dispatched to impl-v040 on release/next-044 from 29cddd6.
+- User request: sweep the core-cpp issues on one branch, release, then re-pin consumers. The triage is in v050-triage.md. Target 0.5.0 (breaking: #6, #7, #13). Two local lanes, integrated by the team lead into release/next-050 with a single push.
+- #53 done: 87e42ed on release/next-044, CI green; TaskKind is derived from StrandTask's existing discriminator (no new field). It becomes the first commit of lane A's next-050-a.
+- Lane B done: next-050-b at 1edc2c9 (15 commits). Fixed #11–13, #20, #21, #23, #25, #33, #36, #37, #44, #45. Obsolete: #16–19, #48, #49. Partly done: #38. Parked: #10, #22, #34. #13 consumer impact: only tuidu's Cli.cpp. Ruling: restore the vcpkg Open work entry pointing at #55; lane A fixes its 4 Windows-tidy test findings, and windows (clang-tidy) joins ci-ok at integration.
+- Lane A: next-050-a at 8fbd033. Fixed #53, #26, #27, #28, #29, #6 (Breaking), #7 (Breaking), #35. Obsolete: #46, #50. Close: #47. #7 consumer impact: endo, 34 files. Ruling on #15: a trampoline gated at compile time (Emscripten, GCC without __OPTIMIZE__); optimised native builds unchanged. Lane A also fixes its 4 Windows-tidy test findings before integration.
+- Ruling revised: #15 closes as a documented decision (option 3), not a gated trampoline. Reason: a second transfer path next to the frame-ownership code carries risk, for debug and browser builds at an unrealistic 100k synchronous depth. The documented fallback is option 4 under __EMSCRIPTEN__ if a consumer ever hits it. Lane A's f5ee1e6 fixes its Windows-tidy findings.
+- Lane A final: 79ab16c (f5ee1e6 tidy fixes, 79ab16c #15 docs). Lane B merges it into release/next-050, adds windows (clang-tidy) to ci-ok, and pushes once.
+- release/next-050 pushed at 45e172a; CI run 36226822173 dispatched (workflow_dispatch). Reviews run in parallel: review-v040 on lane A (29cddd6..79ab16c), review-v050b on lane B plus the merge.
+- Lane A review: APPROVE (4L 2N). All folded into release/next-050 by impl-v040 as local commits; batched with lane B's review fixes into one push. L4: currentDirectory() returns a path.
+- 0.5.0 CI run 36226822173 on 45e172a: 4 reds (style H2, windows clang-tidy H1, macOS jthread in lane A's LingeringClose_test). Lane B review: CHANGES (2H 1M 5L 2N). Lanes fix locally; lane B integrates lane A's fixes and pushes once.
+- 0.5.0 re-review (c8e5408..9763638): APPROVE, 3 nits. Nit 1 (two remaining static_cast<void>(co_await) in HttpServer) goes into a pre-release commit. Nit 2 (VtParser's pending high half is cleared only by win32 keys) stays unfixed: mixed modes don't occur. Nit 3 is accepted.
+- v0.5.0 TAGGED: release commit 7f5f741 (after the style nit commit), tag object 977f9ef8; master fast-forwarded. The release workflow and master Build are watched before publishing.
+- Issues after 0.5.0: 18 closed automatically by 'Fixes #N' on master; closed by hand: #53, #46, #50, #16–19, #48, #49, #47, #15 (#44 was already closed). Still open (deliberately): #55 vcpkg, #54 MSVC, #38 (sanitiser half), #34, #22, #10 (parked), #9 and #8 (trackers).
+- All six consumers dispatched to v0.5.0 (the tag is fetchable; the master Build was still running at dispatch): endo does the #7 migration, tuidu the #13 Cli change, morph adopts RunTask::kind() for item 5, and contour, fastcached and Lightweight re-pin.
+- v0.5.0 PUBLISHED (release, build, docs green). [Unreleased] reopened on master. C: now has 78 GB free (the user's cleanup).
+- endo#187 on v0.5.0 at 184c87b2: the #7 migration is 44 files (+527/-333), and every std::expected is reported, none discarded. Ruling: the pin moves in the new commit 5 with the migration, so each commit stays green. WSL clang-debug (asan/ubsan/tidy) 729/729; clangcl-debug passes.
+- contour#2117 re-vendored at v0.5.0 (45749044, 432 files): CI green; commit 5 fixes 2 stale BadHandle comments. fastcached (784f94d0), Lightweight (db4fd161), tuidu (09cde07) and endo (184c87b2) are all on v0.5.0 and green. morph pending.
+- morph#806 on v0.5.0 at e78768ba: rebased onto master aa577613, dropping 2d20ec46 in favour of master's #825 (the same fix). It adopts RunTask::kind() (#53), with a test red on the old hook. CI 40/40, mergeable. ALL SIX consumers on v0.5.0 with CI green. The issue sweep is complete.
+- 2026-09-26T13:45:49Z: the user asked for the PRs to be marked ready; all six marked ready for review. The plan's implementation is complete; merges are the user's. Merge order: contour after endo and tuidu.
+- endo#187 and contour#2117 MERGED by the user. tuidu, Lightweight, fastcached and morph are open and ready, with no review comments (only codecov bots; morph's 92.6% patch coverage is informational, and its own coverage gate passed).
+- morph#806: rebased onto 150c8816 as 478d4f84 (tree identical to the gated 15c3a30a); CI 40/40, MERGEABLE. The user asked for a rewritten title and body; the team lead wrote and applied them. The lane's update overwrote the body, so it was restored and the lane told not to edit it again.

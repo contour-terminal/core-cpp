@@ -1,19 +1,6 @@
-# Brief for Task C1
+# Brief for Task C1: endo migrates onto core-cpp v0.2.0
 
-Binding references (read these too): Global Constraints at D:/core-cpp/.superpowers/sdd/2026-09-18-core-cpp/global-constraints.md; the design spec at D:/core-cpp/docs/superpowers/specs/2026-09-18-core-cpp-design.md (Part I sections referenced below as 'Part I §N' are in that file).
-
-
-The common steps for every consumer are:
-1. Create the worktree with superpowers:using-git-worktrees, using the Global Constraints location. Never pull into or build in the main checkout:
-   ```powershell
-   git -C D:\<repo> fetch origin
-   git -C D:\<repo> worktree add D:\<repo>-worktrees\core-cpp -b <branch> origin/master
-   ```
-2. Pin with `GIT_TAG v0.1.0` + `VERSION 0.1.0`; iterate locally with `-DCPM_core-cpp_SOURCE=D:/core-cpp`.
-3. Build and test with the repo's own presets on Windows and WSL.
-4. Run superpowers:requesting-code-review, then open the PR with **contour-workflows:draft-pr**.
-5. Drive CI to green with **contour-workflows:fix-ci**.
-
+The plan text follows verbatim. The rulings after it override it.
 
 ### Task C1: endo PR (`contour-terminal/endo`, branch `build/core-cpp`)
 - [ ] **Delta check (first step).** Run `git log --oneline <provenance SHA>..origin/master -- <replaced paths>` in this consumer. If it lists anything applicable, port it into core-cpp first (patch release v0.1.x via contour-workflows:draft-release/publish-release) and bump this PR's pin. Record the result in the PR body (`delta: none` or the ported commits).
@@ -46,5 +33,33 @@ The common steps for every consumer are:
 
 **Verify:** `clang-debug`, `clangcl-debug`, `clang-tsan`, `clang-release-static`, `emscripten-release` (base/log/cli only).
 
+- [ ] Register endo's own language highlighter through `core::tui`'s seam (core-cpp#24), so `.endo` files and ```endo fences highlight again on endo's side.
 - [ ] Delete, then CMake, codemod, build, test, commit (grouped with contour-workflows:commit), then open the draft PR titled "build: coro, net, crispy, tui and the generic platform layer come from core-cpp".
 
+
+# Rulings and facts that override the plan text (2026-09-24)
+
+1. **Pin v0.2.0, not v0.1.0:** `CPMAddPackage(NAME core-cpp GITHUB_REPOSITORY contour-terminal/core-cpp GIT_TAG v0.2.0 VERSION 0.2.0 ...)`. Iterate locally with `-DCPM_core-cpp_SOURCE=<a clean worktree of core-cpp at tag v0.2.0>`. Create that worktree with `git -C D:/core-cpp worktree add --detach D:/core-cpp-wt-endo v0.2.0`.
+2. **Worktrees only.** Never pull, check out, build or commit in `D:\endo`. The only commands allowed against it are `git -C D:\endo fetch origin` and `git -C D:\endo worktree add D:\endo-worktrees\core-cpp -b build/core-cpp origin/master`.
+3. **Module names:**
+   - The coroutine module is `core::async` (`<core/async/...>`), not `core::coro`.
+   - The event source is `core::net::IoBackend`; `makeDefaultBackend` replaces `makeDefaultEventSource`, and `Interest` replaces `FdInterest`.
+   - `tools/migrate/renames.json` and `rewrite.py --profile endo` are the source of truth.
+   - Read core-cpp's CHANGELOG 0.1.0 and 0.2.0 Breaking sections, with the per-consumer summary for endo, and `.agent/guides/consumer-migration.md`.
+4. **No regression, in stability, portability or performance.** This is the user's standing rule for every consumer. endo's full test suite, its `.endo` end-to-end suite and every CI leg (including Emscripten, where endo builds it) must stay green. If you find a core-cpp defect or gap, do NOT work around it in endo. Stop and report it with evidence; it gets fixed upstream and released.
+5. **Compiler cache:** the local fastcache-cc serves stale objects when a header under CPM_core-cpp_SOURCE changes (fastcached#1597). Build with `-DUSE_COMPILER_CACHE=OFF` while CPM_core-cpp_SOURCE points at a local tree.
+6. **Outward actions you may take:**
+   - push `build/core-cpp` to endo's origin;
+   - open the PR as a **draft** with the `contour-workflows:draft-pr` skill if available, else `gh pr create --draft`, including a "Consumer impact" section;
+   - nothing else. No merge, and no ready-for-review.
+7. **Commits:**
+   - Each is small, semantic and green on its own.
+   - Each ends with `Signed-off-by: Christian Parpart <christian@parpart.family>`.
+   - Follow endo's own AGENT.md and rules; they govern inside endo.
+8. **Environment:**
+   - WSL is shared. Run gates through `wsl.exe bash -l <script file>`, and keep logs in your scratchpad.
+   - Never touch foreign build dirs or processes.
+   - Run git on the Windows side for Windows-created worktrees.
+   - Windows writes CRLF: write with Python write_bytes and check for `\r`.
+   - With MSVC at /O2, keep calls out of `co_await` full-expressions (C4737).
+   - **Never wait on a background notification without a bound.** Poll a log's tail or use a timeout. A lane of this project sat idle for 2.5 hours on a notification that never came.

@@ -15,7 +15,7 @@ Three things a reviewer should weigh first:
    beyond what the dispatch scoped, and it is the design decision the whole task rests on.
 2. **§7 — my own canary found a real defect of mine**, reachable in Release where the guard that
    catches its usual spelling is compiled out.
-3. **§7 — I corrupted 72 em-dashes in two other lanes' files and nearly shipped it.** Caught by the
+4. **§7 — I corrupted 72 em-dashes in two other lanes' files and nearly shipped it.** Caught by the
    rebase, not by any gate.
 
 Two stale claims in the dispatch are in §9; one of them cost nothing and the other is worth fixing
@@ -85,9 +85,19 @@ loop across many wakes and only `unregisterPark` retires it.
 so it inherits four loop-wide properties rather than being invisible to all four:
 `notifyHandleClosing` (which at `29e9b24` asserts rather than hopes), `requestCancel`'s generation
 check — what makes `cancelRead` retire the operation it was called on and not a later one that
-reused the slot — `~EventLoop`'s teardown, and `registerPark`'s `armHostWake()`, which is inert for a
-readiness park today for the reason set out below, and already in place if a host-driven backend ever
-gains readiness.
+reused the slot — the turn's decision to enter the backend wait, and `registerPark`'s
+`armHostWake()`, which is inert for a readiness park today for the reason set out below, and already
+in place if a host-driven backend ever gains readiness.
+
+**It does NOT inherit `~EventLoop`'s teardown, and I claimed in fix round 0 that it did — in this
+section, in the CHANGELOG and in the commit message.** Round 1's review was right and I checked it
+rather than taking it: teardown step 2 skips every `_ready` entry with `callbackPark` set, and
+`unparkEverything` excludes callback parks by its `!entry->parked` test, each with a comment saying
+why — there is no frame to unwind and calling the callback would reach an owner being destroyed. So
+a socket operation still parked when its loop is destroyed is **neither completed nor abandoned**,
+and the awaiting coroutine is never resumed and never unwinds. That is a real limit of this design
+and it now says so in the CHANGELOG. It is bounded by an ordering rule the library already has:
+destroy loop-owned objects before the loop.
 
 **The alternative I rejected** was exposing `EventLoop::backend()` and letting each socket attach its
 own handler — one line instead of about sixty. It is the second mechanism B5's timer rule exists to
@@ -298,11 +308,14 @@ second consumer, so it was not a rebase I could wave through. **The table is tha
 **CI on the pushed commit: green, 28 of 28 jobs, 0 failed** (run `35596646379`). That includes the
 three legs no local preset of mine covers and the one I had a written hypothesis about:
 
-- **`macos (appleclang)`, `macos (appleclang-debug)` and `macos (llvm-22)` all pass.** The commit
-  message states the hypothesis — *nothing here is kqueue-shaped or macOS-shaped; the socket asks
-  `IoBackend` to watch a descriptor and never asks which mechanism did it* — and this is the
-  measurement of it. macOS is where R101's kqueue divergence lives, so this was the leg most able
-  to falsify the merge, and it did not.
+- **`macos (appleclang)`, `macos (appleclang-debug)` and `macos (llvm-22)` all pass — and they are
+  the only thing in this record that witnesses `kqueue`.** No local preset of mine runs it; §6's
+  table is `poll`, `epoll`, `iocp` and `wfmo`. The commit message states the hypothesis — *nothing
+  here is kqueue-shaped or macOS-shaped; the socket asks `IoBackend` to watch a descriptor and
+  never asks which mechanism did it* — and these legs are the measurement of it. They also compile
+  the two branches nothing else does: `MSG_CMSG_CLOEXEC`'s fallback and the `fcntl(FD_CLOEXEC)`
+  arm in `tryReadWithFd`. **FreeBSD (`portability.yml`) has not been dispatched**, so the BSD half
+  of that hypothesis is still untested.
 - **`consumer-smoke` on all four legs** (`vendored`, `cpm`, `wasm`, and the shared fixture), which
   is what B3 shipped broken and which builds nowhere locally.
 - **`style`**, the single leg that runs the `tree-level` checks once, plus `linux
@@ -479,20 +492,46 @@ were never written for. No Linux preset could have told me: the suites are POSIX
    library reaches it on Windows today, so it is latent rather than live, and Task B7 replaces the
    class. But it is a documented rule that one shipped transport does not keep, and the cost is
    visible: `CancelRead_test` and `SocketDecorator_test` do not run on Windows at all.
-2. **No Windows socket is frame-free yet**, so the allocation saving this task exists for is currently
+2. **`TlsSocket` does not keep three rules `ISocket`'s docs attach to it, and round 1's review
+   found all three where my concern list named only `WindowsSocket::cancelRead`.** `Tls.cpp` is
+   B11's file and mid-merge, so I have reported rather than fixed — the same call I made for
+   `WindowsSocket`. What I DID fix is the part that is mine: the interface documentation, which
+   promised behaviour the shipped decorator does not have.
+
+   | Verb | What the shipped `TlsSocket` does | Why it matters |
+   |---|---|---|
+   | `waitReadable` | not overridden, so it inherits the base's flat `1` | the default never SUSPENDS, so a TLS watchdog loop is a spin, not a wait. This is live, not latent |
+   | `shutdownWrite` | not overridden, so the no-op the header calls *"for FAKES"* | a response framed "ends at EOF" over TLS never reaches its peer until the full `close()` |
+   | `handshakeIfNeeded` | not overridden by anything in the tree | **B8 is about to write the accept loop this verb exists for.** No bytes are lost today because the handshake happens lazily inside `readPlain`/`writePlain`, but an accept loop awaiting it gets an immediate success and begins autodetection mid-handshake |
+
+   **On `shutdownWrite` I want to flag a signature problem rather than just a missing override.** A
+   clean TLS half-close is a `close_notify` record that has to be written and flushed; the verb is
+   synchronous and `void`, so it cannot await that. Forwarding to the inner socket — the obvious
+   one-line "fix" — sends a FIN with no `close_notify`, which a strict peer reads as a truncation
+   attack rather than an orderly end. So this one is not a missing line in B11's file; it is a verb
+   that cannot be implemented correctly by a decorator as declared, and that is B6's to own. I have
+   documented it on the verb rather than shipped a plausible-looking forward.
+
+3. **No Windows socket is frame-free yet**, so the allocation saving this task exists for is currently
    POSIX-only. That is what "one POSIX socket" in the task title scopes, and B7's IOCP socket is where
    Windows gets it.
-3. **`ReactorSocket_test` moves 1 MiB twice per backend.** It runs in about 1.1s for the whole net
+4. **`ReactorSocket_test` moves 1 MiB twice per backend.** It runs in about 1.1s for the whole net
    binary on `clang-debug`, and the `TIMEOUT 120` backstop is untouched — but it is the first case
    here that is sized rather than scripted, and a slow CI runner is where that would show.
-4. **The frameless readiness park is dispatched but never pruned by teardown-with-an-owner-alive.** A
-   socket that outlives its loop keeps a `ParkId` naming a park the table has dropped; `unregisterPark`
-   on a stale id is a no-op, so this is safe rather than correct-by-construction. The documented
-   ordering (objects registered with a loop are destroyed before it) is what makes it not arise.
-5. **`readWithFd`'s default now costs a coroutine frame** where contour's cost one too (it was a
+5. **A socket operation parked when its loop is destroyed is never resumed and never unwound**, and
+   the reason I first gave for tolerating this was wrong. I wrote that a socket outliving its loop
+   keeps a `ParkId` naming a dropped park and that "`unregisterPark` on a stale id is a no-op, so
+   this is safe". It is not a stale-id no-op: `~PosixSocket` would be calling `cancelTimer`,
+   `unregisterPark` and `notifyHandleClosing` **on a destroyed `EventLoop` object**. The conclusion
+   — do not let a socket outlive its loop — is unchanged; the reason recorded for it was, and a
+   later lane would have read the reason. The actual position: callback parks are excluded from
+   teardown by design (step 2's `callbackPark` skip, `unparkEverything`'s `!entry->parked` test),
+   so the awaiting coroutine of a still-parked operation simply never resumes. The ordering rule is
+   what bounds it, and it is now stated in the CHANGELOG rather than implied.
+6. **`readWithFd`'s default now costs a coroutine frame** where contour's cost one too (it was a
    `Task`), so this is not a regression — but it is the one place where the "frame-free" claim on the
    interface has an asterisk, and the header says so.
-6. **The LISTENER side is untouched, and that is a scope call a reviewer should confirm.**
+7. **The LISTENER side is untouched, and that is a scope call a reviewer should confirm.**
    `IListener::accept()` still returns `async::Task<AcceptResult>`, and `posix/PosixListener`,
    `UnixListener` and `AcceptLoop` are unchanged. The plan's B6 "Files:" line names `IListener.hpp`
    and those three, but its contract section and the dispatch's both list only the ISocket verbs, and
@@ -502,7 +541,7 @@ were never written for. No Linux preset could have told me: the suites are POSIX
    exists to remove. What I did take from the spec is `core::net::SocketResult`, which B8's
    `AcceptResult` should become an alias of. **The spec's `IListener::localPort` → `boundPort`
    rename is likewise not done**, for the same reason: it is a listener rename in a header B8 rewrites.
-7. **Reported, and mostly fixed under me while I was writing it up.** Sweeping my OWN files for the
+8. **Reported, and mostly fixed under me while I was writing it up.** Sweeping my OWN files for the
    `WILL_FAIL` claim after the registration changed (I found one, `SocketContract.hpp:19`, and fixed
    it) turned up the same stale claim in nine other places across six files that `a48e727` had not
    edited. Before I could report it, `fb2615f` landed and fixed the rulebook
@@ -518,13 +557,133 @@ were never written for. No Linux preset could have told me: the suites are POSIX
    the cost that was weighed is no longer the cost. Whoever rewrites that comment should re-decide
    the question rather than re-word the sentence.
 
-8. **Not mine, observed:** the shared checkout had uncommitted edits to `EventLoop.{hpp,cpp}`,
-
-8. **Not mine, observed:** the shared checkout had uncommitted edits to `EventLoop.{hpp,cpp}`,
+9. **Not mine, observed:** the shared checkout had uncommitted edits to `EventLoop.{hpp,cpp}`,
    `CHANGELOG.md` and `.agent/rules/async-and-net.md` throughout. I did not touch the shared tree at
    all — the whole task was committed from a detached worktree at `origin/master` plus my own files,
    which is also why the `--only`/private-index dance in the dispatch's Concurrency section did not
    arise.
+
+---
+
+## 10. Fix round 1
+
+Nine findings, all addressed. Ordered as the controller asked: the two signature-level items first,
+because B8 and B9 are writing against `ISocket` now.
+
+| # | Severity | What changed |
+|---|---|---|
+| 4 | MEDIUM, signature | `setReceiveDeadline(d<=0)` now REMOVES the bound. The citation said `SO_RCVTIMEO` reads zero as "leave it alone"; `man 7 socket` says the opposite — *"If the timeout is set to zero (the default), then the operation will never timeout"* — which I read on the man page rather than taking from the review. New case, mutation-proved |
+| 9 | LOW | `ISocket.hpp` no longer reaches `EventLoop.hpp`: a one-line out-of-line `requestCancelOn(EventLoop&, ParkId)` in a new `IoAwaitable.cpp` restores the forward declaration. **Measured**: 138718 → 130777 preprocessed lines, and 0 occurrences of `EventLoop.hpp` under `clang++ -H` |
+| 1 | HIGH | `write`/`writeVectored` claim the slot as their FIRST statement and attempt on a temporary `WriteOperation`, installed only once the operation is known to park. The inline branch can no longer touch `_write` |
+| 2 | HIGH | The same guard now runs at all five arm hooks, which is where the slot is actually taken — the site the `asTask` gap goes through |
+| 3 | MEDIUM | The owner-lifetime requirement is stated correctly: the owner must outlive the AWAITABLE, not the await, because the destructor retires an unsettled operation |
+| 5 | MEDIUM | `tryProbe` is no longer `const` and no longer guesses: `FIONREAD` + `POLLHUP` on a plain fd, and an `ENOTSOCK` branch that discovers `_plainFd` here rather than assuming a read preceded it. Two new cases |
+| 6 | MEDIUM | Reported, not fixed — `Tls.cpp` is B11's and mid-merge. The three interface docs that promised what the decorator does not do are corrected, and §8 concern 2 carries the detail |
+| 7 | LOW/MED | "It inherits the teardown" was false in three places. Corrected in the CHANGELOG and in §3, and concern 5 now records the real reason rather than the wrong one |
+| 8 | LOW | The turn's step-5 idempotence comment no longer claims an invariant my park kind breaks |
+
+**Mutations, each predicted before it ran.**
+
+| Arm removed | Predicted | Actual |
+|---|---|---|
+| `setReceiveDeadline` back to "non-positive is a no-op" | 1 case, 8 of 20 | 1 case, **8 of 20** |
+| `write()` back to the reviewed shape | new canary mode red, old one green | `write-slot-inline` **`SURVIVED`**, `write-slot` **passed** |
+| `tryProbe` back to the flat `1` and no `ENOTSOCK` | 2 cases | 2 cases, 6 assertions — `parked == false` and `hasValue == false`, which is scenarios A and B exactly |
+
+**Two things the mutations taught me that the fixes did not.**
+
+*The first deadline case was decorative in one half.* With the writer sleeping 5ms against a 20ms
+bound, the byte assertion passed against the very behaviour it existed to catch — only the timer
+count failed. Moving the write past the bound made it load-bearing; and then the count had to move
+BEFORE the bound, because taken afterwards it reads 0 against the broken code too. The wait is split
+for that reason, and each half now carries one assertion.
+
+*A `REQUIRE` inside a loop inside a section silently costs coverage.* Both spellings of "no bound"
+shared one `DYNAMIC_SECTION`, so the `REQUIRE` aborted it and the `-5ms` case ran only when
+everything already passed — it was covered exactly when it could not matter. The mutation showed 4
+failures where I predicted 8; giving each value its own section produced the 8. That is the same
+family as the rule about a `REQUIRE` above a stop, in a shape I had not seen.
+
+**`gcc-release` caught what `clang-debug` could not, and it reported as green.** My new lambdas
+took an `EventLoop* loop` parameter inside a scope that already had a `loop` local, and a
+`bool* sawPark` inside one that already had that parameter. GCC's `-Wshadow` is an error in this
+tree; clang did not diagnose it, so `clang-debug` built and passed. **The gcc leg read
+`BUILD_EXIT=1` with `CTEST_EXIT=0` and `100% tests passed, 0 tests failed out of 38`** — the tests
+ran against the previous binary, because a failed target leaves the last one in place. Four
+compile errors, fixed by renaming to `pump`/`seenPark`, and the whole matrix re-run against the
+amended commit.
+
+That is the third time in this task that a green total came from a binary that was not built from
+the tree under test, and the tell was the same each time: **the build's own exit code, read
+separately from the test run's.** A batch that reports only `tests passed` cannot distinguish them.
+
+**And then I caused a fourth, by running two gate batches at once.** I launched the re-run while the
+first batch was still working, and both drove the SAME build trees. The re-run's `clang-tidy` leg
+reported `CONFIGURE_EXIT=0 BUILD_EXIT=0 CTEST_EXIT=0`, `100% tests passed out of 38` — and its build
+log says **`ninja: no work to do.`** Its `rm -rf out/build/clang-tidy` had run, but the other batch
+recreated the tree afterwards, so the leg analysed nothing and tested binaries it had not built. Four
+of the six legs were the same shape: 7 "steps", all of them the `stb` sub-build.
+
+The objects turned out to be current — newest object 15:58 against newest source 15:38, so the
+analysis WAS of the amended code — but I could not have known that from the summary I was reading,
+and "it happened to be fine" is not a gate result.
+
+**The rule I first wrote down for this was wrong, and worth correcting rather than keeping because
+it sounded strict.** I wrote that a leg counts only if the build exits 0, the step count is
+non-zero, AND `no work to do` is absent. The last clause is not a defect signal: `ninja` reaches it
+by comparing every input timestamp against every output, so **`no work to do` after a SUCCESSFUL
+build is a positive statement that the tree matches the sources** — I confirmed it on the
+`clang-debug` tree with `ninja -n` plus newest-source (15:38) against newest-object (16:14). What
+actually burned me twice was different and simpler: **a build that exited NON-ZERO while the test
+run went ahead on the previous binary.** `gcc-release` did exactly that — `BUILD_EXIT=1`,
+`CTEST_EXIT=0`, `100% tests passed`. So the tell is the build's exit code read separately, and a
+zero step count is only suspicious when the tree was supposed to have been deleted.
+
+The final matrix was re-run **serially** — the overlap was mine, from launching a second batch
+before the first had finished — with the tidy tree deleted and the deletion VERIFIED by testing for
+the directory, rather than inferred from `rm`'s exit code.
+
+**Gates, against the committed tree `c8264a0`.** WSL legs run serially; Windows legs with
+`--clean-first`. Build exit code beside every total, because that is what distinguishes a green run
+from a green reading.
+
+| Configuration | Tests | Skipped | Build |
+|---|---|---|---|
+| `clang-debug` | **38/38** | 0 | exit 0, tree already current (`ninja -n` agrees) |
+| `gcc-release` | **38/38** | **7** | exit 0 — this is the leg that caught the `-Wshadow` errors clang did not |
+| `clang-asan-ubsan` | **38/38** | 0 | exit 0 |
+| `clang-tsan` | **38/38** | 0 | exit 0 |
+| `emscripten` | **28/28** | 0 | exit 0 |
+| `clang-tidy` | **38/38** | 0 | exit 0, **548 ninja steps from a verified-empty tree, 0 findings** |
+| `cl-debug` (`--clean-first`) | **38/38** | 0 | exit 0, **538 ninja steps**, no `no work to do` |
+| `clangcl-release` (`--clean-first`) | **38/38** | **6** | exit 0, **538 ninja steps**, no `no work to do` |
+| pinned `clang-format` 22.1.8 | 436 files clean | | |
+| `mkdocs build --strict` | exit 0 | | |
+
+The 38th test is the new `write-slot-inline` canary mode; `gcc-release` skips 7 rather than 6 for
+the same reason, and `clangcl-release` still skips 6 because the socket-contract canaries are POSIX
+only.
+
+**CI on `c8264a0`: green, 28 of 28 jobs, 0 failed** (run `35614400394`). All three macOS legs, all
+five Windows legs, both `gcc-14` legs and **`linux (gcc-15)`**.
+
+That last one was expected to be red. Master had been failing on it because Canonical's apt archive
+was returning 503 and the compiler never installed, which `ci-ok` requires (**core-cpp#42**, open).
+I verified the diagnosis instead of accepting it — on `d2860dc`, the commit before mine, the failing
+step is **`Install GCC 15`**, not a configure, compile or test step — so the reading rule was the
+step rather than the job. By the time my run reached it the archive had recovered and it passed, so
+nothing had to be discounted.
+
+**Worth stating anyway, because it was true while I was pushing:** my local `gcc-release` preset
+uses **g++ 14.3.0**, so gcc-15 is witnessed by CI alone. Had the outage still been on, this commit
+would have shipped with that toolchain unwitnessed — and the `-Wshadow` errors this round found were
+GCC-only, which clang never diagnosed. Same shape as the kqueue point above: the leg I cannot run
+locally is the only witness.
+
+**Worktree.** Mine had been de-registered and its directory left behind. I verified the leftover was
+byte-identical to `770f2dc` (which is on master) through a temporary-index `git status` before
+touching it, then recreated the worktree at the remote head and moved the build trees back rather
+than rebuilding them.
 
 ---
 

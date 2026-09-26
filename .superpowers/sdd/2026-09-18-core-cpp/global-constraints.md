@@ -3621,3 +3621,63 @@ false claim would have survived precisely because nothing was broken.
 And the gap that let it stand is stated in one line by the re-reviewer: **the suite still has no
 case where two flows interleave on the input slot.** The missing case and the wrong derivation are
 the same fact seen twice.
+
+### A flaky red trains you to re-run instead of read, which is the opposite hazard
+
+Two CI failures tonight had nothing to do with any change:
+
+```
+Install clang 22   linux (clang-22)   on a Dependabot PR
+Install GCC 15     linux (gcc-15)     on a ledger-markdown-only commit of mine
+```
+
+Both are apt fetches from external package repositories, in a `Install <toolchain>` step, before a
+line of the project is compiled.
+
+**This is the inverse of the failure this session has spent its time on.** Everywhere else the
+hazard was *a gate that does not report reads as passed*. Here a gate **reports RED for a
+non-reason**, and the damage is to the reader rather than the signal: after the second or third
+one, "master is red" stops prompting a diagnosis and starts prompting a re-run. **The habit is the
+hazard, not the outage.**
+
+The discipline that keeps it honest is cheap and I followed it both times: **name the failing job
+and the failing STEP before deciding it is infrastructure.** A ledger-only commit cannot reach a
+compiler, so `Install GCC 15` is decisive; a compile error in a test file would not have been.
+`gh run rerun <id> --failed` re-runs only the failed jobs, which keeps the cost of being wrong low.
+
+**Worth a workflow change if it recurs**: a retry on the toolchain-install steps would remove the
+class entirely, and is a smaller intervention than teaching every reader to distinguish. Recorded
+rather than filed, since twice is a pattern and not yet a cost.
+
+### A toolchain family is not a toolchain
+
+B6 checked what its own "gcc is covered locally" claim actually covered:
+
+```
+local gcc-release preset  ->  g++ 14.3.0
+CI linux (gcc-15)         ->  g++ 15, witnessed by CI alone
+```
+
+And the errors that leg family caught in its round were **`-Wshadow`, which clang never diagnosed
+at all**. So during the apt outage, had the commit shipped, gcc-15 would have been unwitnessed --
+and the diagnostics unique to it are precisely the ones no other local preset substitutes for.
+
+**A preset named after a compiler tells you nothing about which version of it CI runs**, and
+"covered locally" is a claim about a *version*, not a family. This is the second case this session
+where a coverage claim was true of a **neighbour** of the thing it named -- the first being
+`macos` and kqueue, where three macOS legs are the only witness and FreeBSD has never been
+dispatched at all.
+
+The general form, which now has three instances: **my 314 launcher lines answered "does `cl` use
+the cache" when the sentence was about "can this defect reach `cl`"; "gcc is covered" answered for
+14 when the risk was 15; "the suite passes" answered for the paths the suite walks.** Each time the
+measurement was real and about the wrong subject, and each time it read as evidence.
+
+### CI recovered on its own, and the discipline is what made that readable
+
+`linux (gcc-15)` passed on `c8264a0` — Canonical's archive had recovered. What made that legible
+rather than confusing is that the failing **step** had been named first: on `d2860dc` it was
+`Install GCC 15`, not configure, compile or test, and `ci-ok` failed only downstream of it. **A
+green after an unexplained red teaches nothing; a green after a named cause closes the question.**
+core-cpp#42 stays open regardless -- the outage recovering is not the retry landing, and the next
+one will cost the same.
