@@ -87,6 +87,9 @@ if(NOT CORE_CPP_SELFTEST_GIT)
     return()
 endif()
 
+# The cases that could not run on this machine; see DEST_IS_A_LINK in core_cpp_vendor_case().
+set(skippedCases "")
+
 # The tag every fixture repository carries, and a SHA that is well formed and resolves nowhere.
 set(fixtureTag "v0.0.1")
 set(absentCommit "0123456789abcdef0123456789abcdef01234567")
@@ -382,9 +385,16 @@ function(core_cpp_vendor_case name)
         endif()
         file(CREATE_LINK "${linkTarget}" "${copy}" RESULT linkResult SYMBOLIC)
         if(NOT linkResult EQUAL 0)
-            # Windows without the privilege to create one. The case cannot run, and says so rather
-            # than passing: nothing of what it asserts was established.
-            message(STATUS "check-vendor-selftest: ${name} SKIPPED, a symbolic link cannot be created here: ${linkResult}")
+            # Windows without the privilege to create one. The case cannot run, and nothing of what
+            # it asserts was established, so it must not read as passed: on a CI runner, where the
+            # privilege exists, that is a failure; elsewhere it is recorded, and the whole test ends
+            # SKIPPED naming it (below) rather than Passed with a case quietly missing.
+            if(DEFINED ENV{CI})
+                set(failures "${failures}\n  ${name}: a symbolic link could not be created on a CI runner: ${linkResult}"
+                    PARENT_SCOPE)
+            else()
+                set(skippedCases ${skippedCases} ${name} PARENT_SCOPE)
+            endif()
             return()
         endif()
     endif()
@@ -914,5 +924,18 @@ endif()
 
 if(failures)
     message(FATAL_ERROR "check-vendor-selftest: ${caseCount} case(s) run, these went wrong:${failures}")
+endif()
+if(skippedCases)
+    # Every case that ran passed, and some could not run: the verdict is SKIPPED, which ctest's
+    # SKIP_REGULAR_EXPRESSION for this test scores as such, and it says which cases and why.
+    list(LENGTH skippedCases skippedCount)
+    string(REPLACE ";" ", " skippedNames "${skippedCases}")
+    message(STATUS
+        "check-vendor-selftest: SKIPPED -- ${skippedCount} case(s) could not run here, because a symbolic "
+        "link cannot be created (${skippedNames}); the other ${caseCount} case(s) passed.")
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.29)
+        cmake_language(EXIT ${SKIP_EXIT_CODE})
+    endif()
+    return()
 endif()
 message(STATUS "check-vendor-selftest: all ${caseCount} case(s) were accepted or refused as expected")
