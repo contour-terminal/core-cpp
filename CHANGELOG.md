@@ -118,7 +118,7 @@ workflow refuses one without a section here.
   clang-cl tree's compile database through `scripts/tidy-database.py`, which refuses a result that
   analysed fewer `windows/` sources than git tracks, an analyser other than the pin, and a canary it
   did not report. (`CXX_CLANG_TIDY` is not used there: over clang-cl it hands clang-tidy a command it
-  reads with exceptions disabled.) It is not yet one of `ci-ok`'s needs; see the job's comment.
+  reads with exceptions disabled.) It is one of `ci-ok`'s needs.
 
 ### Changed
 

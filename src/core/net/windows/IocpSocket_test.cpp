@@ -478,7 +478,7 @@ TEST_CASE("A Windows socket factory refuses a loop whose backend lends no comple
     // adoptSocket closes what it was handed, refusal or not; adoptListener leaves it to the caller.
     core::platform::ensureWinsockInitialized();
     auto const socket = ::WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
-    REQUIRE(socket != INVALID_SOCKET);
+    REQUIRE(socket != InvalidSocketValue);
     auto const adopted =
         core::net::adoptSocket(loop, reinterpret_cast<core::platform::NativeHandle>(socket), {});
     REQUIRE_FALSE(adopted.has_value());
@@ -488,7 +488,7 @@ TEST_CASE("A Windows socket factory refuses a loop whose backend lends no comple
     CHECK(::getsockopt(socket, SOL_SOCKET, SO_TYPE, reinterpret_cast<char*>(&type), &size) == SOCKET_ERROR);
 
     auto const listening = ::WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
-    REQUIRE(listening != INVALID_SOCKET);
+    REQUIRE(listening != InvalidSocketValue);
     auto const adoptedListener =
         core::net::adoptListener(loop, reinterpret_cast<core::platform::NativeHandle>(listening));
     REQUIRE_FALSE(adoptedListener.has_value());

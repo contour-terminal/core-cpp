@@ -852,12 +852,6 @@ jobs:
   # CXX_CLANG_TIDY, which hands clang-tidy a clang-cl command it reads with exceptions disabled
   # (scripts/tidy-database.py says what was measured). The script refuses a result that analysed
   # fewer `windows/` sources than git tracks, an analyser other than the pin, and a silent canary.
-  #
-  # NOT in ci-ok's needs yet, and that is a stated gap rather than an oversight: its first run over
-  # 29cddd6 plus lane B reported findings in the allocation tests (a replaced `operator delete`
-  # whose parameter name differs from vcruntime_new.h's `_Block`, a malloc/free pair the analyser
-  # reads as mismatched, a deliberate use of a moved-from object) that need their owner's judgement.
-  # Add it to ci-ok's needs in the change that clears them.
   windows-clang-tidy:
     name: windows (clang-tidy)
     runs-on: windows-2025
@@ -901,9 +895,16 @@ jobs:
       - name: MSVC developer environment
         uses: ilammy/msvc-dev-cmd@v1
 
-      # Configure only: the analysis reads compile_commands.json, which configure writes.
-      - name: Configure
-        run: cmake --preset clangcl-release "-DCMAKE_CXX_COMPILER=$CXX_COMPILER_PATH"
+      # The analysis reads compile_commands.json, which configure writes -- but not every header
+      # the database's commands include exists after configure: libunicode generates its UCD
+      # headers (ucd_enums.h and the rest) at BUILD time. Without them every core::tui source fails
+      # to parse, and the analyser then reports findings about code it could not read (measured:
+      # 12 sources, `'libunicode/ucd_enums.h' file not found` and a cascade of false const and
+      # linkage findings). So the one target that generates them is built, and nothing else.
+      - name: Configure, and generate libunicode's headers
+        run: |
+          cmake --preset clangcl-release "-DCMAKE_CXX_COMPILER=$CXX_COMPILER_PATH"
+          cmake --build out/build/clangcl-release --target unicode_ucd
 
       - name: clang-tidy over the clang-cl compile database
         run: python scripts/tidy-database.py --build-dir out/build/clangcl-release --tidy "$CLANG_TIDY_EXE"
@@ -1366,7 +1367,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [style, linux, macos, windows, sanitizers, clang-tidy, emscripten, consumer-smoke, compile-cache]
+    needs: [style, linux, macos, windows, windows-clang-tidy, sanitizers, clang-tidy, emscripten, consumer-smoke, compile-cache]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

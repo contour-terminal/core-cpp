@@ -91,9 +91,20 @@ Imported from contour's `src/coro` at `6777ff05`, with `coro::` renamed `core::a
   binary with it), so `src/core/async/CMakeLists.txt` reads the last `-O` off the build's own
   flags, defines `CORE_ASYNC_SYMMETRIC_TRANSFER_IS_TAIL_CALL` only at `-O2` or better, and says
   which it decided in the configure log. `gcc-release` keeps the case, `gcc-debug` and any build
-  outside the presets skip it. The fix is tracked in
-  [core-cpp#15](https://github.com/contour-terminal/core-cpp/issues/15). Task B1 does not close or
-  narrow it: whether the transfer is a tail call is a property of the compiler's sibling-call
+  outside the presets skip it.
+
+  **This limit is a decision, taken in 0.5.0**
+  ([core-cpp#15](https://github.com/contour-terminal/core-cpp/issues/15)), not a pending fix. The fix
+  that holds on every compiler is a trampoline: `await_suspend` returns `bool`, and parent and child
+  race on a completion flag. That costs an atomic exchange on every `co_await` of every `Task`,
+  fastcached's hot path included, and adds a second transfer path next to the frame-ownership code,
+  where a mistake is a silent use-after-free. What it buys is synchronous depth in debug and browser
+  builds only, at depths (100000) no realistic workload reaches; a chain that suspends even once is
+  flat today. `-mtail-call` is not an option either: it is a flag every consumer translation unit
+  would need, which is a PUBLIC flag. **If a consumer does hit the limit in the browser**, the
+  targeted fix is that trampoline under `__EMSCRIPTEN__` alone, with a plain flag instead of the
+  atomic since the WebAssembly subset has no threads, leaving every native build's transfer as it
+  is. Task B1 did not close or narrow the limit: whether the transfer is a tail call is a property of the compiler's sibling-call
   optimisation and of WebAssembly's tail-call support, and the ownership graft changed who owns a
   frame, not how `final_suspend` transfers control. Nothing in this repository measures the depth at
   which the chain overflows, so treat "unchanged" as an argument from what was edited rather than

@@ -453,6 +453,8 @@ others in notes.
 | `src/core/testing/ExitCode.cpp` | origin: core-cpp | - | - | - |
 | `src/core/testing/ExitCode.hpp` | origin: core-cpp | - | - | - |
 | `src/core/testing/ExitCode_test.cpp` | origin: core-cpp | - | - | - |
+| `src/core/testing/ReplacedGlobalAllocation.cpp` | origin: core-cpp | - | - | 0.5.0: the replaced global allocation functions of the three counting tests, in a translation unit that does not see `<new>`'s MSVC parameter names (the Windows clang-tidy leg) |
+| `src/core/testing/ReplacedGlobalAllocation.hpp` | origin: core-cpp | - | - | 0.5.0: what a counting test defines for `ReplacedGlobalAllocation.cpp` to forward to |
 | `src/core/testing/ScopedTempDir.hpp` | contour-terminal/endo | `src/testing/ScopedTempDir.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/testing/ScopedTempDir_test.cpp` | contour-terminal/endo | `src/testing/ScopedTempDir_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/testing/ScopedWorkingDirectory.hpp` | contour-terminal/endo | `src/testing/ScopedWorkingDirectory.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |

@@ -250,12 +250,17 @@ TEST_CASE("A moved-from ResumeTarget names nothing", "[Strand][context]")
 {
     // The implicit move moved the keep-alive out and copied the executor pointer: the source still
     // answered true, and a submit through it reached an executor it no longer kept alive.
+    //
+    // Reading the source after the move is the point of the case. It is held the way an owner holds
+    // one, behind a pointer, which is also what keeps clang-analyzer's use-after-move check -- which
+    // objects to any member call on a moved-from LOCAL -- from reading this deliberate read as a
+    // mistake.
     auto executor = ManualExecutor {};
-    auto source = ResumeTarget { executor };
-    auto const moved = moveOutOf(source);
+    auto const source = std::make_unique<ResumeTarget>(executor);
+    auto const moved = moveOutOf(*source);
     CHECK(moved.executor() == &executor);
-    CHECK_FALSE(source);
-    CHECK(source.executor() == nullptr);
+    CHECK_FALSE(*source);
+    CHECK(source->executor() == nullptr);
 
     auto assigned = ResumeTarget {};
     auto other = ResumeTarget { executor };
