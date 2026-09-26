@@ -9,6 +9,18 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Added
+
+- **`core::async::TaskKind` and `RunTask::kind()`: an around-task hook can tell a coroutine
+  resumption from a posted callable** (core-cpp#53). `TaskKind::Callable` is what `post` and
+  `tryPost` were given; `TaskKind::Resumption` is a coroutine arriving through `submit` or
+  `trySubmit`, as a handle or as `ParkedWork`, a `ResumeOn` hop, or a `KeyedStrands` reroute
+  through a retired key strand. A hook -- `StrandOptions::aroundTask` or a `KeyedAroundTask` --
+  can now scope per-resumption context to coroutine resumptions only, rather than installing it
+  around every callable posted to the same strand or key too. Read from what the task already
+  holds, so it adds nothing to a task and costs one load where a hook asks. Additive; no signature
+  changes.
+
 ## [0.4.3] - 2026-09-26
 
 ### Changed

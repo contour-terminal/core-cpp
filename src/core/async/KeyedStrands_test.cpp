@@ -702,6 +702,96 @@ TEST_CASE("A keyed around-task hook is given the key, around every resumption on
     CHECK(keyedSession == 0);
 }
 
+namespace
+{
+
+using core::async::RunTask;
+using core::async::TaskKind;
+
+/// A keyed hook that records each task's key and kind, and runs it.
+struct KeyedKindHook
+{
+    std::vector<std::pair<int, TaskKind>> seen;
+
+    void operator()(int const& key, RunTask run)
+    {
+        seen.emplace_back(key, run.kind());
+        run();
+    }
+};
+
+/// Counts itself run, and ends: a coroutine that is one task wherever it is submitted.
+Task<void> countOnce(int* ran)
+{
+    ++*ran;
+    co_return;
+}
+
+/// Hops onto @p key's strand, parks on @p queue, and counts each time it runs on the key.
+Task<void> parkOnQueue(Strands* strands, int key, Queue* queue, int* ran)
+{
+    co_await strands->resumeOn(key);
+    ++*ran;
+    std::ignore = co_await queue->pop();
+    ++*ran;
+}
+
+} // namespace
+
+TEST_CASE("A keyed around-task hook is told whether it runs a posted callable or a coroutine resumption",
+          "[KeyedStrands][aroundTask][kind]")
+{
+    auto base = ManualExecutor {};
+    auto foreign = ManualExecutor {};
+    auto queue = Queue { foreign, core::async::AsyncQueueOptions {} };
+    auto hook = KeyedKindHook {};
+    auto strands =
+        Strands { base, core::async::StrandOptions {}, core::async::KeyedAroundTask<int>::of(hook) };
+    auto order = std::vector<int> {};
+
+    strands.post(1, [&order] { order.push_back(1); });
+    auto call = OwningCall { .payload = std::make_unique<int>(2), .out = &order };
+    CHECK(strands.tryPost(2, call));
+    std::ignore = base.drain();
+
+    auto counted = 0;
+    auto byHandle = countOnce(&counted);
+    strands.submit(4, byHandle.handle());
+    auto destroyed = 0;
+    auto root = std::coroutine_handle<> {};
+    core::async::test::parkDetached(&root, FrameSentinel { &destroyed });
+    REQUIRE(root);
+    strands.submit(5, ParkedWork { .resume = root, .abandon = core::async::detail::claimOn(root) });
+    std::ignore = base.drain();
+
+    // A resumption rerouted through a retired key strand: the coroutine parks off its key, the key's
+    // strand retires, and the push comes back through the retired strand to the registry.
+    auto ran = 0;
+    auto parked = parkOnQueue(&strands, 6, &queue, &ran);
+    parked.handle().resume(); // resumeOn(6): a hop
+    std::ignore = base.drain();
+    REQUIRE(queue.hasWaiter());
+    REQUIRE(strands.size() == 0); // key 6's strand retired under the parked coroutine
+    std::ignore = queue.push(1);
+    std::ignore = base.drain();
+    std::ignore = foreign.drain();
+
+    using Seen = std::pair<int, TaskKind>;
+    CHECK(hook.seen
+          == std::vector { Seen { 1, TaskKind::Callable },
+                           Seen { 2, TaskKind::Callable },
+                           Seen { 4, TaskKind::Resumption },
+                           Seen { 5, TaskKind::Resumption },
+                           Seen { 6, TaskKind::Resumption },
+                           Seen { 6, TaskKind::Resumption } });
+    CHECK(order == std::vector { 1, 2 });
+    CHECK(counted == 1);
+    CHECK(byHandle.done());
+    CHECK(destroyed == 1);
+    CHECK(ran == 2);
+    CHECK(parked.done());
+}
+
 TEST_CASE("KeyedStrands::seal() closes the offer door for every key, and runs what is queued and what "
           "comes back",
           "[KeyedStrands][seal]")

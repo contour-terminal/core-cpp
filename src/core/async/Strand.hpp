@@ -52,6 +52,18 @@ namespace detail
     class StrandTask;
 } // namespace detail
 
+/// What a task a strand runs is, as an around-task hook sees it (@c RunTask::kind).
+enum class TaskKind : std::uint8_t
+{
+    /// A callable handed to `post` or `tryPost`.
+    Callable,
+
+    /// A coroutine resumed on the strand: handed to `submit` or `trySubmit`, as a handle or as
+    /// `ParkedWork`, which is how a `ResumeOn` hop arrives and how a coroutine that parked off the
+    /// strand comes back -- a `KeyedStrands` key's included, through a retired strand's reroute.
+    Resumption,
+};
+
 /// The rest of one task, handed to an around-task hook: calling it runs the task.
 ///
 /// A hook calls it exactly once, on the thread the hook was called on, before the hook returns.
@@ -61,6 +73,12 @@ class RunTask final
   public:
     /// Runs the task.
     void operator()() const;
+
+    /// @return Whether the task is a posted callable or a coroutine resumption, so a hook can
+    ///         scope what it installs: a request's session to the resumptions of the coroutine
+    ///         that serves the request, say, and not to every callable posted to the same strand
+    ///         (core-cpp#53). Read from what the task already holds, so it costs one load.
+    [[nodiscard]] TaskKind kind() const noexcept;
 
   private:
     friend class detail::StrandCore;
@@ -75,7 +93,8 @@ class RunTask final
 /// an ambient context -- a request's session, a tenant -- for exactly the length of each task.
 ///
 /// A task is one resumption, so the hook also runs around a coroutine that parked on another
-/// executor and came back through the strand. Set at construction and never changed; a reference,
+/// executor and came back through the strand; @c RunTask::kind tells a resumption from a posted
+/// callable. Set at construction and never changed; a reference,
 /// not an owner: the hook must outlive the strand. Unset, it costs one branch per task and nothing
 /// else.
 struct AroundTask
@@ -440,6 +459,12 @@ namespace detail
 
         /// @return Whether this holds nothing: run, given up, or never set.
         [[nodiscard]] bool empty() const noexcept { return !_call && !_parked.handle(); }
+
+        /// @return Whether this is a call or a coroutine. Asked before @c run, which empties it.
+        [[nodiscard]] TaskKind kind() const noexcept
+        {
+            return _call ? TaskKind::Callable : TaskKind::Resumption;
+        }
 
         /// Runs the task and leaves this empty. A call is freed when it returns, or throws.
         void run()
@@ -1257,6 +1282,11 @@ namespace detail
 inline void RunTask::operator()() const
 {
     _task->run();
+}
+
+inline TaskKind RunTask::kind() const noexcept
+{
+    return _task->kind();
 }
 
 /// An executor that runs what it is given one at a time, in the order given, on a base executor.
