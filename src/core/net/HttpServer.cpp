@@ -11,6 +11,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <tuple>
 #include <utility>
 
 namespace core::net
@@ -202,7 +203,7 @@ namespace
                 // be unread here, and a bare close over them is a reset that destroys the refusal
                 // (core-cpp#35). No loop is at hand in `serve`, so each read of the drain carries
                 // its share of the bound.
-                static_cast<void>(co_await closeLingering(socket, nullptr, limits.linger));
+                std::ignore = co_await closeLingering(socket, nullptr, limits.linger);
             }
             co_return;
         }

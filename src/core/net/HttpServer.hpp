@@ -88,8 +88,14 @@ struct HttpLimits
 
     /// How a connection refused over a request it did not finish reading is closed: through
     /// @c closeLingering, so the refusal is followed by a FIN rather than destroyed by a reset.
-    /// fastcached's connection bounds: two seconds, 64 KiB, four reads.
-    LingerBounds linger { .total = std::chrono::milliseconds { 2000 },
+    ///
+    /// A quarter of a second, 64 KiB, four reads -- not fastcached's two seconds, because
+    /// fastcached lingers in a flow of the connection's own and @c serve does not: **every
+    /// refused request holds this server's accept loop for up to `linger.total`**. A peer that
+    /// reads the refusal and closes costs one round trip, which a quarter second covers well past
+    /// a LAN; one that keeps sending, or never closes, meets the bound, and each such request
+    /// stalls every later client for that long.
+    LingerBounds linger { .total = std::chrono::milliseconds { 250 },
                           .maxBytes = std::size_t { 64 } * 1024,
                           .reads = 4 };
 };
@@ -109,8 +115,9 @@ struct HttpLimits
 /// **A refused connection closes lingering**: a request answered with a 413 or a 400 may
 /// still have bytes the server never read, and a bare close over them is a reset that destroys
 /// the refusal in flight ([core-cpp#35](https://github.com/contour-terminal/core-cpp/issues/35)).
-/// So the refusal is followed by @c closeLingering, bounded by @c HttpLimits::linger. A request
-/// that was read in full and answered is closed by its destructor, which is a FIN.
+/// So the refusal is followed by @c closeLingering, bounded by @c HttpLimits::linger, and **each
+/// refused request holds the accept loop for up to `linger.total`** (250 ms by default) while it
+/// does. A request that was read in full and answered is closed by its destructor, which is a FIN.
 /// @param listener The bound listener to accept from (not owned).
 /// @param handler The request handler.
 /// @param limits Parsing limits applied to every request.

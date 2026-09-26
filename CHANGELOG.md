@@ -97,7 +97,9 @@ workflow refuses one without a section here.
   it closes or a bound runs out -- the whole drain's time, the bytes discarded, the reads made --
   then close, so a reply written over a request left unread is followed by a FIN rather than
   destroyed by the reset a bare close sends. `HttpLimits::linger` bounds it for `serve`, by
-  default two seconds, 64 KiB and four reads. Additive.
+  default 250 ms, 64 KiB and four reads -- smaller than fastcached's two seconds, because `serve`
+  handles one connection at a time and a refused request holds its accept loop for up to that
+  long. Additive.
 - **`core-cpp.open-work`: every `## Open work` entry leads with a core-cpp issue, and that issue is
   open** (core-cpp#12). `scripts/check-open-work.py` reads every such section under `.agent/` and
   `docs/` and the top-level documents, and refuses an entry that does not lead with a core-cpp issue
