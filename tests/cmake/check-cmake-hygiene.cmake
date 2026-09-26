@@ -115,17 +115,23 @@ core_cpp_hygiene_rule(c-style-for KIND cpp
 # no named namespace (a main(), a file of TU-local helpers, a header of macros) is not checked, and
 # neither is a namespace alias.
 #
-# Known limitation (core-cpp#23): "first" is taken literally, so a leading forward-declaration
-# block for another module's type -- `namespace core::platform { class Wakeup; }` at the top of a
-# `core::tui` header -- is refused, and the header carries a full include instead
-# (`src/core/tui/Terminal.hpp`, `src/core/tui/TerminalInput.hpp`). A forward declaration defines
-# no namespace, so the rule should skip such a block.
+# "First" means the first namespace that DEFINES something (core-cpp#23). A block that only
+# forward-declares another module's types -- `namespace core::platform { class Wakeup; }` at the top
+# of a `core::tui` header -- defines nothing, and refusing it made such a header carry a full include
+# instead, widening every consumer's include graph for a type it names by pointer. So a leading
+# block whose body is nothing but `class`/`struct`/`union`/`enum [class|struct]` declarations ending
+# in `;`, at least one, is skipped (its name is still held to lowercase), and the rule applies to the first
+# namespace after it. A block with anything else in it -- a function, an alias, a definition -- is
+# the file's namespace as before.
 set(CORE_CPP_HYGIENE_RULES ${CORE_CPP_HYGIENE_RULES} namespace-directory)
 set(CORE_CPP_HYGIENE_namespace-directory_REASON
     "a source's first namespace is the one its whole directory path names, in lowercase: src/core/<dir>/ is core::<dir> and src/core/<dir>/<sub>/ is core::<dir>::<sub>, bar the platform and detail directories, which are layout; src/core/ is core (Part I §1)")
 set(CORE_CPP_HYGIENE_NAMESPACE_REGEX "^[ \t]*(inline[ \t]+)?namespace[ \t]+([A-Za-z_][A-Za-z0-9_:]*)([ \t{/].*)?$")
 set(CORE_CPP_HYGIENE_NAMESPACE_ALIAS_REGEX "^[ \t]*namespace[ \t]+[A-Za-z0-9_:]+[ \t]*=")
 set(CORE_CPP_HYGIENE_PRIVATE_DIRECTORIES bsd darwin detail emscripten linux posix windows)
+# One forward declaration, as a namespace-directory forward block may hold only these.
+set(CORE_CPP_HYGIENE_FORWARD_DECLARATION_REGEX
+    "(class|struct|union|enum([ \t]+(class|struct))?)[ \t]+[A-Za-z_][A-Za-z0-9_]*([ \t]*:[ \t]*[A-Za-z_][A-Za-z0-9_:]*)?[ \t]*;")
 
 # The rule the allowlist itself answers to.
 set(CORE_CPP_HYGIENE_RULES ${CORE_CPP_HYGIENE_RULES} stale-allowlist)
@@ -233,6 +239,53 @@ set(allowUsed "")
 # found. The control at the end of this file holds it against an independent recount.
 set(checkedCount 0)
 
+## @brief Sets @p outVar to ON if the namespace declared on line @p lineNumber (1-based) of the
+## encoded line list @p linesVar opens a block holding forward declarations and nothing else.
+function(core_cpp_hygiene_forward_block linesVar lineNumber outVar)
+    set(${outVar} OFF PARENT_SCOPE)
+    math(EXPR first "${lineNumber} - 1")
+    list(SUBLIST ${linesVar} ${first} 64 window)
+    set(text "")
+    set(depth 0)
+    set(opened OFF)
+    foreach(encoded IN LISTS window)
+        string(REPLACE "${semicolonCode}" ";" line "${encoded}")
+        string(REPLACE "${openBracketCode}" "[" line "${line}")
+        string(REPLACE "${closeBracketCode}" "]" line "${line}")
+        string(REPLACE "${backslashCode}" "\\" line "${line}")
+        string(REGEX REPLACE "//.*$" "" line "${line}")
+        string(APPEND text " ${line}")
+        string(REGEX MATCHALL "{" opens "${line}")
+        string(REGEX MATCHALL "}" closes "${line}")
+        list(LENGTH opens openCount)
+        list(LENGTH closes closeCount)
+        math(EXPR depth "${depth} + ${openCount} - ${closeCount}")
+        if(openCount GREATER 0)
+            set(opened ON)
+        endif()
+        if(opened AND depth LESS_EQUAL 0)
+            break()
+        endif()
+    endforeach()
+    if(NOT opened OR depth GREATER 0)
+        return()
+    endif()
+    # What is between the braces, less every forward declaration, must be nothing.
+    if(NOT text MATCHES "^[^{]*{(.*)}[^}]*$")
+        return()
+    endif()
+    set(body "${CMAKE_MATCH_1}")
+    # An empty block declares nothing forward; it is the file's namespace like any other.
+    if(NOT body MATCHES "${CORE_CPP_HYGIENE_FORWARD_DECLARATION_REGEX}")
+        return()
+    endif()
+    string(REGEX REPLACE "${CORE_CPP_HYGIENE_FORWARD_DECLARATION_REGEX}" "" body "${body}")
+    string(STRIP "${body}" body)
+    if(body STREQUAL "")
+        set(${outVar} ON PARENT_SCOPE)
+    endif()
+endfunction()
+
 ## @brief Refuses @p line of @p path under @p rule, unless an allowlist row allows the rule in that
 ## file. @p shown is the text printed under the reason.
 function(core_cpp_hygiene_refuse rule path lineNumber shown)
@@ -308,7 +361,11 @@ foreach(path IN LISTS scanned)
             string(REGEX MATCH "${CORE_CPP_HYGIENE_NAMESPACE_REGEX}" declaration "${line}")
             if(declaration)
                 set(declared "${CMAKE_MATCH_2}")
-                if(NOT firstNamespaceSeen AND NOT declared STREQUAL expectedNamespace
+                set(forwardBlock OFF)
+                if(NOT firstNamespaceSeen)
+                    core_cpp_hygiene_forward_block(lines ${lineNumber} forwardBlock)
+                endif()
+                if(NOT firstNamespaceSeen AND NOT forwardBlock AND NOT declared STREQUAL expectedNamespace
                    AND NOT declared MATCHES "^${expectedNamespace}::")
                     core_cpp_hygiene_refuse(namespace-directory "${path}" ${lineNumber}
                         "${line}    (expected ${expectedNamespace})")
@@ -316,7 +373,9 @@ foreach(path IN LISTS scanned)
                     core_cpp_hygiene_refuse(namespace-directory "${path}" ${lineNumber}
                         "${line}    (namespaces are lowercase)")
                 endif()
-                set(firstNamespaceSeen ON)
+                if(NOT forwardBlock)
+                    set(firstNamespaceSeen ON)
+                endif()
             endif()
         endif()
 

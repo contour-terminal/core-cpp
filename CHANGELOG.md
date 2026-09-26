@@ -30,6 +30,17 @@ workflow refuses one without a section here.
     `std::optional<core::cli::FlagStore> parsed` and catches `std::exception` around the call.
     contour and endo use `core::cli::App` only, and need no change.
 
+### Changed
+
+- **The hygiene scan's `namespace-directory` rule skips a leading forward-declaration block**
+  (core-cpp#23). A header under `src/core/<dir>/` that opened with
+  `namespace core::platform { class Wakeup; }` was refused, because that was its first named
+  namespace, so it had to include the other module's header instead. A block whose body is only
+  `class`/`struct`/`union`/`enum` declarations ending in `;` defines nothing and is now skipped,
+  and the rule applies to the first namespace after it. `core/tui/TerminalInput.hpp` forward-declares
+  `core::platform::Wakeup` accordingly and no longer includes `core/platform/Wakeup.hpp`; a file
+  that used `Wakeup` through that include includes it itself (none of the consumers does).
+
 ### Fixed
 
 - **Alt+Backspace reaches its key binding** (core-cpp#21). `VtParser` read `ESC DEL` -- how xterm,

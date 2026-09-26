@@ -141,7 +141,11 @@ has the measurement that made this a rule.
   are `core`; nested helper namespaces (`detail`, `testing`, `base64`, `views`, `ranges`) are
   allowed inside. Spell it `namespace core::<directory>`, not `namespace core { namespace <directory>`.
   The hygiene scan (`namespace-directory` in `tests/cmake/check-cmake-hygiene.cmake`) refuses
-  a source under `src/core/` whose first named namespace is anything else. *(core-cpp; the
+  a source under `src/core/` whose first named namespace is anything else. A leading block that
+  only forward-declares another module's types (`namespace core::platform { class Wakeup; }`)
+  defines nothing and is skipped, so a header that names such a type by pointer or reference
+  forward-declares it rather than including its header
+  ([core-cpp#23](https://github.com/contour-terminal/core-cpp/issues/23)). *(core-cpp; the
   design spec, Part I §1)*
 
 ## Files and headers

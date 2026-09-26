@@ -32,6 +32,10 @@ set(clean
     "src/core/foo/Main.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace\n{\n}\nint main() { return 0<semicolon> }\n"
     "src/core/Top.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core\n{\nnamespace views\n{\n}\n} // namespace core\n"
     "src/core/Base64.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core::base64\n{\n}\n"
+    # A leading block that only forward-declares another module's types defines nothing, so the
+    # namespace the directory names is the first one AFTER it (core-cpp#23): on one line, and
+    # spread over several, with a comment and an enum's underlying type.
+    "src/core/foo/Fwd.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core::bar { class Wakeup<semicolon> }\nnamespace core::bar::detail\n{\nstruct Slot<semicolon> // private\nenum class Kind : std::uint8_t<semicolon>\n}\nnamespace core::foo\n{\n}\n"
     "CHANGELOG.md|# Changelog
 
 ### Imported
@@ -46,7 +50,7 @@ contour-terminal/contour
   Imported at 1111111111111111111111111111111111111111
   - src/core/Base64.hpp (verbatim)
 "
-    ".agent/reference/provenance.md|# Provenance\n\n| core-cpp path | upstream repo | upstream path | synced SHA | notes |\n|---|---|---|---|---|\n| `src/core/foo/CMakeLists.txt` | origin: core-cpp | - | - | - |\n| `src/core/foo/Foo.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/detail/Bar.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/posix/Impl.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/testing/Fake.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/Main.cpp` | origin: core-cpp | - | - | - |\n| `src/core/Top.hpp` | origin: core-cpp | - | - | - |\n| `src/core/Base64.hpp` | contour-terminal/contour | `src/crispy/Base64.hpp` | 1111111111111111111111111111111111111111 | verbatim |\n"
+    ".agent/reference/provenance.md|# Provenance\n\n| core-cpp path | upstream repo | upstream path | synced SHA | notes |\n|---|---|---|---|---|\n| `src/core/foo/CMakeLists.txt` | origin: core-cpp | - | - | - |\n| `src/core/foo/Foo.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/detail/Bar.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/posix/Impl.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/testing/Fake.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/Main.cpp` | origin: core-cpp | - | - | - |\n| `src/core/Top.hpp` | origin: core-cpp | - | - | - |\n| `src/core/Base64.hpp` | contour-terminal/contour | `src/crispy/Base64.hpp` | 1111111111111111111111111111111111111111 | verbatim |\n| `src/core/foo/Fwd.hpp` | origin: core-cpp | - | - | - |\n"
 )
 
 # At least one violating file per rule: "<rule>|<file>|<content>". The file replaces its clean
@@ -75,6 +79,11 @@ set(cases
     "namespace-directory|src/core/Top.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace crispy\n{\n}\n"
     "namespace-directory|src/core/Base64.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core::Async\n{\n}\n"
     "namespace-directory|src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foo\n{\nnamespace Detail\n{\n}\n}\n"
+    # A leading block is skipped only if it forward-declares and does nothing else.
+    "namespace-directory|src/core/foo/Fwd.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core::bar { class Wakeup<semicolon> void wake()<semicolon> }\nnamespace core::foo\n{\n}\n"
+    "namespace-directory|src/core/foo/Fwd.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core::bar\n{\nclass Wakeup {}<semicolon>\n}\nnamespace core::foo\n{\n}\n"
+    # And its name is still held to lowercase.
+    "namespace-directory|src/core/foo/Fwd.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core::Bar { class Wakeup<semicolon> }\nnamespace core::foo\n{\n}\n"
     "namespace-directory|src/core/foo/testing/Fake.hpp|// SPDX-License-Identifier: Apache-2.0\n#pragma once\nnamespace core::foo\n{\n}\n"
     "provenance|src/core/foo/Extra.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foo {}\n"
     "provenance|.agent/reference/provenance.md|# Provenance\n\n| core-cpp path | upstream repo | upstream path | synced SHA | notes |\n|---|---|---|---|---|\n| `src/core/foo/CMakeLists.txt` | origin: core-cpp | - | - | - |\n| `src/core/foo/Foo.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/detail/Bar.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/posix/Impl.cpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/testing/Fake.hpp` | origin: core-cpp | - | - | - |\n| `src/core/foo/Main.cpp` | origin: core-cpp | - | - | - |\n| `src/core/Top.hpp` | origin: core-cpp | - | - | - |\n| `src/core/Base64.hpp` | contour-terminal/contour | `src/crispy/Base64.hpp` | 1111111111111111111111111111111111111111 | verbatim |\n| `src/core/foo/DoesNotExist.cpp` | origin: core-cpp | - | - | - |\n"
@@ -216,7 +225,7 @@ endforeach()
 #
 # So this case plants a DEFECT rather than a violation: a copy of the scanner that skips every .hpp
 # after its kind is assigned, which is what a misplaced `continue` looks like. The clean tree has
-# four of them and ten files the kind table matches, so the two counts must disagree by four and the
+# five of them and eleven files the kind table matches, so the two counts must disagree by five and the
 # scanner must die naming them. A mutation that changed both counts together -- deleting a row from
 # the `kinds` table, say -- would prove nothing, which is why it is the dispatch that is broken here
 # and not the table.

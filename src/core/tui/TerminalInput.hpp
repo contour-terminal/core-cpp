@@ -2,7 +2,6 @@
 #pragma once
 
 #include <core/platform/Types.hpp>
-#include <core/platform/Wakeup.hpp>
 #include <core/tui/Error.hpp>
 #include <core/tui/InputEvent.hpp>
 #include <core/tui/VtParser.hpp>
@@ -13,6 +12,11 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+namespace core::platform
+{
+class Wakeup;
+}
 
 namespace core::tui
 {
