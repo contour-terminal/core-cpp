@@ -77,7 +77,7 @@ void countWake(void* state, ParkWake wake)
 class DescriptorPair
 {
   public:
-    DescriptorPair() { _ok = ::socketpair(AF_UNIX, SOCK_STREAM, 0, _fds.data()) == 0; }
+    DescriptorPair(): _ok(::socketpair(AF_UNIX, SOCK_STREAM, 0, _fds.data()) == 0) {}
     DescriptorPair(DescriptorPair const&) = delete;
     DescriptorPair(DescriptorPair&&) = delete;
     DescriptorPair& operator=(DescriptorPair const&) = delete;
@@ -365,7 +365,7 @@ TEST_CASE("A descriptor closed and its number reused names none of the old ids",
             REQUIRE(pair.ok());
             auto next = Wakes {};
             auto const current = fileOperation(loop, pair.local(), Interest::Read, &next);
-            CHECK(seen.count(current) == 0);
+            CHECK(!seen.contains(current));
             for (auto const old: stale)
             {
                 loop.requestCancel(old);

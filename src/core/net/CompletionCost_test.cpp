@@ -215,6 +215,8 @@ TEST_CASE("Park filed and taken per socket operation", "[.][bench][net][park]")
         for (auto& pair: descriptors)
             REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM, 0, pair.data()) == 0);
         auto parks = std::vector<core::net::ParkId>(sockets);
+        // Whole rounds, so every run files the same number of parks on every socket.
+        auto const rounds = Operations / sockets;
         auto const onReady = [](void*, core::net::ParkWake) {
         };
 
@@ -226,8 +228,7 @@ TEST_CASE("Park filed and taken per socket operation", "[.][bench][net][park]")
             // Posted, so the operations run on the loop's thread inside a turn, as a socket's do.
             loop.post([&] {
                 auto const started = std::chrono::steady_clock::now();
-                for ([[maybe_unused]] auto const round:
-                     std::views::iota(std::size_t { 0 }, Operations / sockets))
+                for ([[maybe_unused]] auto const round: std::views::iota(std::size_t { 0 }, rounds))
                 {
                     for (auto const index: std::views::iota(std::size_t { 0 }, sockets))
                     {
@@ -248,7 +249,7 @@ TEST_CASE("Park filed and taken per socket operation", "[.][bench][net][park]")
             });
             std::ignore = loop.runOnce(std::chrono::milliseconds { 0 });
             sample = std::chrono::duration<double, std::nano>(elapsed).count()
-                     / static_cast<double>(Operations / sockets * sockets);
+                     / static_cast<double>(rounds * sockets);
         }
         CHECK(refused == 0);
         CHECK(loop.parkedWaiterCount() == 0);
