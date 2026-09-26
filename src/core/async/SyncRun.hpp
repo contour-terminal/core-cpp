@@ -68,7 +68,8 @@ T syncRun(Task<T> task)
 /// @param retrieve What completes the task's park; called only where the task parked.
 /// @return The task's result (or void), rethrowing anything its body threw.
 /// @throws std::logic_error if @p task owns no frame, or parked — whether or not @p retrieve woke
-///         it. Origin: [fastcached#178](https://github.com/LASTRADA-Software/fastcached/issues/178).
+///         it. The reasoning above is the whole of its origin: no upstream issue records it
+///         (core-cpp#37).
 template <typename T, std::invocable Retrieve>
 T syncRunWith(Task<T> task, Retrieve&& retrieve)
 {

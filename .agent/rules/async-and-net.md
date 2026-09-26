@@ -439,8 +439,10 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
   `syncRun` does for a task still suspended
   after its resume: reading such a task's result is undefined, and freeing its frame tears down
   storage whatever parked it still points into. `syncRunWith(task, retrieve)` takes the park back
-  first, so the refusal is the whole of the failure rather than a crash naming nothing. Origin:
-  [fastcached#178](https://github.com/LASTRADA-Software/fastcached/issues/178).
+  first, so the refusal is the whole of the failure rather than a crash naming nothing. *(core-cpp,
+  Task B1. No upstream issue records this rule: the fastcached number cited here until
+  [core-cpp#37](https://github.com/contour-terminal/core-cpp/issues/37) was about something else,
+  and the argument above stands on its own.)*
 - **An executor resumes what it is handed, or frees it — never neither.** `detail::Parked::resume()`
   disowns and resumes in one expression, and a handle it *declines* to resume (already done, or
   empty) has its owned chain root destroyed there rather than dropped. Taking the work out and

@@ -22,8 +22,7 @@ against.
   across a suspension
   ([fastcached#1025](https://github.com/LASTRADA-Software/fastcached/issues/1025)).
 - **A task that owns no frame has no result.** `done()` is true for an empty `Task`, and awaiting
-  one is refused rather than resumed into nothing
-  ([fastcached#178](https://github.com/LASTRADA-Software/fastcached/issues/178)).
+  one is refused rather than resumed into nothing.
 - **An executor resumes what it is handed, or frees it -- never neither.** Submitted work travels
   as `core::async::ParkedWork`: the handle to resume and, where the chain belongs to nobody, the
   root to free. A queue of submitted work holds `detail::Parked`, never a bare handle
