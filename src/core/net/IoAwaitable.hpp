@@ -26,6 +26,7 @@
 /// `0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21`), plus the cancellation semantics this library's
 /// design spec §2 item 5 requires and which upstream's has none of.
 
+#include <core/async/Awaitable.hpp>
 #include <core/async/Cancellation.hpp>
 #include <core/async/ParkedWork.hpp>
 #include <core/async/StopToken.hpp>
@@ -231,7 +232,7 @@ class ResultAwaitable
 
         _waiter = awaiting;
         _unownedRoot = async::detail::unownedRootOf(awaiting);
-        if constexpr (requires { awaiting.promise().stopToken(); })
+        if constexpr (async::HasStopToken<Promise>)
             _token = awaiting.promise().stopToken();
 
         // Checked BEFORE arming, so a flow that is already cancelled never leaves an operation

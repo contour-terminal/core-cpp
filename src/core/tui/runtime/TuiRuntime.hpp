@@ -34,6 +34,7 @@
 /// Threading: every member here is the loop thread's, exactly as the loop's own are. The one
 /// cross-thread surface is @c core::net::EventLoop::post.
 
+#include <core/async/Awaitable.hpp>
 #include <core/async/Cancellation.hpp>
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
@@ -549,7 +550,7 @@ class NextInputEventAwaiter
     {
         if (_runtime.hasBufferedInput())
             return false;
-        if constexpr (requires { awaiting.promise().stopToken(); })
+        if constexpr (async::HasStopToken<Promise>)
             _token = awaiting.promise().stopToken();
         if (_token.stop_requested() || _runtime.isStopping() || _runtime.inputClosed())
             return false;
@@ -623,7 +624,7 @@ class NextEventForAwaiter
     {
         if (_runtime.hasBufferedInput())
             return false;
-        if constexpr (requires { awaiting.promise().stopToken(); })
+        if constexpr (async::HasStopToken<Promise>)
             _token = awaiting.promise().stopToken();
         if (_token.stop_requested() || _runtime.isStopping() || _runtime.inputClosed())
             return false;
@@ -683,7 +684,7 @@ class NextActivityAwaiter
     {
         if (_runtime.hasBufferedInput() || _runtime.agentPending())
             return false;
-        if constexpr (requires { awaiting.promise().stopToken(); })
+        if constexpr (async::HasStopToken<Promise>)
             _token = awaiting.promise().stopToken();
         if (_token.stop_requested() || _runtime.isStopping() || _runtime.inputClosed())
             return false;
@@ -744,7 +745,7 @@ class NextAgentReadyAwaiter
     {
         if (_runtime.agentPending())
             return false;
-        if constexpr (requires { awaiting.promise().stopToken(); })
+        if constexpr (async::HasStopToken<Promise>)
             _token = awaiting.promise().stopToken();
         if (_token.stop_requested() || _runtime.isStopping())
             return false;

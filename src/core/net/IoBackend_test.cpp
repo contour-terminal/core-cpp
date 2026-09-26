@@ -70,8 +70,8 @@ TEST_CASE("a watched direction outranks a failure that arrived with it", "[net][
     // hangup on a socket that still has UNREAD BYTES arrives as POLLIN|POLLHUP on
     // poll and epoll. This function returns exactly one callback, so the older order
     // — failure first — returned `onError` alone the moment a handler set the field,
-    // the reader was never woken, and those bytes were never read. kqueue and Wfmo
-    // report the same hangup as readable and were always right.
+    // the reader was never woken, and those bytes were never read. kqueue reports
+    // the same hangup as readable and was always right.
     //
     // The portable idiom is the reason this is the correct order and not merely the
     // safer one: no platform lets you learn what went wrong from the readiness bits.
@@ -269,4 +269,17 @@ TEST_CASE("every backend kind renders as words", "[net][iobackend]")
 
     CHECK(toString(BackendKind::Last) == "unknown");
     CHECK(toString(static_cast<BackendKind>(200)) == "unknown");
+}
+
+TEST_CASE("BackendKind names exactly the backends core::net has", "[net][iobackend][kind]")
+{
+    // Every kind up to `Last`, by the name `toString` gives it. The WFMO backend was removed once
+    // IOCP had been the Windows default for a release (core-cpp#6), so a kind that still named it
+    // would be a backend nothing can build and every matrix row would have to skip.
+    auto names = std::vector<std::string_view> {};
+    for (auto const value: std::views::iota(0, static_cast<int>(core::net::BackendKind::Last)))
+        names.push_back(core::net::toString(static_cast<core::net::BackendKind>(value)));
+    CHECK(names
+          == std::vector<std::string_view> {
+              "poll", "epoll", "kqueue", "iocp", "host-driven", "scripted", "null" });
 }

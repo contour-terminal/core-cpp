@@ -198,6 +198,11 @@ namespace
                 auto const status = request.error().code == NetErrorCode::MessageTooLarge ? 413 : 400;
                 static_cast<void>(
                     co_await writeResponse(socket, HttpResponse::withStatus(status, std::string {})));
+                // The request was refused before it was read to its end, so bytes of it may still
+                // be unread here, and a bare close over them is a reset that destroys the refusal
+                // (core-cpp#35). No loop is at hand in `serve`, so each read of the drain carries
+                // its share of the bound.
+                static_cast<void>(co_await closeLingering(socket, nullptr, limits.linger));
             }
             co_return;
         }
@@ -330,7 +335,7 @@ async::Task<void> serve(IListener* listener, HttpHandler handler, HttpLimits lim
         // Once per connection, before anything frames the stream: a transport that negotiates
         // (TLS) has finished doing so before the first request byte is read. A connection whose
         // handshake fails has no channel to answer on, so it is dropped unanswered -- and closed
-        // by `conn`'s destructor, as every connection here is (core-cpp#35).
+        // by `conn`'s destructor, as every connection not refused mid-request is.
         if (auto const handshaken = co_await conn->handshakeIfNeeded(); !handshaken.has_value())
             continue;
         co_await handleConnection(conn.get(), &handler, limits);

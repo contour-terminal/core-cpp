@@ -27,6 +27,19 @@ namespace fs = std::filesystem;
 namespace core::platform
 {
 
+namespace
+{
+    /// @param path A path to name in an error message.
+    /// @return @p path in UTF-8, in its native format. Not `path::string()`, which on Windows
+    ///         narrows through the ANSI code page: a name the code page cannot hold was mangled,
+    ///         and MSVC's conversion throws there, so the error path itself threw (core-cpp#26).
+    [[nodiscard]] std::string forMessage(fs::path const& path)
+    {
+        auto const spelled = path.u8string();
+        return std::string { reinterpret_cast<char const*>(spelled.data()), spelled.size() };
+    }
+} // namespace
+
 RenameFunction nativeRename()
 {
     return [](fs::path const& from, fs::path const& to, std::error_code& ec) {
@@ -114,12 +127,12 @@ std::expected<std::string, std::string> NativeFileSystem::readFile(fs::path cons
 {
     auto ifs = std::ifstream(path, std::ios::binary);
     if (!ifs)
-        return std::unexpected(std::format("Cannot open file: {}", path.string()));
+        return std::unexpected(std::format("Cannot open file: {}", forMessage(path)));
 
     auto oss = std::ostringstream {};
     oss << ifs.rdbuf();
     if (ifs.bad())
-        return std::unexpected(std::format("Error reading file: {}", path.string()));
+        return std::unexpected(std::format("Error reading file: {}", forMessage(path)));
     return oss.str();
 }
 
@@ -128,11 +141,11 @@ std::expected<void, std::string> NativeFileSystem::writeFile(fs::path const& pat
 {
     auto ofs = std::ofstream(path, std::ios::binary | std::ios::trunc);
     if (!ofs)
-        return std::unexpected(std::format("Cannot open file for writing: {}", path.string()));
+        return std::unexpected(std::format("Cannot open file for writing: {}", forMessage(path)));
 
     ofs.write(content.data(), static_cast<std::streamsize>(content.size()));
     if (!ofs)
-        return std::unexpected(std::format("Error writing file: {}", path.string()));
+        return std::unexpected(std::format("Error writing file: {}", forMessage(path)));
     return {};
 }
 
@@ -141,11 +154,11 @@ std::expected<void, std::string> NativeFileSystem::appendFile(fs::path const& pa
 {
     auto ofs = std::ofstream(path, std::ios::binary | std::ios::app);
     if (!ofs)
-        return std::unexpected(std::format("Cannot open file for appending: {}", path.string()));
+        return std::unexpected(std::format("Cannot open file for appending: {}", forMessage(path)));
 
     ofs.write(content.data(), static_cast<std::streamsize>(content.size()));
     if (!ofs)
-        return std::unexpected(std::format("Error appending to file: {}", path.string()));
+        return std::unexpected(std::format("Error appending to file: {}", forMessage(path)));
     return {};
 }
 
@@ -233,7 +246,7 @@ std::expected<void, std::string> NativeFileSystem::createDirectory(fs::path cons
     // other way this fails, a missing parent -- sends a caller looking in the wrong place.
     if (!ec)
         ec = std::make_error_code(std::errc::file_exists);
-    return std::unexpected(std::format("Cannot create directory '{}': {}", path.string(), ec.message()));
+    return std::unexpected(std::format("Cannot create directory '{}': {}", forMessage(path), ec.message()));
 }
 
 std::expected<void, std::string> NativeFileSystem::createDirectories(fs::path const& path) const
@@ -242,7 +255,7 @@ std::expected<void, std::string> NativeFileSystem::createDirectories(fs::path co
     fs::create_directories(path, ec);
     if (ec)
         return std::unexpected(
-            std::format("Cannot create directories '{}': {}", path.string(), ec.message()));
+            std::format("Cannot create directories '{}': {}", forMessage(path), ec.message()));
     return {};
 }
 
@@ -251,7 +264,7 @@ std::expected<bool, std::string> NativeFileSystem::remove(fs::path const& path) 
     std::error_code ec;
     auto const result = fs::remove(path, ec);
     if (ec)
-        return std::unexpected(std::format("Cannot remove '{}': {}", path.string(), ec.message()));
+        return std::unexpected(std::format("Cannot remove '{}': {}", forMessage(path), ec.message()));
     return result;
 }
 
@@ -260,7 +273,7 @@ std::expected<std::uintmax_t, std::string> NativeFileSystem::removeAll(fs::path 
     std::error_code ec;
     auto const result = fs::remove_all(path, ec);
     if (ec)
-        return std::unexpected(std::format("Cannot remove '{}': {}", path.string(), ec.message()));
+        return std::unexpected(std::format("Cannot remove '{}': {}", forMessage(path), ec.message()));
     return result;
 }
 
@@ -274,7 +287,7 @@ std::expected<void, std::string> NativeFileSystem::copyFile(fs::path const& from
     fs::copy_file(from, to, opts, ec);
     if (ec)
         return std::unexpected(
-            std::format("Cannot copy '{}' to '{}': {}", from.string(), to.string(), ec.message()));
+            std::format("Cannot copy '{}' to '{}': {}", forMessage(from), forMessage(to), ec.message()));
     return {};
 }
 
@@ -369,16 +382,16 @@ std::expected<void, std::string> NativeFileSystem::rename(fs::path const& from, 
             return {};
         if (!recase.stranded.empty())
             return std::unexpected(std::format("Cannot rename '{}' to '{}': {}; it is now at '{}'",
-                                               from.string(),
-                                               to.string(),
+                                               forMessage(from),
+                                               forMessage(to),
                                                recase.error.message(),
-                                               recase.stranded.string()));
+                                               forMessage(recase.stranded)));
         return std::unexpected(std::format(
-            "Cannot rename '{}' to '{}': {}", from.string(), to.string(), recase.error.message()));
+            "Cannot rename '{}' to '{}': {}", forMessage(from), forMessage(to), recase.error.message()));
     }
 
     return std::unexpected(
-        std::format("Cannot rename '{}' to '{}': {}", from.string(), to.string(), ec.message()));
+        std::format("Cannot rename '{}' to '{}': {}", forMessage(from), forMessage(to), ec.message()));
 }
 
 namespace
@@ -422,7 +435,7 @@ std::expected<std::vector<FileSystem::DirectoryEntry>, std::string> NativeFileSy
         it.increment(ec);
     }
     if (ec)
-        return std::unexpected(std::format("Cannot list directory '{}': {}", path.string(), ec.message()));
+        return std::unexpected(std::format("Cannot list directory '{}': {}", forMessage(path), ec.message()));
     return entries;
 }
 
@@ -456,7 +469,7 @@ std::expected<std::uintmax_t, std::string> NativeFileSystem::fileSize(fs::path c
     std::error_code ec;
     auto const size = fs::file_size(path, ec);
     if (ec)
-        return std::unexpected(std::format("Cannot get file size '{}': {}", path.string(), ec.message()));
+        return std::unexpected(std::format("Cannot get file size '{}': {}", forMessage(path), ec.message()));
     return size;
 }
 
@@ -466,7 +479,7 @@ std::expected<fs::file_time_type, std::string> NativeFileSystem::lastWriteTime(f
     auto const time = fs::last_write_time(path, ec);
     if (ec)
         return std::unexpected(
-            std::format("Cannot get last write time '{}': {}", path.string(), ec.message()));
+            std::format("Cannot get last write time '{}': {}", forMessage(path), ec.message()));
     return time;
 }
 
@@ -475,7 +488,8 @@ std::expected<fs::perms, std::string> NativeFileSystem::permissions(fs::path con
     std::error_code ec;
     auto const status = fs::status(path, ec);
     if (ec)
-        return std::unexpected(std::format("Cannot get permissions '{}': {}", path.string(), ec.message()));
+        return std::unexpected(
+            std::format("Cannot get permissions '{}': {}", forMessage(path), ec.message()));
     return status.permissions();
 }
 
@@ -484,7 +498,8 @@ std::expected<void, std::string> NativeFileSystem::setPermissions(fs::path const
     std::error_code ec;
     fs::permissions(path, perms, ec);
     if (ec)
-        return std::unexpected(std::format("Cannot set permissions '{}': {}", path.string(), ec.message()));
+        return std::unexpected(
+            std::format("Cannot set permissions '{}': {}", forMessage(path), ec.message()));
     return {};
 }
 

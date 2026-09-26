@@ -1600,7 +1600,7 @@ TEST_CASE("the default backend drives the scenarios Socket_test pins to one back
     // native-backend defects (a registration holding the peer's connection open, and a
     // parked reader never resuming after close) passed a green suite. These run the same
     // shapes against whatever makeDefaultBackend picks — epoll on Linux, kqueue on
-    // macOS/BSD, Wfmo on Windows — so the backend production actually uses is exercised.
+    // macOS/BSD, IOCP on Windows — so the backend production actually uses is exercised.
     auto const backend = core::net::makeDefaultBackend();
     REQUIRE(backend != nullptr);
 
@@ -1917,13 +1917,11 @@ TEST_CASE("this platform builds every backend the parity matrix expects of it", 
     };
 
 #ifdef _WIN32
-    // Task B7a added IOCP, which is why this row is 2 and not 1. Task B7b makes it the
-    // DEFAULT and keeps Wfmo as its fallback for one release, which changes
-    // `preferredBackendKind` and not this table -- see the message below.
-    auto const expected = std::array<Expected, 2> { {
-        { BackendKind::Wfmo, "Windows' readiness backend: WSAEventSelect + WaitForMultipleObjects" },
+    // One row since 0.5.0: the completion port became the default in Task B7b, and the WFMO
+    // backend it kept as a fallback for one release was then removed (core-cpp#6).
+    auto const expected = std::array<Expected, 1> { {
         { BackendKind::Iocp,
-          "the completion port, and the only backend here that can serve a console handle "
+          "the completion port, Windows' only backend, and the one that can serve a console handle "
           "and a socket from one wait -- a run without it covers neither bridge" },
     } };
 #elifdef __linux__
@@ -1971,10 +1969,8 @@ TEST_CASE("makeBackend answers null for a kind this platform does not build", "[
     CHECK(core::net::makeBackend(BackendKind::Poll) == nullptr);
 #elifdef __linux__
     CHECK(core::net::makeBackend(BackendKind::Kqueue) == nullptr);
-    CHECK(core::net::makeBackend(BackendKind::Wfmo) == nullptr);
 #else
     CHECK(core::net::makeBackend(BackendKind::Epoll) == nullptr);
-    CHECK(core::net::makeBackend(BackendKind::Wfmo) == nullptr);
 #endif
 
     // IOCP arrived with Task B7a, on Windows and nowhere else. Asked in both directions
@@ -2030,12 +2026,12 @@ TEST_CASE("every backend without a completion port refuses a completion registra
     // took it would hand that address to poll(2), epoll, kqueue or WaitForMultipleObjects as though
     // it were a descriptor or a kernel object. "Nothing there can build one" is an argument, not a
     // guarantee, so each backend that lends no port says Unsupported, and this case holds all of
-    // them to it -- the matrix, plus the host-driven backend, which the matrix does not build.
+    // them to it -- the matrix, plus the host-driven backend, which the matrix does not build and
+    // which is the one such backend Windows has since the WFMO backend went (core-cpp#6).
     auto pipe = core::platform::createSystemPipe();
     REQUIRE(pipe.has_value());
     auto const handle = (*pipe)->waitHandle();
 
-    auto asked = 0;
     for (auto const& entry: BackendMatrix)
     {
         auto const backend = core::net::makeBackend(entry.kind);
@@ -2047,9 +2043,7 @@ TEST_CASE("every backend without a completion port refuses a completion registra
             REQUIRE_FALSE(answer.has_value());
             CHECK(answer.error().code == core::net::NetErrorCode::Unsupported);
         }
-        ++asked;
     }
-    CHECK(asked >= 1); // every platform builds at least one readiness backend
 
     SECTION("backend=host-driven")
     {

@@ -8,6 +8,7 @@
 
 using core::platform::configHome;
 using core::platform::homeDirectory;
+using core::platform::userName;
 using core::testing::FakeEnvironment;
 
 TEST_CASE("homeDirectory.returns_value_when_HOME_set", "[platform]")
@@ -66,8 +67,37 @@ TEST_CASE("configHome.nothing_to_derive_it_from", "[platform]")
     CHECK(!configHome(FakeEnvironment {}).has_value());
 }
 
+TEST_CASE("userName.prefers_USER", "[platform]")
+{
+    auto const environment =
+        FakeEnvironment { { { "USER", "alice" }, { "LOGNAME", "bob" }, { "USERNAME", "carol" } } };
+    CHECK(userName(environment) == "alice");
+}
+
+TEST_CASE("userName.falls_back_to_LOGNAME", "[platform]")
+{
+    auto const environment = FakeEnvironment { { { "LOGNAME", "bob" }, { "USERNAME", "carol" } } };
+    CHECK(userName(environment) == "bob");
+}
+
+TEST_CASE("userName.falls_back_to_USERNAME", "[platform]")
+{
+    CHECK(userName(FakeEnvironment { { { "USERNAME", "carol" } } }) == "carol");
+}
+
+TEST_CASE("userName.skips_empty_values", "[platform]")
+{
+    CHECK(userName(FakeEnvironment { { { "USER", "" }, { "USERNAME", "carol" } } }) == "carol");
+}
+
+TEST_CASE("userName.none_set", "[platform]")
+{
+    CHECK(!userName(FakeEnvironment {}).has_value());
+}
+
 // Called without an environment, each is the same function over its default argument, the
 // process environment. That the call exists is checked here without making it: every case
 // above runs the one body, over a fake, and none depends on what the machine running it holds.
 static_assert(requires { homeDirectory(); });
 static_assert(requires { configHome(); });
+static_assert(requires { userName(); });

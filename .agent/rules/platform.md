@@ -24,8 +24,8 @@ project file tree, install paths and the interrupt throttle.
    selection for each platform.
    - **A module's own directory holds only platform-independent code.** A source with one
      `#ifdef` branch per platform is split into those subdirectories rather than kept whole:
-     contour's `PollEventSource.cpp` is `core::net`'s `posix/PollBackend.cpp` and
-     `windows/WfmoBackend.cpp`, epoll is in `linux/` and kqueue in `bsd/`, and each of those
+     contour's `PollEventSource.cpp` became `core::net`'s `posix/PollBackend.cpp` and a
+     `windows/` WFMO backend (removed in 0.5.0), epoll is in `linux/` and kqueue in `bsd/`, and each of those
      directories holds the `DefaultBackend.cpp` the CMakeLists names exactly one of. A public header
      stays portable: a member only one platform uses is declared on all of them. Origin: user
      direction, 2026-09-18 (core-cpp's Task A6).
@@ -42,9 +42,9 @@ Origin: [endo `AGENT.md`, "New Platform Feature"](https://github.com/contour-ter
 which also says: **do not bypass the platform layer.** A direct `::stat`, `std::getenv` or
 `CreateFileW` in another module is a seam that tests cannot replace.
 
-- **The environment is read in one place**, `EnvironmentProvider` (or `core::Environment`, which
-  [core-cpp#7](https://github.com/contour-terminal/core-cpp/issues/7) merges with it), so a test
-  sets it with `testing::TestEnvironmentProvider` or `core::testing::FakeEnvironment` rather than
+- **The environment is read in one place**, `core::Environment`, which `ProcessEnvironment` is too
+  since [core-cpp#7](https://github.com/contour-terminal/core-cpp/issues/7), so a test
+  sets it with `testing::TestProcessEnvironment` or `core::testing::FakeEnvironment` rather than
   mutating the process's environment, which is shared by every thread and every test in the
   binary. **It is written in one place too:** `core::setProcessEnvironmentVariable()`, never
   `setenv()`, which clang-tidy's `concurrency-mt-unsafe` rejects along with `getenv()`.
@@ -111,9 +111,3 @@ filesystem is allowed: under Emscripten it is Emscripten's virtual one, which th
 provider lists and `lstat()`s like any other, and its in-memory pipes are what `platformRead()`
 reads there. Anything else in the module may use all of these freely. See
 [`library-hygiene.md`](library-hygiene.md).
-
-## Open work
-
-- **[core-cpp#7](https://github.com/contour-terminal/core-cpp/issues/7)** — unify
-  `core::Environment` (`core::base`, from crispy) with `core::platform::EnvironmentProvider`
-  into one injectable seam.

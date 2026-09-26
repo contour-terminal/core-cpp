@@ -72,6 +72,7 @@ set(cases
     "nolint|src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foo {} // NOLINT\n"
     "diagnostic-pragma|src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\n#pragma clang diagnostic ignored \"-Wshadow\"\n"
     "c-style-for|src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\nvoid count() { for (int i = 0<semicolon> i < 3<semicolon> ++i) {} }\n"
+    "hand-spelled-stop-token-probe|src/core/foo/Foo.hpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foo { template <typename P> bool has(P awaiting) { return requires { awaiting.promise().stopToken()<semicolon> }<semicolon> } }\n"
     "stale-allowlist|src/core/testing/SuppressWindowsDialogsAtStartup.cpp|// SPDX-License-Identifier: Apache-2.0\n"
     "namespace-directory|src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace bar {}\n"
     "namespace-directory|src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foobar {}\n"

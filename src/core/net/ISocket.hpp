@@ -5,9 +5,9 @@
 /// `ISocket` — a connected, bidirectional byte transport whose operations are frame-free,
 /// stop-aware awaitables.
 ///
-/// Implementations include the loop-driven platform sockets (@c PosixSocket, @c WindowsSocket, and
-/// @c IocpSocket -- overlapped I/O completed by a Windows completion port, the Windows default since
-/// Task B7b), a blocking one for threads that may block (@c BlockingSocket), decorators (@c TlsSocket) and a
+/// Implementations include the loop-driven platform sockets (@c PosixSocket, and @c IocpSocket --
+/// overlapped I/O completed by a Windows completion port, Windows' only socket transport since
+/// 0.5.0), a blocking one for threads that may block (@c BlockingSocket), decorators (@c TlsSocket) and a
 /// deterministic in-process fake for tests (@c testing::InMemorySocket -- not
 /// `testing/InMemoryTransport.hpp`, which is a pair of REAL sockets). Every one of them, and any a
 /// consumer writes, is under the same contract (`<core/net/SocketContract.hpp>`), and the fake is
@@ -158,8 +158,8 @@ class ISocket
     /// discovers the truth, while a false `0` tells a caller its peer is gone. But the default also
     /// never SUSPENDS, so a transport that inherits it turns a parked watch into a spin — a
     /// watchdog loop of the shape @c cancelRead documents would then burn a core rather than wait.
-    /// **A transport whose reads can block owes an override**, and `PosixSocket`, `WindowsSocket`,
-    /// `IocpSocket` and `TlsSocket` all have one.
+    /// **A transport whose reads can block owes an override**, and `PosixSocket`, `IocpSocket` and
+    /// `TlsSocket` all have one.
     ///
     /// **"Consumes nothing" is about bytes the CALLER could have read**, not about the transport's
     /// own buffering. A decorator may have to consume and decode raw bytes to answer at all — a TLS
@@ -313,8 +313,8 @@ class ISocket
     /// drain (G2): here, on a later turn with the value settled by this call; for a read that got
     /// bytes, after whatever the same drain ran first. An owner that destroys the socket in
     /// between -- `conn->close(); connections.erase(id);` -- has destroyed it before the flow runs.
-    /// The transports touch nothing of it on the way back (a coroutine-shaped one -- WFMO's
-    /// `WindowsSocket`, the TLS layer -- that finds its socket gone unwinds the flow with
+    /// The transports touch nothing of it on the way back (a coroutine-shaped one -- the TLS
+    /// layer -- that finds its socket gone unwinds the flow with
     /// @c async::OperationCancelled instead of answering), but the flow must not either: **a flow
     /// touches no socket it does not own after its operation resumes, unless it knows the owner
     /// kept it** -- no `isClosed()`, no `close()` in its cleanup, no retry. One that owns the

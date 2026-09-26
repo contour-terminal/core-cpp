@@ -35,7 +35,8 @@ given, never through a concrete type, a singleton, or a free function with hidde
 | A connection | `core::net::ISocket`, `IListener`, `IConnector` | the in-memory transport |
 | Name resolution | `IAsyncAddressResolver` | an injected resolver |
 | Files | `core::platform::FileSystem`, `FileInfoProvider` | `testing::InMemoryFileSystem`, `testing::MockFileInfoProvider` |
-| The environment | `core::platform::EnvironmentProvider` | `testing::TestEnvironmentProvider` |
+| The environment | `core::Environment` to read, `core::platform::ProcessEnvironment` to write | `core::testing::FakeEnvironment`, `testing::TestProcessEnvironment` (both seams) |
+| The working directory | `core::platform::WorkingDirectory` | `testing::TestWorkingDirectory` |
 | Terminal output | `core::tui::TerminalOutput` | `MockTerminalOutput` |
 
 - **Define the interface first, then inject it**, by constructor, as a reference or a

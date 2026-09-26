@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/ReadinessDial.hpp>
 
+#include <core/async/Awaitable.hpp>
 #include <core/async/Cancellation.hpp>
 #include <core/async/ParkedWork.hpp>
 #include <core/async/StopToken.hpp>
@@ -143,7 +144,7 @@ namespace
         [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting)
         {
             auto token = async::StopToken {};
-            if constexpr (requires { awaiting.promise().stopToken(); })
+            if constexpr (async::HasStopToken<Promise>)
                 token = awaiting.promise().stopToken();
 
             // Checked BEFORE arming, so a flow that is already cancelled never leaves a

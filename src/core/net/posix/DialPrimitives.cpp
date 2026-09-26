@@ -70,7 +70,7 @@ std::expected<void, NetError> pendingSocketError(DialHandles const& handles)
     return {};
 }
 
-std::unique_ptr<ISocket> adoptDialled(EventLoop& loop, DialHandles& handles, std::string peer)
+SocketResult adoptDialled(EventLoop& loop, DialHandles& handles, std::string peer)
 {
     auto const fd = std::exchange(handles.socket, platform::InvalidHandle);
     handles = DialHandles {};

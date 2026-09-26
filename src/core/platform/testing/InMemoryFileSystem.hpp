@@ -29,6 +29,11 @@ struct FileEntry
 /// Stores files as string contents in a map, supports basic directory operations.
 /// Files are keyed by their lexically-normal path string for consistent lookup.
 ///
+/// Answers as `NativeFileSystem` does wherever it models the behaviour; what it deliberately does
+/// not model -- `exists()` on a dangling symlink, the OS's symlink resolution and directory
+/// semantics, two stream put-back corner cases -- is tabled in `docs/modules/platform.md`, so a
+/// test that depends on one of those belongs against the real filesystem.
+///
 /// Usage:
 /// @code
 /// InMemoryFileSystem fs({

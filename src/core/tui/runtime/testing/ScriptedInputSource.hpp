@@ -12,7 +12,7 @@
 /// DECODING: which events the bytes behind a ready handle turn into.
 ///
 /// Point it at a @c core::platform::SystemPipe and readiness becomes real on every platform, so
-/// the same case runs over epoll, poll, kqueue, IOCP and WFMO unchanged. Leave the pipe out and
+/// the same case runs over epoll, poll, kqueue and IOCP unchanged. Leave the pipe out and
 /// the handle is inert, which is what a scripted backend wants — it names registrations by attach
 /// order and never looks at the handle.
 

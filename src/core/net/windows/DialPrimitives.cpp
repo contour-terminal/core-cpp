@@ -12,9 +12,9 @@
 #include <core/net/detail/DialPrimitives.hpp>
 
 #include <core/net/EventLoop.hpp>
+#include <core/net/Sockets.hpp>
 #include <core/net/detail/SocketErrors.hpp>
 #include <core/net/windows/InvalidSocket.hpp>
-#include <core/net/windows/WindowsSocket.hpp>
 #include <core/net/windows/WinsockError.hpp>
 #include <core/platform/WinsockInit.hpp>
 
@@ -54,9 +54,9 @@ std::expected<DialHandles, NetError> openDialSocket(ResolvedEndpoint const& endp
         return std::unexpected(fromWinsockError(WSAGetLastError(), "socket"));
 
     // **The socket is not what the loop watches here.** Winsock reports readiness for a socket
-    // through a `WSAEVENT` associated with it, which is what the WFMO backend waits on — so a
-    // dial holds two handles where POSIX holds one. `WSAEventSelect` also puts the socket into
-    // non-blocking mode, which is what the connect below relies on.
+    // through a `WSAEVENT` associated with it, which the completion port's waitable-handle bridge
+    // waits on — so a dial holds two handles where POSIX holds one. `WSAEventSelect` also puts the socket
+    // into non-blocking mode, which is what the connect below relies on.
     auto const event = ::WSACreateEvent();
     if (event == WSA_INVALID_EVENT
         || ::WSAEventSelect(socket, event, FD_CONNECT | FD_WRITE | FD_CLOSE) == SOCKET_ERROR)
@@ -118,19 +118,21 @@ std::expected<void, NetError> pendingSocketError(DialHandles const& handles)
     return {};
 }
 
-std::unique_ptr<ISocket> adoptDialled(EventLoop& loop, DialHandles& handles, std::string peer)
+SocketResult adoptDialled(EventLoop& loop, DialHandles& handles, std::string peer)
 {
-    auto const socket = reinterpret_cast<SOCKET>(handles.socket);
+    auto const socket = handles.socket;
 
-    // The dial's own event goes with the dial: `WindowsSocket` creates and associates one of its
-    // own, and `WSAEventSelect` allows exactly ONE event object per socket — so leaving this one
-    // attached would take the slot the socket needs. The loop is told before it closes, for the
-    // reason `closeDialSocket` states.
+    // The dial's own event goes with the dial, and the socket's association with it too: the
+    // socket is served through the loop's completion port from here on, not through readiness. The
+    // loop is told before the event closes, for the reason `closeDialSocket` states. The socket
+    // stays non-blocking, which is all an overlapped socket asks of it.
     loop.notifyHandleClosing(handles.readiness, FdWakePolicy::Cancel);
+    std::ignore = ::WSAEventSelect(reinterpret_cast<SOCKET>(socket), nullptr, 0);
     ::WSACloseEvent(static_cast<WSAEVENT>(handles.readiness));
     handles = DialHandles {};
 
-    return std::unique_ptr<ISocket> { new WindowsSocket(loop, socket, std::move(peer)) };
+    // As every accepted and adopted socket is: `adoptSocket` closes it on failure.
+    return adoptSocket(loop, socket, std::move(peer));
 }
 
 } // namespace core::net::detail

@@ -13,7 +13,8 @@ consumer test its own code over core-cpp without a real socket, a real clock or 
 | An event loop | `core::net::EventLoop` (an `IExecutor`) | `testing::TestLoop` |
 | A connection | `core::net::ISocket`, `IListener`, `IConnector` | the in-memory transport |
 | Files | `core::platform::FileSystem`, `FileInfoProvider` | `testing::InMemoryFileSystem`, `testing::MockFileInfoProvider` |
-| The environment | `core::platform::EnvironmentProvider` | `testing::TestEnvironmentProvider` |
+| The environment | `core::Environment` to read, `core::platform::ProcessEnvironment` to write | `core::testing::FakeEnvironment`, `testing::TestProcessEnvironment` (both seams) |
+| The working directory | `core::platform::WorkingDirectory` | `testing::TestWorkingDirectory` |
 | Terminal output | `core::tui::TerminalOutput` | `MockTerminalOutput` |
 
 These arrive with the module imports (Tasks A4 to A7) and the merged async layer (Phase B).

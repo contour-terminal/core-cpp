@@ -292,7 +292,9 @@ Written for 0.4.0 after morph's `StrandExecutor` (morph PR #806); see
   came back through the strand, which is what makes it the place for a request's session: `Task`
   itself carries no context, because that would cost every `co_await` for every consumer. The hook
   is a reference fixed at construction, costs a branch per task when unset, and must outlive the
-  strand.
+  strand. `run.kind()` says what the task is -- `TaskKind::Callable` for what `post` and `tryPost`
+  were given, `TaskKind::Resumption` for a coroutine arriving through `submit`, `trySubmit`, a
+  `ResumeOn` hop or a reroute -- so a hook can scope per-resumption context to the resumptions.
 - `idle()` answers whether nothing is queued or running. On the single-threaded WebAssembly build,
   which has no `waitIdle()`, a host that wants queued work to run pumps its base until `idle()`
   before destroying the strands; destroying or closing them drops what is queued without waiting,

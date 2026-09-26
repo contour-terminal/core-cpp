@@ -11,6 +11,54 @@ workflow refuses one without a section here.
 
 ### Breaking
 
+- **The WFMO backend is removed: the completion port is Windows' only backend** (core-cpp#6).
+  `BackendKind::Wfmo`, `WfmoBackend` and the readiness socket transport it drove
+  (`WindowsSocket`, `WindowsListener`) are gone, after the release in which IOCP was the default
+  and WFMO a fallback. `makeDefaultBackend()` on Windows no longer falls back: a completion port
+  the kernel refuses to create is handle exhaustion, and it propagates. `listen`, `listenUnix`,
+  `adoptListener`, `adoptSocket` and the dials refuse a loop whose backend lends no completion port
+  with `NetErrorCode::Unsupported`, where they used to hand out a readiness socket. Two defects of
+  the removed transport go with it: a closed socket's parked read now answers `Cancelled` on every
+  platform, where `WindowsSocket` answered `BadHandle` (core-cpp#46), and the WFMO-only
+  destruction gap of core-cpp#50 has nothing left to apply to. `connectUnix`'s socket on Windows is
+  now made uninheritable, as every other one is (core-cpp#28).
+  - *Migration*: no consumer names any of these; a program that did replaces
+    `makeBackend(BackendKind::Wfmo)` with `makeDefaultBackend()`. `BackendKind`'s enumerators after
+    `Iocp` shift down by one, so a value stored or sent as an integer is re-read by name
+    (`toString`). A Windows test double that stood in for the loop's backend and expected a
+    socket from the factories needs a completion port, or drives an `ISocket` of its own.
+- **`core::platform::EnvironmentProvider` is `ProcessEnvironment`, a `core::Environment`; the
+  working directory has its own seam; Windows reads and writes the environment in UTF-8**
+  (core-cpp#7). Two seams answered "read `HOME`", with two doubles a mixed test had to keep
+  agreeing. `core::Environment` is now the one read seam, and `ProcessEnvironment` -- what a shell
+  writes -- derives from it, so code that only reads is handed the same object and
+  `testing::TestProcessEnvironment` is the double for both. `set`, `unset`, `exportVariable` and
+  `setAndExport` return `std::expected<void, PlatformError>`, where they returned `void` and dropped
+  the error; a name that is empty or holds `=` or NUL, or a value that holds NUL, is
+  `PlatformError::InvalidArgument` (a new enumerator, last, so no other value moves).
+  `changeDirectory` and `currentDirectory` move to `core::platform::WorkingDirectory`
+  (`nativeWorkingDirectory()`, `testing::TestWorkingDirectory`), and `homeDirectory`, `userName`
+  and `configHome` are the free functions of `<core/platform/UserPaths.hpp>` over a
+  `core::Environment const&` (`userName` is new there). On Windows, `core::LiveEnvironment`,
+  `core::setProcessEnvironmentVariable` and `unsetProcessEnvironmentVariable` go through
+  `GetEnvironmentVariableW`/`SetEnvironmentVariableW`, converting to and from UTF-8, where the
+  code-page API mangled a value such as a user profile path outside the ANSI code page; a name or
+  value that is not UTF-8 is refused (`std::errc::invalid_argument`), and `ProcessEnvironment::keys()`
+  converts UTF-16 names rather than narrowing them a code unit at a time. The read seam's
+  interface is unchanged.
+  - *Migration*: `<core/platform/EnvironmentProvider.hpp>` is `<core/platform/ProcessEnvironment.hpp>`;
+    `EnvironmentProvider` is `ProcessEnvironment`, `nativeEnvironmentProvider()` is
+    `nativeProcessEnvironment()`, and `testing::TestEnvironmentProvider` is
+    `testing::TestProcessEnvironment` (`<core/platform/testing/TestProcessEnvironment.hpp>`), which no
+    longer takes an initial directory. Handle or discard the `std::expected` from every `set`,
+    `unset`, `exportVariable` and `setAndExport` (`std::ignore = env.set(...)` where a failure is
+    acceptable). Replace `env.changeDirectory(p)` and `env.currentDirectory()` with a
+    `WorkingDirectory&` the object is given -- `nativeWorkingDirectory()` in a composition root,
+    `testing::TestWorkingDirectory(initial)` with `addValidPath` in a test -- and
+    `env.homeDirectory()`, `env.userName()` and `env.configHome()` with
+    `core::platform::homeDirectory(env)`, `userName(env)` and `configHome(env)`. A function that
+    only reads can take a `core::Environment const&` and be handed either double. contour, which
+    uses only `core::Environment`, changes nothing.
 - **`core::cli::parse()` returns `std::expected<FlagStore, ParseError>` and throws nothing**
   (core-cpp#13). It returned `std::optional<FlagStore>` -- `std::nullopt` for tokens left over --
   and threw `core::cli::ParserError` for a value of the wrong type, a missing value or an explicit
@@ -32,6 +80,21 @@ workflow refuses one without a section here.
 
 ### Added
 
+- **`core::async::TaskKind` and `RunTask::kind()`: an around-task hook can tell a coroutine
+  resumption from a posted callable** (core-cpp#53). `TaskKind::Callable` is what `post` and
+  `tryPost` were given; `TaskKind::Resumption` is a coroutine arriving through `submit` or
+  `trySubmit`, as a handle or as `ParkedWork`, a `ResumeOn` hop, or a `KeyedStrands` reroute
+  through a retired key strand. A hook -- `StrandOptions::aroundTask` or a `KeyedAroundTask` --
+  can now scope per-resumption context to coroutine resumptions only, rather than installing it
+  around every callable posted to the same strand or key too. Read from what the task already
+  holds, so it adds nothing to a task and costs one load where a hook asks. Additive; no signature
+  changes.
+- **`core::net::closeLingering` and `LingerBounds`** (`<core/net/LingeringClose.hpp>`, from
+  fastcached at `0708dd54`; core-cpp#35): half-close, discard what the peer is still sending until
+  it closes or a bound runs out -- the whole drain's time, the bytes discarded, the reads made --
+  then close, so a reply written over a request left unread is followed by a FIN rather than
+  destroyed by the reset a bare close sends. `HttpLimits::linger` bounds it for `serve`, by
+  default two seconds, 64 KiB and four reads. Additive.
 - **`core-cpp.open-work`: every `## Open work` entry leads with a core-cpp issue, and that issue is
   open** (core-cpp#12). `scripts/check-open-work.py` reads every such section under `.agent/` and
   `docs/` and the top-level documents, and refuses an entry that does not lead with a core-cpp issue
@@ -59,6 +122,11 @@ workflow refuses one without a section here.
 
 ### Changed
 
+- **`core::net` and `core::tui` ask a promise for its stop token through
+  `core::async::HasStopToken`** (core-cpp#29), and `ctest -L hygiene` refuses the hand-spelled
+  `requires { awaiting.promise().stopToken(); }` anywhere in the tree, so the concept is the one
+  place that states the contract. No behaviour changes: every site assigned the token to a
+  `StopToken`, which is what the concept requires it to convert to.
 - **The hygiene scan's `namespace-directory` rule skips a leading forward-declaration block**
   (core-cpp#23). A header under `src/core/<dir>/` that opened with
   `namespace core::platform { class Wakeup; }` was refused, because that was its first named
@@ -70,6 +138,28 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- **`serve`'s refusal of a request it did not read to its end reaches the client** (core-cpp#35).
+  A 413 or 400 was written over request bytes still unread, and the connection's bare close then
+  sent a reset rather than a FIN: the client read the refusal followed by a connection reset, and
+  on Windows could lose the refusal itself. The refusal now closes through `closeLingering`. A
+  request read in full and answered closes as before.
+- **`NativeFileSystem` reports a failure on a path the ANSI code page cannot spell** (core-cpp#26).
+  Its error messages spelled the path with `path::string()`, which on Windows narrows through the
+  code page: such a name was mangled, and MSVC's conversion throws there, so the error path itself
+  threw out of `readFile`, `rename`, `listDirectory` and the rest. The messages now spell the path
+  in UTF-8, as the paths core-cpp hands back already are. POSIX was unaffected.
+- **`testing::InMemoryFileSystem` answers as the native backend does in two more places**
+  (core-cpp#27). `isExecutableFile`, `permissions` and `setPermissions` follow a symlink to its
+  target, so a dangling link is not executable and has no permissions to set, where the fake used
+  to judge the link by bits recorded on the link itself. `createDirectory` refuses a path that is
+  already there, directory or file, with "File exists", where it used to succeed. What the fake
+  still does not model is tabled in `docs/modules/platform.md`.
+- **A Windows `SystemPipe`'s sockets are no longer inherited by child processes** (core-cpp#28).
+  `::socket()` and `::accept()` hand back inheritable handles there, so a consumer that spawned a
+  process -- contour's and endo's shells -- handed the child the loop's wakeup channel, and a child
+  that kept it open could hold it alive after the parent closed its end. The sockets are made with
+  `WSA_FLAG_NO_HANDLE_INHERIT` and the accepted one has its inheritance cleared, as POSIX already
+  sets `FD_CLOEXEC`.
 - **Alt+Backspace reaches its key binding** (core-cpp#21). `VtParser` read `ESC DEL` -- how xterm,
   VTE, iTerm and Alacritty send Alt+Backspace -- and `ESC BS` (Alt+Ctrl+H) as a bare Escape followed
   by a plain Backspace, so a modal took the Escape as cancel and `DeleteBigWordBackward` could fire

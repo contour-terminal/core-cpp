@@ -51,8 +51,10 @@ class Environment
 /// configuration file is loaded or reloaded, for instance -- simply makes its own rather than
 /// reaching for a global.
 ///
-/// Name resolution is the host's own: `GetEnvironmentVariableA()` on Windows, which matches
-/// case-insensitively against the environment block the operating system itself synchronizes, and
+/// Name resolution is the host's own: `GetEnvironmentVariableW()` on Windows, which matches
+/// case-insensitively against the environment block the operating system itself synchronizes --
+/// the name and the value converted from and to UTF-8, so a value outside the ANSI code page reads
+/// intact, and a name that is not UTF-8 reads as unset -- and
 /// a byte-wise scan of `environ` guarded by a process-wide mutex elsewhere. That mutex serializes
 /// this class's readers against each other; it cannot protect them from a `setenv()` issued outside
 /// it, which is why no first-party code may call `setenv()`: a program that must change its
@@ -112,9 +114,9 @@ class CachingEnvironment final: public Environment
 /// still hold a block published earlier. Each call so costs one block of pointers, which suits the
 /// rare writes a process makes to its own environment: a variable it exports to the children it
 /// starts, a test fixture's setting. A write that changes nothing (the variable already reads
-/// @p value) publishes nothing. On Windows it is `SetEnvironmentVariableA()`, which the operating
-/// system synchronizes; the CRT's own copy of the environment, which its `getenv()` reads, does not
-/// see it.
+/// @p value) publishes nothing. On Windows it is `SetEnvironmentVariableW()`, over the name and
+/// value converted from UTF-8, which the operating system synchronizes; the CRT's own copy of the
+/// environment, which its `getenv()` reads, does not see it.
 ///
 /// Not for use between `fork()` and `exec()`: it takes a lock and allocates, and in the child of a
 /// multi-threaded process the lock may be held by a thread that no longer exists. Build the
@@ -123,7 +125,8 @@ class CachingEnvironment final: public Environment
 /// @param name Name of the variable to set: not empty, and without '=' or NUL.
 /// @param value The value it should read as, without NUL. An empty value sets the variable.
 /// @return Nothing, or why the variable could not be set: @c std::errc::invalid_argument for a
-///         name or value no environment can hold, or the operating system's error on Windows.
+///         name or value no environment can hold -- on Windows also one that is not UTF-8 -- or
+///         the operating system's error on Windows.
 [[nodiscard]] std::expected<void, std::error_code> setProcessEnvironmentVariable(std::string_view name,
                                                                                  std::string_view value);
 

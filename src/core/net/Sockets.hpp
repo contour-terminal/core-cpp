@@ -4,8 +4,8 @@
 /// @file
 /// Cross-platform factory functions for the async socket layer. Consumers use
 /// these instead of including the per-platform implementation headers directly;
-/// each resolves to the right backend (PosixSocket/Listener or
-/// WindowsSocket/Listener) at compile time.
+/// each resolves to the right transport (PosixSocket/Listener or
+/// IocpSocket/Listener) at compile time.
 
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
@@ -161,9 +161,9 @@ struct ListenOptions
 /// @param loop The loop whose reactor drives accept readiness (not owned).
 /// @param path The socket file path.
 /// @param backlog The listen backlog.
-/// On Windows the listener belongs to the loop's transport, as @c listen's does: an
-/// @c IocpListener handing out @c IocpSocket on an IOCP loop (the default; since 0.2.1), a
-/// @c WindowsListener handing out @c WindowsSocket on a WFMO one.
+/// On Windows the listener is an @c IocpListener handing out @c IocpSocket, as @c listen's is,
+/// and a loop whose backend lends no completion port is refused with
+/// @c NetErrorCode::Unsupported (since 0.5.0).
 /// @return The bound listener; @c NetErrorCode::Unsupported where AF_UNIX is not available.
 [[nodiscard]] std::expected<std::unique_ptr<IListener>, NetError> listenUnix(EventLoop& loop,
                                                                              std::string_view path,
@@ -179,8 +179,8 @@ struct ListenOptions
 /// @param loop The loop whose reactor drives connect readiness (not owned; a
 ///        pointer, since coroutine reference parameters can dangle).
 /// @param path The socket file path.
-/// @return A task resolving to the connected socket -- on Windows an @c IocpSocket on an IOCP loop
-///         and a @c WindowsSocket on a WFMO one (since 0.2.1) --; a @c NetError on failure,
+/// @return A task resolving to the connected socket -- on Windows an @c IocpSocket --; a
+///         @c NetError on failure,
 ///         @c NetErrorCode::Cancelled if the flow was stopped while it waited,
 ///         @c NetErrorCode::Unsupported where AF_UNIX is not available.
 [[nodiscard]] async::Task<std::expected<std::unique_ptr<ISocket>, NetError>> connectUnix(

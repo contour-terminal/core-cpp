@@ -101,10 +101,9 @@ namespace detail
     /// @param loop The loop the socket is pinned to.
     /// @param handles The connected handles; left invalid, because the socket owns them now.
     /// @param peer The printable peer address to report from @c ISocket::peerAddress.
-    /// @return The socket.
-    [[nodiscard]] std::unique_ptr<ISocket> adoptDialled(EventLoop& loop,
-                                                        DialHandles& handles,
-                                                        std::string peer);
+    /// @return The socket, or why the loop cannot serve one -- on Windows, a loop with no
+    ///         completion port. The handle is closed on failure.
+    [[nodiscard]] SocketResult adoptDialled(EventLoop& loop, DialHandles& handles, std::string peer);
 
     /// Dials one candidate as ONE overlapped `ConnectEx` on @p loop's completion port — the
     /// completion-model counterpart of @c dialReadiness, and what a connector uses whenever

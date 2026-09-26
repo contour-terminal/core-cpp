@@ -23,14 +23,13 @@ std::unique_ptr<IoBackend> makeBackend(BackendKind kind)
     {
         case BackendKind::Poll: return std::make_unique<PollBackend>();
 
-        // Not built here. Epoll is Linux's, Kqueue the BSDs', and IOCP and Wfmo are
+        // Not built here. Epoll is Linux's, Kqueue the BSDs', and IOCP is
         // Windows'; a caller asking for one gets a null rather than a silent
         // substitution, so a test that means to exercise a specific backend skips
         // instead of testing the wrong one twice.
         case BackendKind::Epoll:
         case BackendKind::Kqueue:
         case BackendKind::Iocp:
-        case BackendKind::Wfmo: return nullptr;
 
         // Reachable everywhere, and not through here. HostDriven needs the
         // IHostScheduler its host provides, which a no-argument factory cannot supply

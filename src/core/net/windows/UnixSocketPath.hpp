@@ -2,9 +2,9 @@
 #pragma once
 
 /// @file
-/// Claiming an AF_UNIX socket path on Windows, for both listeners that bind one: the readiness
-/// `WindowsListener` and the completion-port `IocpListener`. Private to this module's Windows
-/// sources; the probe was `WindowsListener.cpp`'s alone until `IocpListener::bindUnix` needed it.
+/// Claiming an AF_UNIX socket path on Windows, for `IocpListener::bindUnix`. Private to this
+/// module's Windows sources; it was shared with the readiness `WindowsListener` until 0.5.0
+/// removed that transport (core-cpp#6).
 
 // winsock2.h MUST precede windows.h / ws2tcpip.h, and afunix.h needs what they declare.
 // clang-format off

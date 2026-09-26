@@ -16,7 +16,9 @@
 #include <core/net/IListener.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/IoResult.hpp>
+#include <core/net/LingeringClose.hpp>
 
+#include <chrono>
 #include <cstddef>
 #include <expected>
 #include <functional>
@@ -83,6 +85,13 @@ struct HttpLimits
 {
     std::size_t maxHeadBytes = DefaultMaxRequestHeadBytes; ///< Cap on request line + headers.
     std::size_t maxBodyBytes = DefaultMaxRequestBodyBytes; ///< Cap on the body.
+
+    /// How a connection refused over a request it did not finish reading is closed: through
+    /// @c closeLingering, so the refusal is followed by a FIN rather than destroyed by a reset.
+    /// fastcached's connection bounds: two seconds, 64 KiB, four reads.
+    LingerBounds linger { .total = std::chrono::milliseconds { 2000 },
+                          .maxBytes = std::size_t { 64 } * 1024,
+                          .reads = 4 };
 };
 
 /// Serves connections from @p listener until it is closed, dispatching each request
@@ -97,10 +106,11 @@ struct HttpLimits
 /// connection with @c ISocket::setReceiveDeadline on the accepted socket, or serve from
 /// behind something that does.
 ///
-/// **Every connection is closed by its destructor, straight after the response is
-/// written**, with no lingering close: a request refused with its body still unread
-/// (a 413) can have that refusal destroyed in flight by the reset the close sends
-/// ([core-cpp#35](https://github.com/contour-terminal/core-cpp/issues/35)).
+/// **A refused connection closes lingering**: a request answered with a 413 or a 400 may
+/// still have bytes the server never read, and a bare close over them is a reset that destroys
+/// the refusal in flight ([core-cpp#35](https://github.com/contour-terminal/core-cpp/issues/35)).
+/// So the refusal is followed by @c closeLingering, bounded by @c HttpLimits::linger. A request
+/// that was read in full and answered is closed by its destructor, which is a FIN.
 /// @param listener The bound listener to accept from (not owned).
 /// @param handler The request handler.
 /// @param limits Parsing limits applied to every request.

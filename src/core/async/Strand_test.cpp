@@ -27,6 +27,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -1176,6 +1177,81 @@ TEST_CASE("An around-task hook runs around every task, including a resumption th
     strand.post([] { CHECK(ambientSession == 42); });
     std::ignore = base.drain();
     CHECK(hook.calls == 4);
+}
+
+namespace
+{
+
+using core::async::RunTask;
+using core::async::TaskKind;
+
+static_assert(noexcept(std::declval<RunTask const&>().kind()), "kind() is noexcept");
+static_assert(std::is_same_v<decltype(std::declval<RunTask const&>().kind()), TaskKind>,
+              "kind() returns the TaskKind");
+
+/// A hook that records what kind of task it runs around, and runs it.
+struct KindHook
+{
+    std::vector<TaskKind> kinds;
+
+    void operator()(RunTask run)
+    {
+        kinds.push_back(run.kind());
+        run();
+    }
+};
+
+/// Hops onto @p strand with `ResumeOn`, then counts itself run.
+Task<void> hopOnto(Strand* strand, int* ran)
+{
+    co_await ResumeOn { *strand };
+    ++*ran;
+}
+
+} // namespace
+
+TEST_CASE("An around-task hook is told whether it runs a posted callable or a coroutine resumption",
+          "[Strand][aroundTask][kind]")
+{
+    // A hook that installs per-resumption context -- a request's session -- can apply it to the
+    // resumptions alone (core-cpp#53): every way a coroutine reaches the strand is a resumption, and
+    // every callable posted to it is a callable.
+    auto base = ManualExecutor {};
+    auto hook = KindHook {};
+    auto strand =
+        Strand { base, core::async::StrandOptions { .aroundTask = core::async::AroundTask::of(hook) } };
+    auto order = std::vector<int> {};
+
+    strand.post([&order] { order.push_back(1); });
+    auto call = OwningCall { .payload = std::make_unique<int>(2), .out = &order };
+    CHECK(strand.tryPost(call));
+
+    auto seen = std::vector<Sighting> {};
+    auto byHandle = lookOnce(&strand, &seen);
+    strand.submit(byHandle.handle());
+
+    auto destroyed = 0;
+    auto root = std::coroutine_handle<> {};
+    core::async::test::parkDetached(&root, FrameSentinel { &destroyed });
+    REQUIRE(root);
+    strand.submit(ParkedWork { .resume = root, .abandon = core::async::detail::claimOn(root) });
+
+    auto hopped = 0;
+    auto hop = hopOnto(&strand, &hopped);
+    hop.handle().resume(); // a ResumeOn hop: the strand is handed the coroutine
+
+    std::ignore = base.drain();
+    CHECK(hook.kinds
+          == std::vector { TaskKind::Callable,
+                           TaskKind::Callable,
+                           TaskKind::Resumption,
+                           TaskKind::Resumption,
+                           TaskKind::Resumption });
+    CHECK(order == std::vector { 1, 2 });
+    CHECK(byHandle.done());
+    CHECK(destroyed == 1);
+    CHECK(hopped == 1);
+    CHECK(hop.done());
 }
 
 TEST_CASE("seal() closes the offer door, and runs what is queued and what comes back", "[Strand][seal]")

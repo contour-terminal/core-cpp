@@ -12,8 +12,6 @@
 #include <core/net/Sockets.hpp>
 #include <core/net/windows/InvalidSocket.hpp>
 #include <core/net/windows/IocpSocket.hpp>
-#include <core/net/windows/WindowsListener.hpp>
-#include <core/net/windows/WindowsSocket.hpp>
 #include <core/platform/WinsockInit.hpp>
 
 #include <cassert>
@@ -27,6 +25,23 @@
 namespace core::net
 {
 
+namespace
+{
+    /// What a Windows factory answers for a loop that lends no completion port: a test double's,
+    /// or a host's. Windows has one socket transport since 0.5.0, the completion port's; the
+    /// readiness one, which the WFMO backend drove, went with that backend (core-cpp#6).
+    /// @param what The factory, for the message.
+    /// @return The refusal.
+    [[nodiscard]] NetError needsCompletionPort(char const* what)
+    {
+        return makeNetError(NetErrorCode::Unsupported,
+                            0,
+                            std::string { what }
+                                + ": a Windows socket needs a loop whose backend is the completion "
+                                  "port (BackendKind::Iocp)");
+    }
+} // namespace
+
 std::expected<std::unique_ptr<IListener>, NetError> listen(EventLoop& loop, ListenOptions options)
 {
     // Refused, never mapped: Windows has no load-balancing SO_REUSEPORT, and its SO_REUSEADDR
@@ -35,17 +50,11 @@ std::expected<std::unique_ptr<IListener>, NetError> listen(EventLoop& loop, List
         return std::unexpected(makeNetError(
             NetErrorCode::Unsupported, 0, "port sharing: Windows has no load-balancing SO_REUSEPORT"));
     platform::ensureWinsockInitialized();
-    // Which listener is the loop's question, not the platform's: a completion port completes
-    // AcceptEx, and a readiness backend is told FD_ACCEPT. Both are built on Windows, and
-    // `BackendKind::Wfmo` stays reachable by name for a release after IOCP became the default.
-    if (loop.completionPort() != nullptr)
-        return IocpListener::bind(loop, options.host, options.port, options.backlog, options.buffers)
-            .transform([](std::unique_ptr<IocpListener> listener) -> std::unique_ptr<IListener> {
-                return listener;
-            });
-    return WindowsListener::bind(loop, options.host, options.port, options.backlog, options.buffers)
+    if (loop.completionPort() == nullptr)
+        return std::unexpected(needsCompletionPort("listen"));
+    return IocpListener::bind(loop, options.host, options.port, options.backlog, options.buffers)
         .transform(
-            [](std::unique_ptr<WindowsListener> listener) -> std::unique_ptr<IListener> { return listener; });
+            [](std::unique_ptr<IocpListener> listener) -> std::unique_ptr<IListener> { return listener; });
 }
 
 std::expected<std::unique_ptr<IListener>, NetError> listen(EventLoop& loop,
@@ -62,14 +71,11 @@ std::expected<std::unique_ptr<IListener>, NetError> adoptListener(EventLoop& loo
     platform::ensureWinsockInitialized();
     if (handle == platform::InvalidHandle)
         return std::unexpected(makeNetError(NetErrorCode::BadHandle, 0, "adoptListener"));
-    if (loop.completionPort() != nullptr)
-        return IocpListener::adopt(loop, reinterpret_cast<SOCKET>(handle))
-            .transform([](std::unique_ptr<IocpListener> listener) -> std::unique_ptr<IListener> {
-                return listener;
-            });
-    return WindowsListener::adopt(loop, reinterpret_cast<SOCKET>(handle))
+    if (loop.completionPort() == nullptr)
+        return std::unexpected(needsCompletionPort("adoptListener"));
+    return IocpListener::adopt(loop, reinterpret_cast<SOCKET>(handle))
         .transform(
-            [](std::unique_ptr<WindowsListener> listener) -> std::unique_ptr<IListener> { return listener; });
+            [](std::unique_ptr<IocpListener> listener) -> std::unique_ptr<IListener> { return listener; });
 }
 
 std::expected<std::unique_ptr<IListener>, NetError> listenUnix(EventLoop& loop,
@@ -81,17 +87,11 @@ std::expected<std::unique_ptr<IListener>, NetError> listenUnix(EventLoop& loop,
     // (the user's profile/temp tree) govern access, not POSIX mode bits.
     auto ec = std::error_code {};
     std::filesystem::create_directories(std::filesystem::path { std::string { path } }.parent_path(), ec);
-    // The loop's question, as `listen` and `adoptListener` ask it: an IOCP loop -- the default --
-    // serves the socket through its completion port and hands out IocpSockets. This built the WFMO
-    // listener whatever the loop was until 0.2.1.
-    if (loop.completionPort() != nullptr)
-        return IocpListener::bindUnix(loop, path, backlog)
-            .transform([](std::unique_ptr<IocpListener> listener) -> std::unique_ptr<IListener> {
-                return listener;
-            });
-    return WindowsListener::bindUnix(loop, path, backlog)
+    if (loop.completionPort() == nullptr)
+        return std::unexpected(needsCompletionPort("listenUnix"));
+    return IocpListener::bindUnix(loop, path, backlog)
         .transform(
-            [](std::unique_ptr<WindowsListener> listener) -> std::unique_ptr<IListener> { return listener; });
+            [](std::unique_ptr<IocpListener> listener) -> std::unique_ptr<IListener> { return listener; });
 }
 
 async::Task<std::expected<std::unique_ptr<ISocket>, NetError>> connectUnix(EventLoop* loop,
@@ -104,7 +104,10 @@ async::Task<std::expected<std::unique_ptr<ISocket>, NetError>> connectUnix(Event
         co_return std::unexpected(makeNetError(NetErrorCode::AddressError, 0, "unix socket path too long"));
     std::memcpy(addr.sun_path, path.data(), path.size());
 
-    auto const sock = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    // Uninherited, as every socket core-cpp makes on Windows: a process that dials and also
+    // spawns children would otherwise hand each child the connection (core-cpp#28).
+    auto const sock =
+        ::WSASocketW(AF_UNIX, SOCK_STREAM, 0, nullptr, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
     if (sock == detail::InvalidSocket)
         co_return std::unexpected(
             makeNetError(NetErrorCode::Unsupported, WSAGetLastError(), "socket(AF_UNIX)"));
@@ -120,9 +123,8 @@ async::Task<std::expected<std::unique_ptr<ISocket>, NetError>> connectUnix(Event
                          err,
                          "connect unix"));
     }
-    // Adopted, so the loop decides the transport as it does for every other socket: an
-    // IocpSocket on an IOCP loop, a WindowsSocket on a WFMO one. It used to be a WindowsSocket
-    // whatever the loop was. `adoptSocket` closes the socket on failure.
+    // Adopted, so the loop's completion port serves it as it serves every other socket.
+    // `adoptSocket` closes the socket on failure.
     co_return adoptSocket(*loop, reinterpret_cast<platform::NativeHandle>(sock), std::string {});
 }
 
@@ -137,12 +139,13 @@ std::expected<std::unique_ptr<ISocket>, NetError> adoptSocket(EventLoop& loop,
     if (socket == detail::InvalidSocket)
         return std::unexpected(makeNetError(NetErrorCode::BadHandle, WSAENOTSOCK, "adoptSocket"));
 
-    // The same question `listen` and the connector ask of the loop: a completion port, or readiness.
     auto* const port = loop.completionPort();
     if (port == nullptr)
-        return WindowsSocket::adopt(loop, socket, std::move(peerAddress))
-            .transform(
-                [](std::unique_ptr<WindowsSocket> adopted) -> std::unique_ptr<ISocket> { return adopted; });
+    {
+        // This call promised to close what it was handed, and a refusal is a failure like any other.
+        ::closesocket(socket);
+        return std::unexpected(needsCompletionPort("adoptSocket"));
+    }
 
     // Associated HERE rather than by the constructor, so a refusal is this call's error value and
     // the socket is closed with it -- the constructor can only record the failure for a first read.

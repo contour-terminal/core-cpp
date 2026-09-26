@@ -8,7 +8,7 @@
 #include <core/net/SocketAddress.hpp>
 #include <core/net/SocketBuffers.hpp>
 #include <core/net/detail/StreamSocketOptions.hpp>
-#include <core/net/testing/InMemoryTransport.hpp>
+#include <core/net/testing/InMemorySocket.hpp>
 #include <core/net/testing/TestLoop.hpp>
 #include <core/platform/Clock.hpp>
 
@@ -111,7 +111,6 @@ class SilentResolver final: public core::net::IAsyncAddressResolver
 struct DialScript
 {
     core::platform::ManualClock* clock = nullptr;
-    core::net::EventLoop* loop = nullptr;
 
     /// How much clock each attempt consumes.
     std::chrono::milliseconds cost { 0 };
@@ -140,10 +139,10 @@ Task<SocketResult> scriptedDial(void* state,
 
     if (endpoint.protocol == script.succeedAt)
     {
-        auto pair = core::net::testing::makeSocketPair(*script.loop);
-        if (!pair.has_value())
-            co_return std::unexpected(pair.error());
-        co_return std::move(pair->first);
+        // The dial's answer is all this flow asks of the socket, and a TestLoop has no kernel
+        // behind it: the fake is the socket that needs neither.
+        auto pair = core::net::testing::InMemorySocketPair::create();
+        co_return std::unique_ptr<core::net::ISocket> { std::move(pair.client) };
     }
     co_return std::unexpected(core::net::makeNetError(
         NetErrorCode::ConnRefused, 0, std::format("candidate {} refused", endpoint.protocol)));
@@ -172,7 +171,7 @@ TEST_CASE("an empty host is refused before the resolver is touched", "[net]")
     auto clock = core::platform::ManualClock {};
     auto loop = core::net::testing::TestLoop { clock };
     auto resolver = ScriptedAsyncResolver { &clock, 1 };
-    auto script = DialScript { .clock = &clock, .loop = &loop };
+    auto script = DialScript { .clock = &clock };
 
     auto answer = SocketResult {};
     loop.blockOn(runFlow(&resolver, &loop, &clock, "", DialOptions {}, &script, &answer));
@@ -191,7 +190,7 @@ TEST_CASE("every candidate is tried and the LAST failure is reported", "[net]")
     auto clock = core::platform::ManualClock {};
     auto loop = core::net::testing::TestLoop { clock };
     auto resolver = ScriptedAsyncResolver { &clock, 3 };
-    auto script = DialScript { .clock = &clock, .loop = &loop };
+    auto script = DialScript { .clock = &clock };
 
     auto answer = SocketResult {};
     loop.blockOn(runFlow(&resolver, &loop, &clock, "three.test", DialOptions {}, &script, &answer));
@@ -208,7 +207,7 @@ TEST_CASE("the first candidate that connects wins and the rest are not tried", "
     auto clock = core::platform::ManualClock {};
     auto loop = core::net::testing::TestLoop { clock };
     auto resolver = ScriptedAsyncResolver { &clock, 3 };
-    auto script = DialScript { .clock = &clock, .loop = &loop, .succeedAt = 1 };
+    auto script = DialScript { .clock = &clock, .succeedAt = 1 };
 
     auto answer = SocketResult {};
     loop.blockOn(runFlow(&resolver, &loop, &clock, "three.test", DialOptions {}, &script, &answer));
@@ -227,7 +226,7 @@ TEST_CASE("the budget covers the whole call, resolution included", "[net]")
     auto loop = core::net::testing::TestLoop { clock };
     auto resolver = ScriptedAsyncResolver { &clock, 2 };
     resolver.cost = std::chrono::milliseconds { 1500 };
-    auto script = DialScript { .clock = &clock, .loop = &loop };
+    auto script = DialScript { .clock = &clock };
 
     auto answer = SocketResult {};
     loop.blockOn(runFlow(&resolver,
@@ -257,7 +256,7 @@ TEST_CASE("the budget ends a lookup that never answers, at the deadline and not 
     auto clock = core::platform::ManualClock {};
     auto loop = core::net::testing::TestLoop { clock };
     auto resolver = SilentResolver { &clock };
-    auto script = DialScript { .clock = &clock, .loop = &loop };
+    auto script = DialScript { .clock = &clock };
 
     auto answer = SocketResult {};
     auto finished = false;
@@ -303,7 +302,7 @@ TEST_CASE("a stop ends a flow parked on a lookup, and it unwinds rather than ans
     auto clock = core::platform::ManualClock {};
     auto loop = core::net::testing::TestLoop { clock };
     auto resolver = SilentResolver { &clock };
-    auto script = DialScript { .clock = &clock, .loop = &loop };
+    auto script = DialScript { .clock = &clock };
 
     auto answer = SocketResult {};
     auto threw = false;
@@ -344,7 +343,7 @@ TEST_CASE("each candidate gets a share of what is left, not the whole of it", "[
     auto clock = core::platform::ManualClock {};
     auto loop = core::net::testing::TestLoop { clock };
     auto resolver = ScriptedAsyncResolver { &clock, 2 };
-    auto script = DialScript { .clock = &clock, .loop = &loop };
+    auto script = DialScript { .clock = &clock };
 
     auto const start = clock.now();
     auto answer = SocketResult {};
@@ -372,7 +371,7 @@ TEST_CASE("a dial with no budget hands every candidate an unbounded deadline", "
     auto clock = core::platform::ManualClock {};
     auto loop = core::net::testing::TestLoop { clock };
     auto resolver = ScriptedAsyncResolver { &clock, 1 };
-    auto script = DialScript { .clock = &clock, .loop = &loop };
+    auto script = DialScript { .clock = &clock };
 
     auto answer = SocketResult {};
     loop.blockOn(runFlow(&resolver, &loop, &clock, "one.test", DialOptions {}, &script, &answer));
@@ -387,7 +386,7 @@ TEST_CASE("a resolver failure is reported as itself, not as a dial failure", "[n
     auto loop = core::net::testing::TestLoop { clock };
     auto resolver = ScriptedAsyncResolver { &clock, 1 };
     resolver.fail = true;
-    auto script = DialScript { .clock = &clock, .loop = &loop };
+    auto script = DialScript { .clock = &clock };
 
     auto answer = SocketResult {};
     loop.blockOn(runFlow(&resolver, &loop, &clock, "bad.test", DialOptions {}, &script, &answer));
@@ -407,7 +406,7 @@ TEST_CASE("keepalive and buffer sizes travel per call rather than per connector"
     auto clock = core::platform::ManualClock {};
     auto loop = core::net::testing::TestLoop { clock };
     auto resolver = ScriptedAsyncResolver { &clock, 1 };
-    auto script = DialScript { .clock = &clock, .loop = &loop };
+    auto script = DialScript { .clock = &clock };
     auto const options =
         DialOptions { .keepAlive = KeepAlive::Yes,
                       .buffers = core::net::SocketBufferSizes { .send = 4096, .receive = 8192 } };

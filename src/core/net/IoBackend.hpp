@@ -90,7 +90,7 @@ enum class HandleKind : std::uint8_t
     ///
     /// Only a backend with a completion port can serve it. Every other one refuses it BY
     /// NAME, with @c NetErrorCode::Unsupported, rather than handing an operation's address
-    /// to the kernel as a descriptor -- poll, epoll, kqueue, WFMO and the host-driven
+    /// to the kernel as a descriptor -- poll, epoll, kqueue and the host-driven
     /// backend, which `BackendParity_test` holds to it. Added by Task B7b with its first
     /// user.
     Completion
@@ -123,9 +123,8 @@ enum class Readiness : std::uint8_t
     /// it.** It is a hint, never a fact. The backends genuinely disagree and are each
     /// right to: poll and epoll set it for a peer hangup, while kqueue reports the same
     /// hangup as ordinary readability — `EV_EOF` on a read filter means the peer called
-    /// `shutdown(WR)`, which is an EOF and not an error — and Wfmo sets it only when a
-    /// wait fails on the handle itself. Unifying them would mean either calling a
-    /// normal close a failure on macOS or suppressing a real error elsewhere.
+    /// `shutdown(WR)`, which is an EOF and not an error. Unifying them would mean either
+    /// calling a normal close a failure on macOS or suppressing a real error elsewhere.
     ///
     /// What IS portable, and what every handler actually needs, is that **a peer hangup
     /// wakes the direction the handler watches, on every backend**. The caller is then
@@ -211,8 +210,8 @@ struct ReadinessHandler
     /// handler's. See that type's comment for why the refcount and the generation are
     /// two answers to two questions rather than one belt with one brace.
     ///
-    /// **A readiness backend leaves it empty and nothing notices.** poll, epoll, kqueue
-    /// and Wfmo hand the kernel a descriptor and get a descriptor back, so they have
+    /// **A readiness backend leaves it empty and nothing notices.** poll, epoll and
+    /// kqueue hand the kernel a descriptor and get a descriptor back, so they have
     /// nothing to protect and write nothing here. The field is not a contract between
     /// the handler's owner and the backend: an owner NEVER reads it, sets it, or copies
     /// a handler expecting it to mean anything. It is the backend's, on the handler,
@@ -285,13 +284,11 @@ enum class BackendKind : std::uint8_t
     Poll = 0, ///< poll(2), POSIX. Portable; a wait is O(registered).
     Epoll,    ///< epoll(7), Linux only. A wait is O(ready).
     Kqueue,   ///< kqueue(2), macOS and the BSDs. A wait is O(ready).
-    /// I/O completion ports, Windows, and the Windows default since Task B7b. A wait is
-    /// O(ready), and it is the only backend here that can serve a console handle and a socket
-    /// from one wait.
+    /// I/O completion ports, Windows, and its only backend: the WSAEventSelect +
+    /// WaitForMultipleObjects one it replaced as the default in 0.2.1 was removed in 0.5.0
+    /// ([core-cpp#6](https://github.com/contour-terminal/core-cpp/issues/6)). A wait is O(ready),
+    /// and it can serve a console handle and a socket from one wait.
     Iocp,
-    /// WSAEventSelect + WaitForMultipleObjects, Windows. No longer the default: kept by name for
-    /// one release as the fallback ([core-cpp#6](https://github.com/contour-terminal/core-cpp/issues/6)).
-    Wfmo,
     HostDriven, ///< No wait of its own: a host (a browser's event loop, a Qt one) pumps the loop.
     Scripted,   ///< The test double whose readiness a case writes out in advance.
     Null,       ///< Reports nothing, ever. What a loop with no I/O at all is driven by.
@@ -314,7 +311,6 @@ enum class BackendKind : std::uint8_t
         case BackendKind::Epoll: return "epoll";
         case BackendKind::Kqueue: return "kqueue";
         case BackendKind::Iocp: return "iocp";
-        case BackendKind::Wfmo: return "wfmo";
         case BackendKind::HostDriven: return "host-driven";
         case BackendKind::Scripted: return "scripted";
         case BackendKind::Null: return "null";

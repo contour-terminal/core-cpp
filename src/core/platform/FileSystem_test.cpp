@@ -327,15 +327,59 @@ TEST_CASE("isExecutableFile rejects directories and missing paths", "[FileSystem
     CHECK_FALSE(fs.isExecutableFile("/usr/bin/nope"));
 }
 
-TEST_CASE("isExecutableFile follows the execute bit of a symlink entry", "[FileSystem]")
+TEST_CASE("the model's isExecutableFile answers for what a symlink points at, as the native backend does",
+          "[FileSystem]")
 {
+    // The model used to judge a symlink by the execute bit recorded on the LINK, and never looked
+    // where it pointed, so a dangling link carrying the bit was executable here and nothing on the
+    // real filesystem (core-cpp#27). The native backend follows the link: a link to an executable
+    // file is executable, a link to a directory or to nothing is not, and permissions set through
+    // a link land on its target -- `std::filesystem::permissions` follows it too.
     auto fs = InMemoryFileSystem {};
-    fs.addSymlink("/usr/bin/link", "/opt/real");
-    REQUIRE(fs.setPermissions("/usr/bin/link",
-                              std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec)
-                .has_value());
+    auto const exec = std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec;
+    fs.addFile("/opt/tool", "#!/bin/sh\n");
+    REQUIRE(fs.setPermissions("/opt/tool", exec).has_value());
+    fs.addFile("/opt/data", "plain");
+    REQUIRE(fs.createDirectories("/opt/dir").has_value());
 
-    CHECK(fs.isExecutableFile("/usr/bin/link"));
+    fs.addSymlink("/usr/bin/tool", "/opt/tool");
+    fs.addSymlink("/usr/bin/data", "/opt/data");
+    fs.addSymlink("/usr/bin/dir", "/opt/dir");
+    fs.addSymlink("/usr/bin/dangling", "/opt/absent");
+
+    CHECK(fs.isExecutableFile("/usr/bin/tool"));
+    CHECK_FALSE(fs.isExecutableFile("/usr/bin/data"));
+    CHECK_FALSE(fs.isExecutableFile("/usr/bin/dir"));
+    CHECK_FALSE(fs.isExecutableFile("/usr/bin/dangling"));
+
+    // Through the link, onto the target, and read back through either name.
+    REQUIRE(fs.setPermissions("/usr/bin/data", exec).has_value());
+    CHECK(fs.isExecutableFile("/opt/data"));
+    CHECK(fs.isExecutableFile("/usr/bin/data"));
+    CHECK(fs.permissions("/usr/bin/data") == exec);
+    CHECK_FALSE(fs.setPermissions("/usr/bin/dangling", exec).has_value()); // nothing to set it on
+    CHECK_FALSE(fs.isExecutableFile("/usr/bin/dangling"));
+}
+
+TEST_CASE("the model's createDirectory refuses a path that is already there, as the native backend does",
+          "[FileSystem]")
+{
+    // The model created a directory over whatever was there and answered success; the native
+    // backend answers "File exists" for a directory, and for a file (core-cpp#27).
+    auto fs = InMemoryFileSystem {};
+    REQUIRE(fs.createDirectories("/srv").has_value());
+    REQUIRE(fs.createDirectory("/srv/sub").has_value());
+
+    auto const again = fs.createDirectory("/srv/sub");
+    REQUIRE_FALSE(again.has_value());
+    CHECK(again.error().contains(std::make_error_code(std::errc::file_exists).message()));
+
+    fs.addFile("/srv/file", "content");
+    auto const overFile = fs.createDirectory("/srv/file");
+    REQUIRE_FALSE(overFile.has_value());
+    CHECK(overFile.error().contains(std::make_error_code(std::errc::file_exists).message()));
+    CHECK(fs.readFile("/srv/file") == "content"); // and the file is still a file
+    CHECK_FALSE(fs.isDirectory("/srv/file"));
 }
 
 // ============================================================================
@@ -990,4 +1034,38 @@ TEST_CASE("the model copies onto an open destination in place", "[FileSystem]")
     auto byte = char {};
     (*stream)->read(&byte, 1);
     CHECK(byte == 'n');
+}
+
+TEST_CASE("NativeFileSystem reports a failure on a path the narrow encoding cannot spell, in UTF-8",
+          "[FileSystem][native]")
+{
+    // The error messages used to spell the path with path::string(), which on Windows narrows
+    // through the ANSI code page: a name the code page cannot hold was mangled, and MSVC's
+    // conversion THROWS there, so reporting the failure threw out of the error path itself
+    // (core-cpp#26). Invisible on POSIX, where the narrow encoding is UTF-8.
+    auto const& fs = core::platform::NativeFileSystem::instance();
+    auto const dir = core::testing::ScopedTempDir { "core_fs_utf8_message" };
+    auto const missing = dir.path() / std::filesystem::path { std::u8string { u8"日本" } }
+                         / std::filesystem::path { std::u8string { u8"ファイル.txt" } };
+    auto const spelled = std::string { "日本" };
+
+    auto const read = fs.readFile(missing);
+    REQUIRE_FALSE(read.has_value());
+    CHECK(read.error().contains(spelled));
+
+    auto const written = fs.writeFile(missing, "content");
+    REQUIRE_FALSE(written.has_value());
+    CHECK(written.error().contains(spelled));
+
+    auto const size = fs.fileSize(missing);
+    REQUIRE_FALSE(size.has_value());
+    CHECK(size.error().contains(spelled));
+
+    auto const listed = fs.listDirectory(missing.parent_path());
+    REQUIRE_FALSE(listed.has_value());
+    CHECK(listed.error().contains(spelled));
+
+    auto const renamed = fs.rename(missing, dir.path() / "elsewhere.txt");
+    REQUIRE_FALSE(renamed.has_value());
+    CHECK(renamed.error().contains(spelled));
 }

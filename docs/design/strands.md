@@ -126,6 +126,12 @@ have, and each was added as the smallest thing that meets it:
   every `co_await` in every consumer, fastcached's hot path included, for a need that is per
   strand. An around-task hook costs one branch per task where it is unset, and `KeyedStrands`'
   hook is given the key, because morph finds the session by the model instance the key names.
+  The hook is also told each task's kind, a posted callable or a coroutine resumption
+  (`RunTask::kind`, core-cpp#53): a session installed around every task on a key reaches the
+  callables posted to that key too, and a hook that means it for the handler's resumptions alone
+  can now say so. An enum rather than an `isResumption()` flag, by the rule that a `bool` is not an
+  API word where an `enum class` names what it means. It is read from what the task already holds,
+  so it grows nothing.
 
 ### Sealing: a teardown with no window
 

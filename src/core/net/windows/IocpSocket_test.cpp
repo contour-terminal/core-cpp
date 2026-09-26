@@ -6,7 +6,7 @@
 /// default backend is the completion port, and `testing::makeSocketPair`, `listen` and `connect`
 /// hand out the socket the loop's backend drives -- so `Socket_test`, `WaitReadable_test`,
 /// `AcceptedHalfClose_test`, `HttpServer_test` and the rest run over `IocpSocket` on the IOCP leg
-/// of `BackendMatrix` and over `WindowsSocket` on the WFMO one. These are the cases only a
+/// of `BackendMatrix`. These are the cases only a
 /// socket whose KERNEL performs the operation can have:
 ///
 /// - **the operation outlives the socket**
@@ -42,11 +42,11 @@
 #include <core/net/detail/ScopeGuard.hpp>
 #include <core/net/testing/CoroTestSupport.hpp>
 #include <core/net/testing/InMemoryTransport.hpp>
+#include <core/net/testing/TestLoop.hpp>
 #include <core/net/windows/IocpBackend.hpp>
 #include <core/net/windows/IocpSocket.hpp>
-#include <core/net/windows/WfmoBackend.hpp>
 #include <core/net/windows/WindowsLoopback.hpp>
-#include <core/net/windows/WindowsSocket.hpp>
+#include <core/platform/Clock.hpp>
 #include <core/platform/WinsockInit.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -440,9 +440,8 @@ TEST_CASE("On Windows the default backend is the completion port, and the factor
     CHECK(byDefault->kind() == core::net::BackendKind::Iocp);
     CHECK(byDefault->completionPort() != nullptr);
 
-    // And the socket a loop gets is the one ITS backend drives, asked per loop rather than fixed
-    // per platform -- WFMO stays reachable by name for one release (core-cpp#6).
-    SECTION("over the completion port")
+    // And the socket a loop gets is the one its backend drives: the completion port's, which since
+    // 0.5.0 is the only Windows backend (core-cpp#6).
     {
         auto loop = EventLoop { *byDefault };
         auto pair = core::net::testing::makeSocketPair(loop);
@@ -452,19 +451,50 @@ TEST_CASE("On Windows the default backend is the completion port, and the factor
         REQUIRE(bound.has_value());
         CHECK(dynamic_cast<IocpListener*>(bound->get()) != nullptr);
     }
-    SECTION("over WFMO, by name")
-    {
-        auto wfmo = core::net::makeBackend(core::net::BackendKind::Wfmo);
-        REQUIRE(wfmo != nullptr);
-        CHECK(wfmo->completionPort() == nullptr);
-        auto loop = EventLoop { *wfmo };
-        auto pair = core::net::testing::makeSocketPair(loop);
-        REQUIRE(pair.has_value());
-        CHECK(dynamic_cast<core::net::WindowsSocket*>(pair->first.get()) != nullptr);
-        auto bound = core::net::listen(loop, core::net::ListenOptions { .host = "127.0.0.1" });
-        REQUIRE(bound.has_value());
-        CHECK(dynamic_cast<IocpListener*>(bound->get()) == nullptr);
-    }
+}
+
+TEST_CASE("A Windows socket factory refuses a loop whose backend lends no completion port",
+          "[net][iocp][default]")
+{
+    // The other half of core-cpp#6: with the readiness transport gone there is no socket a loop
+    // without a port can drive, so every factory says so by name rather than handing out one that
+    // would never complete. A loop over a test double is the case a consumer can reach.
+    auto clock = core::platform::ManualClock {};
+    auto loop = core::net::testing::TestLoop { clock };
+    REQUIRE(loop.completionPort() == nullptr);
+
+    auto const bound = core::net::listen(loop, core::net::ListenOptions { .host = "127.0.0.1" });
+    REQUIRE_FALSE(bound.has_value());
+    CHECK(bound.error().code == NetErrorCode::Unsupported);
+
+    auto const unixBound = core::net::listenUnix(loop, "core-cpp-refused.sock");
+    REQUIRE_FALSE(unixBound.has_value());
+    CHECK(unixBound.error().code == NetErrorCode::Unsupported);
+
+    auto const pair = core::net::testing::makeSocketPair(loop);
+    REQUIRE_FALSE(pair.has_value());
+    CHECK(pair.error().code == NetErrorCode::Unsupported);
+
+    // adoptSocket closes what it was handed, refusal or not; adoptListener leaves it to the caller.
+    core::platform::ensureWinsockInitialized();
+    auto const socket = ::WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
+    REQUIRE(socket != INVALID_SOCKET);
+    auto const adopted =
+        core::net::adoptSocket(loop, reinterpret_cast<core::platform::NativeHandle>(socket), {});
+    REQUIRE_FALSE(adopted.has_value());
+    CHECK(adopted.error().code == NetErrorCode::Unsupported);
+    auto type = 0;
+    auto size = static_cast<int>(sizeof(type));
+    CHECK(::getsockopt(socket, SOL_SOCKET, SO_TYPE, reinterpret_cast<char*>(&type), &size) == SOCKET_ERROR);
+
+    auto const listening = ::WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
+    REQUIRE(listening != INVALID_SOCKET);
+    auto const adoptedListener =
+        core::net::adoptListener(loop, reinterpret_cast<core::platform::NativeHandle>(listening));
+    REQUIRE_FALSE(adoptedListener.has_value());
+    CHECK(adoptedListener.error().code == NetErrorCode::Unsupported);
+    CHECK(::getsockopt(listening, SOL_SOCKET, SO_TYPE, reinterpret_cast<char*>(&type), &size) == 0);
+    ::closesocket(listening);
 }
 
 TEST_CASE("An IocpListener and IocpSocket round-trip bytes, and AcceptEx reports the peer",

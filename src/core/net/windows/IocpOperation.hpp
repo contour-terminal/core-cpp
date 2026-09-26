@@ -27,6 +27,7 @@
 #include <windows.h>
 // clang-format on
 
+#include <core/async/Awaitable.hpp>
 #include <core/async/Cancellation.hpp>
 #include <core/async/ParkedWork.hpp>
 #include <core/async/StopToken.hpp>
@@ -230,7 +231,7 @@ class CompletionWait
     [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting)
     {
         auto token = async::StopToken {};
-        if constexpr (requires { awaiting.promise().stopToken(); })
+        if constexpr (async::HasStopToken<Promise>)
             token = awaiting.promise().stopToken();
 
         if (!park())

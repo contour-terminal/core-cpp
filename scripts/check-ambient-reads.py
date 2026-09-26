@@ -7,7 +7,7 @@
 `.agent/rules/design-principles.md` says it first: anything that touches time, the environment or
 any other ambient resource is reached through an interface the object is GIVEN, never through a
 free function with hidden state -- `IClock`, not `std::chrono::steady_clock::now()`;
-`EnvironmentProvider`, not `std::getenv()`. That rule had no step behind it. It was a sentence a
+`core::Environment`, not `std::getenv()`. That rule had no step behind it. It was a sentence a
 reviewer agreed with, and the tree carries direct reads it never caught. This is the step: a scan
 over `src/core/` for the spellings that bypass a seam.
 

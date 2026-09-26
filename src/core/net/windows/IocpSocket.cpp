@@ -1094,8 +1094,8 @@ void IocpListener::close() noexcept
         ::closesocket(shared->socket);
         shared->socket = detail::InvalidSocket;
     }
-    // The socket FILE goes with the socket, as `WindowsListener::close` and `UnixListener::close`
-    // do; "" for a TCP listener. DeleteFileA, because this is noexcept.
+    // The socket FILE goes with the socket, as `UnixListener::close` does on POSIX; "" for a TCP listener.
+    // DeleteFileA, because this is noexcept.
     if (!_path.empty())
         ::DeleteFileA(_path.c_str());
     for (auto* const wait: accepting)

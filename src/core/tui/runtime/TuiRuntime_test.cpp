@@ -554,8 +554,7 @@ TEST_CASE("Input arriving while the loop waits resumes the flow on the loop thre
     // Nothing is ready when the flow parks, so the loop is inside its backend's wait when the
     // other thread scripts the input -- the case the runtime exists for, and the one no scripted
     // backend can stand in for. Run over every backend this platform builds: on Windows that is
-    // WFMO and IOCP, and the terminal input handle is the reason the IOCP waitable-HANDLE bridge
-    // exists at all.
+    // IOCP, and the terminal input handle is the reason its waitable-HANDLE bridge exists at all.
     for (auto const& entry: core::net::testing::BackendMatrix)
     {
         auto backend = core::net::makeBackend(entry.kind);

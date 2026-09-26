@@ -14,9 +14,10 @@
 //
 // **Only a park that goes through the closed-park queue can fail here**, and on POSIX the socket
 // case does not: `PosixSocket::close()` settles its parked read inline, before the drain even
-// starts, so that case is a CONTROL there -- it would pass on the unfixed loop. It still
-// distinguishes where a socket parks through the loop's coroutine awaiter (the WFMO backend's
-// `WindowsSocket`). The listener case distinguishes everywhere, and on POSIX
+// starts, so that case is a CONTROL there -- it would pass on the unfixed loop. (It
+// distinguished on Windows while the WFMO backend's `WindowsSocket` parked through the loop's
+// coroutine awaiter; that transport was removed in 0.5.0.) The listener case distinguishes
+// everywhere, and on POSIX
 // `posix/WaitReadableClose_test.cpp` parks a raw descriptor through `waitReadable`, which does.
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
@@ -126,11 +127,9 @@ TEST_CASE("runUntilIdle does not return while a closed socket's read is still qu
 
             CHECK(outcome.resolved);
             CHECK_FALSE(outcome.hasValue);
-            // Not the code: what idleness is asked here is that the read RESOLVED. The code a
-            // closed socket's read answers is the transport's, and they disagree -- `PosixSocket`
-            // and `IocpSocket` answer `Cancelled`, while the WFMO backend's `WindowsSocket` hands
-            // the decision back to its read, whose closed-socket guard answers `BadHandle`
-            // (`windows/WindowsSocket.cpp`, `parkUntilReady`).
+            // And the code, which every transport now agrees on: the WFMO backend's
+            // `WindowsSocket` answered `BadHandle` here (core-cpp#46) until 0.5.0 removed it.
+            CHECK(outcome.code == NetErrorCode::Cancelled);
         }
     }
 }
