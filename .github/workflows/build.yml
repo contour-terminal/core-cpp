@@ -888,7 +888,7 @@ jobs:
         run: |
           site="$RUNNER_TEMP/clang-tidy"
           python -m pip install --no-deps --target "$site" "$(python scripts/tool-versions.py | grep '^clang-tidy==')"
-          tidy="${site//\//}/clang_tidy/data/bin/clang-tidy.exe"
+          tidy="$(cygpath -m "$site")/clang_tidy/data/bin/clang-tidy.exe"
           test -x "$tidy" || { echo "::error::the clang-tidy wheel has no $tidy"; exit 1; }
           echo "CLANG_TIDY_EXE=$tidy" >> "$GITHUB_ENV"
 

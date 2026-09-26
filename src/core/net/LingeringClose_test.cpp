@@ -173,7 +173,9 @@ struct Refused
                   .outcome = std::nullopt,
                   .received = { .text = {}, .ending = core::net::IoResult { std::size_t { 0 } } } };
     {
-        auto client = std::jthread { [port, &refused] {
+        // `std::thread` with an explicit join rather than `std::jthread`: AppleClang's libc++ has
+        // none (see `TestLoop_test.cpp`).
+        auto client = std::thread { [port, &refused] {
             auto connector = core::net::BlockingConnector {};
             auto socket = syncRun(
                 connector.connect("127.0.0.1", port, core::net::DialOptions { .connectTimeout = 5s }));
@@ -197,6 +199,7 @@ struct Refused
             refused.outcome = *served;
         if (!refused.served)
             (*listener)->close();
+        client.join();
     }
     return refused;
 }

@@ -279,7 +279,10 @@ endif()
 # And a directory that is not a source tree is refused rather than scanned clean.
 file(MAKE_DIRECTORY "${WORK_DIR}/empty")
 core_cpp_selftest_scan("${WORK_DIR}/empty" emptyRc emptyOutput)
-if(emptyRc EQUAL 0 OR NOT emptyOutput MATCHES "no CMakeLists\.txt")
+# CMake wraps a FATAL_ERROR message at about 76 columns, so the phrase can straddle a line break --
+# measured on CI, where the longer WORK_DIR moved "CMakeLists.txt" onto the next line.
+string(REGEX REPLACE "[ \t\r\n]+" " " emptyOutput "${emptyOutput}")
+if(emptyRc EQUAL 0 OR NOT emptyOutput MATCHES "no CMakeLists\\.txt")
     list(APPEND failures "empty ROOT: a directory with nothing in it was not refused as no source tree: ${emptyOutput}")
 endif()
 
