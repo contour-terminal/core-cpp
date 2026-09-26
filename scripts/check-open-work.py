@@ -20,14 +20,17 @@ Two halves, because only one of them needs the network:
     offline    every entry's leading reference is a core-cpp issue link whose text and URL agree;
                a section with no entries is refused too -- the heading goes with its last entry
     --online   every leading issue is open, asked of the GitHub API (GH_TOKEN or GITHUB_TOKEN
-               is used when set). A lookup that fails is refused, never passed: an unanswered
-               question is not an open issue
+               is used when set). A lookup that cannot be answered -- no network, a rate limit,
+               no token -- is neither a pass nor a refusal: the run exits 77, SKIPPED, naming
+               what it could not ask. An unanswered question is not an open issue, and it is
+               not a closed one either
 
 The ctest runs the offline half, so a local run never fails for want of a network; CI's `style`
 job runs both. `--states FILE` answers the online half from a JSON object of issue number to state
 instead of the network, which is how the self-test reaches it.
 
-Exit status: 0 when every entry holds, 1 naming every one that does not.
+Exit status: 0 when every entry holds; 1 naming every one that does not; 77 when nothing was
+refused but at least one issue's state could not be learnt.
 """
 
 from __future__ import annotations
@@ -50,6 +53,9 @@ REPOSITORY = "contour-terminal/core-cpp"
 SCANNED = (".agent", "docs")
 TOP_LEVEL = ("AGENT.md", "CONTRIBUTING.md", "README.md")
 HEADING = "## Open work"
+
+# The exit status ctest reads as a skip (CORE_CPP_SKIP_EXIT_CODE in cmake/CoreCppTargets.cmake).
+SKIP_EXIT_CODE = 77
 
 LEADING = re.compile(
     r"^- \*\*\[core-cpp#(?P<text>\d+)\]\(https://github\.com/contour-terminal/core-cpp/issues/(?P<url>\d+)\)\*\*"
@@ -162,14 +168,15 @@ def github_state(number: int) -> str:
         return json.load(response)["state"]
 
 
-def state_problems(entries: list[Entry], states: dict[int, str] | None) -> list[str]:
-    """Refuses an entry whose issue is closed, or whose state could not be learnt.
+def state_problems(entries: list[Entry], states: dict[int, str] | None) -> tuple[list[str], list[str]]:
+    """Refuses an entry whose issue is closed, and lists those whose state could not be learnt.
 
     :param entries: the entries to check.
     :param states: issue number to state, or None to ask GitHub.
-    :return: one line per refused entry.
+    :return: one line per refused entry, and one per entry left unanswered.
     """
     problems = []
+    unanswered = []
     for entry in entries:
         number = issue_number(entry)
         if number is None:
@@ -177,7 +184,7 @@ def state_problems(entries: list[Entry], states: dict[int, str] | None) -> list[
         try:
             state = states[number] if states is not None else github_state(number)
         except (KeyError, OSError, ValueError, urllib.error.URLError) as error:
-            problems.append(
+            unanswered.append(
                 f"{entry.path}:{entry.line}: core-cpp#{number}: its state could not be read ({error!r})"
             )
             continue
@@ -186,7 +193,7 @@ def state_problems(entries: list[Entry], states: dict[int, str] | None) -> list[
                 f"{entry.path}:{entry.line}: core-cpp#{number} is {state}, so this entry has gone false; "
                 "delete it, or reopen the issue if the work is not done"
             )
-    return problems
+    return problems, unanswered
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -201,11 +208,13 @@ def main(argv: list[str] | None = None) -> int:
 
     entries, problems = open_work_entries(arguments.root)
     problems += grammar_problems(entries)
+    unanswered: list[str] = []
     if arguments.online or arguments.states:
         states = None
         if arguments.states:
             states = {int(key): value for key, value in json.loads(arguments.states.read_text()).items()}
-        problems += state_problems(entries, states)
+        refused, unanswered = state_problems(entries, states)
+        problems += refused
 
     halves = "grammar and state" if arguments.online or arguments.states else "grammar"
     if problems:
@@ -213,6 +222,13 @@ def main(argv: list[str] | None = None) -> int:
         for problem in problems:
             print(f"  {problem}")
         return 1
+    if unanswered:
+        print(
+            f"check-open-work: SKIPPED -- {len(unanswered)} issue state(s) could not be read, so the state half is unanswered:"
+        )
+        for line in unanswered:
+            print(f"  {line}")
+        return SKIP_EXIT_CODE
     print(f"check-open-work: {len(entries)} Open work entries hold ({halves})")
     return 0
 

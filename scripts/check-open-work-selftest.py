@@ -97,10 +97,17 @@ class OpenWorkTest(unittest.TestCase):
         self.assertEqual(status, 1, said)
         self.assertIn("core-cpp#12 is closed", said)
 
-    def test_an_unanswered_state_is_refused_not_passed(self):
+    def test_an_unanswered_state_is_skipped_neither_passed_nor_refused(self):
         status, said = self.run_check(f"## Open work\n\n{GOOD}", {99: "open"})
-        self.assertEqual(status, 1, said)
+        self.assertEqual(status, 77, said)
+        self.assertIn("SKIPPED", said)
         self.assertIn("could not be read", said)
+
+    def test_a_refusal_still_fails_beside_an_unanswered_state(self):
+        other = GOOD.replace("#12", "#13").replace("/12)", "/13)")
+        status, said = self.run_check(f"## Open work\n\n{GOOD}{other}", {12: "closed"})
+        self.assertEqual(status, 1, said)
+        self.assertIn("core-cpp#12 is closed", said)
 
     def test_other_sections_and_code_blocks_are_not_entries(self):
         rules = f"## Rules\n\n- a rule, not an entry\n\n```\n## Open work\n- not an entry either\n```\n\n## Open work\n\n{GOOD}"

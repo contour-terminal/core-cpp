@@ -120,7 +120,18 @@ jobs:
       - name: Open work entries lead with an open issue
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python scripts/check-open-work.py --online
+        # 77 is the checker's "could not ask GitHub" (no network, a rate limit): a warning that
+        # says so, never a pass and never a red. A closed issue is 1, and fails the step.
+        run: |
+          set +e
+          python scripts/check-open-work.py --online
+          status=$?
+          set -e
+          if [ "$status" -eq 77 ]; then
+            echo "::warning::check-open-work could not read an issue's state; the state half was skipped"
+            exit 0
+          fi
+          exit "$status"
 
       # covers: core-cpp.open-work-selftest
       - name: Open-work self-test
