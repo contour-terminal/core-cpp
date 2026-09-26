@@ -67,8 +67,10 @@ workflow refuses one without a section here.
   `UnexpectedToken`, `MissingRequiredOption`), the index of the token at fault and a message.
   `ParserError` is removed. Numbers are read whole, with `std::from_chars` (floating point with
   `std::strtod`): `12abc` is refused rather than read as 12, `-1` is no longer accepted -- and
-  wrapped -- as an unsigned, and a value out of the type's range is refused rather than truncated.
-  `App::run()` and `App::reparseParameters()` print the error's message; their signatures are
+  wrapped -- as an unsigned, a leading `+` or leading whitespace (`+5`, ` 5`), which `std::stoi`
+  and `std::stoul` accepted, is refused, and a value out of the type's range is refused rather
+  than truncated. `parse()` is `[[nodiscard]]`: a call that discards the result no longer compiles
+  under `-Werror`. `App::run()` and `App::reparseParameters()` print the error's message; their signatures are
   unchanged.
   - *Migration*: a call site that tested `has_value()` or used `*parsed` and `parsed->` compiles
     as it is when its variable is `auto`; one that names the type spells
