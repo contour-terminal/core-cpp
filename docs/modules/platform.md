@@ -25,7 +25,7 @@ the interrupt throttle.
 | `<core/platform/FileSystem.hpp>`, `<core/platform/NativeFileSystem.hpp>` | the `FileSystem` interface, errors as `std::expected`, a lazy recursive walk as a `core::Generator`; `NativeFileSystem` over `std::filesystem` |
 | `<core/platform/FileInfoProvider.hpp>` | `FileInfoProvider`, a directory listing with `stat(2)` metadata (`FileEntry`), a single file or a glob pattern |
 | `<core/platform/ProcessEnvironment.hpp>` | `ProcessEnvironment`, a `core::Environment` a shell writes: variables with a set-then-export model, each write a `std::expected`; `isValidEnvironmentName()` |
-| `<core/platform/WorkingDirectory.hpp>` | `WorkingDirectory`: `changeDirectory()` and `currentDirectory()` |
+| `<core/platform/WorkingDirectory.hpp>` | `WorkingDirectory`: `changeDirectory()` and `currentDirectory()`, both over `std::filesystem::path`, so the answer round-trips on Windows whatever it spells |
 | `<core/platform/UserPaths.hpp>` | `homeDirectory()`, `userName()` and `configHome()` over a `core::Environment`, by default the process environment |
 | `<core/platform/PathUtils.hpp>` | path spelling: `normalizePath()`, `joinPath()`, `absolutePath()`, `canonicalCasePath()`, `stripTrailingSeparator()`, `isCaseOnlyRename()`, `resolveDevicePath()` |
 | `<core/platform/GlobMatch.hpp>` | `globMatchFilename()` (`*`, `?`, `[...]`) and `containsGlobChars()` |

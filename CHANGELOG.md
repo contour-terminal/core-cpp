@@ -55,7 +55,11 @@ workflow refuses one without a section here.
     `unset`, `exportVariable` and `setAndExport` (`std::ignore = env.set(...)` where a failure is
     acceptable). Replace `env.changeDirectory(p)` and `env.currentDirectory()` with a
     `WorkingDirectory&` the object is given -- `nativeWorkingDirectory()` in a composition root,
-    `testing::TestWorkingDirectory(initial)` with `addValidPath` in a test -- and
+    `testing::TestWorkingDirectory(initial)` with `addValidPath` in a test. Its
+    `currentDirectory()` returns a `std::filesystem::path`, where the old member returned a UTF-8
+    `std::string`, so the answer round-trips through `changeDirectory()` on Windows whatever it
+    spells: a caller that wants the text takes `core::platform::normalizePath(cwd.currentDirectory())`,
+    and one that compared with a string literal compares its `generic_string()`. Replace
     `env.homeDirectory()`, `env.userName()` and `env.configHome()` with
     `core::platform::homeDirectory(env)`, `userName(env)` and `configHome(env)`. A function that
     only reads can take a `core::Environment const&` and be handed either double. contour, which

@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-#include <core/platform/PathUtils.hpp>
 #include <core/platform/WorkingDirectory.hpp>
 
 #include <expected>
 #include <filesystem>
 #include <memory>
-#include <string>
 
 #include <unistd.h>
 
@@ -26,9 +24,9 @@ namespace
             return {};
         }
 
-        [[nodiscard]] std::string currentDirectory() const override
+        [[nodiscard]] std::filesystem::path currentDirectory() const override
         {
-            return normalizePath(std::filesystem::current_path());
+            return std::filesystem::current_path().generic_string();
         }
     };
 } // namespace

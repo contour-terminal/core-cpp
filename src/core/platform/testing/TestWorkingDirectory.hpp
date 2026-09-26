@@ -31,7 +31,7 @@ class TestWorkingDirectory final: public WorkingDirectory
         return {};
     }
 
-    [[nodiscard]] std::string currentDirectory() const override { return _current; }
+    [[nodiscard]] std::filesystem::path currentDirectory() const override { return _current; }
 
     /// Adds a path that @c changeDirectory accepts. While none has been added, every path is.
     void addValidPath(std::string const& path)

@@ -4,7 +4,6 @@
 #include <core/Environment.hpp>
 
 #include <algorithm>
-#include <cctype>
 #include <expected>
 #include <memory>
 #include <string>
@@ -41,19 +40,44 @@ namespace
         return utf8;
     }
 
-    /// @return Whether @p a and @p b name the same variable: ASCII letters compare without case.
-    [[nodiscard]] bool sameName(std::string_view a, std::string_view b) noexcept
+    /// @return @p text in UTF-16, for the comparison below. A byte that is not UTF-8 becomes
+    ///         U+FFFD: such a name cannot reach the process environment anyway.
+    [[nodiscard]] std::wstring toWide(std::string const& text)
     {
-        return std::ranges::equal(a, b, [](char x, char y) {
-            return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
-        });
+        if (text.empty())
+            return {};
+        auto const size = static_cast<int>(text.size());
+        auto const length = MultiByteToWideChar(CP_UTF8, 0, text.data(), size, nullptr, 0);
+        auto wide = std::wstring(static_cast<std::size_t>(length), L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, text.data(), size, wide.data(), length);
+        return wide;
+    }
+
+    /// Compares two variable names as Windows does: ordinally, with case folded through the
+    /// operating system's own upper-case table, in all of Unicode and not only ASCII.
+    /// @return Negative, zero or positive, as @p a sorts before, with or after @p b.
+    [[nodiscard]] int compareNames(std::string_view a, std::string_view b)
+    {
+        auto const wideA = toWide(std::string { a });
+        auto const wideB = toWide(std::string { b });
+        auto const order = ::CompareStringOrdinal(wideA.c_str(),
+                                                  static_cast<int>(wideA.size()),
+                                                  wideB.c_str(),
+                                                  static_cast<int>(wideB.size()),
+                                                  TRUE);
+        return order - CSTR_EQUAL;
+    }
+
+    /// @return Whether @p a and @p b name the same variable.
+    [[nodiscard]] bool sameName(std::string_view a, std::string_view b)
+    {
+        return compareNames(a, b) == 0;
     }
 } // namespace
 
 bool WindowsProcessEnvironment::CaseInsensitiveLess::operator()(std::string_view a, std::string_view b) const
 {
-    return std::ranges::lexicographical_compare(
-        a, b, [](unsigned char ac, unsigned char bc) { return std::tolower(ac) < std::tolower(bc); });
+    return compareNames(a, b) < 0;
 }
 
 std::unique_ptr<ProcessEnvironment> nativeProcessEnvironment()

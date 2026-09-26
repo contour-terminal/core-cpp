@@ -26,7 +26,8 @@ class WindowsProcessEnvironment final: public ProcessEnvironment
     [[nodiscard]] std::vector<std::string> keys() const override;
 
   private:
-    /// @brief Internal storage for variables set but not exported (case-insensitive key comparison).
+    /// @brief Internal storage for variables set but not exported, ordered as Windows compares
+    /// names: case-insensitively in all of Unicode (`CompareStringOrdinal` with case ignored).
     struct CaseInsensitiveLess
     {
         using is_transparent = void;

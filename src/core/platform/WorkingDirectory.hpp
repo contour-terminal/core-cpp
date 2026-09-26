@@ -6,7 +6,6 @@
 #include <expected>
 #include <filesystem>
 #include <memory>
-#include <string>
 
 namespace core::platform
 {
@@ -34,8 +33,11 @@ class WorkingDirectory
         std::filesystem::path const& path) = 0;
 
     /// @return The working directory, with forward slashes; on Windows in the capitalization the
-    ///         filesystem stores, whatever case it was changed to.
-    [[nodiscard]] virtual std::string currentDirectory() const = 0;
+    ///         filesystem stores, whatever case it was changed to. A path rather than a string, so
+    ///         it round-trips through @c changeDirectory whatever it spells: a string converted to
+    ///         a path reads through the ANSI code page on Windows. @c normalizePath gives its
+    ///         UTF-8 spelling.
+    [[nodiscard]] virtual std::filesystem::path currentDirectory() const = 0;
 };
 
 /// @brief Creates this operating system's own WorkingDirectory, for a composition root: the
