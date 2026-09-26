@@ -146,15 +146,28 @@ function(core_cpp_selftest_write dir rowsVar)
     endforeach()
 endfunction()
 
-## @brief Runs the scanner over @p dir, setting @p rcVar and @p outputVar.
+## @brief Collapses every run of whitespace in the variable named @p var into one space.
+##
+## CMake word-wraps a FATAL_ERROR message at about 76 columns, and where the breaks fall moves with
+## the length of every path in it -- so a phrase the self-test looks for can straddle a line break
+## on one machine and not on another. Measured on CI: the scanner refused the empty ROOT correctly,
+## and "no CMakeLists.txt" arrived as "no" and "CMakeLists.txt" on two lines. Every match on the
+## scanner's output is made against the flattened text.
+macro(core_cpp_selftest_flatten var)
+    string(REGEX REPLACE "[ \t\r\n]+" " " ${var} "${${var}}")
+endmacro()
+
+## @brief Runs the scanner over @p dir, setting @p rcVar and @p outputVar (flattened).
 function(core_cpp_selftest_scan dir rcVar outputVar)
     execute_process(
         COMMAND "${CMAKE_COMMAND}" "-DROOT=${dir}" -P "${SCANNER}"
         RESULT_VARIABLE rc
         OUTPUT_VARIABLE out
         ERROR_VARIABLE err)
+    set(said "${out}${err}")
+    core_cpp_selftest_flatten(said)
     set(${rcVar} "${rc}" PARENT_SCOPE)
-    set(${outputVar} "${out}${err}" PARENT_SCOPE)
+    set(${outputVar} "${said}" PARENT_SCOPE)
 endfunction()
 
 set(failures "")
@@ -272,16 +285,15 @@ execute_process(
     RESULT_VARIABLE relativeRc
     OUTPUT_VARIABLE relativeOut
     ERROR_VARIABLE relativeErr)
-if(relativeRc EQUAL 0 OR NOT "${relativeOut}${relativeErr}" MATCHES "${severalCount} violation\\(s\\)")
+set(relativeSaid "${relativeOut}${relativeErr}")
+core_cpp_selftest_flatten(relativeSaid)
+if(relativeRc EQUAL 0 OR NOT relativeSaid MATCHES "${severalCount} violation\\(s\\)")
     list(APPEND failures
-         "relative ROOT: the several-at-once tree named relatively did not report its ${severalCount} violations: ${relativeOut}${relativeErr}")
+         "relative ROOT: the several-at-once tree named relatively did not report its ${severalCount} violations: ${relativeSaid}")
 endif()
 # And a directory that is not a source tree is refused rather than scanned clean.
 file(MAKE_DIRECTORY "${WORK_DIR}/empty")
 core_cpp_selftest_scan("${WORK_DIR}/empty" emptyRc emptyOutput)
-# CMake wraps a FATAL_ERROR message at about 76 columns, so the phrase can straddle a line break --
-# measured on CI, where the longer WORK_DIR moved "CMakeLists.txt" onto the next line.
-string(REGEX REPLACE "[ \t\r\n]+" " " emptyOutput "${emptyOutput}")
 if(emptyRc EQUAL 0 OR NOT emptyOutput MATCHES "no CMakeLists\\.txt")
     list(APPEND failures "empty ROOT: a directory with nothing in it was not refused as no source tree: ${emptyOutput}")
 endif()
@@ -314,12 +326,14 @@ execute_process(
     RESULT_VARIABLE droppedRc
     OUTPUT_VARIABLE droppedOut
     ERROR_VARIABLE droppedErr)
+set(droppedSaid "${droppedOut}${droppedErr}")
+core_cpp_selftest_flatten(droppedSaid)
 if(droppedRc EQUAL 0)
     list(APPEND failures
          "dropped-file control: a scanner that silently skips every .hpp still reported success")
-elseif(NOT "${droppedOut}${droppedErr}" MATCHES "checked 6 file")
+elseif(NOT droppedSaid MATCHES "checked 6 file")
     list(APPEND failures
-         "dropped-file control: refused, but not over the count it checked: ${droppedOut}${droppedErr}")
+         "dropped-file control: refused, but not over the count it checked: ${droppedSaid}")
 endif()
 
 if(failures)
