@@ -42,6 +42,7 @@
 /// Threading: all scheduler state is touched only on the loop thread. The cross-thread surface is
 /// @c post(), @c submit(), @c schedule(), @c requestCancel() and @c stop().
 
+#include <core/async/Awaitable.hpp>
 #include <core/async/Cancellation.hpp>
 #include <core/async/IExecutor.hpp>
 #include <core/async/ParkedWork.hpp>
@@ -1262,7 +1263,7 @@ class DelayAwaiter
     {
         if (_loop == nullptr || _deadline <= _loop->clock().now())
             return false;
-        if constexpr (requires { awaiting.promise().stopToken(); })
+        if constexpr (async::HasStopToken<Promise>)
             _token = awaiting.promise().stopToken();
         if (_token.stop_requested())
             return false;
@@ -1350,7 +1351,7 @@ class WaitHandleAwaiter
     template <typename Promise>
     [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting)
     {
-        if constexpr (requires { awaiting.promise().stopToken(); })
+        if constexpr (async::HasStopToken<Promise>)
             _token = awaiting.promise().stopToken();
         if (_token.stop_requested())
             return false;

@@ -21,6 +21,14 @@ workflow refuses one without a section here.
   holds, so it adds nothing to a task and costs one load where a hook asks. Additive; no signature
   changes.
 
+### Changed
+
+- **`core::net` and `core::tui` ask a promise for its stop token through
+  `core::async::HasStopToken`** (core-cpp#29), and `ctest -L hygiene` refuses the hand-spelled
+  `requires { awaiting.promise().stopToken(); }` anywhere in the tree, so the concept is the one
+  place that states the contract. No behaviour changes: every site assigned the token to a
+  `StopToken`, which is what the concept requires it to convert to.
+
 ### Fixed
 
 - **`NativeFileSystem` reports a failure on a path the ANSI code page cannot spell** (core-cpp#26).

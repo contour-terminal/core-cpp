@@ -92,6 +92,9 @@ core_cpp_hygiene_rule(diagnostic-pragma KIND cpp
 core_cpp_hygiene_rule(c-style-for KIND cpp
     REGEX "(^|[^A-Za-z0-9_])for[ \t]*\\([^;]*;[^;]*;"
     REASON "no C-style for(;;) loops: use a range-for over a range, e.g. std::views::iota")
+core_cpp_hygiene_rule(hand-spelled-stop-token-probe KIND cpp
+    REGEX "requires[ \t]*\\{[ \t]*[A-Za-z_][A-Za-z0-9_]*\\.promise\\(\\)\\.stopToken\\(\\)"
+    REASON "ask a promise for its stop token through core::async::HasStopToken, the one place that states the contract (core-cpp#29)")
 
 # A rule over a file rather than a line: under src/core/, the first named namespace a C++ source
 # declares is the one its directory PATH names, every segment of it. src/core/<dir>/... declares

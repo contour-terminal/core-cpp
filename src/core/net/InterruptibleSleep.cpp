@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/InterruptibleSleep.hpp>
 
+#include <core/async/Awaitable.hpp>
 #include <core/async/Cancellation.hpp>
 #include <core/async/ParkedWork.hpp>
 #include <core/net/detail/ScopeGuard.hpp>
@@ -63,7 +64,7 @@ namespace
         {
             if (_deadline <= _loop.clock().now())
                 return false;
-            if constexpr (requires { awaiting.promise().stopToken(); })
+            if constexpr (async::HasStopToken<Promise>)
                 _flowToken = awaiting.promise().stopToken();
             if (_token.stop_requested() || _flowToken.stop_requested())
                 return false;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/async/AsTask.hpp>
+#include <core/async/Awaitable.hpp>
 #include <core/async/StopToken.hpp>
 #include <core/async/SyncRun.hpp>
 #include <core/async/Task.hpp>
@@ -92,7 +93,7 @@ class TokenProbe
     template <typename Promise>
     [[nodiscard]] bool await_suspend(std::coroutine_handle<Promise> awaiting) noexcept
     {
-        if constexpr (requires { awaiting.promise().stopToken(); })
+        if constexpr (core::async::HasStopToken<Promise>)
             *_sawStop = awaiting.promise().stopToken().stop_requested();
         return false; // never actually parks; the point is which promise it was handed
     }
