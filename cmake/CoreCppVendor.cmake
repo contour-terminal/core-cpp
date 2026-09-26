@@ -354,6 +354,19 @@ file(REMOVE_RECURSE "${stagingDir}")
 # Before anything is written: three things about DEST and its two siblings, all of them visible in
 # a second, and all of them checked here rather than minutes later after a clone and a tree walk.
 #
+# DEST is not a symbolic link (core-cpp#25). EXISTS and IS_DIRECTORY resolve through one, so a link
+# to a directory would pass every guard below as the directory it names, and then the replacement's
+# two renames would move the LINK aside and put a real directory where it was: the consumer's link
+# replaced, its target left holding the old copy, and success reported. A link to a file would be
+# refused below as a file, which is right but says the wrong thing. Refused by name, before either.
+if(IS_SYMLINK "${DEST}")
+    file(READ_SYMLINK "${DEST}" linkTarget)
+    message(FATAL_ERROR
+        "core-cpp-vendor: ${DEST} is a symlink, and a sync replaces DEST itself rather than writing "
+        "through it, so the link would be lost. Nothing has been changed. Point DEST at the "
+        "directory it names (${linkTarget}).")
+endif()
+
 # DEST is a directory or it does not exist. A regular file there is someone's, and the replacement
 # would rename it aside and delete it after a successful swap, reporting success: the occupant
 # check below cannot see it, because a file holds no files.

@@ -141,6 +141,7 @@ set(refusalPhrases
     "resolving the commit"
     "already exists"
     "is a file, not a directory"
+    "is a symlink, and a sync"
     "MODE must be sync or check"
     "DEST is not set"
     "REF is not set")
@@ -333,12 +334,13 @@ endfunction()
 ##   MODULES <list>       the MODULES argument of the sync (default: all of them)
 ##   OCCUPY <name>        a file of someone else's, placed in DEST before the sync
 ##   DEST_IS_A_FILE       DEST is created as a regular file of someone else's, not a directory
+##   DEST_IS_A_LINK <to>  DEST is created as a symbolic link to someone else's FILE or DIRECTORY
 ##   MUTATE <what>        what happens to the copy between the sync and the check
 ##   WANT_SYNC  <ACCEPT or phrase>
 ##   WANT_CHECK <ACCEPT or phrase>   (omitted: the check is not run)
 ##   EXPECT_FILES <path>...   the exact set of paths the manifest must list
 function(core_cpp_vendor_case name)
-    cmake_parse_arguments(PARSE_ARGV 1 arg "DEST_IS_A_FILE" "MUTATE;OCCUPY;REF;WANT_SYNC;WANT_CHECK"
+    cmake_parse_arguments(PARSE_ARGV 1 arg "DEST_IS_A_FILE" "DEST_IS_A_LINK;MUTATE;OCCUPY;REF;WANT_SYNC;WANT_CHECK"
                           "EXTRA;MODULES;EXPECT_FILES")
     if(arg_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "check-vendor-selftest: case ${name} has unexpected arguments: ${arg_UNPARSED_ARGUMENTS}")
@@ -367,6 +369,26 @@ function(core_cpp_vendor_case name)
         file(WRITE "${copy}" "someone else's file, where DEST points\n")
     endif()
 
+    if(arg_DEST_IS_A_LINK)
+        # The link's target is someone else's, beside where DEST would be.
+        get_filename_component(copyParent "${copy}" DIRECTORY)
+        set(linkTarget "${copyParent}/elsewhere")
+        if(arg_DEST_IS_A_LINK STREQUAL "DIRECTORY")
+            # Empty, so the occupant check has nothing to refuse: this is the link that got through
+            # every guard, and that the replacement then swapped for a real directory.
+            file(MAKE_DIRECTORY "${linkTarget}")
+        else()
+            file(WRITE "${linkTarget}" "someone else's file, behind a link\n")
+        endif()
+        file(CREATE_LINK "${linkTarget}" "${copy}" RESULT linkResult SYMBOLIC)
+        if(NOT linkResult EQUAL 0)
+            # Windows without the privilege to create one. The case cannot run, and says so rather
+            # than passing: nothing of what it asserts was established.
+            message(STATUS "check-vendor-selftest: ${name} SKIPPED, a symbolic link cannot be created here: ${linkResult}")
+            return()
+        endif()
+    endif()
+
     set(ref "${fixtureTag}")
     if(arg_REF)
         set(ref "${arg_REF}")
@@ -393,6 +415,20 @@ function(core_cpp_vendor_case name)
             if(NOT kept MATCHES "someone else's file")
                 string(APPEND problems " the refused sync overwrote the file at DEST")
             endif()
+        endif()
+    endif()
+    if(arg_DEST_IS_A_LINK)
+        # Refusing is half of it again: the link is still a link, to the same place, and what it
+        # names is untouched.
+        if(NOT IS_SYMLINK "${copy}")
+            string(APPEND problems " the refused sync replaced the link at DEST")
+        endif()
+        if(arg_DEST_IS_A_LINK STREQUAL "DIRECTORY")
+            if(EXISTS "${linkTarget}/MANIFEST")
+                string(APPEND problems " the refused sync changed the directory behind the link")
+            endif()
+        elseif(IS_DIRECTORY "${linkTarget}" OR NOT EXISTS "${linkTarget}")
+            string(APPEND problems " the refused sync replaced or deleted the file behind the link")
         endif()
     endif()
     core_cpp_selftest_no_siblings("${copy}" "the sync" problems)
@@ -566,6 +602,15 @@ core_cpp_vendor_case(refuses-a-destination-that-is-not-a-copy
 core_cpp_vendor_case(refuses-a-destination-that-is-a-file
     DEST_IS_A_FILE
     WANT_SYNC "is a file, not a directory")
+# Nor is a DEST that is a symbolic link (core-cpp#25), to a directory or to a file. The guards above
+# resolve through a link, so one to a directory passed them as that directory, and the replacement
+# then renamed the link aside and put a real directory in its place.
+core_cpp_vendor_case(refuses-a-destination-that-links-to-a-directory
+    DEST_IS_A_LINK DIRECTORY
+    WANT_SYNC "is a symlink, and a sync")
+core_cpp_vendor_case(refuses-a-destination-that-links-to-a-file
+    DEST_IS_A_LINK FILE
+    WANT_SYNC "is a symlink, and a sync")
 
 # --- re-syncing over an existing copy -------------------------------------------
 #

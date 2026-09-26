@@ -73,8 +73,10 @@ cmake -DMODE=check -DDEST=<dir> -P <dir>/cmake/CoreCppVendor.cmake
 - **`sync` replaces the copy it finds, whole.** `<dir>` is swapped for the new tree rather than
   edited in place, so a file the new ref no longer has is gone rather than left behind. What it
   refuses to replace: a `<dir>` holding files and no manifest, because that is not a copy of ours;
-  and a `<dir>` that is a regular file rather than a directory, because that is someone's file.
-  Both are refused before anything is read or written.
+  a `<dir>` that is a regular file rather than a directory, because that is someone's file; and a
+  `<dir>` that is a symbolic link, because the swap would replace the link rather than write
+  through it -- point `DEST` at the directory the link names instead. All three are refused before
+  anything is read or written.
 - **`MANIFEST`** starts with header lines naming the repository, the ref, the commit, the modules
   and the file count (`# repository ...`, `# ref ...`, `# commit ...`, `# modules ...`,
   `# files ...`), followed by one `<sha256>  <path>` line per file, sorted by path. It is written

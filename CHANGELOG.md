@@ -55,6 +55,11 @@ workflow refuses one without a section here.
   `windows/Win32Utf.hpp`), and an unpaired one becomes U+FFFD. `VtParser` drops what no UTF-8
   decoder may produce, on every platform: an encoded surrogate, an overlong encoding and a value
   above U+10FFFF. No public signature changes.
+- **The vendoring tool refuses a `DEST` that is a symbolic link** (core-cpp#25). CMake's `EXISTS`
+  and `IS_DIRECTORY` resolve through a link, so a link to an empty directory passed every guard, and
+  the replacement then renamed the link aside and put a real directory in its place: the consumer's
+  link was gone, its target untouched, and the sync reported success. `MODE=sync` now refuses such a
+  `DEST` by name, before anything is read or written, and says which directory to name instead.
 
 ## [0.4.3] - 2026-09-26
 
