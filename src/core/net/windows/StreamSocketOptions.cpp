@@ -88,41 +88,41 @@ namespace
     }
 } // namespace
 
-void applyStreamSocketOptions(platform::NativeHandle handle, KeepAlive keepAlive) noexcept
+void applyStreamSocketOptions(platform::NativeHandle socket, KeepAlive keepAlive) noexcept
 {
-    auto const socket = reinterpret_cast<SOCKET>(handle);
+    auto const winSocket = reinterpret_cast<SOCKET>(socket);
 
     // Windows' close-on-exec: not inherited by a child process. A socket made with
     // `WSA_FLAG_NO_HANDLE_INHERIT` already is not, but one made by a plain `::socket` -- the WFMO
     // listener's, which an accepted socket inherits the attribute from, and the readiness dial's --
     // is, and a process that also spawns children would hand every child an open connection.
-    std::ignore = ::SetHandleInformation(reinterpret_cast<HANDLE>(socket), HANDLE_FLAG_INHERIT, 0);
+    std::ignore = ::SetHandleInformation(reinterpret_cast<HANDLE>(winSocket), HANDLE_FLAG_INHERIT, 0);
 
     int const one = 1;
     std::ignore =
-        ::setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<char const*>(&one), sizeof(one));
+        ::setsockopt(winSocket, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<char const*>(&one), sizeof(one));
 
     if (keepAlive == KeepAlive::Yes)
-        std::ignore = armKeepAlive(socket, KeepAliveSettings {});
+        std::ignore = armKeepAlive(winSocket, KeepAliveSettings {});
 }
 
-void applySocketBufferSizes(platform::NativeHandle handle, SocketBufferSizes const& sizes) noexcept
+void applySocketBufferSizes(platform::NativeHandle socket, SocketBufferSizes const& sizes) noexcept
 {
-    auto const socket = reinterpret_cast<SOCKET>(handle);
-    requestBuffer(socket, SO_SNDBUF, sizes.send);
-    requestBuffer(socket, SO_RCVBUF, sizes.receive);
+    auto const winSocket = reinterpret_cast<SOCKET>(socket);
+    requestBuffer(winSocket, SO_SNDBUF, sizes.send);
+    requestBuffer(winSocket, SO_RCVBUF, sizes.receive);
 }
 
-StreamSocketReport reportStreamSocketOptions(platform::NativeHandle handle) noexcept
+StreamSocketReport reportStreamSocketOptions(platform::NativeHandle socket) noexcept
 {
-    auto const socket = reinterpret_cast<SOCKET>(handle);
+    auto const winSocket = reinterpret_cast<SOCKET>(socket);
     auto const clampedSize = [](int value) {
         return static_cast<std::size_t>(std::max(value, 0));
     };
     return StreamSocketReport {
-        .noDelay = readOption(socket, IPPROTO_TCP, TCP_NODELAY) != 0,
-        .sendBuffer = clampedSize(readOption(socket, SOL_SOCKET, SO_SNDBUF)),
-        .receiveBuffer = clampedSize(readOption(socket, SOL_SOCKET, SO_RCVBUF)),
+        .noDelay = readOption(winSocket, IPPROTO_TCP, TCP_NODELAY) != 0,
+        .sendBuffer = clampedSize(readOption(winSocket, SOL_SOCKET, SO_SNDBUF)),
+        .receiveBuffer = clampedSize(readOption(winSocket, SOL_SOCKET, SO_RCVBUF)),
     };
 }
 

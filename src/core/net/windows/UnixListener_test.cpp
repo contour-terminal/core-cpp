@@ -23,6 +23,7 @@
 #include <core/net/Sockets.hpp>
 #include <core/net/WithTimeout.hpp>
 #include <core/net/testing/BackendMatrix.hpp>
+#include <core/net/windows/InvalidSocket.hpp>
 #include <core/net/windows/IocpSocket.hpp>
 #include <core/net/windows/WindowsListener.hpp>
 #include <core/net/windows/WindowsSocket.hpp>
@@ -144,7 +145,7 @@ Task<void> echoOnce(EventLoop* loop, IListener* listener, std::string path, Echo
 {
     core::platform::ensureWinsockInitialized();
     auto const sock = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    if (sock == INVALID_SOCKET)
+    if (sock == core::net::detail::InvalidSocket)
         return false;
     auto address = sockaddr_un {};
     address.sun_family = AF_UNIX;

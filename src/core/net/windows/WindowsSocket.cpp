@@ -65,7 +65,7 @@ std::expected<std::unique_ptr<WindowsSocket>, NetError> WindowsSocket::adopt(Eve
     auto adopted = std::unique_ptr<WindowsSocket> {};
     try
     {
-        adopted.reset(new WindowsSocket(loop, socket, std::move(peerAddress)));
+        adopted = std::make_unique<WindowsSocket>(loop, socket, std::move(peerAddress));
     }
     catch (...)
     {
