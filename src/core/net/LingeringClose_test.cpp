@@ -16,6 +16,7 @@
 #include <core/net/LingeringClose.hpp>
 #include <core/net/Sockets.hpp>
 #include <core/net/WithTimeout.hpp>
+#include <core/net/detail/ScopeGuard.hpp>
 #include <core/net/testing/InMemorySocket.hpp>
 #include <core/net/testing/TestLoop.hpp>
 #include <core/platform/Clock.hpp>
@@ -173,8 +174,9 @@ struct Refused
                   .outcome = std::nullopt,
                   .received = { .text = {}, .ending = core::net::IoResult { std::size_t { 0 } } } };
     {
-        // `std::thread` with an explicit join rather than `std::jthread`: AppleClang's libc++ has
-        // none (see `TestLoop_test.cpp`).
+        // `std::thread` with an explicit join rather than `std::jthread`: AppleClang's libc++ has no
+        // `<stop_token>`, so it has no `jthread` either. The guard joins on every way out, so a
+        // throw between here and the end of the block cannot leave a joinable thread behind.
         auto client = std::thread { [port, &refused] {
             auto connector = core::net::BlockingConnector {};
             auto socket = syncRun(
@@ -190,6 +192,7 @@ struct Refused
             refused.received = syncRun(readToEnd(socket->get()));
             (*socket)->close();
         } };
+        auto const joinClient = core::net::detail::ScopeGuard { [&client]() noexcept { client.join(); } };
 
         // Bounded, and says so: a client that never connected leaves the accept parked.
         auto served =
@@ -199,7 +202,6 @@ struct Refused
             refused.outcome = *served;
         if (!refused.served)
             (*listener)->close();
-        client.join();
     }
     return refused;
 }
