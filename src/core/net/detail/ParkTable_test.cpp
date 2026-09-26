@@ -370,3 +370,72 @@ TEST_CASE("takeAll hands out the resident parks an operation holds, and only tho
     CHECK(table.find(next) == fresh);
     table.retireResident(*fresh);
 }
+
+TEST_CASE("Resident slots freed after a burst keep no more parks than the spare list holds",
+          "[net][parktable][resident]")
+{
+    // A burst of connections, each direction parking once, then closing: the loop must not hold a
+    // park per direction it ever had. Freed slots hand their parks to the spare list, whose cap is
+    // what the loop keeps; the slots keep their generations.
+    constexpr auto Burst = 500;
+    auto table = ParkTable {};
+    auto watch = HandleWatch {};
+    auto slots = std::vector<std::uint32_t> {};
+    auto issued = std::vector<ParkId> {};
+    for ([[maybe_unused]] auto const direction: std::views::iota(0, Burst))
+    {
+        auto const slot = table.openResident();
+        auto* const park = table.idleResident(slot);
+        REQUIRE(park != nullptr);
+        fillAsOperation(*park, watch, &table);
+        issued.push_back(table.addResident(slot));
+        table.retireResident(*park);
+        slots.push_back(slot);
+    }
+    CHECK(table.retainedParkCount() == std::size_t { Burst }); // idle, each still its slot's
+    for (auto const slot: slots)
+        table.closeResident(slot);
+    auto const kept = table.retainedParkCount();
+    CHECK(kept <= ParkTable::MaxSpareParks);
+
+    // Steady churn below the cap draws from the spares: opening and parking again makes no park.
+    for ([[maybe_unused]] auto const direction: std::views::iota(0, 16))
+    {
+        auto const slot = table.openResident();
+        auto* const park = table.idleResident(slot);
+        REQUIRE(park != nullptr);
+        fillAsOperation(*park, watch, &table);
+        auto const id = table.addResident(slot);
+        CHECK(!holds(issued, id)); // the slot's generation outlived its park
+        table.retireResident(*park);
+        table.closeResident(slot);
+    }
+    CHECK(table.retainedParkCount() == kept);
+}
+
+TEST_CASE("A resident slot whose generations are spent is retired, never wrapped",
+          "[net][parktable][resident]")
+{
+    auto table = ParkTable {};
+    auto watch = HandleWatch {};
+    auto const slot = table.openResident();
+    table.setResidentGenerationForTesting(slot, ParkTable::MaxResidentGeneration - 1);
+
+    // The last generation the slot has.
+    auto* const park = table.idleResident(slot);
+    REQUIRE(park != nullptr);
+    fillAsOperation(*park, watch, &table);
+    auto const last = table.addResident(slot);
+    CHECK(ParkTable::isResident(last));
+    CHECK(table.find(last) == park);
+    table.retireResident(*park);
+
+    // Spent: no further operation is filed in it, so the loop takes the ordinary path instead.
+    CHECK(table.idleResident(slot) == nullptr);
+    CHECK(table.find(last) == nullptr);
+
+    // And closing it never hands it out again, however many slots are opened after.
+    table.closeResident(slot);
+    for ([[maybe_unused]] auto const other: std::views::iota(0, 8))
+        CHECK(table.openResident() != slot);
+}

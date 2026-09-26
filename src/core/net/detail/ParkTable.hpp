@@ -850,6 +850,40 @@ namespace detail
         /// @c openResident answers when the id space for slots is spent.
         static constexpr std::uint32_t NoResidentSlot = UINT32_MAX;
 
+        /// How many taken parks @c recycle keeps for reuse. Enough for a loop's steady churn -- a
+        /// park is taken and another filed per operation -- without holding a burst's worth of
+        /// memory for ever.
+        static constexpr std::size_t MaxSpareParks = 64;
+
+        /// Bits of a resident id that carry the slot's generation; the slot sits above them.
+        static constexpr unsigned GenerationBits = 40;
+
+        /// A trillion operations per slot, then the slot is retired for good rather than wrapped,
+        /// which is what keeps "never handed out before" true. At a million operations a second on
+        /// one socket, twelve days.
+        static constexpr std::uint64_t MaxResidentGeneration = (std::uint64_t { 1 } << GenerationBits) - 1;
+
+        /// @return How many parks the table holds with no operation in them: the spares, and every
+        ///         resident slot's idle park. What a burst of connections leaves behind once they
+        ///         close, which is why it is asked.
+        [[nodiscard]] std::size_t retainedParkCount() const noexcept
+        {
+            auto idle = _spare.size();
+            for (auto const& slot: _resident)
+                if (slot.park != nullptr && !slot.park->id)
+                    ++idle;
+            return idle;
+        }
+
+        /// Test seam: sets @p slot's generation, so a case can reach the end of a slot's id space
+        /// without filing a trillion operations. Never called outside a test.
+        /// @param slot A slot from @c openResident with no operation filed.
+        /// @param generation The generation its last operation carried.
+        void setResidentGenerationForTesting(std::uint32_t slot, std::uint64_t generation) noexcept
+        {
+            _resident[slot].generation = generation;
+        }
+
         /// @param id A park's id.
         /// @return Whether @p id names a resident park rather than one in the id map.
         [[nodiscard]] static constexpr bool isResident(ParkId id) noexcept
@@ -879,9 +913,12 @@ namespace detail
             }
             if (_resident.size() > MaxResidentSlot)
                 return NoResidentSlot;
+            // Never more free slots than slots, so `freeResident` -- `noexcept` -- never grows the
+            // list. Reserved BEFORE the slot is made, so a refusal leaves no slot nobody holds, and
+            // geometrically, so a loop ramping up to its connections does not reallocate per slot.
+            if (_freeResident.capacity() < _resident.size() + 1)
+                _freeResident.reserve(2 * (_resident.size() + 1));
             _resident.push_back(ResidentSlot { .park = nullptr, .generation = 0, .kept = true });
-            // Never more free slots than slots, so `freeResident` -- `noexcept` -- never grows it.
-            _freeResident.reserve(_resident.size());
             return static_cast<std::uint32_t>(_resident.size() - 1);
         }
 
@@ -897,7 +934,7 @@ namespace detail
                 return nullptr;
             if (resident.park == nullptr)
             {
-                resident.park = std::make_unique<Park>();
+                resident.park = acquire();
                 resident.park->residentSlot = slot;
             }
             return resident.park->id ? nullptr : resident.park.get();
@@ -1044,11 +1081,6 @@ namespace detail
                 _byHandle.erase(index);
         }
 
-        /// How many taken parks @c recycle keeps for reuse. Enough for a loop's steady churn -- a
-        /// park is taken and another filed per operation -- without holding a burst's worth of
-        /// memory for ever.
-        static constexpr std::size_t MaxSpareParks = 64;
-
         /// One resident slot: its park, the generation its latest operation's id carried, and
         /// whether a watch still holds it.
         struct ResidentSlot
@@ -1061,15 +1093,14 @@ namespace detail
         /// A resident id is this bit, the slot above @c GenerationBits and the generation below.
         /// The id-map counter never reaches the bit, so the two kinds of id never meet.
         static constexpr std::uint64_t ResidentTag = std::uint64_t { 1 } << 63U;
-        static constexpr unsigned GenerationBits = 40;
-
-        /// A trillion operations per slot, then the slot is retired for good rather than wrapped,
-        /// which is what keeps "never handed out before" true. At a million operations a second on
-        /// one socket, twelve days.
-        static constexpr std::uint64_t MaxResidentGeneration = (std::uint64_t { 1 } << GenerationBits) - 1;
 
         /// The highest slot: eight million, two per socket for four million open sockets.
         static constexpr std::size_t MaxResidentSlot = (std::size_t { 1 } << (63U - GenerationBits)) - 1;
+
+        static_assert(ResidentTag == std::uint64_t { 1 } << 63U, "the tag is the top bit");
+        static_assert(((std::uint64_t { MaxResidentSlot } << GenerationBits) | MaxResidentGeneration)
+                          == ResidentTag - 1,
+                      "the largest slot and generation fill the 63 bits below the tag exactly");
 
         /// @param id A resident id.
         /// @return Its slot.
@@ -1078,12 +1109,17 @@ namespace detail
             return static_cast<std::size_t>((id.value & ~ResidentTag) >> GenerationBits);
         }
 
-        /// Hands @p slot out again, unless its generations are spent.
+        /// Hands @p slot out again, unless its generations are spent, and its park to the spare
+        /// list. The park goes rather than staying with the slot, so what a loop keeps after a burst
+        /// of connections closes is what @c recycle keeps -- @c MaxSpareParks -- and not a park per
+        /// direction it ever had; churn below that cap still makes none. The generation stays with
+        /// the slot, so no id is handed out again.
         /// @param slot A slot no watch and no operation holds.
         void freeResident(std::uint32_t slot) noexcept
         {
             auto& resident = _resident[slot];
             resident.kept = false;
+            recycle(std::move(resident.park));
             if (resident.generation < MaxResidentGeneration)
                 _freeResident.push_back(slot);
         }
