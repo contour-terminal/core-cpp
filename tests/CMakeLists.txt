@@ -370,6 +370,26 @@ else()
         TIMEOUT 60)
 endif()
 
+# Every `## Open work` entry leads with a core-cpp issue (core-cpp#12). Offline here -- the grammar
+# only -- so a local run never fails for want of a network; the `style` job also runs the checker
+# `--online`, which refuses an entry whose issue has closed. Bounds: both run in well under a second.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME core-cpp.open-work
+             COMMAND "${Python3_EXECUTABLE}" "${CORE_CPP_SOURCE_DIR}/scripts/check-open-work.py")
+    add_test(NAME core-cpp.open-work-selftest
+             COMMAND "${Python3_EXECUTABLE}" "${CORE_CPP_SOURCE_DIR}/scripts/check-open-work-selftest.py")
+else()
+    add_test(NAME core-cpp.open-work COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.open-work: SKIPPED -- no Python 3 interpreter was found at configure time")
+    add_test(NAME core-cpp.open-work-selftest COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.open-work-selftest: SKIPPED -- no Python 3 interpreter was found at configure time")
+    set_tests_properties(core-cpp.open-work core-cpp.open-work-selftest PROPERTIES
+        SKIP_REGULAR_EXPRESSION "SKIPPED")
+endif()
+set_tests_properties(core-cpp.open-work core-cpp.open-work-selftest PROPERTIES
+    LABELS "core-cpp;hygiene;tree-level"
+    TIMEOUT 60)
+
 # What keeps R96's arrangement honest. The build jobs exclude `tree-level`, so a labelled check
 # that nobody adds a `style` step for runs NOWHERE in CI -- it neither fails nor skips, it is
 # absent, and an absent check is indistinguishable from a passing one. This holds the label against

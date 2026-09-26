@@ -30,6 +30,15 @@ workflow refuses one without a section here.
     `std::optional<core::cli::FlagStore> parsed` and catches `std::exception` around the call.
     contour and endo use `core::cli::App` only, and need no change.
 
+### Added
+
+- **`core-cpp.open-work`: every `## Open work` entry leads with a core-cpp issue, and that issue is
+  open** (core-cpp#12). `scripts/check-open-work.py` reads every such section under `.agent/` and
+  `docs/` and the top-level documents, and refuses an entry that does not lead with a core-cpp issue
+  link, a link whose text and URL disagree, and a heading with no entries. The ctest runs that
+  offline; CI's `style` job also runs it `--online`, which refuses an entry whose issue has closed,
+  and one whose state could not be read. It has a self-test.
+
 ### Changed
 
 - **The hygiene scan's `namespace-directory` rule skips a leading forward-declaration block**

@@ -72,9 +72,12 @@ issue. The leading one may not: an entry whose issue has closed is a rule that h
 false, and the expensive version of that is an entry saying something *cannot* be done,
 which tells the next session not to try. Delete the heading when its last entry goes. The
 grammar is fastcached's, where a ctest reads and resolves it
-([fastcached#957](https://github.com/LASTRADA-Software/fastcached/issues/957)); until core-cpp
-has that check ([core-cpp#12](https://github.com/contour-terminal/core-cpp/issues/12)),
-keeping entries true is a review question here.
+([fastcached#957](https://github.com/LASTRADA-Software/fastcached/issues/957)), and
+`scripts/check-open-work.py` holds core-cpp to it
+([core-cpp#12](https://github.com/contour-terminal/core-cpp/issues/12)): the ctest
+`core-cpp.open-work` refuses an entry that does not lead with a core-cpp issue and a heading with no
+entries, and CI's `style` job also runs it `--online`, which refuses an entry whose issue has
+closed. So close an issue and delete its entry in the same change.
 
 ## Every principle names the step that carries it
 
@@ -106,6 +109,7 @@ v0.1.0 (Task B13); a new principle joins it in the same change.
 | Every transport declares `cancelRead`; every `read` guards its buffer; every loop-thread-only member refuses a second thread | `async-and-net.md` | **check**: `core-cpp.cancel-read-declared`, `core-cpp.read-buffer-guard`, `core-cpp.loop-affinity-canary.*` |
 | A member that files work asks for the turn that runs it | `async-and-net.md` | **check**: the parameterised case in `HostDrivenLoop_test.cpp` |
 | A platform socket error is classified in one table | `async-and-net.md` | **check** for the table's rows (`SocketErrors_test.cpp`); a second private switch is **review** |
+| An Open work entry leads with an open core-cpp issue | `README.md` | **check**: `core-cpp.open-work` for the grammar, and the `style` job's `--online` run for the issue's state |
 | A public header change is a CHANGELOG entry | `library-hygiene.md` | **review**: the release checklist in `.agent/guides/releasing.md` |
 
 ## Do not `@`-import these
@@ -114,9 +118,3 @@ v0.1.0 (Task B13); a new principle joins it in the same change.
 `@`-prefixed reference to a file in this directory, anywhere in `AGENT.md`, would pull every
 one of them into every session and undo the point of the split. Link them as plain markdown.
 Origin: [fastcached `.agent/rules/README.md`](https://github.com/LASTRADA-Software/fastcached/blob/b5ded89c5ae6ba5b45337335ce774c5ae6986d65/.agent/rules/README.md).
-
-## Open work
-
-- **[core-cpp#12](https://github.com/contour-terminal/core-cpp/issues/12)** — a check that reads
-  every `## Open work` entry and refuses one whose leading reference is not a core-cpp issue, or
-  whose issue has closed.

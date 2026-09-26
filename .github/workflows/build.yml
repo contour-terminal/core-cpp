@@ -113,6 +113,19 @@ jobs:
       # Every visible configure preset is run by some workflow, or is allowlisted with a reason.
       # Without it a preset can be offered and run by nothing, which is not a failure anywhere --
       # it is an absence, and an absent configuration looks exactly like a passing one.
+      # Every `## Open work` entry leads with a core-cpp issue, and that issue is still open
+      # (core-cpp#12): an entry whose issue closed is a rule that has gone false. The ctest runs
+      # the grammar alone; the state needs the network, which this job has.
+      # covers: core-cpp.open-work
+      - name: Open work entries lead with an open issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/check-open-work.py --online
+
+      # covers: core-cpp.open-work-selftest
+      - name: Open-work self-test
+        run: python scripts/check-open-work-selftest.py
+
       # covers: core-cpp.preset-coverage
       - name: Preset coverage
         run: python scripts/check-preset-coverage.py
