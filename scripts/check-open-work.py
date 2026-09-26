@@ -23,7 +23,8 @@ Two halves, because only one of them needs the network:
                is used when set). A lookup that cannot be answered -- no network, a rate limit,
                no token -- is neither a pass nor a refusal: the run exits 77, SKIPPED, naming
                what it could not ask. An unanswered question is not an open issue, and it is
-               not a closed one either
+               not a closed one either. A 404 or a 410 IS an answer -- the issue does not exist,
+               or was deleted -- and is refused like a closed one
 
 The ctest runs the offline half, so a local run never fails for want of a network; CI's `style`
 job runs both. `--states FILE` answers the online half from a JSON object of issue number to state
@@ -56,6 +57,10 @@ HEADING = "## Open work"
 
 # The exit status ctest reads as a skip (CORE_CPP_SKIP_EXIT_CODE in cmake/CoreCppTargets.cmake).
 SKIP_EXIT_CODE = 77
+
+# The state of an issue GitHub says does not exist (404) or has been deleted (410). A definite
+# answer, so refused -- never folded into "could not ask", which only skips.
+MISSING = "missing"
 
 LEADING = re.compile(
     r"^- \*\*\[core-cpp#(?P<text>\d+)\]\(https://github\.com/contour-terminal/core-cpp/issues/(?P<url>\d+)\)\*\*"
@@ -154,8 +159,9 @@ def github_state(number: int) -> str:
     """Asks the GitHub API for an issue's state.
 
     :param number: the core-cpp issue number.
-    :return: "open" or "closed".
-    :raises OSError: when the question could not be answered.
+    :return: "open", "closed", or MISSING when GitHub answers 404 or 410.
+    :raises OSError: when the question could not be answered -- no network, a rate limit, no
+        permission, a server error.
     """
     request = urllib.request.Request(
         f"https://api.github.com/repos/{REPOSITORY}/issues/{number}",
@@ -164,8 +170,15 @@ def github_state(number: int) -> str:
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if token:
         request.add_header("Authorization", f"Bearer {token}")
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.load(response)["state"]
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.load(response)["state"]
+    except urllib.error.HTTPError as error:
+        # HTTPError is a URLError, so without this a "no such issue" read as "could not ask". A
+        # 401, 403 or 429 is a question not answered, and a 5xx one GitHub failed to answer.
+        if error.code in (404, 410):
+            return MISSING
+        raise
 
 
 def state_problems(entries: list[Entry], states: dict[int, str] | None) -> tuple[list[str], list[str]]:
@@ -188,7 +201,12 @@ def state_problems(entries: list[Entry], states: dict[int, str] | None) -> tuple
                 f"{entry.path}:{entry.line}: core-cpp#{number}: its state could not be read ({error!r})"
             )
             continue
-        if state != "open":
+        if state == MISSING:
+            problems.append(
+                f"{entry.path}:{entry.line}: core-cpp#{number} does not exist (GitHub answers 404 or 410); "
+                "the entry must lead with the issue that tracks it"
+            )
+        elif state != "open":
             problems.append(
                 f"{entry.path}:{entry.line}: core-cpp#{number} is {state}, so this entry has gone false; "
                 "delete it, or reopen the issue if the work is not done"

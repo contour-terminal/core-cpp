@@ -100,8 +100,8 @@ workflow refuses one without a section here.
   `docs/` and the top-level documents, and refuses an entry that does not lead with a core-cpp issue
   link, a link whose text and URL disagree, and a heading with no entries. The ctest runs that
   offline; CI's `style` job also runs it `--online`, which refuses an entry whose issue has closed,
-  and exits 77 (skipped, a warning in CI) rather than failing when it could not ask
-  GitHub. It has a self-test.
+  and one whose issue does not exist (404 or 410); it exits 77 (skipped, a warning in CI) rather
+  than failing when it could not ask GitHub. It has a self-test.
 - **A nightly job answers whether a provenance row's upstream has moved** (core-cpp#33).
   `core-cpp.upstream-drift` needs the upstream checkouts beside core-cpp, so it skips on every CI
   runner and its coverage there was zero. The `upstream-drift` job of `downstream.yml` checks out

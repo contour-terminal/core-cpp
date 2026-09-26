@@ -18,6 +18,8 @@ import json
 import sys
 import tempfile
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
@@ -102,6 +104,30 @@ class OpenWorkTest(unittest.TestCase):
         self.assertEqual(status, 77, said)
         self.assertIn("SKIPPED", said)
         self.assertIn("could not be read", said)
+
+    def test_an_issue_that_does_not_exist_is_refused_not_skipped(self):
+        status, said = self.run_check(f"## Open work\n\n{GOOD}", {12: CHECK.MISSING})
+        self.assertEqual(status, 1, said)
+        self.assertIn("core-cpp#12 does not exist", said)
+
+    def test_a_404_from_github_is_an_answer_and_a_429_is_not(self):
+        def failing(code):
+            def ask(request, timeout):
+                raise urllib.error.HTTPError(request.full_url, code, "fake", {}, None)
+
+            return ask
+
+        original = urllib.request.urlopen
+        try:
+            urllib.request.urlopen = failing(404)
+            self.assertEqual(CHECK.github_state(12), CHECK.MISSING)
+            urllib.request.urlopen = failing(410)
+            self.assertEqual(CHECK.github_state(12), CHECK.MISSING)
+            urllib.request.urlopen = failing(429)
+            with self.assertRaises(OSError):
+                CHECK.github_state(12)
+        finally:
+            urllib.request.urlopen = original
 
     def test_a_refusal_still_fails_beside_an_unanswered_state(self):
         other = GOOD.replace("#12", "#13").replace("/12)", "/13)")
