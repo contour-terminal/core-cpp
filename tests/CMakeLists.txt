@@ -390,6 +390,21 @@ set_tests_properties(core-cpp.open-work core-cpp.open-work-selftest PROPERTIES
     LABELS "core-cpp;hygiene;tree-level"
     TIMEOUT 60)
 
+# What decides a Windows clang-tidy result (core-cpp#38, #44): scripts/tidy-database.py, which CI's
+# `windows (clang-tidy)` job runs over the clang-cl compile database. The analysis needs that build;
+# the self-test proves the selection, the windows/ count and each field of the verdict, anywhere.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME core-cpp.tidy-database-selftest
+             COMMAND "${Python3_EXECUTABLE}" "${CORE_CPP_SOURCE_DIR}/scripts/tidy-database-selftest.py")
+else()
+    add_test(NAME core-cpp.tidy-database-selftest COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.tidy-database-selftest: SKIPPED -- no Python 3 interpreter was found at configure time")
+    set_tests_properties(core-cpp.tidy-database-selftest PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED")
+endif()
+set_tests_properties(core-cpp.tidy-database-selftest PROPERTIES
+    LABELS "core-cpp;hygiene;tree-level"
+    TIMEOUT 60)
+
 # What keeps R96's arrangement honest. The build jobs exclude `tree-level`, so a labelled check
 # that nobody adds a `style` step for runs NOWHERE in CI -- it neither fails nor skips, it is
 # absent, and an absent check is indistinguishable from a passing one. This holds the label against

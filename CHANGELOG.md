@@ -48,6 +48,13 @@ workflow refuses one without a section here.
   (core-cpp#11). In every MSVC-driver Debug build (`cl-debug`, `clangcl-debug`) it indexes a
   `std::vector` out of range and passes only on the runtime's own `vector subscript out of range`;
   a build where `_ITERATOR_DEBUG_LEVEL` fell below 2 reads the element instead, and fails.
+- **A `windows (clang-tidy)` CI job analyses the Windows sources** (core-cpp#38, core-cpp#44). The
+  `clang-tidy` job's preset is Unix-only, so every `windows/` source and every `_WIN32` arm of a
+  shared header went unanalysed while it was green. The new job runs the pinned clang-tidy over the
+  clang-cl tree's compile database through `scripts/tidy-database.py`, which refuses a result that
+  analysed fewer `windows/` sources than git tracks, an analyser other than the pin, and a canary it
+  did not report. (`CXX_CLANG_TIDY` is not used there: over clang-cl it hands clang-tidy a command it
+  reads with exceptions disabled.) It is not yet one of `ci-ok`'s needs; see the job's comment.
 
 ### Changed
 

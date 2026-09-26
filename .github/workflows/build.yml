@@ -126,6 +126,10 @@ jobs:
       - name: Open-work self-test
         run: python scripts/check-open-work-selftest.py
 
+      # covers: core-cpp.tidy-database-selftest
+      - name: Windows clang-tidy script self-test
+        run: python scripts/tidy-database-selftest.py
+
       # covers: core-cpp.preset-coverage
       - name: Preset coverage
         run: python scripts/check-preset-coverage.py
@@ -828,6 +832,70 @@ jobs:
           status=${PIPESTATUS[0]}
           set -e
           python3 scripts/tidy-record.py --log "$RUNNER_TEMP/tidy-build.log" --exit-code "$status"
+
+  # ---------------------------------------------------------------------------------------------
+  # The clang-tidy job above analyses the Linux tree, so every `windows/` source and every `_WIN32`
+  # arm of a shared header went unanalysed, and read as covered because that job was green
+  # (core-cpp#38, core-cpp#44; Task B13 found 58 findings that had built up that way). This is the
+  # same analyser, the pinned PyPI release, over the clang-cl tree's compile database -- not through
+  # CXX_CLANG_TIDY, which hands clang-tidy a clang-cl command it reads with exceptions disabled
+  # (scripts/tidy-database.py says what was measured). The script refuses a result that analysed
+  # fewer `windows/` sources than git tracks, an analyser other than the pin, and a silent canary.
+  #
+  # NOT in ci-ok's needs yet, and that is a stated gap rather than an oversight: its first run over
+  # 29cddd6 plus lane B reported findings in the allocation tests (a replaced `operator delete`
+  # whose parameter name differs from vcruntime_new.h's `_Block`, a malloc/free pair the analyser
+  # reads as mismatched, a deliberate use of a moved-from object) that need their owner's judgement.
+  # Add it to ci-ok's needs in the change that clears them.
+  windows-clang-tidy:
+    name: windows (clang-tidy)
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Cache CPM sources
+        uses: actions/cache@v4
+        with:
+          path: .cache/cpm
+          key: cpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
+          restore-keys: cpm-${{ runner.os }}-${{ runner.arch }}-
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ninja
+        run: choco install ninja -y --no-progress
+
+      - name: Install LLVM ${{ env.LLVM_VERSION }} (clang-cl)
+        run: |
+          choco upgrade llvm --version=22.1.8 --allow-downgrade -y --no-progress
+          clangcl="C:/Program Files/LLVM/bin/clang-cl.exe"
+          "$clangcl" --version | grep -q "clang version $LLVM_VERSION\." \
+            || { echo "::error::clang-cl is not LLVM $LLVM_VERSION"; exit 1; }
+          echo "CXX_COMPILER_PATH=$clangcl" >> "$GITHUB_ENV"
+
+      # Run in place, as on Linux: the wheel's binary finds its resource headers relative to itself.
+      - name: Install the pinned clang-tidy
+        run: |
+          site="$RUNNER_TEMP/clang-tidy"
+          python -m pip install --no-deps --target "$site" "$(python scripts/tool-versions.py | grep '^clang-tidy==')"
+          tidy="${site//\//}/clang_tidy/data/bin/clang-tidy.exe"
+          test -x "$tidy" || { echo "::error::the clang-tidy wheel has no $tidy"; exit 1; }
+          echo "CLANG_TIDY_EXE=$tidy" >> "$GITHUB_ENV"
+
+      - name: MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # Configure only: the analysis reads compile_commands.json, which configure writes.
+      - name: Configure
+        run: cmake --preset clangcl-release "-DCMAKE_CXX_COMPILER=$CXX_COMPILER_PATH"
+
+      - name: clang-tidy over the clang-cl compile database
+        run: python scripts/tidy-database.py --build-dir out/build/clangcl-release --tidy "$CLANG_TIDY_EXE"
 
   # ---------------------------------------------------------------------------------------------
   emscripten:
