@@ -12,6 +12,7 @@
 #include <core/net/IoAwaitable.hpp>
 #include <core/net/testing/TestLoop.hpp>
 #include <core/platform/Clock.hpp>
+#include <core/testing/ReplacedGlobalAllocation.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -256,32 +257,14 @@ core::async::DetachedTask runDetached(core::async::Task<void> child)
 
 } // namespace
 
-void* operator new(std::size_t size)
+// The replaced global allocation functions are in ReplacedGlobalAllocation.cpp, which forwards
+// them here (its header says why they are not in this file).
+void* core::testing::replacedAllocate(std::size_t size)
 {
     return countedAllocation(size);
 }
 
-void* operator new[](std::size_t size)
-{
-    return countedAllocation(size);
-}
-
-void operator delete(void* storage) noexcept
-{
-    std::free(storage);
-}
-
-void operator delete[](void* storage) noexcept
-{
-    std::free(storage);
-}
-
-void operator delete(void* storage, std::size_t /*size*/) noexcept
-{
-    std::free(storage);
-}
-
-void operator delete[](void* storage, std::size_t /*size*/) noexcept
+void core::testing::replacedRelease(void* storage) noexcept
 {
     std::free(storage);
 }

@@ -30,7 +30,7 @@ namespace
     }
 
     /// @return @p text in UTF-8, as every name core-cpp hands back is spelled.
-    [[nodiscard]] std::string toUtf8(std::wstring_view text)
+    [[nodiscard]] std::string toUtf8(std::wstring const& text)
     {
         if (text.empty())
             return {};
@@ -115,7 +115,7 @@ std::vector<std::string> WindowsProcessEnvironment::keys() const
             // Converted, not narrowed a code unit at a time: a name outside ASCII lost every high
             // byte that way (core-cpp#7).
             if (auto const eq = entry.find(L'='); eq != std::wstring_view::npos && eq > 0)
-                result.push_back(toUtf8(entry.substr(0, eq)));
+                result.push_back(toUtf8(std::wstring { entry.substr(0, eq) }));
             p += entry.size() + 1;
         }
         FreeEnvironmentStringsW(envBlock);

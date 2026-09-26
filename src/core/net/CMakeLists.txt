@@ -303,8 +303,8 @@ core_cpp_add_test(net NAME net_backend
 # and whose allocator is not the one a Release program counts against.
 if(NOT CORE_CPP_SANITIZERS)
     core_cpp_add_test(net NAME net_alloc
-        SOURCES CallbackAllocation_test.cpp
-        SOURCES_EMSCRIPTEN CallbackAllocation_test.cpp)
+        SOURCES CallbackAllocation_test.cpp ../testing/ReplacedGlobalAllocation.cpp
+        SOURCES_EMSCRIPTEN CallbackAllocation_test.cpp ../testing/ReplacedGlobalAllocation.cpp)
 endif()
 
 # Everything that needs a loop, a socket or a descriptor, and so nothing that builds under
