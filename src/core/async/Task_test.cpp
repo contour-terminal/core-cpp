@@ -466,7 +466,7 @@ TEST_CASE("Deep co_await chains keep the stack bounded (symmetric transfer)", "[
 {
     // Without symmetric transfer this recursion would overflow the stack; with it
     // both the descent and the unwind are tail calls, where the compiler makes them so. Where it
-    // does not, the case is skipped; core-cpp#15 tracks the fix.
+    // does not, the case is skipped: a limit decided in 0.5.0 (core-cpp#15, docs/modules/async.md).
     //
     // The teardown is not covered by that reasoning and does not need to be: each level destroys
     // the child it awaited at the end of its own `co_return` expression, by which time that child
