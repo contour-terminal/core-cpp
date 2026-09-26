@@ -18,7 +18,7 @@ namespace core::net
 namespace
 {
     /// Enough to take a typical refused request's remainder in one read.
-    constexpr std::size_t DrainChunkBytes = 16 * 1024;
+    constexpr auto DrainChunkBytes = std::size_t { 16 } * 1024;
 } // namespace
 
 async::Task<LingerOutcome> closeLingering(ISocket* socket, EventLoop* loop, LingerBounds bounds)

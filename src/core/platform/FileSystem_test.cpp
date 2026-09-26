@@ -1051,21 +1051,21 @@ TEST_CASE("NativeFileSystem reports a failure on a path the narrow encoding cann
 
     auto const read = fs.readFile(missing);
     REQUIRE_FALSE(read.has_value());
-    CHECK(read.error().find(spelled) != std::string::npos);
+    CHECK(read.error().contains(spelled));
 
     auto const written = fs.writeFile(missing, "content");
     REQUIRE_FALSE(written.has_value());
-    CHECK(written.error().find(spelled) != std::string::npos);
+    CHECK(written.error().contains(spelled));
 
     auto const size = fs.fileSize(missing);
     REQUIRE_FALSE(size.has_value());
-    CHECK(size.error().find(spelled) != std::string::npos);
+    CHECK(size.error().contains(spelled));
 
     auto const listed = fs.listDirectory(missing.parent_path());
     REQUIRE_FALSE(listed.has_value());
-    CHECK(listed.error().find(spelled) != std::string::npos);
+    CHECK(listed.error().contains(spelled));
 
     auto const renamed = fs.rename(missing, dir.path() / "elsewhere.txt");
     REQUIRE_FALSE(renamed.has_value());
-    CHECK(renamed.error().find(spelled) != std::string::npos);
+    CHECK(renamed.error().contains(spelled));
 }
