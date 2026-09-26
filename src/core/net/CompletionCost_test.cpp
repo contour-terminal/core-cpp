@@ -18,6 +18,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <sys/time.h>
 
 #include <algorithm>
@@ -32,6 +33,8 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+
+#include <unistd.h>
 
 using core::async::DetachedTask;
 using core::async::Task;
@@ -189,4 +192,62 @@ TEST_CASE("Socket completion cost over connected pairs", "[.][bench][net][socket
             Completions,
             Runs);
     }
+}
+
+TEST_CASE("Park filed and taken per socket operation", "[.][bench][net][park]")
+{
+    // What a socket operation pays the loop's bookkeeping when it has to wait, with no kernel wait
+    // and no readiness: file a frameless read park on the socket's kept registration, then take it,
+    // as `PosixSocket::armRead` and `takeRead` do. The registration is attached and armed for
+    // reading by the first park and never touched again, so this is the loop's own work alone --
+    // core-cpp#52's target, which the ping-pong above spreads over a syscall-heavy round trip.
+    constexpr auto Operations = std::size_t { 2'000'000 };
+    constexpr auto Runs = std::size_t { 5 };
+
+    auto backend = core::net::makeBackend(core::net::preferredBackendKind());
+    REQUIRE(backend != nullptr);
+    auto loop = EventLoop { *backend };
+    auto descriptors = std::array<int, 2> {};
+    REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM, 0, descriptors.data()) == 0);
+    auto const fd = descriptors[0];
+    auto const onReady = [](void*, core::net::ParkWake) {
+    };
+
+    auto samples = std::array<double, Runs> {};
+    for (auto& sample: samples)
+    {
+        auto const started = std::chrono::steady_clock::now();
+        auto refused = std::size_t { 0 };
+        for ([[maybe_unused]] auto const operation: std::views::iota(std::size_t { 0 }, Operations))
+        {
+            auto const park = loop.registerPark(
+                core::net::ParkEntry::onReadyCallback(onReady,
+                                                      nullptr,
+                                                      fd,
+                                                      core::net::DefaultHandleKind,
+                                                      core::net::Interest::Read,
+                                                      core::net::RegistrationLifetime::UntilClosed));
+            if (!park)
+                ++refused;
+            loop.unregisterPark(park);
+        }
+        auto const elapsed = std::chrono::steady_clock::now() - started;
+        REQUIRE(refused == 0);
+        sample = std::chrono::duration<double, std::nano>(elapsed).count() / static_cast<double>(Operations);
+    }
+    CHECK(loop.parkedWaiterCount() == 0);
+    loop.notifyHandleClosing(fd, core::net::FdWakePolicy::Resume);
+    std::ignore = ::close(descriptors[0]);
+    std::ignore = ::close(descriptors[1]);
+
+    std::ranges::sort(samples);
+    std::cout << std::format(
+        "park filed and taken, backend {}: median {:.1f} ns/op (min {:.1f}, max {:.1f}); "
+        "{} operations x {} runs\n",
+        core::net::toString(core::net::preferredBackendKind()),
+        samples[Runs / 2],
+        samples.front(),
+        samples.back(),
+        Operations,
+        Runs);
 }
