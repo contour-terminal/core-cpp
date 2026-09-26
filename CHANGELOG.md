@@ -9,6 +9,14 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Alt+Backspace reaches its key binding** (core-cpp#21). `VtParser` read `ESC DEL` -- how xterm,
+  VTE, iTerm and Alacritty send Alt+Backspace -- and `ESC BS` (Alt+Ctrl+H) as a bare Escape followed
+  by a plain Backspace, so a modal took the Escape as cancel and `DeleteBigWordBackward` could fire
+  only under the Kitty keyboard protocol. Both now decode to one `KeyCode::Backspace` with
+  `Modifier::Alt`. No signature changes.
+
 ## [0.4.3] - 2026-09-26
 
 ### Changed

@@ -576,6 +576,16 @@ void VtParser::processEscape(std::uint8_t byte, std::vector<InputEvent>& events)
         return;
     }
 
+    // Alt+Backspace: ESC DEL, the spelling xterm, VTE, iTerm and Alacritty send, and ESC BS for
+    // Alt+Ctrl+H. The fallback below would read either as a bare Escape -- which a modal takes as
+    // cancel -- followed by a plain Backspace (core-cpp#21).
+    if (byte == 0x7F || byte == 0x08)
+    {
+        events.emplace_back(KeyEvent { .key = KeyCode::Backspace, .modifiers = Modifier::Alt });
+        _state = State::Ground;
+        return;
+    }
+
     // Alt+character: ESC followed by printable
     if (byte >= 0x20 && byte < 0x7F)
     {

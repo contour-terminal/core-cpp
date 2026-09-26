@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/tui/KeyBindings.hpp>
 #include <core/tui/VtParser.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <optional>
 #include <string>
@@ -899,4 +901,31 @@ TEST_CASE("VtParser.Dcs.a_payload_past_the_cap_is_abandoned", "[tui,vtparser]")
     auto const* key = std::get_if<KeyEvent>(events.data());
     REQUIRE(key != nullptr);
     CHECK(key->codepoint == U'a');
+}
+
+// ============================================================================
+// Alt+Backspace (core-cpp#21)
+// ============================================================================
+
+TEST_CASE("VtParser.Escape.alt_backspace_is_one_key_not_escape_then_backspace", "[tui,vtparser]")
+{
+    // xterm, VTE, iTerm and Alacritty send Alt+Backspace as ESC DEL, and Alt+Ctrl+H as ESC BS.
+    // Read as "Escape, then reprocess", each became a bare Escape -- a modal's cancel -- followed by
+    // a plain Backspace.
+    auto const spelling = GENERATE(std::string_view { "" }, std::string_view { "" });
+    CAPTURE(spelling);
+    auto parser = VtParser {};
+    auto const events = parser.feed(spelling);
+    REQUIRE(events.size() == 1);
+    auto const* key = std::get_if<KeyEvent>(events.data());
+    REQUIRE(key != nullptr);
+    CHECK(key->key == KeyCode::Backspace);
+    CHECK(key->modifiers == Modifier::Alt);
+}
+
+TEST_CASE("VtParser.Escape.alt_backspace_reaches_its_default_binding", "[tui,vtparser]")
+{
+    auto const key = parseKey("");
+    REQUIRE(key.has_value());
+    CHECK(KeyBindings::defaults().lookup(*key) == EditAction::DeleteBigWordBackward);
 }
