@@ -97,6 +97,14 @@ namespace detail
     /// @return Nothing when the connection is up, or the classified failure.
     [[nodiscard]] std::expected<void, NetError> pendingSocketError(DialHandles const& handles);
 
+    /// Whether a dial on @p loop could hand out a socket at all, asked BEFORE anything is created:
+    /// on Windows a loop whose backend lends no completion port cannot serve one, and a dial that
+    /// found out at @c adoptDialled had already completed a real handshake the peer then saw
+    /// reset. Everywhere else the answer is yes.
+    /// @param loop The loop the dial would pin its socket to.
+    /// @return Nothing, or @c NetErrorCode::Unsupported.
+    [[nodiscard]] std::expected<void, NetError> dialableOn(EventLoop& loop);
+
     /// Wraps the connected handle as the platform's @c ISocket, transferring ownership.
     /// @param loop The loop the socket is pinned to.
     /// @param handles The connected handles; left invalid, because the socket owns them now.

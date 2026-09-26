@@ -118,6 +118,15 @@ std::expected<void, NetError> pendingSocketError(DialHandles const& handles)
     return {};
 }
 
+std::expected<void, NetError> dialableOn(EventLoop& loop)
+{
+    // `adoptSocket` would refuse the socket after the handshake; this says so before one.
+    if (loop.completionPort() == nullptr)
+        return std::unexpected(
+            makeNetError(NetErrorCode::Unsupported, 0, "the loop's backend lends no completion port"));
+    return {};
+}
+
 SocketResult adoptDialled(EventLoop& loop, DialHandles& handles, std::string peer)
 {
     auto const socket = handles.socket;

@@ -17,7 +17,8 @@ workflow refuses one without a section here.
   and WFMO a fallback. `makeDefaultBackend()` on Windows no longer falls back: a completion port
   the kernel refuses to create is handle exhaustion, and it propagates. `listen`, `listenUnix`,
   `adoptListener`, `adoptSocket` and the dials refuse a loop whose backend lends no completion port
-  with `NetErrorCode::Unsupported`, where they used to hand out a readiness socket. Two defects of
+  with `NetErrorCode::Unsupported`, where they used to hand out a readiness socket; a dial refuses
+  before it creates a socket, so nothing reaches the peer. Two defects of
   the removed transport go with it: a closed socket's parked read now answers `Cancelled` on every
   platform, where `WindowsSocket` answered `BadHandle` (core-cpp#46), and the WFMO-only
   destruction gap of core-cpp#50 has nothing left to apply to. `connectUnix`'s socket on Windows is

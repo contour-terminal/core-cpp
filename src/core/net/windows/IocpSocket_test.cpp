@@ -38,6 +38,7 @@
 #include <core/net/IListener.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/Sockets.hpp>
+#include <core/net/ThreadedAddressResolver.hpp>
 #include <core/net/detail/ReadyBatch.hpp>
 #include <core/net/detail/ScopeGuard.hpp>
 #include <core/net/testing/CoroTestSupport.hpp>
@@ -495,6 +496,59 @@ TEST_CASE("A Windows socket factory refuses a loop whose backend lends no comple
     CHECK(adoptedListener.error().code == NetErrorCode::Unsupported);
     CHECK(::getsockopt(listening, SOL_SOCKET, SO_TYPE, reinterpret_cast<char*>(&type), &size) == 0);
     ::closesocket(listening);
+}
+
+namespace
+{
+/// Dials @p port on @p loop and records the answer.
+Task<void> dialInto(EventLoop* loop, std::uint16_t port, std::optional<core::net::SocketResult>* out)
+{
+    *out =
+        co_await core::net::connect(loop,
+                                    "127.0.0.1",
+                                    port,
+                                    &core::net::defaultAsyncResolver(),
+                                    core::net::DialOptions { .connectTimeout = std::chrono::seconds { 5 } });
+}
+} // namespace
+
+TEST_CASE("A Windows dial on a loop without a completion port refuses before it connects",
+          "[net][iocp][default]")
+{
+    // The dial's half of the refusal above (review L2 of 0.5.0). It used to take the readiness path,
+    // complete a real TCP handshake, and only then refuse the socket at adoption -- so the server
+    // saw a connection accepted and reset per candidate. It must refuse as `dialCompletion` does:
+    // up front, with nothing on the wire.
+    core::platform::ensureWinsockInitialized();
+    auto const listening = ::WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
+    REQUIRE(listening != InvalidSocketValue);
+    auto const closeListening =
+        core::net::detail::ScopeGuard { [&]() noexcept { ::closesocket(listening); } };
+    auto address = sockaddr_in {};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    REQUIRE(::bind(listening, reinterpret_cast<sockaddr const*>(&address), sizeof(address)) == 0);
+    REQUIRE(::listen(listening, 4) == 0);
+    auto bound = sockaddr_in {};
+    auto boundSize = static_cast<int>(sizeof(bound));
+    REQUIRE(::getsockname(listening, reinterpret_cast<sockaddr*>(&bound), &boundSize) == 0);
+
+    auto clock = core::platform::ManualClock {};
+    auto loop = core::net::testing::TestLoop { clock };
+    auto dialled = std::optional<core::net::SocketResult> {};
+    loop.spawn(dialInto(&loop, ntohs(bound.sin_port), &dialled));
+    std::ignore = loop.drain();
+
+    // Nothing reached the listener: a pending connection would make it readable.
+    auto pending = WSAPOLLFD { .fd = listening, .events = POLLRDNORM, .revents = 0 };
+    CHECK(::WSAPoll(&pending, 1, 200) == 0);
+
+    // And the answer came without a wait. Past the budget, for the run where it did not.
+    clock.advance(std::chrono::seconds { 10 });
+    std::ignore = loop.drain();
+    REQUIRE(dialled.has_value());
+    REQUIRE_FALSE(dialled->has_value());
+    CHECK(dialled->error().code == NetErrorCode::Unsupported);
 }
 
 TEST_CASE("An IocpListener and IocpSocket round-trip bytes, and AcceptEx reports the peer",

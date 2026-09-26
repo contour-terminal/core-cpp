@@ -70,6 +70,11 @@ std::expected<void, NetError> pendingSocketError(DialHandles const& handles)
     return {};
 }
 
+std::expected<void, NetError> dialableOn(EventLoop& /*loop*/)
+{
+    return {};
+}
+
 SocketResult adoptDialled(EventLoop& loop, DialHandles& handles, std::string peer)
 {
     auto const fd = std::exchange(handles.socket, platform::InvalidHandle);

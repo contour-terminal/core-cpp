@@ -203,6 +203,11 @@ async::Task<SocketResult> dialReadiness(EventLoop* loop,
                                         platform::SteadyTimePoint deadline,
                                         StreamSocketOptions options)
 {
+    // Before the socket exists: a loop that could not adopt the result refuses the dial with
+    // nothing on the wire (core-cpp#6).
+    if (auto const dialable = dialableOn(*loop); !dialable.has_value())
+        co_return std::unexpected(dialable.error());
+
     auto opened = openDialSocket(endpoint);
     if (!opened.has_value())
         co_return std::unexpected(opened.error());
