@@ -71,6 +71,12 @@ workflow refuses one without a section here.
   around every callable posted to the same strand or key too. Read from what the task already
   holds, so it adds nothing to a task and costs one load where a hook asks. Additive; no signature
   changes.
+- **`core::net::closeLingering` and `LingerBounds`** (`<core/net/LingeringClose.hpp>`, from
+  fastcached at `0708dd54`; core-cpp#35): half-close, discard what the peer is still sending until
+  it closes or a bound runs out -- the whole drain's time, the bytes discarded, the reads made --
+  then close, so a reply written over a request left unread is followed by a FIN rather than
+  destroyed by the reset a bare close sends. `HttpLimits::linger` bounds it for `serve`, by
+  default two seconds, 64 KiB and four reads. Additive.
 
 ### Changed
 
@@ -82,6 +88,11 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- **`serve`'s refusal of a request it did not read to its end reaches the client** (core-cpp#35).
+  A 413 or 400 was written over request bytes still unread, and the connection's bare close then
+  sent a reset rather than a FIN: the client read the refusal followed by a connection reset, and
+  on Windows could lose the refusal itself. The refusal now closes through `closeLingering`. A
+  request read in full and answered closes as before.
 - **`NativeFileSystem` reports a failure on a path the ANSI code page cannot spell** (core-cpp#26).
   Its error messages spelled the path with `path::string()`, which on Windows narrows through the
   code page: such a name was mangled, and MSVC's conversion throws there, so the error path itself

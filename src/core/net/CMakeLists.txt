@@ -139,6 +139,7 @@ core_cpp_add_module(net KIND STATIC
         ISocket.hpp
         ITlsContext.hpp
         KeepAlive.hpp
+        LingeringClose.hpp
         PlatformLoop.hpp
         ReadinessDial.hpp
         SharedPortDatagram.hpp
@@ -187,6 +188,7 @@ core_cpp_add_module(net KIND STATIC
         HealthProbe.cpp
         HttpServer.cpp
         ISocket.cpp
+        LingeringClose.cpp
         ReadinessDial.cpp
         SharedPortDatagram.cpp
         SocketAddress.cpp
@@ -330,6 +332,7 @@ core_cpp_add_test(net
         HttpServer_test.cpp
         IAdmissionControl_test.cpp
         IoAwaitable_test.cpp
+        LingeringClose_test.cpp
         LoopTeardown_test.cpp
         ReadinessDial_test.cpp
         SharedPortDatagram_test.cpp

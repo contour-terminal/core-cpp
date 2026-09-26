@@ -746,3 +746,74 @@ TEST_CASE("serve completes the transport handshake before it reads a request", "
     CHECK(writes == 0);
     CHECK_FALSE(handled);
 }
+
+TEST_CASE("serve's refusal of a request whose body it did not read reaches the client, then EOF",
+          "[net][http][linger]")
+{
+    // core-cpp#35. A 413 is written over a body the server never read, so a bare close finds
+    // bytes still in its receive buffer and sends a reset rather than a FIN -- and the reset
+    // destroys the refusal on Windows, and follows it as an error everywhere else. The body is
+    // far past one read chunk of the server's reader, so most of it is unread at the close.
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
+    auto listener = core::net::listen(loop, "127.0.0.1", 0);
+    REQUIRE(listener.has_value());
+    auto const port = (*listener)->boundPort();
+    REQUIRE(port != 0);
+
+    auto handled = false;
+    auto handler = core::net::HttpHandler { [&handled](HttpRequest const&) {
+        handled = true;
+        return HttpResponse::ok("unreachable");
+    } };
+
+    struct Received
+    {
+        std::string text;                       ///< Every byte read, in order.
+        std::optional<core::net::IoResult> end; ///< EOF as 0, or the error that ended the reads.
+    };
+    auto client = [](EventLoop* l, std::uint16_t p, Received* out) -> Task<void> {
+        auto connected = co_await core::net::connect(l, "127.0.0.1", p);
+        if (!connected.has_value())
+            co_return;
+        auto socket = std::move(*connected);
+        auto const request =
+            std::string { "POST /upload HTTP/1.1\r\nHost: x\r\nContent-Length: 32768\r\n\r\n" }
+            + std::string(32768, 'b');
+        co_await sendText(socket.get(), &request);
+        auto chunk = std::array<std::byte, 4096> {};
+        while (true)
+        {
+            auto const got = co_await socket->read(chunk);
+            if (!got.has_value() || *got == 0)
+            {
+                out->end = got;
+                co_return;
+            }
+            out->text.append(reinterpret_cast<char const*>(chunk.data()), *got);
+        }
+    };
+    auto run = [](EventLoop* l,
+                  core::net::IListener* lis,
+                  core::net::HttpHandler h,
+                  std::uint16_t p,
+                  Received* out,
+                  auto clientFn) -> Task<void> {
+        static_cast<void>(co_await core::async::whenAny(
+            core::net::serve(lis, std::move(h), HttpLimits { .maxBodyBytes = 1024 }), clientFn(l, p, out)));
+    };
+
+    auto received = Received {};
+    auto const ran = loop.blockOn(
+        core::net::withTimeout(&loop,
+                               run(&loop, listener->get(), std::move(handler), port, &received, client),
+                               std::chrono::seconds { 10 }));
+    REQUIRE(ran);
+
+    CHECK_FALSE(handled);
+    CHECK(received.text.starts_with("HTTP/1.1 413 "));
+    REQUIRE(received.end.has_value());
+    INFO("the client's reads ended in "
+         << (received.end->has_value() ? "EOF" : received.end->error().context));
+    CHECK(received.end->has_value());
+}

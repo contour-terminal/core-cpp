@@ -50,7 +50,8 @@ directory `src/core/net/`. Three targets:
 | `<core/net/WriteQueue.hpp>` | the single writer per connection: whole frames in order, bounded by bytes, with superseding by tag |
 | `<core/net/SplitSocket.hpp>` | one duplex `ISocket` from two simplex halves |
 | `<core/net/WithTimeout.hpp>` | `withTimeout()`: a task raced against a timer on the loop's clock |
-| `<core/net/HttpServer.hpp>` | a minimal HTTP/1.1 server: `serve()`, `readRequest()`, `writeResponse()`; `Content-Length` bodies only, every response closes |
+| `<core/net/HttpServer.hpp>` | a minimal HTTP/1.1 server: `serve()`, `readRequest()`, `writeResponse()`; `Content-Length` bodies only, every response closes, and a refusal closes lingering (`HttpLimits::linger`) |
+| `<core/net/LingeringClose.hpp>` | `closeLingering()`: half-close, drain the peer within `LingerBounds` (time, bytes, reads), then close, so a reply written over a request left unread is not destroyed by the reset a bare close sends |
 | `<core/net/IDatagramSocket.hpp>`, `<core/net/UdpSocket.hpp>` | `IDatagramSocket` (`send`, a bounded `receive`, `close`, `boundAddress`), `DatagramAddress`, `ReceivedDatagram`, `DatagramWait`; `openUdpSocket()` with `BroadcastMode` and `PortSharing`, answering WHY a bind failed. Blocking, on a thread of its own: a datagram socket is not an `ISocket` |
 | `<core/net/SharedPortDatagram.hpp>` | `answerFromOwnAddress()` and `openSharedPortUdpSocket()`: hear the segment on a shared port, send and be answered from an address only this node holds |
 | `<core/net/BlockingSocket.hpp>`, `<core/net/BlockingConnector.hpp>` | the transports for threads that may block: `BlockingSocket`, whose every awaitable is already settled, and `BlockingConnector`, an `IConnector` that dials on the calling thread within its budget and arms `BlockingConnectorOptions::ioTimeout` before handing the socket over. Driven by `core::async::syncRun`; never on a loop thread |
