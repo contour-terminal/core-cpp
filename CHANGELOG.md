@@ -28,6 +28,12 @@ workflow refuses one without a section here.
   code page: such a name was mangled, and MSVC's conversion throws there, so the error path itself
   threw out of `readFile`, `rename`, `listDirectory` and the rest. The messages now spell the path
   in UTF-8, as the paths core-cpp hands back already are. POSIX was unaffected.
+- **`testing::InMemoryFileSystem` answers as the native backend does in two more places**
+  (core-cpp#27). `isExecutableFile`, `permissions` and `setPermissions` follow a symlink to its
+  target, so a dangling link is not executable and has no permissions to set, where the fake used
+  to judge the link by bits recorded on the link itself. `createDirectory` refuses a path that is
+  already there, directory or file, with "File exists", where it used to succeed. What the fake
+  still does not model is tabled in `docs/modules/platform.md`.
 
 ## [0.4.3] - 2026-09-26
 

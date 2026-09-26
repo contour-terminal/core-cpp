@@ -35,7 +35,22 @@ the interrupt throttle.
 The test doubles are in `testing/` and in `core::platform::testing`:
 `testing::InMemoryFileSystem` (a `FileSystem` held in maps, with symlinks, permissions and
 refused paths), `testing::MockFileInfoProvider` and `testing::TestEnvironmentProvider`, which never
-touches the process environment. The native implementations of `FileInfoProvider` and
+touches the process environment.
+
+`InMemoryFileSystem` answers as `NativeFileSystem` does wherever it models the behaviour: `isExecutableFile`,
+`permissions` and `setPermissions` follow a symlink to its target (a dangling link is not
+executable and has no permissions to set), and `createDirectory` refuses a path that is already
+there, directory or file, with "File exists" (core-cpp#27). What it deliberately does not model,
+so a test that depends on one of these belongs against the real filesystem:
+
+| Behaviour | Native | `InMemoryFileSystem` |
+|---|---|---|
+| `exists()` on a dangling symlink | `false`: the followed status is an error | `true`: the link's own key is there |
+| Symlink resolution | the OS, with `ELOOP` at its limit | a bounded textual chain of 32 hops, ending on the last key reached |
+| Directory semantics | permissions, ordering and `.`/`..` from the OS | a key set; permissions are consulted by `isExecutableFile` and the refused-path list only |
+| `putback()` of a character the file does not hold | may fail; libc++ refuses it, libstdc++ and MSVC accept | always accepted |
+| `unget()` after a put-back character was read | hands the put-back character out again | steps back to the file's own byte |
+ The native implementations of `FileInfoProvider` and
 `EnvironmentProvider` are in the private `posix/` and `windows/` directories, which no consumer
 includes; a composition root gets them from `nativeEnvironmentProvider()` and
 `nativeFileInfoProvider()`, each a `std::unique_ptr` to the interface:

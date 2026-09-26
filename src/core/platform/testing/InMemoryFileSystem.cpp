@@ -16,6 +16,7 @@
 #include <ranges>
 #include <set>
 #include <streambuf>
+#include <system_error>
 
 namespace core::platform::testing
 {
@@ -404,8 +405,10 @@ bool InMemoryFileSystem::isSymlink(std::filesystem::path const& path) const
 
 bool InMemoryFileSystem::isExecutableFile(std::filesystem::path const& path) const
 {
-    auto const key = normalize(path);
-    if (!_files.contains(key) && !_symlinks.contains(key))
+    // Through the link, as the native backend's followed status is: a link to an executable file is
+    // executable, a link to a directory or to nothing is not, and the bit is the target's.
+    auto const key = resolveSymlinks(normalize(path));
+    if (!_files.contains(key))
         return false;
 
     auto const it = _permissions.find(key);
@@ -505,6 +508,11 @@ std::expected<void, std::string> InMemoryFileSystem::createDirectory(std::filesy
     auto const key = normalize(path);
     if (_deniedPaths.contains(key))
         return std::unexpected(std::format("Permission denied: {}", key));
+    // Whatever is there already -- a directory, a file, a link -- is refused as the native backend
+    // refuses it, with the operating system's "File exists".
+    if (_directories.contains(key) || _files.contains(key) || _symlinks.contains(key))
+        return std::unexpected(std::format(
+            "Cannot create directory '{}': {}", key, std::make_error_code(std::errc::file_exists).message()));
     // Check that parent exists
     auto const parent = normalizePath(pathFromKey(key).parent_path());
     if (!parent.empty() && parent != "/" && !_directories.contains(parent))
@@ -778,19 +786,21 @@ std::expected<std::filesystem::file_time_type, std::string> InMemoryFileSystem::
 std::expected<std::filesystem::perms, std::string> InMemoryFileSystem::permissions(
     std::filesystem::path const& path) const
 {
-    auto const key = normalize(path);
+    // Through a link, as `std::filesystem::status` is: the permissions are the target's.
+    auto const key = resolveSymlinks(normalize(path));
+    if (!_files.contains(key) && !_directories.contains(key))
+        return std::unexpected(std::format("Path not found: {}", key));
     if (auto const it = _permissions.find(key); it != _permissions.end())
         return it->second;
-    if (!exists(path))
-        return std::unexpected(std::format("Path not found: {}", key));
     return std::filesystem::perms::owner_read | std::filesystem::perms::owner_write;
 }
 
 std::expected<void, std::string> InMemoryFileSystem::setPermissions(std::filesystem::path const& path,
                                                                     std::filesystem::perms perms) const
 {
-    auto const key = normalize(path);
-    if (!exists(path))
+    // Onto the target, as `std::filesystem::permissions` follows a link; a dangling one has none.
+    auto const key = resolveSymlinks(normalize(path));
+    if (!_files.contains(key) && !_directories.contains(key))
         return std::unexpected(std::format("Path not found: {}", key));
     _permissions[key] = perms;
     return {};
