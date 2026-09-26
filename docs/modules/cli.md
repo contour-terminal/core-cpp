@@ -24,12 +24,17 @@ auto const syntax = core::cli::Command {
     .name = "tool",
     .options = { core::cli::Option { .name = "verbose", .v = core::cli::Value { false } } },
 };
-if (auto const flags = core::cli::parse(syntax, argc, argv))
-    verbose = flags->get<bool>("tool.verbose");
+auto const flags = core::cli::parse(syntax, argc, argv);
+if (!flags)
+{
+    std::println(stderr, "tool: {}", flags.error().message);
+    return EXIT_FAILURE;
+}
+verbose = flags->get<bool>("tool.verbose");
 ```
 
-## Open work
-
-- **[core-cpp#13](https://github.com/contour-terminal/core-cpp/issues/13)**: `parse()` throws
-  `core::cli::ParserError` or `std::invalid_argument` on a malformed command line, as crispy's
-  did. It is to return `std::expected` instead.
+A malformed command line is a value, never an exception: `parse()` returns
+`std::expected<FlagStore, ParseError>`, and a `ParseError` has a `kind` (`ParseErrorKind`: not
+enough arguments, an invalid value, an explicit empty value for a non-string option, an unexpected
+token, a missing required option), the index of the token at fault and a message for the user.
+A number is read whole: `12abc` is refused rather than read as 12, and `-1` is not an unsigned.

@@ -4,8 +4,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <format>
-#include <stdexcept>
+#include <string>
 #include <string_view>
+#include <utility>
 
 // TODO API / impl:
 //
@@ -38,7 +39,6 @@
 // - [ ] test command chains up to 3 levels deep (including proper help output, maybe via /bin/ip emul?)
 //
 
-using std::optional;
 using std::string;
 
 namespace cli = core::cli;
@@ -58,7 +58,7 @@ TEST_CASE("CLI.option.type.bool")
     SECTION("set")
     {
         auto const args = cli::StringViewList { "contour", "verbose" };
-        optional<cli::FlagStore> const flagsOpt = cli::parse(cmd, args);
+        auto const flagsOpt = cli::parse(cmd, args);
         REQUIRE(flagsOpt.has_value());
         CHECK(flagsOpt.value().values.at("contour.verbose") == cli::Value { true });
     }
@@ -66,7 +66,7 @@ TEST_CASE("CLI.option.type.bool")
     SECTION("set true")
     {
         auto const args = cli::StringViewList { "contour", "verbose", "true" };
-        optional<cli::FlagStore> const flagsOpt = cli::parse(cmd, args);
+        auto const flagsOpt = cli::parse(cmd, args);
         REQUIRE(flagsOpt.has_value());
         CHECK(flagsOpt.value().values.at("contour.verbose") == cli::Value { true });
     }
@@ -74,7 +74,7 @@ TEST_CASE("CLI.option.type.bool")
     SECTION("set true")
     {
         auto const args = cli::StringViewList { "contour", "verbose", "false" };
-        optional<cli::FlagStore> const flagsOpt = cli::parse(cmd, args);
+        auto const flagsOpt = cli::parse(cmd, args);
         REQUIRE(flagsOpt.has_value());
         CHECK(flagsOpt.value().values.at("contour.verbose") == cli::Value { false });
     }
@@ -82,7 +82,7 @@ TEST_CASE("CLI.option.type.bool")
     SECTION("unset")
     {
         auto const args = cli::StringViewList { "contour" };
-        optional<cli::FlagStore> const flagsOpt = cli::parse(cmd, args);
+        auto const flagsOpt = cli::parse(cmd, args);
         REQUIRE(flagsOpt.has_value());
         CHECK(flagsOpt.value().values.at("contour.verbose") == cli::Value { false });
     }
@@ -107,7 +107,7 @@ TEST_CASE("CLI.contour-full-test")
     };
 
     auto const args = cli::StringViewList { "contour", "capture", "logical", "output", "out.vt" };
-    optional<cli::FlagStore> const flagsOpt = cli::parse(cmd, args);
+    auto const flagsOpt = cli::parse(cmd, args);
     REQUIRE(flagsOpt.has_value());
 
     cli::FlagStore const& flags = flagsOpt.value();
@@ -222,7 +222,7 @@ TEST_CASE("CLI.helpText.non-ascii-help-text")
     CHECK(text.contains("https://contour-terminal.org/"));
 }
 
-// The declaration says which failures are a value and which are an exception; these pin it.
+// Every way a command line can be refused is a value -- core-cpp#13 -- and says which, and where.
 TEST_CASE("CLI.parse.failure-modes")
 {
     auto const cmd = cli::Command {
@@ -231,6 +231,9 @@ TEST_CASE("CLI.parse.failure-modes")
         .options =
             cli::OptionList {
                 cli::Option { .name = "count"sv, .v = cli::Value { 0 }, .helpText = "A number."sv },
+                cli::Option { .name = "size"sv, .v = cli::Value { 0U }, .helpText = "A size."sv },
+                cli::Option { .name = "ratio"sv, .v = cli::Value { 0.0 }, .helpText = "A ratio."sv },
+                cli::Option { .name = "verbose"sv, .v = cli::Value { false }, .helpText = "Chatty."sv },
                 cli::Option { .name = "profile"sv,
                               .v = cli::Value { ""s },
                               .helpText = "Which profile."sv,
@@ -239,16 +242,95 @@ TEST_CASE("CLI.parse.failure-modes")
             },
     };
 
-    SECTION("a value of the wrong type throws ParserError")
+    /// Parses @p args, which must be refused, and returns why.
+    auto const refusal = [&cmd](cli::StringViewList const& args) {
+        auto result = cli::parse(cmd, args);
+        REQUIRE_FALSE(result.has_value());
+        return std::move(result).error();
+    };
+
+    SECTION("a value of the wrong type")
     {
-        auto const args = cli::StringViewList { "contour", "profile", "p", "count", "not-a-number" };
-        CHECK_THROWS_AS(cli::parse(cmd, args), cli::ParserError);
+        auto const error = refusal({ "contour", "profile", "p", "count", "not-a-number" });
+        CHECK(error.kind == cli::ParseErrorKind::InvalidValue);
+        CHECK(error.tokenIndex == 4);
+        CHECK(error.message.contains("count"));
     }
 
-    SECTION("a missing required option throws std::invalid_argument")
+    SECTION("a number with something after it")
     {
-        auto const args = cli::StringViewList { "contour", "count", "1" };
-        CHECK_THROWS_AS(cli::parse(cmd, args), std::invalid_argument);
+        // std::stoi read "12abc" as 12.
+        auto const error = refusal({ "contour", "profile", "p", "count", "12abc" });
+        CHECK(error.kind == cli::ParseErrorKind::InvalidValue);
+        CHECK(error.tokenIndex == 4);
+    }
+
+    SECTION("a negative unsigned")
+    {
+        // std::stoul read "-1" as ULONG_MAX, and the cast to unsigned kept its low half.
+        auto const error = refusal({ "contour", "profile", "p", "size", "-1" });
+        CHECK(error.kind == cli::ParseErrorKind::InvalidValue);
+    }
+
+    SECTION("an integer out of range")
+    {
+        auto const error = refusal({ "contour", "profile", "p", "count", "99999999999999999999" });
+        CHECK(error.kind == cli::ParseErrorKind::InvalidValue);
+    }
+
+    SECTION("a floating-point value with something after it")
+    {
+        auto const error = refusal({ "contour", "profile", "p", "ratio", "1.5x" });
+        CHECK(error.kind == cli::ParseErrorKind::InvalidValue);
+    }
+
+    SECTION("an explicit empty value for an option that is not a string")
+    {
+        auto const error = refusal({ "contour", "profile", "p", "--count=" });
+        CHECK(error.kind == cli::ParseErrorKind::EmptyValue);
+        CHECK(error.tokenIndex == 3);
+    }
+
+    SECTION("an option whose value is missing")
+    {
+        auto const error = refusal({ "contour", "profile", "p", "count" });
+        CHECK(error.kind == cli::ParseErrorKind::NotEnoughArguments);
+        CHECK(error.tokenIndex == 4);
+        CHECK(error.message.contains("count"));
+    }
+
+    SECTION("no command name at all")
+    {
+        auto const error = refusal({});
+        CHECK(error.kind == cli::ParseErrorKind::NotEnoughArguments);
+        CHECK(error.tokenIndex == 0);
+    }
+
+    SECTION("a token nothing takes")
+    {
+        auto const error = refusal({ "contour", "profile", "p", "bogus" });
+        CHECK(error.kind == cli::ParseErrorKind::UnexpectedToken);
+        CHECK(error.tokenIndex == 3);
+        CHECK(error.message.contains("bogus"));
+    }
+
+    SECTION("a missing required option")
+    {
+        auto const error = refusal({ "contour", "count", "1" });
+        CHECK(error.kind == cli::ParseErrorKind::MissingRequiredOption);
+        CHECK(error.message.contains("contour.profile"));
+    }
+
+    SECTION("every type still reads a well-formed value")
+    {
+        auto const flags = cli::parse(
+            cmd, { "contour", "profile", "p", "count", "-7", "size", "7", "ratio", "0.25", "verbose", "no" });
+        REQUIRE(flags.has_value());
+        CHECK(flags->get<int>("contour.count") == -7);
+        CHECK(flags->get<unsigned>("contour.size") == 7U);
+        CHECK(flags->get<double>("contour.ratio") == 0.25);
+        CHECK_FALSE(flags->get<bool>("contour.verbose"));
+        CHECK(flags->get<std::string>("contour.profile") == "p");
     }
 }
 

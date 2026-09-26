@@ -4,10 +4,12 @@
 #include <core/Utils.hpp>
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <expected>
 #include <format>
 #include <map>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -95,10 +97,24 @@ enum class OptionStyle : uint8_t
     Posix,
 };
 
-class ParserError: public std::runtime_error
+/// Why @c parse refused a command line.
+enum class ParseErrorKind : std::uint8_t
 {
-  public:
-    explicit ParserError(std::string const& msg): std::runtime_error(msg) {}
+    NotEnoughArguments,    ///< The command line ended where a token was needed: a name or a value.
+    InvalidValue,          ///< A value cannot be read as the type its option declares.
+    EmptyValue,            ///< `--name=` for an option whose type is not a string.
+    UnexpectedToken,       ///< A token that is neither an option, a sub-command nor verbatim input.
+    MissingRequiredOption, ///< An option marked @c Presence::Required was not given.
+};
+
+/// What was wrong with a command line, and where.
+struct ParseError
+{
+    ParseErrorKind kind = ParseErrorKind::NotEnoughArguments; ///< What was wrong.
+    /// The index into the argument list of the token at fault. For @c NotEnoughArguments and
+    /// @c MissingRequiredOption, where no token is at fault, the argument count.
+    std::size_t tokenIndex = 0;
+    std::string message; ///< A sentence for the user, naming the option or token concerned.
 };
 
 struct FlagStore
@@ -132,26 +148,29 @@ using StringViewList = std::vector<std::string_view>;
 /**
  * Parses the command line arguments with respect to @p command as passed via @p args.
  *
- * @returns a @c FlagStore containing the parsed result, or std::nullopt when the arguments do not
- *          form a complete command -- tokens left over at the end, above all.
- * @throw ParserError when a value cannot be read as the type its option declares.
- * @throw std::invalid_argument when an option marked Presence::Required was not given.
+ * A malformed command line is a value, never an exception: nothing in the parser throws.
+ * Numbers are read with `std::from_chars` (floating point with `std::strtod`), and the whole token
+ * must be the number -- `12abc` is refused rather than read as 12, and `-1` is not an unsigned.
  *
- * A caller whose own contract is a value rather than an exception -- core::cli::App::run() and
- * App::reparseParameters() -- catches both.
+ * @param command The syntax to parse against.
+ * @param args The arguments; the first is the command's own name (`argv[0]`), and is not checked.
+ * @return A @c FlagStore holding every option's value, the defaults included, or the
+ *         @c ParseError that says what was wrong and at which token.
  */
-std::optional<FlagStore> parse(Command const& command, StringViewList const& args);
+[[nodiscard]] std::expected<FlagStore, ParseError> parse(Command const& command, StringViewList const& args);
 
 /**
  * Parses the command line arguments with respect to @p command as passed via (argc, argv) suitable
  * for a general main() functions's argc and argv.
  *
- * @returns a @c FlagStore containing the parsed result, or std::nullopt when the arguments do not
- *          form a complete command.
- * @throw ParserError when a value cannot be read as the type its option declares.
- * @throw std::invalid_argument when an option marked Presence::Required was not given.
+ * @param command The syntax to parse against.
+ * @param argc The argument count.
+ * @param argv The arguments, `argv[0]` first.
+ * @return As for the @c StringViewList overload.
  */
-std::optional<FlagStore> parse(Command const& command, int argc, char const* const* argv);
+[[nodiscard]] std::expected<FlagStore, ParseError> parse(Command const& command,
+                                                         int argc,
+                                                         char const* const* argv);
 
 enum class HelpElement : uint8_t
 {

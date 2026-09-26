@@ -7,8 +7,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <charconv>
 #include <cstddef>
+#include <cstdlib>
 #include <deque>
+#include <expected>
 #include <ranges>
 #include <sstream>
 
@@ -59,16 +63,12 @@ using std::deque;
 using std::function;
 using std::get;
 using std::holds_alternative;
-using std::invalid_argument;
 using std::map;
 using std::max;
 using std::nullopt;
 using std::optional;
 using std::ostream;
 using std::pair;
-using std::stod;
-using std::stoi;
-using std::stoul;
 using std::string;
 using std::string_view;
 using std::stringstream;
@@ -149,23 +149,67 @@ namespace // {{{ helper
         return nullptr;
     }
 
-    string_view consumeToken(ParseContext& context)
+    /// The refusal of the token at @p index.
+    auto refuse(ParseErrorKind kind, size_t index, string message) -> std::unexpected<ParseError>
+    {
+        return std::unexpected { ParseError {
+            .kind = kind, .tokenIndex = index, .message = std::move(message) } };
+    }
+
+    auto consumeToken(ParseContext& context) -> std::expected<string_view, ParseError>
     {
         // NAME := <just a name>
         if (context.pos >= context.args.size())
-            throw ParserError("Not enough arguments specified.");
+            return refuse(ParseErrorKind::NotEnoughArguments, context.pos, "Not enough arguments specified.");
 
         CLI_DEBUG(std::format("Consuming token '{}'", currentToken(context)));
         return context.args.at(context.pos++);
     }
 
-    /// Parses the given parameter value @p text with respect to the given @p option.
-    Value parseValue(ParseContext& context, string_view text) // {{{
+    /// Reads all of @p text as a number of type @p T, or nothing.
+    template <typename T>
+    auto parseNumber(string_view text) -> optional<T>
+    {
+        auto value = T {};
+        auto const* const first = text.data();
+        auto const* const last = first + text.size();
+        auto const [end, error] = std::from_chars(first, last, value);
+        if (error != std::errc {} || end != last)
+            return nullopt;
+        return value;
+    }
+
+    /// Reads all of @p text as a double, or nothing. `std::strtod` rather than `std::from_chars`,
+    /// whose floating-point overloads libc++ 17 -- the WebAssembly build's -- does not provide.
+    auto parseDouble(string_view text) -> optional<double>
+    {
+        if (text.empty() || std::isspace(static_cast<unsigned char>(text.front())) != 0)
+            return nullopt;
+        auto const owned = string(text);
+        char* end = nullptr;
+        errno = 0;
+        auto const value = std::strtod(owned.c_str(), &end);
+        if (errno == ERANGE || end != owned.c_str() + owned.size())
+            return nullopt;
+        return value;
+    }
+
+    /// Parses the given parameter value @p text, the token at @p index, with respect to the current
+    /// option.
+    auto parseValue(ParseContext const& context, string_view text, size_t index)
+        -> std::expected<Value, ParseError> // {{{
     {
         // Value := STR | BOOL | FLOAT | INT | UINT
+        auto const& option = *context.currentOption;
+        auto const invalid = [&](string_view expected) {
+            return refuse(
+                ParseErrorKind::InvalidValue,
+                index,
+                std::format(R"(Option "{}" expects {}, not "{}".)", option.name.longName, expected, text));
+        };
 
         // BOOL
-        if (holds_alternative<bool>(context.currentOption->v))
+        if (holds_alternative<bool>(option.v))
         {
             if (isTrue(text))
                 return Value { true };
@@ -173,61 +217,50 @@ namespace // {{{ helper
             if (isFalse(text))
                 return Value { false };
 
-            throw ParserError("Boolean value expected but something else specified.");
+            return invalid("a boolean");
         }
 
         // FLOAT
-        try
+        if (holds_alternative<double>(option.v))
         {
-            if (holds_alternative<double>(context.currentOption->v))
-            {
-                return Value { stod(string(text)) }; // TODO: avoid malloc
-            }
-        }
-        catch (...)
-        {
-            throw ParserError("Floating point value expected but something else specified.");
+            if (auto const value = parseDouble(text))
+                return Value { *value };
+            return invalid("a floating-point number");
         }
 
         // UINT
-        try
+        if (holds_alternative<unsigned>(option.v))
         {
-            if (holds_alternative<unsigned>(context.currentOption->v))
-                return Value { unsigned(stoul(string(text))) };
-        }
-        catch (...)
-        {
-            throw ParserError("Unsigned integer value expected but something else specified.");
+            if (auto const value = parseNumber<unsigned>(text))
+                return Value { *value };
+            return invalid("an unsigned integer");
         }
 
         // INT
-        try
+        if (holds_alternative<int>(option.v))
         {
-            if (holds_alternative<int>(context.currentOption->v))
-                return Value { stoi(string(text)) };
-        }
-        catch (...)
-        {
-            throw ParserError("Integer value expected but something else specified.");
+            if (auto const value = parseNumber<int>(text))
+                return Value { *value };
+            return invalid("an integer");
         }
 
         // STR
         return Value { string(text) };
     } // }}}
-    Value parseValue(ParseContext& context) // {{{
+    auto parseValue(ParseContext& context) -> std::expected<Value, ParseError> // {{{
     {
         if (holds_alternative<bool>(context.currentOption->v))
         {
             auto const text = currentToken(context);
             if (isTrue(text))
             {
-                consumeToken(context);
+                ++context.pos;
                 return Value { true };
             }
 
             if (isFalse(text))
             {
-                consumeToken(context);
+                ++context.pos;
                 return Value { false };
             }
 
@@ -235,7 +268,13 @@ namespace // {{{ helper
             // and are considered to be true (implicit).
             return Value { true };
         }
-        return parseValue(context, consumeToken(context));
+        if (!hasTokensAvailable(context))
+            return refuse(
+                ParseErrorKind::NotEnoughArguments,
+                context.pos,
+                std::format("Option \"{}\" expects a value.", context.currentOption->name.longName));
+        auto const index = context.pos++;
+        return parseValue(context, context.args.at(index), index);
     } // }}}
 
     struct ScopedOption
@@ -258,12 +297,24 @@ namespace // {{{ helper
         ~ScopedCommand() { context.currentCommand.pop_back(); }
     };
 
+    /// An option and the value given for it.
+    using ParsedOption = pair<Option const*, Value>;
+
+    /// Parses the value of @p option, whose name is the current token, and consumes both.
+    auto parseOptionValue(ParseContext& context, Option const& option)
+        -> std::expected<optional<ParsedOption>, ParseError>
+    {
+        ++context.pos; // the name, which findOption() has matched
+        auto const optionScope = ScopedOption { context, option };
+        return parseValue(context).transform(
+            [&](Value value) { return optional { ParsedOption { &option, std::move(value) } }; });
+    }
+
     /// Tries parsing an option name and, if matching, also its value if provided.
     ///
-    /// @throw ParserError on parserfailures
-    /// @returns nullptr if current token is no option name a pair of an @c Option pointer and its optional
-    /// value otherwise.
-    optional<pair<Option const*, Value>> tryParseOption(ParseContext& context)
+    /// @returns nullopt if the current token is no option name, a pair of an @c Option pointer and
+    /// its value otherwise, or the error that made the option's value unreadable.
+    auto tryParseOption(ParseContext& context) -> std::expected<optional<ParsedOption>, ParseError>
     {
         // NAME [VALUE]
         // -NAME [VALUE]
@@ -277,47 +328,32 @@ namespace // {{{ helper
                 auto const valueText = current.substr(i + 1);
                 if (Option const* opt = findOption(context, name)) // --NAME=VALUE
                 {
-                    consumeToken(context);
+                    auto const index = context.pos++;
                     if (valueText.empty() && !holds_alternative<string>(opt->v))
-                        throw ParserError("Explicit empty value passed but a non-string value expected.");
+                        return refuse(ParseErrorKind::EmptyValue,
+                                      index,
+                                      std::format("Option \"{}\" was given an explicit empty value, but its "
+                                                  "value is not a string.",
+                                                  opt->name.longName));
 
                     auto const optionScope = ScopedOption { context, *opt };
-                    return pair { opt, parseValue(context, valueText) };
+                    return parseValue(context, valueText, index).transform([&](Value value) {
+                        return optional { ParsedOption { opt, std::move(value) } };
+                    });
                 }
             }
-            else
-            {
-                auto const name = current.substr(2);
-                if (Option const* opt = findOption(context, name)) // --NAME
-                {
-                    consumeToken(context);
-                    auto const optionScope = ScopedOption { context, *opt };
-                    return pair { opt, parseValue(context) };
-                }
-            }
+            else if (Option const* opt = findOption(context, current.substr(2))) // --NAME
+                return parseOptionValue(context, *opt);
         }
         else if (matchPrefix(current, "-")) // POSIX-style short opt (or otherwise ...)
         {
-            auto const name = current.substr(1);
-            if (Option const* opt = findOption(context, name)) // -NAME
-            {
-                consumeToken(context);
-                auto const optionScope = ScopedOption { context, *opt };
-                return pair { opt, parseValue(context) };
-            }
+            if (Option const* opt = findOption(context, current.substr(1))) // -NAME
+                return parseOptionValue(context, *opt);
         }
-        else // Natural style option
-        {
-            auto const name = current;
-            if (Option const* opt = findOption(context, name)) // -NAME
-            {
-                consumeToken(context);
-                auto const optionScope = ScopedOption { context, *opt };
-                return pair { opt, parseValue(context) };
-            }
-        }
+        else if (Option const* opt = findOption(context, current)) // Natural style option: NAME
+            return parseOptionValue(context, *opt);
 
-        return nullopt;
+        return optional<ParsedOption> {};
     }
 
     void setOption(ParseContext& context, string const& key, Value value)
@@ -326,18 +362,20 @@ namespace // {{{ helper
         context.output.values[key] = std::move(value);
     }
 
-    void parseOptionList(ParseContext& context)
+    auto parseOptionList(ParseContext& context) -> std::expected<void, ParseError>
     {
         // Option := Option*
         auto const optionPrefix = namePrefix(context);
 
         while (true)
         {
-            auto optionOptPair = tryParseOption(context);
-            if (!optionOptPair.has_value())
-                break;
+            auto parsed = tryParseOption(context);
+            if (!parsed)
+                return std::unexpected { std::move(parsed).error() };
+            if (!parsed->has_value())
+                return {};
 
-            auto& [option, value] = optionOptPair.value();
+            auto& [option, value] = parsed->value();
             auto const fqdn = optionPrefix + "." + Name(option->name.longName);
             setOption(context, fqdn, std::move(value));
         }
@@ -392,42 +430,40 @@ namespace // {{{ helper
         }
     }
 
-    auto parseCommand(Command const& com, ParseContext& context) -> bool
+    /// Parses @p com, whose name has been consumed, and whatever sub-command follows it.
+    auto parseCommand(Command const& com, ParseContext& context) -> std::expected<void, ParseError>
     {
         // command := NAME Option* Section*
         auto const commandScope = ScopedCommand { context, com };
         context.output.values[namePrefix(context)] = Value { true };
 
-        parseOptionList(context);
+        if (auto options = parseOptionList(context); !options)
+            return options;
 
         if (Command const* subcmd = tryLookupCommand(context))
         {
             CLI_DEBUG(std::format("parseCommand: found sub command: {}", subcmd->name));
-            consumeToken(context); // Name was already ensured to be right (or is assumed to be right).
-            parseCommand(*subcmd, context);
+            ++context.pos; // Name was already ensured to be right (or is assumed to be right).
+            return parseCommand(*subcmd, context);
         }
-        else if (Command const* implicitCommand = tryImplicitCommand(context))
+
+        if (Command const* implicitCommand = tryImplicitCommand(context))
         {
             CLI_DEBUG(std::format("parseCommand: found implicit sub command: {}", implicitCommand->name));
             // DO not consume token
-            parseCommand(*implicitCommand, context);
-        }
-        else if (com.verbatim.has_value())
-        {
-            CLI_DEBUG(std::format("parseCommand: going verbatim."));
-            if (hasTokensAvailable(context))
-            {
-                if (currentToken(context) == "--")
-                    (void) consumeToken(context); // consume "--"
-                while (context.pos < context.args.size())
-                    context.output.verbatim.emplace_back(consumeToken(context));
-            }
+            return parseCommand(*implicitCommand, context);
         }
 
-        // A command must not leave any trailing tokens at the end of parsing.
-        // (Its own flag was set at the top of this function; re-setting it here set the same key
-        // to the same value.)
-        return context.pos == context.args.size();
+        if (com.verbatim.has_value())
+        {
+            CLI_DEBUG(std::format("parseCommand: going verbatim."));
+            if (hasTokensAvailable(context) && currentToken(context) == "--")
+                ++context.pos; // consume "--"
+            while (hasTokensAvailable(context))
+                context.output.verbatim.emplace_back(context.args.at(context.pos++));
+        }
+
+        return {};
     }
 
     StringViewList stringViewList(int argc, char const* const* argv)
@@ -441,7 +477,8 @@ namespace // {{{ helper
         return output;
     }
 
-    void validate(Command const& com, ParseContext& context, string const& keyPrefix)
+    auto validate(Command const& com, ParseContext const& context, string const& keyPrefix)
+        -> std::expected<void, ParseError>
     {
         auto const key = keyPrefix.empty() ? string(com.name) : std::format("{}.{}", keyPrefix, com.name);
 
@@ -450,15 +487,20 @@ namespace // {{{ helper
         {
             auto const optionKey = std::format("{}.{}", key, option.name.longName);
             if (option.presence == Presence::Required && !context.output.values.contains(optionKey))
-                throw invalid_argument(std::format("Missing option: {}", optionKey));
+                return refuse(ParseErrorKind::MissingRequiredOption,
+                              context.args.size(),
+                              std::format("Missing option: {}", optionKey));
         }
 
         for (Command const& subcmd: com.children)
         {
             auto const commandKey = std::format("{}.{}", key, subcmd.name);
-            if (context.output.get<bool>(commandKey))
-                validate(subcmd, context, key);
+            if (!context.output.get<bool>(commandKey))
+                continue;
+            if (auto valid = validate(subcmd, context, key); !valid)
+                return valid;
         }
+        return {};
     }
 
 } // namespace
@@ -474,7 +516,7 @@ void validate(Command const& command)
     // - must not contain '='
 }
 
-optional<FlagStore> parse(Command const& command, StringViewList const& args)
+std::expected<FlagStore, ParseError> parse(Command const& command, StringViewList const& args)
 {
     validate(command);
 
@@ -482,25 +524,23 @@ optional<FlagStore> parse(Command const& command, StringViewList const& args)
 
     prefillDefaults(context, command);
 
-    // XXX do not enforce checking the first token, as for main()'s argv[0] this most likely is different.
-    // if (currentToken(context) != command.name)
-    //     return nullopt;
-
-    consumeToken(context); // Name was already ensured to be right (or is assumed to be right).
-    if (!parseCommand(command, context))
-        return nullopt;
-
-    // auto const& flags = context.output;
-    // std::cout << std::format("Flags: {}\n", flags.values.size());
-    // for (auto const & [k, v] : flags.values)
-    //     std::cout << std::format(" - {}: {}\n", k, v);
-
-    validate(command, context, "");
-
-    return std::move(context.output);
+    // The first token is the command's name, and is not checked: for main()'s argv[0] it most likely
+    // is something else.
+    return consumeToken(context)
+        .and_then([&](string_view) { return parseCommand(command, context); })
+        .and_then([&]() -> std::expected<void, ParseError> {
+            // A command must not leave any trailing tokens at the end of parsing.
+            if (hasTokensAvailable(context))
+                return refuse(ParseErrorKind::UnexpectedToken,
+                              context.pos,
+                              std::format("Unexpected argument \"{}\".", currentToken(context)));
+            return {};
+        })
+        .and_then([&] { return validate(command, context, ""); })
+        .transform([&] { return std::move(context.output); });
 }
 
-optional<FlagStore> parse(Command const& command, int argc, char const* const* argv)
+std::expected<FlagStore, ParseError> parse(Command const& command, int argc, char const* const* argv)
 {
     return parse(command, stringViewList(argc, argv));
 }

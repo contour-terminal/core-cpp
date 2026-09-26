@@ -14,7 +14,6 @@
 #include <iomanip>
 #include <iostream>
 #include <numeric>
-#include <optional>
 #include <ranges>
 
 #ifndef _WIN32
@@ -28,7 +27,6 @@ using std::cout;
 using std::exception;
 using std::left;
 using std::max;
-using std::optional;
 using std::setw;
 using std::string;
 using std::string_view;
@@ -228,22 +226,14 @@ bool App::reparseParameters(int argc, char const* argv[])
 {
     _syntax = parameterDefinition();
 
-    // cli::parse() throws for a value of the wrong type and for a missing required option (see
-    // its declaration). This function's contract is a bool, so a failure is a value here: without
-    // the catch an exception escaped a function whose caller has no reason to expect one.
-    try
+    auto parsed = cli::parse(_syntax.value(), argc, argv);
+    if (!parsed)
     {
-        optional<cli::FlagStore> flagsOpt = cli::parse(_syntax.value(), argc, argv);
-        if (!flagsOpt.has_value())
-            return false;
-        _flags = std::move(flagsOpt.value());
-        return true;
-    }
-    catch (exception const& e)
-    {
-        std::cerr << std::format("{}: {}\n", _appName, e.what());
+        std::cerr << std::format("{}: {}\n", _appName, parsed.error().message);
         return false;
     }
+    _flags = std::move(parsed).value();
+    return true;
 }
 
 bool App::parseParametersForTesting(int argc, char const* argv[])
@@ -263,13 +253,13 @@ int App::run(int argc, char const* argv[])
 
         _syntax = parameterDefinition();
 
-        optional<cli::FlagStore> flagsOpt = cli::parse(_syntax.value(), argc, argv);
-        if (!flagsOpt.has_value())
+        auto parsed = cli::parse(_syntax.value(), argc, argv);
+        if (!parsed)
         {
-            std::cerr << "Failed to parse command line parameters.\n";
+            std::cerr << std::format("{}: {}\n", _appName, parsed.error().message);
             return EXIT_FAILURE;
         }
-        _flags = std::move(flagsOpt.value());
+        _flags = std::move(parsed).value();
 
         // std::cout << std::format("Flags: {}\n", parameters().values.size());
         // for (auto const& [k, v]: parameters().values)

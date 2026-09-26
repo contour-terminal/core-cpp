@@ -46,9 +46,9 @@ class TestApp final: public cli::App
 } // namespace
 
 // reparseParameters() is documented "false on failure", and parseParametersForTesting() is its
-// test-facing alias -- but cli::parse() throws for a malformed command line, and neither of them
-// caught, so an exception escaped a function whose contract is a bool. App::run() catches; these
-// two did not.
+// test-facing alias. cli::parse() used to throw for a malformed command line and neither of them
+// caught, so an exception escaped a function whose contract is a bool; it returns the error now
+// (core-cpp#13), and these pin that every refusal still reaches the bool.
 TEST_CASE("cli::App::reparseParameters answers false for a command line it cannot parse", "[cli][app]")
 {
     auto const env = core::testing::FakeEnvironment {};

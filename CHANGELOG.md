@@ -9,6 +9,27 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Breaking
+
+- **`core::cli::parse()` returns `std::expected<FlagStore, ParseError>` and throws nothing**
+  (core-cpp#13). It returned `std::optional<FlagStore>` -- `std::nullopt` for tokens left over --
+  and threw `core::cli::ParserError` for a value of the wrong type, a missing value or an explicit
+  empty one, and `std::invalid_argument` for a missing required option. Every one of those is now a
+  `ParseError`: a `ParseErrorKind` (`NotEnoughArguments`, `InvalidValue`, `EmptyValue`,
+  `UnexpectedToken`, `MissingRequiredOption`), the index of the token at fault and a message.
+  `ParserError` is removed. Numbers are read whole, with `std::from_chars` (floating point with
+  `std::strtod`): `12abc` is refused rather than read as 12, `-1` is no longer accepted -- and
+  wrapped -- as an unsigned, and a value out of the type's range is refused rather than truncated.
+  `App::run()` and `App::reparseParameters()` print the error's message; their signatures are
+  unchanged.
+  - *Migration*: a call site that tested `has_value()` or used `*parsed` and `parsed->` compiles
+    as it is when its variable is `auto`; one that names the type spells
+    `std::expected<core::cli::FlagStore, core::cli::ParseError>`, or `auto`. Replace a `try`/`catch`
+    around `parse()` with a test of the result, and report `parsed.error().message`. tuidu's
+    `parseCommandLine()` (`src/tuidu/Cli.cpp`) is the one consumer call site: it declares
+    `std::optional<core::cli::FlagStore> parsed` and catches `std::exception` around the call.
+    contour and endo use `core::cli::App` only, and need no change.
+
 ### Fixed
 
 - **Alt+Backspace reaches its key binding** (core-cpp#21). `VtParser` read `ESC DEL` -- how xterm,
