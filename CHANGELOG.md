@@ -9,6 +9,22 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A POSIX accept that failed for one connection is no longer reported as `SystemError`.** The
+  accept loop retried `EINTR` and `ECONNABORTED` and handed every other `errno` over as
+  `SystemError` with no category, which a caller has to read as exhaustion and back off on. That
+  covered a packet filter's `EPERM` for a single connection and the pending-connection errors that
+  Linux's accept(2) says to treat like `EAGAIN`. Now `EPROTO` and `ENOPROTOOPT` are retried with
+  `EINTR` and `ECONNABORTED`. Every other failed accept is classified by the one socket-error
+  table: `EPERM` is reported as `PermissionDenied`, and `EHOSTUNREACH`, `ENETUNREACH`,
+  `EHOSTDOWN`, `ENETDOWN` and `ENONET` as `HostUnreach`. `EOPNOTSUPP` is reported as
+  `Unsupported` rather than retried, because a socket that is not a stream answers it on every
+  call. Exhaustion (`EMFILE`, `ENFILE`, `ENOBUFS`, `ENOMEM`) stays `SystemError`, and a closed
+  listener is still `Cancelled`. The table's new rows apply to every POSIX transport and to the
+  dial, not only to accept. Windows gains the matching rows: `WSAEHOSTDOWN` and `WSAENETDOWN` are
+  `HostUnreach`, and `WSAEOPNOTSUPP` is `Unsupported`.
+
 ## [0.5.0] - 2026-09-26
 
 ### Breaking

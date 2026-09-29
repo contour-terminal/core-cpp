@@ -3,12 +3,14 @@
 
 /// @file
 /// The POSIX accept loop shared by UnixListener and PosixListener: one
-/// definition of the accept / EAGAIN-park / EINTR-retry / error-map machinery,
+/// definition of the accept / EAGAIN-park / retry / error-map machinery,
 /// so a fix to the accept or cancellation logic cannot drift between them.
 
 #include <core/async/Task.hpp>
 #include <core/net/IListener.hpp>
+#include <core/net/NetError.hpp>
 
+#include <cstdint>
 #include <memory>
 
 namespace core::net
@@ -16,10 +18,45 @@ namespace core::net
 
 class EventLoop;
 
+namespace detail
+{
+
+    /// What the accept loop does with one failed `accept(2)`.
+    enum class AcceptStep : std::uint8_t
+    {
+        Park,   ///< Nothing is pending: wait until the listener is readable, then accept again.
+        Retry,  ///< Accept again at once: the call was interrupted, or the connection it dequeued had
+                ///< already failed, and the listener is as good as it was.
+        Report, ///< Hand the error to the caller, classified by the one table (`SocketErrors.hpp`).
+    };
+
+    /// What the accept loop does with one failed `accept(2)`, and what it reports.
+    struct AcceptFailure
+    {
+        AcceptStep step;   ///< Park, retry, or report.
+        NetErrorCode code; ///< What is reported, for `Report`; `Ok` otherwise.
+    };
+
+    /// Decides what a failed `accept(2)` means for the accept loop.
+    ///
+    /// Only the RETRY set is accept's own: `EINTR`, and the errors Linux's accept(2) says are
+    /// "already-pending network errors on the new socket" to be treated "like EAGAIN by retrying"
+    /// and that no category names -- `ECONNABORTED`, `EPROTO`, `ENOPROTOOPT`. Every other error is
+    /// REPORTED through `classifySocketError`, so a per-connection answer that HAS a category
+    /// reaches the caller as it: a packet filter's `EPERM` as `PermissionDenied`, `EHOSTUNREACH`,
+    /// `ENETUNREACH`, `EHOSTDOWN`, `ENETDOWN` and `ENONET` as `HostUnreach` -- where it used to be
+    /// `SystemError`, which a caller must read as exhaustion and back off on.
+    /// @param err The `errno` a failed `accept(2)` left.
+    /// @return What the accept loop does about it, and for `Report` the category it reports.
+    [[nodiscard]] AcceptFailure acceptFailureOf(int err) noexcept;
+
+} // namespace detail
+
 /// One shared accept turn-loop: accepts a connection (recording the peer via
 /// formatPeer -- empty for AF_UNIX), parking on the listener fd until it is
-/// readable on EAGAIN, retrying EINTR/ECONNABORTED, and mapping the rest to a
-/// NetError. A closed or cancelled listener yields NetErrorCode::Cancelled.
+/// readable on EAGAIN, retrying what `detail::acceptFailureOf` says to, and mapping
+/// the rest through the one error table. A closed or cancelled listener yields
+/// NetErrorCode::Cancelled.
 /// Pointers, not references: a coroutine must not take reference parameters
 /// (they would dangle across a suspension). The owning listener outlives the
 /// accept task, so its live @c _fd / @c _closed are read through the pointers.

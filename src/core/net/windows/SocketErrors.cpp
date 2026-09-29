@@ -15,12 +15,15 @@ NetErrorCode classifySocketError(int systemCode) noexcept
     {
         case WSAECONNRESET: return NetErrorCode::ConnReset;
         case WSAECONNREFUSED: return NetErrorCode::ConnRefused;
-        // One category for both, for the reason the POSIX table gives.
+        // One category for all four, for the reason the POSIX table gives.
         case WSAEHOSTUNREACH:
-        case WSAENETUNREACH: return NetErrorCode::HostUnreach;
+        case WSAENETUNREACH:
+        case WSAEHOSTDOWN:
+        case WSAENETDOWN: return NetErrorCode::HostUnreach;
         case WSAEADDRINUSE: return NetErrorCode::AddressInUse;
         case WSAEADDRNOTAVAIL: return NetErrorCode::AddressNotAvail;
         case WSAEACCES: return NetErrorCode::PermissionDenied;
+        case WSAEOPNOTSUPP: return NetErrorCode::Unsupported;
         case WSAEBADF:
         case WSAENOTSOCK: return NetErrorCode::BadHandle;
         case WSAEINTR: return NetErrorCode::Cancelled;

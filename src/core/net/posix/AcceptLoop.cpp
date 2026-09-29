@@ -4,12 +4,15 @@
 #include <core/async/Cancellation.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/detail/PeerAddress.hpp>
+#include <core/net/detail/SocketErrors.hpp>
 #include <core/net/detail/StreamSocketOptions.hpp>
 #include <core/net/detail/WouldBlock.hpp>
 #include <core/net/posix/PosixSocket.hpp>
 
 #include <sys/socket.h>
 
+#include <algorithm>
+#include <array>
 #include <cerrno>
 
 #include <fcntl.h>
@@ -17,6 +20,36 @@
 
 namespace core::net
 {
+
+namespace detail
+{
+
+    namespace
+    {
+
+        /// The failed accepts the loop takes again at once, and nothing else: `EINTR`, and the
+        /// pending-connection errors Linux's accept(2) says to treat like EAGAIN that no category
+        /// of `NetErrorCode` names. Each one dequeued the connection it reports on, so retrying
+        /// consumes the backlog rather than spinning on it. The man page's list goes on --
+        /// `EHOSTUNREACH`, `ENETUNREACH`, `EHOSTDOWN`, `ENETDOWN`, `ENONET`, and `EPERM` for a packet
+        /// filter -- but those HAVE a category, so they are reported as it, and a caller that tells
+        /// a per-connection failure from exhaustion can. `EOPNOTSUPP` is on that list too and is
+        /// reported, as `Unsupported`, deliberately: it is also what `accept` answers on a socket
+        /// that is not a stream, on every call, and retrying that would never stop.
+        constexpr auto RetriedAcceptErrors = std::array { EINTR, ECONNABORTED, EPROTO, ENOPROTOOPT };
+
+    } // namespace
+
+    AcceptFailure acceptFailureOf(int err) noexcept
+    {
+        if (isWouldBlock(err))
+            return AcceptFailure { .step = AcceptStep::Park, .code = NetErrorCode::Ok };
+        if (std::ranges::find(RetriedAcceptErrors, err) != RetriedAcceptErrors.end())
+            return AcceptFailure { .step = AcceptStep::Retry, .code = NetErrorCode::Ok };
+        return AcceptFailure { .step = AcceptStep::Report, .code = classifySocketError(err) };
+    }
+
+} // namespace detail
 
 async::Task<AcceptResult> acceptOne(EventLoop* loop,
                                     int const* fd,
@@ -52,29 +85,26 @@ async::Task<AcceptResult> acceptOne(EventLoop* loop,
         }
 
         auto const err = errno;
-        if (net::detail::isWouldBlock(err))
+        auto const failure = detail::acceptFailureOf(err);
+        if (failure.step == detail::AcceptStep::Retry)
+            continue;
+        if (failure.step == detail::AcceptStep::Report)
+            co_return std::unexpected(makeNetError(failure.code, err, "accept"));
+        // AcceptStep::Park: wait until the listener fd is readable (a connection is pending). A
+        // cancelled wait (listener closed / stop requested) throws OperationCancelled, which the
+        // accept loop turns into Cancelled.
+        try
         {
-            // Park until the listener fd is readable (a connection is pending). A
-            // cancelled wait (listener closed / stop requested) throws
-            // OperationCancelled, which the accept loop turns into Cancelled.
-            try
-            {
-                co_await loop->waitReadable(*fd);
-            }
-            catch (async::OperationCancelled const&)
-            {
-                co_return std::unexpected(makeNetError(NetErrorCode::Cancelled, 0, "accept cancelled"));
-            }
-            // Asked before `*closed` and `*fd` are: the listener's `close()` woke this park, and
-            // its owner may have destroyed it before the loop got here.
-            if (listener.expired())
-                co_return std::unexpected(
-                    makeNetError(NetErrorCode::Cancelled, 0, "the listener was destroyed"));
-            continue;
+            co_await loop->waitReadable(*fd);
         }
-        if (err == EINTR || err == ECONNABORTED)
-            continue;
-        co_return std::unexpected(makeNetError(NetErrorCode::SystemError, err, "accept"));
+        catch (async::OperationCancelled const&)
+        {
+            co_return std::unexpected(makeNetError(NetErrorCode::Cancelled, 0, "accept cancelled"));
+        }
+        // Asked before `*closed` and `*fd` are: the listener's `close()` woke this park, and
+        // its owner may have destroyed it before the loop got here.
+        if (listener.expired())
+            co_return std::unexpected(makeNetError(NetErrorCode::Cancelled, 0, "the listener was destroyed"));
     }
 }
 
