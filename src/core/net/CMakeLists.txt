@@ -376,6 +376,7 @@ core_cpp_add_test(net
         ReactorSocket_test.cpp
         SocketDecorator_test.cpp
         SocketRegistration_test.cpp
+        posix/AcceptLoop_test.cpp
         posix/AdoptListener_test.cpp
         posix/FdPassing_test.cpp
         posix/PortSharing_test.cpp

@@ -15,9 +15,17 @@ NetErrorCode classifySocketError(int systemCode) noexcept
         case ECONNRESET: return NetErrorCode::ConnReset;
         case ECONNREFUSED: return NetErrorCode::ConnRefused;
         // A route that does not exist and a host that does not answer are one category: both mean
-        // this endpoint is unreachable from here, and neither is retryable at this layer.
+        // this endpoint is unreachable from here, and neither is retryable at this layer. A host
+        // reported down and a network that is down or absent belong with them; `accept` answers
+        // all of these for one pending connection, and unclassified they read as exhaustion.
         case EHOSTUNREACH:
-        case ENETUNREACH: return NetErrorCode::HostUnreach;
+        case ENETUNREACH:
+        case EHOSTDOWN:
+        case ENETDOWN:
+#ifdef ENONET
+        case ENONET:
+#endif
+            return NetErrorCode::HostUnreach;
         case EADDRINUSE: return NetErrorCode::AddressInUse;
         case EADDRNOTAVAIL: return NetErrorCode::AddressNotAvail;
         // `EPERM` beside `EACCES`: a packet filter refusing a connect answers EPERM on Linux, and
@@ -27,7 +35,8 @@ NetErrorCode classifySocketError(int systemCode) noexcept
         // A family or protocol this host does not have, which a dial or an `openUdpSocket` meets
         // on a machine without IPv6.
         case EAFNOSUPPORT:
-        case EPROTONOSUPPORT: return NetErrorCode::Unsupported;
+        case EPROTONOSUPPORT:
+        case EOPNOTSUPP: return NetErrorCode::Unsupported;
         case EBADF:
         case ENOTSOCK: return NetErrorCode::BadHandle;
         case EINTR: return NetErrorCode::Cancelled;

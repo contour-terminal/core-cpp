@@ -32,12 +32,18 @@ constexpr auto Rows = std::array {
     Row { .systemCode = ECONNREFUSED, .code = NetErrorCode::ConnRefused },
     Row { .systemCode = EHOSTUNREACH, .code = NetErrorCode::HostUnreach },
     Row { .systemCode = ENETUNREACH, .code = NetErrorCode::HostUnreach },
+    Row { .systemCode = EHOSTDOWN, .code = NetErrorCode::HostUnreach },
+    Row { .systemCode = ENETDOWN, .code = NetErrorCode::HostUnreach },
+#ifdef ENONET
+    Row { .systemCode = ENONET, .code = NetErrorCode::HostUnreach },
+#endif
     Row { .systemCode = EADDRINUSE, .code = NetErrorCode::AddressInUse },
     Row { .systemCode = EADDRNOTAVAIL, .code = NetErrorCode::AddressNotAvail },
     Row { .systemCode = EACCES, .code = NetErrorCode::PermissionDenied },
     Row { .systemCode = EPERM, .code = NetErrorCode::PermissionDenied },
     Row { .systemCode = EAFNOSUPPORT, .code = NetErrorCode::Unsupported },
     Row { .systemCode = EPROTONOSUPPORT, .code = NetErrorCode::Unsupported },
+    Row { .systemCode = EOPNOTSUPP, .code = NetErrorCode::Unsupported },
     Row { .systemCode = EBADF, .code = NetErrorCode::BadHandle },
     Row { .systemCode = ENOTSOCK, .code = NetErrorCode::BadHandle },
     Row { .systemCode = EINTR, .code = NetErrorCode::Cancelled },
