@@ -21,6 +21,44 @@
 namespace core::net
 {
 
+namespace
+{
+
+    /// The kernel's accept, for `systemAcceptCall`.
+    class SystemAcceptCall final: public IAcceptCall
+    {
+      public:
+        [[nodiscard]] AcceptAttempt accept(int listenFd,
+                                           sockaddr_storage& peer,
+                                           socklen_t& peerLen) noexcept override
+        {
+#ifdef __linux__
+            auto const conn = ::accept4(
+                listenFd, reinterpret_cast<sockaddr*>(&peer), &peerLen, SOCK_NONBLOCK | SOCK_CLOEXEC);
+#else
+            auto const conn = ::accept(listenFd, reinterpret_cast<sockaddr*>(&peer), &peerLen);
+#endif
+            if (conn < 0)
+                return AcceptAttempt { .fd = -1, .error = errno };
+#ifndef __linux__
+            // Portable fallback: non-blocking explicitly; close-on-exec is the accept loop's
+            // stream-socket helper's.
+            if (auto const flags = ::fcntl(conn, F_GETFL, 0); flags >= 0)
+                ::fcntl(conn, F_SETFL, flags | O_NONBLOCK);
+#endif
+            return AcceptAttempt { .fd = conn, .error = 0 };
+        }
+    };
+
+} // namespace
+
+IAcceptCall& systemAcceptCall() noexcept
+{
+    // Stateless, so one instance serves every listener on every thread.
+    static auto instance = SystemAcceptCall {};
+    return instance;
+}
+
 namespace detail
 {
 
@@ -76,7 +114,8 @@ namespace detail
 async::Task<AcceptResult> acceptOne(EventLoop* loop,
                                     int const* fd,
                                     bool const* closed,
-                                    std::weak_ptr<void const> listener)
+                                    std::weak_ptr<void const> listener,
+                                    IAcceptCall* acceptCall)
 {
     while (true)
     {
@@ -85,19 +124,10 @@ async::Task<AcceptResult> acceptOne(EventLoop* loop,
 
         auto peer = sockaddr_storage {};
         auto peerLen = socklen_t { sizeof(peer) };
-#ifdef __linux__
-        auto const conn =
-            ::accept4(*fd, reinterpret_cast<sockaddr*>(&peer), &peerLen, SOCK_NONBLOCK | SOCK_CLOEXEC);
-#else
-        auto const conn = ::accept(*fd, reinterpret_cast<sockaddr*>(&peer), &peerLen);
-#endif
-        if (conn >= 0)
+        auto const attempt = acceptCall->accept(*fd, peer, peerLen);
+        if (attempt.fd >= 0)
         {
-#ifndef __linux__
-            // Portable fallback: non-blocking explicitly; close-on-exec is the helper's below.
-            if (auto const flags = ::fcntl(conn, F_GETFL, 0); flags >= 0)
-                ::fcntl(conn, F_SETFL, flags | O_NONBLOCK);
-#endif
+            auto const conn = attempt.fd;
             // What a dialled socket is given too -- TCP_NODELAY above all, which only the dial
             // used to set, so a server's replies waited on Nagle while its client's did not. The
             // buffer sizes are not asked for here: the socket inherited them from the listener,
@@ -106,7 +136,7 @@ async::Task<AcceptResult> acceptOne(EventLoop* loop,
             co_return std::unique_ptr<ISocket>(new PosixSocket(*loop, conn, formatPeer(peer)));
         }
 
-        auto const err = errno;
+        auto const err = attempt.error;
         auto const failure = detail::acceptFailureOf(err);
         if (failure.step == detail::AcceptStep::Retry)
             continue;
