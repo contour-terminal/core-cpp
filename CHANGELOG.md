@@ -21,9 +21,14 @@ workflow refuses one without a section here.
   `EHOSTDOWN`, `ENETDOWN` and `ENONET` as `HostUnreach`. `EOPNOTSUPP` is reported as
   `Unsupported` rather than retried, because a socket that is not a stream answers it on every
   call. Exhaustion (`EMFILE`, `ENFILE`, `ENOBUFS`, `ENOMEM`) stays `SystemError`, and a closed
-  listener is still `Cancelled`. The table's new rows apply to every POSIX transport and to the
-  dial, not only to accept. Windows gains the matching rows: `WSAEHOSTDOWN` and `WSAENETDOWN` are
-  `HostUnreach`, and `WSAEOPNOTSUPP` is `Unsupported`.
+  listener is still `Cancelled`. `EINVAL` from accept, a socket that is not listening, is
+  `BadHandle` like `EBADF` and `ENOTSOCK` rather than `SystemError`, which read as exhaustion and
+  backed off on a dead listener forever; that row is accept's own, and `EINVAL` from any other call
+  is unchanged. The table's new rows apply to every POSIX transport and to the dial, not only to
+  accept. Windows gains `WSAEHOSTDOWN` as `HostUnreach` and `WSAEOPNOTSUPP` as `Unsupported`.
+  `WSAENETDOWN` stays `SystemError`: Winsock answers it when the network subsystem has failed, for
+  every call, and `AcceptEx` shares the table, so as `HostUnreach` it would read as one peer's
+  failure and be accepted again at once.
 
 ## [0.5.0] - 2026-09-26
 

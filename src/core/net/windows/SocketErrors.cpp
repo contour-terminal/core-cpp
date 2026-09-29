@@ -15,11 +15,15 @@ NetErrorCode classifySocketError(int systemCode) noexcept
     {
         case WSAECONNRESET: return NetErrorCode::ConnReset;
         case WSAECONNREFUSED: return NetErrorCode::ConnRefused;
-        // One category for all four, for the reason the POSIX table gives.
+        // One category for all three, for the reason the POSIX table gives. NOT `WSAENETDOWN`,
+        // although the POSIX table has `ENETDOWN`: Winsock answers it when the network SUBSYSTEM
+        // has failed, for every call on the machine, where Linux's accept(2) answers ENETDOWN for
+        // one pending connection. `AcceptEx` failures are classified by this table too, and as
+        // `HostUnreach` a caller would read a machine-wide failure as one peer's and accept again
+        // at once, forever; left `SystemError`, it reads as the condition it is and backs off.
         case WSAEHOSTUNREACH:
         case WSAENETUNREACH:
-        case WSAEHOSTDOWN:
-        case WSAENETDOWN: return NetErrorCode::HostUnreach;
+        case WSAEHOSTDOWN: return NetErrorCode::HostUnreach;
         case WSAEADDRINUSE: return NetErrorCode::AddressInUse;
         case WSAEADDRNOTAVAIL: return NetErrorCode::AddressNotAvail;
         case WSAEACCES: return NetErrorCode::PermissionDenied;

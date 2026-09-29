@@ -38,6 +38,24 @@ namespace detail
         /// that is not a stream, on every call, and retrying that would never stop.
         constexpr auto RetriedAcceptErrors = std::array { EINTR, ECONNABORTED, EPROTO, ENOPROTOOPT };
 
+        /// One `errno` that means something narrower from `accept` than from every other socket
+        /// call, and the category it is reported as.
+        struct AcceptOwnClassification
+        {
+            int systemCode;    ///< The `errno` value.
+            NetErrorCode code; ///< What the accept loop reports it as.
+        };
+
+        /// The errors `accept` classifies itself, ahead of the shared table. `EINVAL` from `accept`
+        /// says the socket is not listening (or the flags are bad): a listener that is not one, as
+        /// permanent as `EBADF` and `ENOTSOCK`, which the shared table already calls `BadHandle`.
+        /// The shared table cannot say so, because `EINVAL` from another call is an argument error
+        /// that says nothing about the handle; left `SystemError`, a caller backs off and tries a
+        /// dead listener again forever.
+        constexpr auto AcceptOwnClassifications = std::array {
+            AcceptOwnClassification { .systemCode = EINVAL, .code = NetErrorCode::BadHandle },
+        };
+
     } // namespace
 
     AcceptFailure acceptFailureOf(int err) noexcept
@@ -46,6 +64,10 @@ namespace detail
             return AcceptFailure { .step = AcceptStep::Park, .code = NetErrorCode::Ok };
         if (std::ranges::find(RetriedAcceptErrors, err) != RetriedAcceptErrors.end())
             return AcceptFailure { .step = AcceptStep::Retry, .code = NetErrorCode::Ok };
+        if (auto const own =
+                std::ranges::find(AcceptOwnClassifications, err, &AcceptOwnClassification::systemCode);
+            own != AcceptOwnClassifications.end())
+            return AcceptFailure { .step = AcceptStep::Report, .code = own->code };
         return AcceptFailure { .step = AcceptStep::Report, .code = classifySocketError(err) };
     }
 

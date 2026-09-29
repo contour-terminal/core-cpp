@@ -38,7 +38,6 @@ constexpr auto Rows = std::array {
     Row { .systemCode = WSAEHOSTUNREACH, .code = NetErrorCode::HostUnreach },
     Row { .systemCode = WSAENETUNREACH, .code = NetErrorCode::HostUnreach },
     Row { .systemCode = WSAEHOSTDOWN, .code = NetErrorCode::HostUnreach },
-    Row { .systemCode = WSAENETDOWN, .code = NetErrorCode::HostUnreach },
     Row { .systemCode = WSAEADDRINUSE, .code = NetErrorCode::AddressInUse },
     Row { .systemCode = WSAEADDRNOTAVAIL, .code = NetErrorCode::AddressNotAvail },
     Row { .systemCode = WSAEACCES, .code = NetErrorCode::PermissionDenied },
@@ -53,6 +52,10 @@ constexpr auto Rows = std::array {
     // `SystemError`, as `EPIPE` is on POSIX.
     Row { .systemCode = WSAECONNABORTED, .code = NetErrorCode::SystemError },
     Row { .systemCode = WSAENETRESET, .code = NetErrorCode::SystemError },
+    // Not `HostUnreach` like POSIX's `ENETDOWN`, on purpose: Winsock answers it when the network
+    // subsystem has failed, for every call, and `AcceptEx` shares this table, so as `HostUnreach` a
+    // machine-wide failure would read as one peer's and be accepted again at once, forever.
+    Row { .systemCode = WSAENETDOWN, .code = NetErrorCode::SystemError },
 };
 
 } // namespace
