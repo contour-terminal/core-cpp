@@ -56,10 +56,11 @@ constexpr auto Rows = std::array {
     Row { .systemCode = ENFILE, .step = AcceptStep::Report, .code = NetErrorCode::SystemError },
     Row { .systemCode = ENOBUFS, .step = AcceptStep::Report, .code = NetErrorCode::SystemError },
     Row { .systemCode = ENOMEM, .step = AcceptStep::Report, .code = NetErrorCode::SystemError },
-    // A listener that is not one.
+    // A listener that is not one, whichever errno says so: `EINVAL` is a socket that is not listening,
+    // accept's own row, and must not read as exhaustion (see `AcceptOwnClassifications`).
     Row { .systemCode = EBADF, .step = AcceptStep::Report, .code = NetErrorCode::BadHandle },
     Row { .systemCode = ENOTSOCK, .step = AcceptStep::Report, .code = NetErrorCode::BadHandle },
-    Row { .systemCode = EINVAL, .step = AcceptStep::Report, .code = NetErrorCode::SystemError },
+    Row { .systemCode = EINVAL, .step = AcceptStep::Report, .code = NetErrorCode::BadHandle },
 };
 
 } // namespace
