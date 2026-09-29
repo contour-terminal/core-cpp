@@ -10,6 +10,8 @@
 #include <core/net/IListener.hpp>
 #include <core/net/NetError.hpp>
 
+#include <sys/socket.h>
+
 #include <cstdint>
 #include <memory>
 
@@ -17,6 +19,37 @@ namespace core::net
 {
 
 class EventLoop;
+
+/// One `accept(2)` as the accept loop makes it: the new descriptor, or the error it failed with.
+struct AcceptAttempt
+{
+    int fd;    ///< The accepted descriptor, already non-blocking; negative when the call failed.
+    int error; ///< The `errno` a failed call left; 0 when it succeeded.
+};
+
+/// The one system call the accept loop makes, injected so that a test can make it fail in each
+/// way accept(2) can. No loopback connection can be asked for a packet filter's `EPERM` or a
+/// pending `EPROTO`, and without this seam the loop's handling of them -- retry, report, park --
+/// was asserted nowhere: only the pure decision (`detail::acceptFailureOf`) was.
+class IAcceptCall
+{
+  public:
+    virtual ~IAcceptCall() = default;
+
+    /// Accepts one pending connection.
+    /// @param listenFd The listening descriptor.
+    /// @param peer Receives the peer's address.
+    /// @param peerLen On entry the size of @p peer, on return the length of the address.
+    /// @return The accepted descriptor, or the error.
+    [[nodiscard]] virtual AcceptAttempt accept(int listenFd,
+                                               sockaddr_storage& peer,
+                                               socklen_t& peerLen) noexcept = 0;
+};
+
+/// The kernel's accept: `accept4` with `SOCK_NONBLOCK | SOCK_CLOEXEC` on Linux, `accept` and then
+/// `O_NONBLOCK` elsewhere.
+/// @return The process-wide instance; it holds no state.
+[[nodiscard]] IAcceptCall& systemAcceptCall() noexcept;
 
 namespace detail
 {
@@ -69,9 +102,12 @@ namespace detail
 /// @param listener The owning listener's lifetime token. `close()` wakes a parked accept through
 ///        the loop, a turn later, and the owner may destroy the listener in between: once this has
 ///        expired, @p fd and @p closed dangle, and the accept answers Cancelled without them.
+/// @param acceptCall The system call, the kernel's unless a test scripts it. A pointer, like the
+///        others, and outliving the accept task.
 [[nodiscard]] async::Task<AcceptResult> acceptOne(EventLoop* loop,
                                                   int const* fd,
                                                   bool const* closed,
-                                                  std::weak_ptr<void const> listener);
+                                                  std::weak_ptr<void const> listener,
+                                                  IAcceptCall* acceptCall = &systemAcceptCall());
 
 } // namespace core::net
