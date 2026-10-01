@@ -58,6 +58,9 @@ constexpr auto Rows = std::array {
     Row { .systemCode = ENFILE, .code = NetErrorCode::ResourceExhausted },
     Row { .systemCode = ENOBUFS, .code = NetErrorCode::ResourceExhausted },
     Row { .systemCode = ENOMEM, .code = NetErrorCode::ResourceExhausted },
+#ifdef ENOSR
+    Row { .systemCode = ENOSR, .code = NetErrorCode::ResourceExhausted },
+#endif
 };
 
 } // namespace

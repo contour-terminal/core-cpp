@@ -2,6 +2,8 @@
 #include <core/net/AcceptPolicy.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <format>
 #include <string>
 #include <utility>
@@ -11,53 +13,71 @@ namespace core::net
 
 AcceptVerdict AcceptErrorPolicy::onError(NetErrorCode code, platform::SteadyTimePoint now) noexcept
 {
+    auto verdict = AcceptVerdict {};
     switch (acceptDispositionOf(code))
     {
-        case AcceptDisposition::Closed:
-            return AcceptVerdict { .delay = {}, .warning = std::nullopt, .action = AcceptAction::Stop };
-        case AcceptDisposition::Dead:
-            return AcceptVerdict { .delay = {}, .warning = std::nullopt, .action = AcceptAction::GiveUp };
+        case AcceptDisposition::Closed: verdict.action = AcceptAction::Stop; return verdict;
+        case AcceptDisposition::Dead: verdict.action = AcceptAction::GiveUp; return verdict;
         case AcceptDisposition::PollTick:
-            return AcceptVerdict { .delay = {},
-                                   .warning = std::nullopt,
-                                   .action = AcceptAction::AcceptAgain };
+            // Says nothing, but counts toward the yield: a listener that answers its poll deadline
+            // without suspending would otherwise hold the loop for as long as it keeps answering.
+            verdict.delay = yieldDue();
+            return verdict;
         case AcceptDisposition::Exhausted:
-            return AcceptVerdict { .delay = nextBackoff(),
-                                   .warning = warningDue(now),
-                                   .action = AcceptAction::AcceptAgain };
+            verdict.delay = nextBackoff();
+            verdict.warning = warningDue(now);
+            return verdict;
         case AcceptDisposition::Unclassified:
-            if (++_unclassifiedInARow >= UnclassifiedBeforeGiveUp)
-                return AcceptVerdict { .delay = {}, .warning = std::nullopt, .action = AcceptAction::GiveUp };
-            return AcceptVerdict { .delay = nextBackoff(),
-                                   .warning = warningDue(now),
-                                   .action = AcceptAction::AcceptAgain };
-        case AcceptDisposition::PeerFailed: {
-            // The listener just dequeued a connection, so it is alive whatever came before.
-            _unclassifiedInARow = 0;
-            auto delay = std::chrono::milliseconds {};
-            if (++_failuresInARow >= FailuresBeforeYield)
+            if (!_runSince.has_value())
+                _runSince = now;
+            ++_runLength;
+            _runCode = code;
+            // Never an end: what nobody classified may well pass, and a loop that ended on it
+            // would make a transient condition permanent. A long run is REPORTED, once.
+            if (_runLength >= UnclassifiedBeforeDegraded && !_degraded)
             {
-                // A YIELD, constant and never growing: each of these failures consumed one queued
-                // connection, so the loop is making progress through a backlog of dead ones.
-                _failuresInARow = 0;
-                delay = FirstBackoff;
+                _degraded = true;
+                verdict.change = AcceptConditionChange::Degraded;
+                verdict.streak =
+                    AcceptStreak { .lasted = now - *_runSince, .failures = _runLength, .code = code };
             }
-            return AcceptVerdict { .delay = delay,
-                                   .warning = warningDue(now),
-                                   .action = AcceptAction::AcceptAgain };
-        }
+            verdict.delay = nextBackoff();
+            verdict.warning = warningDue(now);
+            return verdict;
+        case AcceptDisposition::PeerFailed:
+            // The listener just dequeued a connection, so it is alive whatever came before.
+            endRun(now, verdict);
+            verdict.delay = yieldDue();
+            verdict.warning = warningDue(now);
+            return verdict;
     }
     // Not reached: every disposition returns above, and a disposition no row names cannot be made.
-    return AcceptVerdict { .delay = nextBackoff(),
-                           .warning = warningDue(now),
-                           .action = AcceptAction::AcceptAgain };
+    verdict.delay = nextBackoff();
+    return verdict;
 }
 
-void AcceptErrorPolicy::onAccepted() noexcept
+AcceptVerdict AcceptErrorPolicy::onAccepted(platform::SteadyTimePoint now) noexcept
 {
+    auto verdict = AcceptVerdict {};
+    endRun(now, verdict);
     _backoff = {};
-    _failuresInARow = 0;
-    _unclassifiedInARow = 0;
+    _waitlessInARow = 0;
+    return verdict;
+}
+
+void AcceptErrorPolicy::endRun(platform::SteadyTimePoint now, AcceptVerdict& verdict) noexcept
+{
+    if (_degraded)
+    {
+        verdict.change = AcceptConditionChange::Recovered;
+        verdict.streak = AcceptStreak { .lasted = now - _runSince.value_or(now),
+                                        .failures = _runLength,
+                                        .code = _runCode };
+    }
+    _degraded = false;
+    _runSince.reset();
+    _runLength = 0;
+    _runCode = {};
 }
 
 std::optional<AcceptWarning> AcceptErrorPolicy::warningDue(platform::SteadyTimePoint now) noexcept
@@ -80,6 +100,29 @@ std::chrono::milliseconds AcceptErrorPolicy::nextBackoff() noexcept
     return _backoff;
 }
 
+std::chrono::milliseconds AcceptErrorPolicy::yieldDue() noexcept
+{
+    // A YIELD, constant and never growing: what came back waited for nothing, and the loop must let
+    // the others on its thread run -- but a failed connection consumed a queued one, so the loop is
+    // making progress through a backlog, and slowing it down further would keep the port refusing.
+    if (++_waitlessInARow < FailuresBeforeYield)
+        return {};
+    _waitlessInARow = 0;
+    return FirstBackoff;
+}
+
+namespace
+{
+
+    /// @param duration A duration.
+    /// @return It in whole milliseconds, for a line.
+    [[nodiscard]] std::int64_t millisecondsOf(platform::SteadyDuration duration) noexcept
+    {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+    }
+
+} // namespace
+
 std::string describeAcceptFailure(std::string_view surface,
                                   NetError const& error,
                                   AcceptVerdict const& verdict)
@@ -93,6 +136,28 @@ std::string describeAcceptFailure(std::string_view surface,
                            : std::format("accepting again in {} ms", verdict.delay.count()),
                        unreported == 0 ? std::string {}
                                        : std::format(" ({} more since the last warning)", unreported));
+}
+
+std::string describeAcceptDegraded(std::string_view surface,
+                                   NetError const& error,
+                                   AcceptStreak const& streak)
+{
+    return std::format(
+        "{}: accept loop degraded: {} accepts in a row failed over {} ms with an error nothing "
+        "classifies, the last {}; backing off and accepting again until it clears",
+        surface,
+        streak.failures,
+        millisecondsOf(streak.lasted),
+        error.toString());
+}
+
+std::string describeAcceptRecovered(std::string_view surface, AcceptStreak const& streak)
+{
+    return std::format("{}: accept loop recovered after {} failed accepts over {} ms (the last {})",
+                       surface,
+                       streak.failures,
+                       millisecondsOf(streak.lasted),
+                       toString(streak.code));
 }
 
 std::string describeAcceptLoopEnded(std::string_view surface, NetError const& error)

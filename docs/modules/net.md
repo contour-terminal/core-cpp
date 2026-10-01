@@ -42,7 +42,7 @@ directory `src/core/net/`. Three targets:
 | `<core/net/IoBackend.hpp>` | `IoBackend`, the injected blocking wait the loop drives and the readiness dispatcher behind it: `ReadinessHandler` (a handle, an owner and the callbacks a backend invokes), `Interest`, `HandleKind`, `Readiness`, `selectReadinessCallback()`, `BackendKind`, `WaitResult`; and the factories `makeDefaultBackend()`, `makeBackend(BackendKind)` and `preferredBackendKind()`. Every backend's own header is private, so the factories are how a program gets one: poll(2) on POSIX, epoll on Linux, kqueue on macOS and the BSDs, and on Windows an I/O completion port, which `preferredBackendKind()` answers since Task B7b and which is Windows' only backend since 0.5.0: the `WSAEventSelect` + `WaitForMultipleObjects` one it replaced was removed ([core-cpp#6](https://github.com/contour-terminal/core-cpp/issues/6)). `completionPort()` answers non-null on a completion-based backend and `nullptr` on every other, which is how a socket factory knows whether to hand out a socket that issues overlapped operations or one that parks on readiness; `EventLoop::completionPort()` asks it for them. `HandleKind::Completion` is a park on an overlapped operation an owner issued, which is how a completion reaches the loop's turn |
 | `<core/net/IHostScheduler.hpp>` | `IHostScheduler::callAfter()`, the one thing a host event loop has to lend core-cpp's, and `HostCallback` |
 | `<core/net/HostDrivenBackend.hpp>` | `HostDrivenBackend`: the backend for a loop that is PUMPED rather than one that blocks. It has no readiness (`attach` and `setInterest` answer `Unsupported`), its `wait()` never blocks, `wake()` and `armWakeAt()` ask the host for a pump and coalesce, and `isHostDriven()` is true. Portable, and the browser is only one of its hosts |
-| `<core/net/ISocket.hpp>`, `<core/net/IListener.hpp>` | the transport interfaces. `read`, `readWithFd`, `write`, `writeVectored`, `waitReadable`, `handshakeIfNeeded`, `cancelRead`, `shutdownWrite`, `setReceiveDeadline`, `close`; `accept`, `boundPort`. Every operation is a frame-free, stop-aware awaitable, not a `Task` |
+| `<core/net/ISocket.hpp>`, `<core/net/IListener.hpp>` | the transport interfaces. `read`, `readWithFd`, `write`, `writeVectored`, `waitReadable`, `handshakeIfNeeded`, `cancelRead`, `shutdownWrite`, `setReceiveDeadline`, `close`; `accept`, `boundPort`, `close` and `closeToken` -- a listener's `close()` is the base class's, fires the token (as its destructor does) and runs the implementation's `doClose()`. Every operation is a frame-free, stop-aware awaitable, not a `Task` |
 | `<core/net/IoAwaitable.hpp>` | `ResultAwaitable<R>` and its byte-count alias `IoAwaitable`: what a socket operation resolves through, and why it allocates nothing. `core::async::asTask` is the escape hatch for a caller that must store one |
 | `<core/net/SocketContract.hpp>` | `core::net::contract` — the socket contract's tripwires: `claimReadSlot` and `claimWriteSlot`, which end the process in every build, and the Debug assertions `requireReadBuffer` and `assertTeardownIsSerialisedWithDispatch`; public so a transport outside this library gets them too |
 | `<core/net/Sockets.hpp>` | `listen()`, `connect()`, `listenUnix()`, `connectUnix()`, `adoptFd()`, `appendReadChunk()` |
@@ -92,7 +92,7 @@ switch with no `default`, which is what makes a compiler name it when a code is 
 | `Unsupported` | `unsupported` | The operation is not supported on this platform or transport |
 | `MessageTooLarge` | `message too large` | A framed unit (line, PDU, datagram) exceeded its configured bound |
 | `SystemError` | `system error` | An OS error nothing classified further; read `NetError::systemCode`. It may be permanent |
-| `ResourceExhausted` | `resource exhausted` | The process or the system ran out of descriptors, buffer space or memory (`EMFILE`, `ENFILE`, `ENOBUFS`, `ENOMEM`, `WSAEMFILE`, `WSAENOBUFS`). Transient: the same call can succeed once something is released. After `SystemError`, so no earlier code was renumbered when it was added in 0.6.0 |
+| `ResourceExhausted` | `resource exhausted` | The process or the system ran out of descriptors, buffer space or memory (`EMFILE`, `ENFILE`, `ENOBUFS`, `ENOMEM`, `ENOSR`, `WSAEMFILE`, `WSAENOBUFS`, `WSA_NOT_ENOUGH_MEMORY`). Transient: the same call can succeed once something is released. After `SystemError`, so no earlier code was renumbered when it was added in 0.6.0 |
 | `Last` | `unknown error` | Not a code: the number of codes above it, so a table or a test covers every one without restating the list. Never constructed, never returned |
 
 A new code goes **above** `Last`, never below. One appended after it still satisfies the
@@ -105,30 +105,6 @@ ONE table per platform (`detail::classifySocketError`, `posix/SocketErrors.cpp` 
 `AddressNotAvail`, `PermissionDenied`, `Timeout` -- means the same thing whichever transport
 reported it. `EPIPE` is deliberately `SystemError`, not `ConnReset`: it is a write after this end's
 own half-close, and a caller counts a reset apart from a goodbye.
-
-## Accept loops
-
-**A failed accept is almost never a failed listener**, and a loop that ends on one leaves its port
-open, accepting handshakes into a backlog nobody drains. `AcceptErrorPolicy`
-(`<core/net/AcceptPolicy.hpp>`) is the one answer to *what does a loop do about this failed accept*,
-from a table with a row for every `NetErrorCode` (`AcceptErrorTable`, in enumerator order, so a new
-code fails the build until its row is decided):
-
-| Disposition | Codes | What the loop does |
-|---|---|---|
-| `Closed` | `Cancelled` | ends, quietly (`AcceptAction::Stop`): the owner closed the listener |
-| `Dead` | `BadHandle` | ends, and says so (`AcceptAction::GiveUp`): accepting again would fail the same way forever |
-| `PollTick` | `Timeout`, `WouldBlock` | accepts again at once, and says nothing |
-| `PeerFailed` | `Eof`, `ConnReset`, `ConnRefused`, `HostUnreach`, `PermissionDenied`, `Unsupported`, `MessageTooLarge` | accepts again at once with a rate-limited warning, yielding for `FirstBackoff` after `FailuresBeforeYield` in a row |
-| `Exhausted` | `ResourceExhausted` | backs off, 10 ms doubling to 1 s, and accepts again, for as long as it lasts |
-| `Unclassified` | `SystemError`, and the codes an accept never answers | backs off the same way, and gives up after `UnclassifiedBeforeGiveUp` in a row with no accept and no per-connection failure between them |
-
-The policy is pure: the loop hands it the code and the instant and does the waiting, the logging and
-the accepting itself. `serve()` is such a loop; `AcceptLoopReporting` says where its warnings and its
-giving up go, and `AcceptLoopHealth` (`<core/net/AcceptLoopHealth.hpp>`) records surfaces that gave
-up, for a liveness probe to answer from. `testing::FailingListener`
-(`<core/net/testing/FailingListener.hpp>`) scripts the failed accepts a consumer's own loop is
-tested against.
 
 `isDeadlineExpiry(code)` answers "did this operation run out of time", and it is `Timeout` **or**
 `WouldBlock`, because a deadline armed with `SO_RCVTIMEO`/`SO_SNDTIMEO` or a poll timeout expires as
@@ -169,6 +145,41 @@ under `#ifndef _WIN32`. `detail/` has the rest that is private: the ready batch 
 dispatches through, the wakeup channel every blocking one is woken by, the timeout conversion, the
 chunking arithmetic of the Windows wait, `PeerAddress.hpp` (which includes `<winsock2.h>`), and two
 helpers.
+
+## Accept loops
+
+**A failed accept is almost never a failed listener**, and a loop that ends on one leaves its port
+open, accepting handshakes into a backlog nobody drains. `AcceptErrorPolicy`
+(`<core/net/AcceptPolicy.hpp>`) is the one answer to *what does a loop do about this failed accept*,
+from a table with a row for every `NetErrorCode` (`AcceptErrorTable`, in enumerator order, so a new
+code fails the build until its row is decided):
+
+| Disposition | Codes | What the loop does |
+|---|---|---|
+| `Closed` | `Cancelled` | ends, quietly (`AcceptAction::Stop`): the owner closed the listener |
+| `Dead` | `BadHandle` | ends, and says so (`AcceptAction::GiveUp`): accepting again would fail the same way forever |
+| `PollTick` | `Timeout`, `WouldBlock` | accepts again and says nothing, yielding for `FirstBackoff` after `FailuresBeforeYield` in a row |
+| `PeerFailed` | `Eof`, `ConnReset`, `ConnRefused`, `HostUnreach`, `PermissionDenied`, `Unsupported`, `MessageTooLarge` | accepts again with a rate-limited warning, yielding the same way |
+| `Exhausted` | `ResourceExhausted` | backs off, 10 ms doubling to 1 s, and accepts again, for as long as it lasts |
+| `Unclassified` | `SystemError`, and the codes an accept never answers | backs off the same way for as long as it lasts, and after `UnclassifiedBeforeDegraded` in a row with no accept and no failed connection between them reports the loop **degraded**, once; the next accept or failed connection reports it **recovered** |
+
+Only the first two end a loop. An unclassified error is never one of them, because what nobody
+classified may well pass, and ending the loop on it would make a transient condition permanent.
+
+The policy is pure: the loop hands it the code and the instant and does the waiting, the reporting
+and the accepting itself. `serve()` is such a loop:
+
+- its backoff races `IListener::closeToken()`, so a close ends it at once rather than when the
+  backoff runs out, and it asks the token before every accept, so it never calls into a listener its
+  owner has destroyed;
+- a listener it finds dead it closes, so the port refuses rather than queues, and then reports;
+- `AcceptLoopReporting::onEvent` receives every report, and when it is empty each report's line goes
+  to `reportDiagnostic()`, so a degraded or dead loop is never silent by default.
+
+`AcceptLoopHealth` (`<core/net/AcceptLoopHealth.hpp>`) records which loops are degraded or gave up,
+for a liveness probe to answer from (`record` takes `serve`'s reports whole).
+`testing::FailingListener` (`<core/net/testing/FailingListener.hpp>`) scripts the failed accepts a
+consumer's own loop is tested against.
 
 ## Invariants
 

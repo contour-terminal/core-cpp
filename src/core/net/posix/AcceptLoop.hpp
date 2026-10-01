@@ -96,7 +96,9 @@ namespace detail
 /// formatPeer -- empty for AF_UNIX), parking on the listener fd until it is
 /// readable on EAGAIN, retrying what `detail::acceptFailureOf` says to, and mapping
 /// the rest through the one error table. A closed or cancelled listener yields
-/// NetErrorCode::Cancelled.
+/// NetErrorCode::Cancelled; a listening descriptor the loop refuses to watch
+/// (@c FdRegistrationFailed) yields NetErrorCode::BadHandle, since no accept on it
+/// can ever wait again.
 /// Pointers, not references: a coroutine must not take reference parameters
 /// (they would dangle across a suspension). The owning listener outlives the
 /// accept task, so its live @c _fd / @c _closed are read through the pointers.

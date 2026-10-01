@@ -63,10 +63,11 @@ class FailingListener final: public IListener
     FailingListener& operator=(FailingListener&&) = delete;
     ~FailingListener() override = default;
 
-    /// @return The next scripted failure, or once they are spent, the decorated listener's accept.
+    /// @return The next scripted failure, or once they are spent -- or once this listener is
+    ///         closed -- the decorated listener's accept.
     [[nodiscard]] async::Task<AcceptResult> accept() override
     {
-        if (_answered < _failures.size())
+        if (_answered < _failures.size() && !closeToken().stop_requested())
         {
             auto failure = _failures[_answered];
             ++_answered;
@@ -78,11 +79,14 @@ class FailingListener final: public IListener
     /// @return The decorated listener's port.
     [[nodiscard]] std::uint16_t boundPort() const noexcept override { return _inner->boundPort(); }
 
-    /// Closes the decorated listener. Failures not yet answered are still answered first.
-    void close() noexcept override { _inner->close(); }
-
     /// @return How many of the scripted failures have been answered.
     [[nodiscard]] std::size_t failuresAnswered() const noexcept { return _answered; }
+
+  protected:
+    /// Closes the decorated listener. Failures not yet answered are then never answered: a closed
+    /// listener answers `Cancelled`, as a real one does. Closing the DECORATED listener directly
+    /// fires its token, not this one's -- close the decorator, which is the listener the loop holds.
+    void doClose() noexcept override { _inner->close(); }
 
   private:
     std::unique_ptr<IListener> _owned; ///< The decorated listener when this owns it; null otherwise.

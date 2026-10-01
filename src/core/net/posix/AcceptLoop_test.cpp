@@ -11,6 +11,7 @@
 #include <core/net/IoBackend.hpp>
 #include <core/net/NetError.hpp>
 #include <core/net/posix/AcceptLoop.hpp>
+#include <core/net/testing/ScriptedBackend.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -78,6 +79,12 @@ constexpr auto Rows = std::array {
     Row { .systemCode = EBADF, .step = AcceptStep::Report, .code = NetErrorCode::BadHandle },
     Row { .systemCode = ENOTSOCK, .step = AcceptStep::Report, .code = NetErrorCode::BadHandle },
     Row { .systemCode = EINVAL, .step = AcceptStep::Report, .code = NetErrorCode::BadHandle },
+    // A pending timeout on one new connection is that connection's failure, not the loop's poll
+    // ticking: accept's own row, because the shared table answers `ETIMEDOUT` as a deadline.
+    Row { .systemCode = ETIMEDOUT, .step = AcceptStep::Report, .code = NetErrorCode::HostUnreach },
+#ifdef ENOSR
+    Row { .systemCode = ENOSR, .step = AcceptStep::Report, .code = NetErrorCode::ResourceExhausted },
+#endif
 };
 
 } // namespace
@@ -225,4 +232,47 @@ TEST_CASE("The accept loop retries, reports and parks as the decision says, thro
         // rather than two unprintable optionals.
         CHECK(reported.value_or(NetErrorCode::Ok) == loopCase.error.value_or(NetErrorCode::Ok));
     }
+}
+
+TEST_CASE("A listener the loop refuses to watch is reported dead, not thrown", "[net][errors][accept-policy]")
+{
+    // `waitReadable` throws `FdRegistrationFailed` when the backend refuses the registration. Let
+    // out of `accept()`, it ended an accept loop as an exception nobody reported -- the one way out
+    // of `serve` that was neither a closed listener nor a dead one. Reported as `BadHandle`, it is
+    // a dead listener: the loop gives up on it, closes it and says so.
+    auto source = core::net::testing::ScriptedBackend {};
+    source.refuseNextAttach();
+    auto loop = EventLoop { source };
+    auto listenPair = std::array<int, 2> { -1, -1 };
+    REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM, 0, listenPair.data()) == 0);
+    REQUIRE(::fcntl(listenPair[0], F_SETFL, ::fcntl(listenPair[0], F_GETFL, 0) | O_NONBLOCK) == 0);
+
+    // Nothing pending, so the accept parks -- and the park is what the backend refuses.
+    auto scripted = ScriptedAcceptCall { { EAGAIN } };
+    auto const lifetime = std::make_shared<int>(0);
+    auto const closed = false;
+    auto const listenFd = listenPair[0];
+    auto const accept = [](EventLoop* l,
+                           int const* fd,
+                           bool const* isClosed,
+                           std::weak_ptr<void const> alive,
+                           IAcceptCall* call) -> core::async::Task<std::optional<NetErrorCode>> {
+        try
+        {
+            auto result = co_await core::net::acceptOne(l, fd, isClosed, std::move(alive), call);
+            co_return result.has_value() ? std::optional<NetErrorCode> {}
+                                         : std::optional { result.error().code };
+        }
+        catch (core::net::FdRegistrationFailed const&)
+        {
+            co_return std::optional { NetErrorCode::Last }; // escaped: stands for "thrown"
+        }
+    };
+    auto const reported =
+        loop.blockOn(accept(&loop, &listenFd, &closed, std::weak_ptr<void const> { lifetime }, &scripted));
+    ::close(listenPair[0]);
+    ::close(listenPair[1]);
+
+    REQUIRE(reported.has_value());
+    CHECK(*reported == NetErrorCode::BadHandle);
 }

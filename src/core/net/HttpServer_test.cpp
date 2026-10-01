@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/async/Task.hpp>
 #include <core/async/WhenAny.hpp>
+#include <core/net/Diagnostics.hpp>
 #include <core/net/HttpServer.hpp>
 #include <core/net/IListener.hpp>
 #include <core/net/ISocket.hpp>
@@ -8,10 +9,14 @@
 #include <core/net/Sockets.hpp>
 #include <core/net/WithTimeout.hpp>
 #include <core/net/testing/FailingListener.hpp>
+#include <core/net/testing/InMemorySocket.hpp>
 #include <core/net/testing/InMemoryTransport.hpp>
+#include <core/net/testing/TestLoop.hpp>
+#include <core/platform/Clock.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -19,6 +24,7 @@
 #include <expected>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -141,7 +147,9 @@ class OneShotListener final: public core::net::IListener
     }
 
     [[nodiscard]] std::uint16_t boundPort() const noexcept override { return 0; }
-    void close() noexcept override { _connection.reset(); }
+
+  protected:
+    void doClose() noexcept override { _connection.reset(); }
 
   private:
     std::unique_ptr<core::net::ISocket> _connection;
@@ -827,10 +835,16 @@ namespace
 /// What a `serve` under test reported, and what its one client read back.
 struct ServeObservation
 {
-    std::string reply;                        ///< Every byte the client read.
-    std::vector<std::string> failureLines;    ///< `AcceptLoopReporting::onFailure`'s lines.
-    std::vector<core::net::NetError> givenUp; ///< `AcceptLoopReporting::onGiveUp`'s errors.
-    std::size_t handled = 0;                  ///< Requests the handler saw.
+    std::string reply;                              ///< Every byte the client read.
+    std::vector<core::net::AcceptLoopEvent> events; ///< Every report, in order.
+    std::size_t handled = 0;                        ///< Requests the handler saw.
+
+    /// @param kind A kind of report.
+    /// @return How many reports of that kind there were.
+    [[nodiscard]] std::size_t count(core::net::AcceptLoopEventKind kind) const
+    {
+        return static_cast<std::size_t>(std::ranges::count(events, kind, &core::net::AcceptLoopEvent::kind));
+    }
 };
 
 /// @param seen Where the reports go.
@@ -839,9 +853,18 @@ struct ServeObservation
 {
     return core::net::AcceptLoopReporting {
         .surface = "http",
-        .onFailure = [seen](std::string_view line) { seen->failureLines.emplace_back(line); },
-        .onGiveUp = [seen](core::net::NetError const& error) { seen->givenUp.push_back(error); },
+        .onEvent = [seen](core::net::AcceptLoopEvent const& event) { seen->events.push_back(event); },
     };
+}
+
+/// @param seen Where the handled count goes.
+/// @return A handler that counts what it serves.
+[[nodiscard]] core::net::HttpHandler countingHandler(ServeObservation* seen)
+{
+    return core::net::HttpHandler { [seen](HttpRequest const& request) {
+        ++seen->handled;
+        return HttpResponse::ok("served:" + request.path);
+    } };
 }
 
 /// One GET, and the reply drained into @p out.
@@ -856,6 +879,40 @@ Task<void> getHello(EventLoop* loop, std::uint16_t port, std::string* out)
     co_await drain(socket.get(), out);
 }
 
+/// One GET over an in-memory connection, and the reply drained into @p out.
+Task<void> getHelloInMemory(core::net::ISocket* socket, std::string* out)
+{
+    auto const request = std::string { "GET /hello HTTP/1.1\r\nHost: x\r\n\r\n" };
+    co_await sendText(socket, &request);
+    co_await drain(socket, out);
+}
+
+/// How a `serve` under test ended.
+enum class Ending : std::uint8_t
+{
+    Running,  ///< It has not ended.
+    Returned, ///< It returned.
+    Threw,    ///< An exception left it.
+};
+
+/// Runs `serve`, and records how it ended.
+Task<void> serveAndRecord(EventLoop* loop,
+                          core::net::IListener* listener,
+                          ServeObservation* seen,
+                          Ending* ending)
+{
+    try
+    {
+        co_await core::net::serve(loop, listener, countingHandler(seen), {}, recordInto(seen));
+        *ending = Ending::Returned;
+    }
+    catch (...)
+    {
+        *ending = Ending::Threw;
+        throw;
+    }
+}
+
 /// Races `serve` over @p listener against one client, bounded.
 /// @return Whether the race finished inside its bound.
 [[nodiscard]] bool serveOneClient(EventLoop& loop,
@@ -863,20 +920,42 @@ Task<void> getHello(EventLoop* loop, std::uint16_t port, std::string* out)
                                   std::uint16_t port,
                                   ServeObservation* seen)
 {
-    auto handler = core::net::HttpHandler { [seen](HttpRequest const& request) {
-        ++seen->handled;
-        return HttpResponse::ok("served:" + request.path);
-    } };
-    auto run = [](EventLoop* l,
-                  core::net::IListener* lis,
-                  core::net::HttpHandler h,
-                  std::uint16_t p,
-                  ServeObservation* s) -> Task<void> {
+    auto run =
+        [](EventLoop* l, core::net::IListener* lis, std::uint16_t p, ServeObservation* s) -> Task<void> {
         static_cast<void>(co_await core::async::whenAny(
-            core::net::serve(l, lis, std::move(h), {}, recordInto(s)), getHello(l, p, &s->reply)));
+            core::net::serve(l, lis, countingHandler(s), {}, recordInto(s)), getHello(l, p, &s->reply)));
     };
-    return loop.blockOn(core::net::withTimeout(
-        &loop, run(&loop, listener, std::move(handler), port, seen), std::chrono::seconds { 10 }));
+    return loop.blockOn(
+        core::net::withTimeout(&loop, run(&loop, listener, port, seen), std::chrono::seconds { 10 }));
+}
+
+/// Restores the discarding diagnostic sink however a case leaves.
+struct DiagnosticSinkGuard
+{
+    DiagnosticSinkGuard() = default;
+    DiagnosticSinkGuard(DiagnosticSinkGuard const&) = delete;
+    DiagnosticSinkGuard& operator=(DiagnosticSinkGuard const&) = delete;
+    DiagnosticSinkGuard(DiagnosticSinkGuard&&) = delete;
+    DiagnosticSinkGuard& operator=(DiagnosticSinkGuard&&) = delete;
+    ~DiagnosticSinkGuard() { core::net::setDiagnosticSink({}); }
+};
+
+/// @param events Reports.
+/// @return Their kinds, in order, in words: what a case compares whole.
+[[nodiscard]] std::string kindsOf(std::vector<core::net::AcceptLoopEvent> const& events)
+{
+    auto kinds = std::string {};
+    for (auto const& event: events)
+    {
+        switch (event.kind)
+        {
+            case core::net::AcceptLoopEventKind::Warning: kinds += "warning; "; break;
+            case core::net::AcceptLoopEventKind::Degraded: kinds += "degraded; "; break;
+            case core::net::AcceptLoopEventKind::Recovered: kinds += "recovered; "; break;
+            case core::net::AcceptLoopEventKind::GaveUp: kinds += "gave up; "; break;
+        }
+    }
+    return kinds;
 }
 
 } // namespace
@@ -912,29 +991,30 @@ TEST_CASE("serve backs off on exhausted accepts and serves the connection queued
         wrong += "the handler saw " + std::to_string(seen.handled) + " requests; ";
     if (!seen.reply.starts_with("HTTP/1.1 200 OK\r\n") || !seen.reply.ends_with("served:/hello"))
         wrong += "the client read \"" + seen.reply + "\"; ";
-    if (!seen.givenUp.empty())
-        wrong += "the loop gave up on " + seen.givenUp.front().toString() + "; ";
-    // The first failure warns; the two after it fall inside the rate limit.
-    if (seen.failureLines.size() != 1 || !seen.failureLines.front().contains("resource exhausted"))
-        wrong += std::to_string(seen.failureLines.size()) + " warning lines; ";
+    // The first failure warns; the two after it fall inside the rate limit. Nothing else is said.
+    if (kindsOf(seen.events) != "warning; " || !seen.events.front().line.contains("resource exhausted"))
+        wrong += "reported: " + kindsOf(seen.events);
     INFO(wrong);
     CHECK(wrong.empty());
 }
 
-TEST_CASE("serve ends on a dead listener and reports it once, and ends quietly on a closed one",
+TEST_CASE("serve gives up on a dead listener, closes it and says so, and ends quietly on a closed one",
           "[net][http][accept-policy]")
 {
     // The control beside the case above: going on is right for a failed ACCEPT, never for a failed
     // LISTENER. A dead listener ends the loop at once -- accepting again would fail the same way
-    // forever -- and the end is reported, because nobody asked for it. A closed listener is the
-    // owner's own doing and ends it quietly.
+    // forever -- and is closed, so its port refuses rather than queues; the end is reported,
+    // because nobody asked for it. A closed listener is the owner's own doing: it ends the loop
+    // quietly.
     struct Case
     {
-        NetErrorCode code;   ///< What the one scripted accept answers.
-        std::size_t givenUp; ///< How many times the loop must report giving up.
+        NetErrorCode code;        ///< What the one scripted accept answers.
+        std::string_view reports; ///< What the loop must report.
+        bool closesIt;            ///< Whether `serve` must close the listener.
     };
-    for (auto const& [code, givenUp]: { Case { .code = NetErrorCode::BadHandle, .givenUp = 1 },
-                                        Case { .code = NetErrorCode::Cancelled, .givenUp = 0 } })
+    for (auto const& [code, reports, closesIt]:
+         { Case { .code = NetErrorCode::BadHandle, .reports = "gave up; ", .closesIt = true },
+           Case { .code = NetErrorCode::Cancelled, .reports = "", .closesIt = false } })
     {
         INFO(core::net::toString(code));
         auto const source = core::net::makeDefaultBackend();
@@ -943,29 +1023,222 @@ TEST_CASE("serve ends on a dead listener and reports it once, and ends quietly o
         REQUIRE(listener.has_value());
         auto failing =
             core::net::testing::FailingListener { **listener, core::net::testing::repeatedFailures(code, 1) };
+        auto const closed = failing.closeToken();
 
         auto seen = ServeObservation {};
-        auto handler = core::net::HttpHandler { [&seen](HttpRequest const&) {
-            ++seen.handled;
-            return HttpResponse::ok("unreachable");
-        } };
         // `serve` alone, bounded: it must END, with no client and no cancellation to end it.
         auto const ended = loop.blockOn(core::net::withTimeout(
             &loop,
-            core::net::serve(&loop, &failing, std::move(handler), {}, recordInto(&seen)),
+            core::net::serve(&loop, &failing, countingHandler(&seen), {}, recordInto(&seen)),
             std::chrono::seconds { 10 }));
         REQUIRE(ended);
 
         auto wrong = std::string {};
-        if (seen.givenUp.size() != givenUp)
-            wrong += "reported giving up " + std::to_string(seen.givenUp.size()) + " times; ";
-        if (givenUp == 1 && !seen.givenUp.empty() && seen.givenUp.front().code != code)
-            wrong += "reported " + seen.givenUp.front().toString() + "; ";
-        if (!seen.failureLines.empty())
-            wrong += "warned: " + seen.failureLines.front() + "; ";
+        if (kindsOf(seen.events) != reports)
+            wrong += "reported: " + kindsOf(seen.events) + "; ";
+        else if (!seen.events.empty() && seen.events.front().error.code != code)
+            wrong += "reported " + seen.events.front().error.toString() + "; ";
+        if (closed.stop_requested() != closesIt)
+            wrong += closesIt ? "left the dead listener open; " : "closed a listener it should not have; ";
         if (seen.handled != 0)
             wrong += "the handler ran; ";
         INFO(wrong);
         CHECK(wrong.empty());
     }
+}
+
+TEST_CASE("serve says what it reports to the diagnostic sink when nobody asked to hear it",
+          "[net][http][accept-policy]")
+{
+    // `AcceptLoopReporting` defaulted is what the first consumer of `serve` gets, and a loop that
+    // gives up silently with its port still open is the incident the accept policy exists for.
+    auto const guard = DiagnosticSinkGuard {};
+    auto lines = std::vector<std::string> {};
+    core::net::setDiagnosticSink([&lines](std::string_view line) { lines.emplace_back(line); });
+
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
+    auto listener = core::net::listen(loop, "127.0.0.1", 0);
+    REQUIRE(listener.has_value());
+    auto failing = core::net::testing::FailingListener {
+        **listener, core::net::testing::repeatedFailures(NetErrorCode::BadHandle, 1)
+    };
+    auto handler =
+        core::net::HttpHandler { [](HttpRequest const&) { return HttpResponse::ok("unreachable"); } };
+    auto const ended = loop.blockOn(core::net::withTimeout(
+        &loop, core::net::serve(&loop, &failing, std::move(handler)), std::chrono::seconds { 10 }));
+    REQUIRE(ended);
+
+    REQUIRE(lines.size() == 1);
+    CHECK(lines.front().starts_with("http: accept loop ended (bad handle (accept))"));
+}
+
+TEST_CASE("A close during serve's backoff ends it at once, with the clock frozen",
+          "[net][http][accept-policy]")
+{
+    // The backoff races the listener's close token. Waited out on the timer instead, a close that
+    // lands during a backoff is noticed only when the backoff ends -- up to a second later -- and
+    // the loop then calls into the listener again. With the clock frozen nothing below can be
+    // explained by the backoff running out.
+    auto clock = core::platform::ManualClock {};
+    auto ending = Ending::Running;
+    auto seen = ServeObservation {};
+    auto loop = core::net::testing::TestLoop { clock };
+    auto listener = core::net::testing::FailingListener {
+        std::make_unique<core::net::testing::InMemoryListener>(),
+        core::net::testing::repeatedFailures(NetErrorCode::ResourceExhausted, 1)
+    };
+
+    loop.spawn(serveAndRecord(&loop, &listener, &seen, &ending));
+    std::ignore = loop.drain();
+    REQUIRE(ending == Ending::Running);
+    REQUIRE(listener.failuresAnswered() == 1);
+    REQUIRE(loop.pendingTimers() == 1); // parked in the backoff
+
+    listener.close();
+    std::ignore = loop.drain();
+
+    CHECK(ending == Ending::Returned);
+    CHECK(loop.pendingTimers() == 0);
+}
+
+TEST_CASE("serve never calls into a listener its owner destroyed while it waited",
+          "[net][http][accept-policy]")
+{
+    // `serve` keeps the listener's close token, which outlives the listener and which its
+    // destructor fires, and asks it before every accept. A listener closed and destroyed during a
+    // backoff, destroyed without a close, or destroyed while a connection is being served, is
+    // never touched again -- under AddressSanitizer a call into it is a use-after-free report, and
+    // the Linux run is under it.
+    for (auto const how: { 0, 1, 2 })
+    {
+        INFO((how == 0   ? "closed, then destroyed, during a backoff"
+              : how == 1 ? "destroyed during a backoff"
+                         : "destroyed while a connection is served"));
+        auto clock = core::platform::ManualClock {};
+        auto ending = Ending::Running;
+        auto seen = ServeObservation {};
+        auto reply = std::string {};
+        auto loop = core::net::testing::TestLoop { clock };
+        auto inner = std::make_unique<core::net::testing::InMemoryListener>();
+        auto client = how == 2 ? inner->connectClient() : nullptr;
+        auto listener = std::make_unique<core::net::testing::FailingListener>(
+            std::move(inner),
+            core::net::testing::repeatedFailures(NetErrorCode::ResourceExhausted, how == 2 ? 0 : 1));
+
+        loop.spawn(serveAndRecord(&loop, listener.get(), &seen, &ending));
+        std::ignore = loop.drain();
+        REQUIRE(ending == Ending::Running);
+
+        if (how == 0)
+            listener->close();
+        listener.reset();
+        if (how == 2)
+            loop.spawn(getHelloInMemory(client.get(), &reply));
+        std::ignore = loop.drain();
+        // Past any backoff: a loop that waited the timer out rather than the token would call into
+        // the destroyed listener here.
+        clock.advance(std::chrono::seconds { 2 });
+        std::ignore = loop.drain();
+
+        CHECK(ending == Ending::Returned);
+        if (how == 2)
+            CHECK(reply.ends_with("served:/hello"));
+    }
+}
+
+TEST_CASE("Cancelling serve returns from it, in a backoff as in an accept", "[net][http][accept-policy]")
+{
+    // The flow's own stop meets `serve` in one of two places. Parked in an accept, the listener
+    // answers `Cancelled` and `serve` returns; in a backoff, the wait throws `OperationCancelled`,
+    // and `serve` returns there too rather than letting it out.
+    for (auto const inBackoff: { true, false })
+    {
+        INFO((inBackoff ? "in a backoff" : "in an accept"));
+        auto const source = core::net::makeDefaultBackend();
+        auto loop = EventLoop { *source };
+        auto listener = core::net::listen(loop, "127.0.0.1", 0);
+        REQUIRE(listener.has_value());
+        // Exhausted without end: every accept fails at once, so whenever the timeout lands, `serve`
+        // is in a backoff. With no failure, it is parked in the real listener's accept.
+        auto failing = core::net::testing::FailingListener {
+            **listener,
+            core::net::testing::repeatedFailures(NetErrorCode::ResourceExhausted, inBackoff ? 1000 : 0)
+        };
+        auto ending = Ending::Running;
+        auto seen = ServeObservation {};
+        auto const finished = loop.blockOn(core::net::withTimeout(
+            &loop, serveAndRecord(&loop, &failing, &seen, &ending), std::chrono::milliseconds { 50 }));
+        CHECK_FALSE(finished); // the timeout cancelled it
+        CHECK(ending == Ending::Returned);
+    }
+}
+
+TEST_CASE("A listener answering its poll tick without suspending makes serve yield",
+          "[net][http][accept-policy]")
+{
+    // Each `WouldBlock` comes back at once, so without a yield `serve` would answer every one of
+    // them in a single turn and no other flow on its loop would run until they stopped coming.
+    auto clock = core::platform::ManualClock {};
+    auto ending = Ending::Running;
+    auto seen = ServeObservation {};
+    auto loop = core::net::testing::TestLoop { clock };
+    auto listener =
+        core::net::testing::FailingListener { std::make_unique<core::net::testing::InMemoryListener>(),
+                                              core::net::testing::repeatedFailures(NetErrorCode::WouldBlock,
+                                                                                   40) };
+
+    loop.spawn(serveAndRecord(&loop, &listener, &seen, &ending));
+    std::ignore = loop.drain();
+    // One yield's worth, and then it waits: the clock is frozen.
+    CHECK(listener.failuresAnswered() == core::net::AcceptErrorPolicy::FailuresBeforeYield);
+    CHECK(loop.pendingTimers() == 1);
+    CHECK(seen.events.empty()); // a poll tick says nothing
+
+    listener.close();
+    std::ignore = loop.drain();
+    CHECK(ending == Ending::Returned);
+}
+
+TEST_CASE("serve reports a degraded loop once, and recovery when the error clears",
+          "[net][http][accept-policy]")
+{
+    // An unclassified error is backed off on without end: it may be transient, and ending the loop
+    // on it would make it permanent. A long run of them is reported -- once -- and the first accept
+    // after it reports the recovery, then serves.
+    auto clock = core::platform::ManualClock {};
+    auto ending = Ending::Running;
+    auto seen = ServeObservation {};
+    auto reply = std::string {};
+    auto loop = core::net::testing::TestLoop { clock };
+    auto inner = std::make_unique<core::net::testing::InMemoryListener>();
+    auto const client = inner->connectClient();
+    constexpr auto Failures = core::net::AcceptErrorPolicy::UnclassifiedBeforeDegraded + 8;
+    auto listener = core::net::testing::FailingListener {
+        std::move(inner), core::net::testing::repeatedFailures(NetErrorCode::SystemError, Failures)
+    };
+
+    loop.spawn(serveAndRecord(&loop, &listener, &seen, &ending));
+    loop.spawn(getHelloInMemory(client.get(), &reply));
+    // Bounded: each pass answers at least one failure, whose backoff is at most a second.
+    for ([[maybe_unused]] auto const pass: std::views::iota(0U, Failures + 4))
+    {
+        std::ignore = loop.drain();
+        clock.advance(core::net::AcceptErrorPolicy::MaxBackoff);
+    }
+    std::ignore = loop.drain();
+
+    // The warnings are rate-limited by the same clock; what this case is about is the rest.
+    auto events = seen.events;
+    std::erase_if(events, [](core::net::AcceptLoopEvent const& event) {
+        return event.kind == core::net::AcceptLoopEventKind::Warning;
+    });
+    CHECK(kindsOf(events) == "degraded; recovered; ");
+    CHECK(listener.failuresAnswered() == Failures);
+    CHECK(reply.ends_with("served:/hello"));
+    CHECK(ending == Ending::Running); // it never ended on the error
+
+    listener.close();
+    std::ignore = loop.drain();
+    CHECK(ending == Ending::Returned);
 }

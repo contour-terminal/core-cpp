@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/HttpServer.hpp>
 
+#include <core/async/Cancellation.hpp>
+#include <core/async/StopToken.hpp>
 #include <core/net/AcceptPolicy.hpp>
 #include <core/net/AsyncBufferedReader.hpp>
+#include <core/net/Diagnostics.hpp>
+#include <core/net/InterruptibleSleep.hpp>
 
 #include <algorithm>
 #include <array>
@@ -327,14 +331,56 @@ async::Task<IoResult> writeResponse(ISocket* socket, HttpResponse response)
     co_return co_await socket->write(bytes);
 }
 
+namespace
+{
+
+    /// Hands one report of the accept loop to where @p reporting says, or to @c reportDiagnostic when
+    /// it names nowhere: a loop that degrades or gives up is never silent by default.
+    /// @param reporting Where reports go.
+    /// @param event The report.
+    void report(AcceptLoopReporting const& reporting, AcceptLoopEvent const& event)
+    {
+        if (reporting.onEvent)
+            reporting.onEvent(event);
+        else
+            reportDiagnostic(event.line);
+    }
+
+    /// Waits out an accept backoff, unless the listener is closed or the flow is cancelled first.
+    /// @param loop The loop whose timer waits.
+    /// @param closed The listener's close token.
+    /// @param delay How long.
+    /// @return Whether the loop may accept again: false when the listener was closed (or destroyed)
+    ///         or the flow was cancelled while it waited.
+    async::Task<bool> backOff(EventLoop* loop, async::StopToken closed, std::chrono::milliseconds delay)
+    {
+        try
+        {
+            auto const woke = co_await interruptibleSleepUntil(loop, closed, loop->clock().now() + delay);
+            co_return woke == WakeReason::Deadline;
+        }
+        catch (async::OperationCancelled const&)
+        {
+            // The flow's own stop, met in a backoff: `serve` returns, as it does when the same stop
+            // meets it parked in an accept, which the listener answers `Cancelled`.
+            co_return false;
+        }
+    }
+
+} // namespace
+
 async::Task<void> serve(EventLoop* loop,
                         IListener* listener,
                         HttpHandler handler,
                         HttpLimits limits,
                         AcceptLoopReporting reporting)
 {
+    // Taken while the listener is alive -- the caller's contract -- and kept: the token outlives the
+    // listener, so asking it before every accept is how this loop never calls into a listener its
+    // owner closed and destroyed while the loop was backing off or serving a connection.
+    auto const closed = listener->closeToken();
     auto policy = AcceptErrorPolicy {};
-    while (true)
+    while (!closed.stop_requested())
     {
         auto accepted = co_await listener->accept();
         if (!accepted.has_value())
@@ -347,18 +393,49 @@ async::Task<void> serve(EventLoop* loop,
             {
                 case AcceptAction::Stop: co_return;
                 case AcceptAction::GiveUp:
-                    if (reporting.onGiveUp)
-                        reporting.onGiveUp(error);
+                    // A dead listener left open would go on queueing handshakes nobody accepts: the
+                    // port is closed, so it refuses them, and then the end is reported.
+                    if (!closed.stop_requested())
+                        listener->close();
+                    report(reporting,
+                           AcceptLoopEvent { .surface = reporting.surface,
+                                             .line = describeAcceptLoopEnded(reporting.surface, error),
+                                             .error = error,
+                                             .kind = AcceptLoopEventKind::GaveUp });
                     co_return;
                 case AcceptAction::AcceptAgain: break;
             }
-            if (verdict.warning.has_value() && reporting.onFailure)
-                reporting.onFailure(describeAcceptFailure(reporting.surface, error, verdict));
-            if (verdict.delay > std::chrono::milliseconds {})
-                co_await loop->delay(verdict.delay);
+            if (verdict.change == AcceptConditionChange::Degraded)
+                report(reporting,
+                       AcceptLoopEvent { .surface = reporting.surface,
+                                         .line =
+                                             describeAcceptDegraded(reporting.surface, error, verdict.streak),
+                                         .error = error,
+                                         .kind = AcceptLoopEventKind::Degraded });
+            else if (verdict.change == AcceptConditionChange::Recovered)
+                report(reporting,
+                       AcceptLoopEvent { .surface = reporting.surface,
+                                         .line = describeAcceptRecovered(reporting.surface, verdict.streak),
+                                         .error = {},
+                                         .kind = AcceptLoopEventKind::Recovered });
+            if (verdict.warning.has_value())
+                report(reporting,
+                       AcceptLoopEvent { .surface = reporting.surface,
+                                         .line = describeAcceptFailure(reporting.surface, error, verdict),
+                                         .error = error,
+                                         .kind = AcceptLoopEventKind::Warning });
+            if (verdict.delay > std::chrono::milliseconds {}
+                && !co_await backOff(loop, closed, verdict.delay))
+                co_return;
             continue;
         }
-        policy.onAccepted();
+        if (auto const recovered = policy.onAccepted(loop->clock().now());
+            recovered.change == AcceptConditionChange::Recovered)
+            report(reporting,
+                   AcceptLoopEvent { .surface = reporting.surface,
+                                     .line = describeAcceptRecovered(reporting.surface, recovered.streak),
+                                     .error = {},
+                                     .kind = AcceptLoopEventKind::Recovered });
         auto conn = std::move(*accepted);
         // Once per connection, before anything frames the stream: a transport that negotiates
         // (TLS) has finished doing so before the first request byte is read. A connection whose

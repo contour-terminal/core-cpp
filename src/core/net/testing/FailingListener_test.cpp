@@ -47,10 +47,11 @@ class OneConnectionListener final: public core::net::IListener
 
     [[nodiscard]] std::uint16_t boundPort() const noexcept override { return 4242; }
 
-    void close() noexcept override { _closed = true; }
-
     /// @return How many accepts reached this listener.
     [[nodiscard]] int accepts() const noexcept { return _accepts; }
+
+  protected:
+    void doClose() noexcept override { _closed = true; }
 
   private:
     int _accepts = 0;
@@ -111,4 +112,21 @@ TEST_CASE("A failing listener may own the listener it decorates", "[net][accept-
         codes += acceptOnce(loop, failing) + "; ";
     CHECK(codes == "bad handle (accept); bad handle (accept); accepted; ");
     CHECK(inner->accepts() == 1);
+}
+
+TEST_CASE("A closed failing listener answers no more of its script", "[net][accept-policy]")
+{
+    // A real listener closed answers `Cancelled`, whatever else it might have said; a fake that
+    // went on answering its script after a close would let a loop that misses the close pass.
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
+    auto inner = OneConnectionListener {};
+    auto failing =
+        FailingListener { inner, core::net::testing::repeatedFailures(NetErrorCode::ResourceExhausted, 3) };
+
+    CHECK(acceptOnce(loop, failing) == "resource exhausted (accept)");
+    failing.close();
+    CHECK(failing.closeToken().stop_requested());
+    CHECK(acceptOnce(loop, failing) == "cancelled (inner closed)");
+    CHECK(failing.failuresAnswered() == 1);
 }

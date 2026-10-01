@@ -90,8 +90,15 @@ namespace detail
         /// The shared table cannot say so, because `EINVAL` from another call is an argument error
         /// that says nothing about the handle; left `SystemError`, a caller backs off and tries a
         /// dead listener again forever.
+        ///
+        /// `ETIMEDOUT` from `accept` is a network error pending on ONE new connection -- the peer
+        /// went silent before the handshake finished -- where from a receive with a deadline armed
+        /// it is the deadline: the shared table's `Timeout`, which an accept loop reads as its own
+        /// poll ticking and says nothing about. As `HostUnreach` it is what it is: one connection's
+        /// failure, warned about and counted toward the loop's yield.
         constexpr auto AcceptOwnClassifications = std::array {
             AcceptOwnClassification { .systemCode = EINVAL, .code = NetErrorCode::BadHandle },
+            AcceptOwnClassification { .systemCode = ETIMEDOUT, .code = NetErrorCode::HostUnreach },
         };
 
     } // namespace
@@ -152,6 +159,16 @@ async::Task<AcceptResult> acceptOne(EventLoop* loop,
         catch (async::OperationCancelled const&)
         {
             co_return std::unexpected(makeNetError(NetErrorCode::Cancelled, 0, "accept cancelled"));
+        }
+        catch (FdRegistrationFailed const& refused)
+        {
+            // The loop could not watch the listening descriptor, so this listener can never be
+            // waited on again: a dead listener, which an accept loop gives up on and closes. Thrown
+            // on, it would end the loop as an exception nobody reports.
+            co_return std::unexpected(makeNetError(NetErrorCode::BadHandle,
+                                                   refused.reason.systemCode,
+                                                   "accept: the loop could not watch the listener ("
+                                                       + refused.reason.toString() + ")"));
         }
         // Asked before `*closed` and `*fd` are: the listener's `close()` woke this park, and
         // its owner may have destroyed it before the loop got here.

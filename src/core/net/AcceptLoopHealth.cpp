@@ -14,40 +14,48 @@ void AcceptLoopHealth::subscribe(Listener listener)
 
 void AcceptLoopHealth::forward(AcceptLoopHealth& target)
 {
-    auto already = std::vector<StoppedSurface> {};
+    auto already = std::vector<SurfaceCondition> {};
     {
         auto const guard = std::scoped_lock { _mutex };
         _forward = &target;
-        already = _stopped;
+        already = _conditions;
     }
-    // A loop that stopped before the process was assembled far enough to forward is still told.
-    for (auto const& stopped: already)
-        target.stopped(stopped.surface, stopped.reason);
+    // A loop that reported before the process was assembled far enough to forward is still told.
+    for (auto const& condition: already)
+        target.record(AcceptLoopEvent {
+            .surface = condition.surface, .line = condition.reason, .error = {}, .kind = condition.kind });
 }
 
-void AcceptLoopHealth::stopped(std::string_view surface, std::string_view reason)
+void AcceptLoopHealth::record(AcceptLoopEvent const& event)
 {
-    auto stopped = StoppedSurface { .surface = std::string { surface }, .reason = std::string { reason } };
+    if (event.kind == AcceptLoopEventKind::Warning)
+        return;
     auto listener = Listener {};
     AcceptLoopHealth* forward = nullptr;
     {
         auto const guard = std::scoped_lock { _mutex };
-        _stopped.push_back(stopped);
+        // A surface holds at most one degraded entry: the one its current run reported.
+        std::erase_if(_conditions, [&event](SurfaceCondition const& condition) {
+            return condition.surface == event.surface && condition.kind == AcceptLoopEventKind::Degraded;
+        });
+        if (event.kind != AcceptLoopEventKind::Recovered)
+            _conditions.push_back(
+                SurfaceCondition { .surface = event.surface, .reason = event.line, .kind = event.kind });
         listener = _listener;
         forward = _forward;
     }
     // Outside the lock: a listener that takes another registry's lock, or reads this one back,
     // must not deadlock on it.
     if (listener)
-        listener(stopped);
+        listener(event);
     if (forward != nullptr)
-        forward->stopped(stopped.surface, stopped.reason);
+        forward->record(event);
 }
 
-std::vector<StoppedSurface> AcceptLoopHealth::snapshot() const
+std::vector<SurfaceCondition> AcceptLoopHealth::snapshot() const
 {
     auto const guard = std::scoped_lock { _mutex };
-    return _stopped;
+    return _conditions;
 }
 
 } // namespace core::net

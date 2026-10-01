@@ -19,6 +19,7 @@
 #include <vector>
 
 using core::net::AcceptAction;
+using core::net::AcceptConditionChange;
 using core::net::AcceptDisposition;
 using core::net::acceptDispositionOf;
 using core::net::AcceptErrorPolicy;
@@ -156,93 +157,151 @@ TEST_CASE("An exhausted accept backs off within a bound, without end, and an acc
         delays.push_back(policy.onError(NetErrorCode::ResourceExhausted, clock.now()).delay.count());
     CHECK(delays == std::vector<std::int64_t> { 10, 20, 40, 80, 160, 320, 640, 1000, 1000 });
 
-    // Exhaustion is transient by definition, so it never gives up, however long it lasts: well past
-    // the bound an unclassified failure gives up at.
-    auto gaveUpAt = -1;
-    for (auto const i: std::views::iota(0, static_cast<int>(AcceptErrorPolicy::UnclassifiedBeforeGiveUp) * 4))
-        if (gaveUpAt < 0
-            && policy.onError(NetErrorCode::ResourceExhausted, clock.now()).action
-                   != AcceptAction::AcceptAgain)
-            gaveUpAt = i;
-    CHECK(gaveUpAt == -1);
+    // Exhaustion is transient by definition: it never ends the loop, and is never reported as a
+    // degraded one, however long it lasts.
+    auto otherwise = std::string {};
+    for (auto const i:
+         std::views::iota(0, static_cast<int>(AcceptErrorPolicy::UnclassifiedBeforeDegraded) * 4))
+    {
+        auto const verdict = policy.onError(NetErrorCode::ResourceExhausted, clock.now());
+        if (otherwise.empty()
+            && (verdict.action != AcceptAction::AcceptAgain || verdict.change != AcceptConditionChange::None))
+            otherwise = std::format("failure {}: {}", i, describe(verdict));
+    }
+    INFO(otherwise);
+    CHECK(otherwise.empty());
 
-    policy.onAccepted();
+    std::ignore = policy.onAccepted(clock.now());
     CHECK(policy.onError(NetErrorCode::ResourceExhausted, clock.now()).delay
           == AcceptErrorPolicy::FirstBackoff);
 
     // A per-connection failure never waits, whatever an exhaustion before it did.
-    policy.onAccepted();
+    std::ignore = policy.onAccepted(clock.now());
     CHECK(policy.onError(NetErrorCode::ConnReset, clock.now()).delay == std::chrono::milliseconds {});
 }
 
-TEST_CASE("An unclassified failure backs off, and the loop gives up if nothing else happens",
+TEST_CASE("An unclassified failure is backed off on without end, and a long run is reported degraded once",
           "[net][accept-policy]")
 {
-    // `SystemError` may be permanent -- a listener the network subsystem took down with it -- and a
-    // loop backing off on it forever looks alive while it serves nothing. So it backs off as
-    // exhaustion does, for a bounded run, and then gives up.
-    auto const clock = core::platform::ManualClock {};
+    // What lands in `SystemError` is what nobody anticipated -- `WSAENETDOWN` while an adapter
+    // resets, a completion nobody mapped -- and ending the loop on it would make a transient
+    // condition a permanent outage. So it is backed off on for as long as it lasts, and a long run
+    // is REPORTED, once, with how long it has lasted.
+    auto clock = core::platform::ManualClock {};
     auto policy = AcceptErrorPolicy {};
-    auto const bound = AcceptErrorPolicy::UnclassifiedBeforeGiveUp;
+    auto const bound = AcceptErrorPolicy::UnclassifiedBeforeDegraded;
 
     auto wrong = std::string {};
-    for (auto const failure: std::views::iota(std::uint32_t { 1 }, bound))
+    auto degradedAt = std::uint32_t { 0 };
+    auto reported = AcceptVerdict {};
+    for (auto const failure: std::views::iota(std::uint32_t { 1 }, bound * 3))
     {
         auto const verdict = policy.onError(NetErrorCode::SystemError, clock.now());
         if (verdict.action != AcceptAction::AcceptAgain || verdict.delay == std::chrono::milliseconds {})
             wrong += std::format("failure {}: {}; ", failure, describe(verdict));
+        if (verdict.change == AcceptConditionChange::Degraded)
+        {
+            if (degradedAt != 0)
+                wrong += std::format("reported degraded again at {}; ", failure);
+            degradedAt = failure;
+            reported = verdict;
+        }
+        else if (verdict.change != AcceptConditionChange::None)
+            wrong += std::format("failure {}: a change other than degraded; ", failure);
+        clock.advance(verdict.delay);
     }
-    auto const last = policy.onError(NetErrorCode::SystemError, clock.now());
-    if (last.action != AcceptAction::GiveUp)
-        wrong += std::format("failure {}: {}, expected to give up; ", bound, describe(last));
+    if (degradedAt != bound)
+        wrong += std::format("reported degraded at failure {}, expected {}; ", degradedAt, bound);
+    if (reported.streak.failures != bound || reported.streak.code != NetErrorCode::SystemError
+        || reported.streak.lasted <= std::chrono::seconds { 20 })
+        wrong += std::format(
+            "the run reported was {} failures over {} ms; ",
+            reported.streak.failures,
+            std::chrono::duration_cast<std::chrono::milliseconds>(reported.streak.lasted).count());
     INFO(wrong);
     CHECK(wrong.empty());
 
-    // The count is of failures IN A ROW: an accept, or a connection the listener dequeued and that
-    // failed, says the listener is alive, and starts it again.
-    for (auto const evidence: { 0, 1 })
-    {
-        auto alive = AcceptErrorPolicy {};
-        for ([[maybe_unused]] auto const i: std::views::iota(std::uint32_t { 1 }, bound))
-            std::ignore = alive.onError(NetErrorCode::SystemError, clock.now());
-        if (evidence == 0)
-            alive.onAccepted();
-        else
-            std::ignore = alive.onError(NetErrorCode::ConnReset, clock.now());
-        INFO((evidence == 0 ? "after an accept" : "after a failed connection"));
-        CHECK(alive.onError(NetErrorCode::SystemError, clock.now()).action == AcceptAction::AcceptAgain);
-    }
+    // An accept ends the run: the recovery is reported, with the whole run, and the next long run
+    // is reported again.
+    auto const recovered = policy.onAccepted(clock.now());
+    CHECK(recovered.change == AcceptConditionChange::Recovered);
+    CHECK(recovered.streak.failures == (bound * 3) - 1);
+    auto again = std::uint32_t { 0 };
+    for (auto const failure: std::views::iota(std::uint32_t { 1 }, bound + 1))
+        if (policy.onError(NetErrorCode::SystemError, clock.now()).change == AcceptConditionChange::Degraded)
+            again = failure;
+    CHECK(again == bound);
 }
 
-TEST_CASE("Failed connections without end make the loop yield and never back off", "[net][accept-policy]")
+TEST_CASE("A run of unclassified failures is ended by any sign the listener is dequeuing",
+          "[net][accept-policy]")
 {
-    // A listener answering a per-connection code forever would spin its loop, and one whose accept
-    // fails without suspending would never yield it. But each such failure consumed a queued
-    // connection, so the answer is a constant YIELD: a backoff that doubled held a port refusing for
-    // as long as a flood's backlog of dead connections took to drain at one a second.
+    // An accept, or a connection the listener dequeued and that then failed, says the listener is
+    // alive: the run starts again, so the degraded report needs a run of `UnclassifiedBeforeDegraded`
+    // IN A ROW. A run that was never reported recovers silently; one that was says so.
     auto const clock = core::platform::ManualClock {};
-    auto policy = AcceptErrorPolicy {};
+    auto const bound = AcceptErrorPolicy::UnclassifiedBeforeDegraded;
     auto wrong = std::string {};
-    auto const expect = [&](int round, std::uint32_t failure, std::chrono::milliseconds want) {
-        auto const verdict = policy.onError(NetErrorCode::ConnReset, clock.now());
-        if (verdict.delay != want || verdict.action != AcceptAction::AcceptAgain)
-            wrong += std::format(
-                "round {} failure {}: {}, expected {} ms; ", round, failure, describe(verdict), want.count());
-    };
-    for (auto const round: { 1, 2, 3 })
+    for (auto const evidence: { 0, 1 })
     {
-        for (auto const failure:
-             std::views::iota(std::uint32_t { 1 }, AcceptErrorPolicy::FailuresBeforeYield))
-            expect(round, failure, std::chrono::milliseconds {});
-        // The same short yield every time: it does not grow.
-        expect(round, AcceptErrorPolicy::FailuresBeforeYield, AcceptErrorPolicy::FirstBackoff);
+        auto const name = evidence == 0 ? "an accept" : "a failed connection";
+        auto const end = [&](AcceptErrorPolicy& policy) {
+            return evidence == 0 ? policy.onAccepted(clock.now())
+                                 : policy.onError(NetErrorCode::ConnReset, clock.now());
+        };
+        auto policy = AcceptErrorPolicy {};
+        for ([[maybe_unused]] auto const i: std::views::iota(std::uint32_t { 1 }, bound))
+            std::ignore = policy.onError(NetErrorCode::SystemError, clock.now());
+        if (end(policy).change != AcceptConditionChange::None)
+            wrong += std::format("{} after an unreported run reported a change; ", name);
+        if (policy.onError(NetErrorCode::SystemError, clock.now()).change != AcceptConditionChange::None)
+            wrong += std::format("{} did not start the run again; ", name);
+
+        auto degraded = AcceptErrorPolicy {};
+        for ([[maybe_unused]] auto const i: std::views::iota(std::uint32_t { 0 }, bound))
+            std::ignore = degraded.onError(NetErrorCode::SystemError, clock.now());
+        if (end(degraded).change != AcceptConditionChange::Recovered)
+            wrong += std::format("{} after a reported run did not report the recovery; ", name);
     }
     INFO(wrong);
     CHECK(wrong.empty());
+}
 
-    // One accept and the count starts again.
-    policy.onAccepted();
-    CHECK(policy.onError(NetErrorCode::ConnReset, clock.now()).delay == std::chrono::milliseconds {});
+TEST_CASE("Answers that wait for nothing make the loop yield, and never back off", "[net][accept-policy]")
+{
+    // A listener answering a per-connection code, or its own poll tick, without suspending would
+    // never yield its loop. But each failed connection consumed a queued one, so the answer is a
+    // constant YIELD: a backoff that doubled held a port refusing for as long as a flood's backlog
+    // of dead connections took to drain at one a second.
+    auto const clock = core::platform::ManualClock {};
+    auto wrong = std::string {};
+    for (auto const code: { NetErrorCode::ConnReset, NetErrorCode::WouldBlock, NetErrorCode::Timeout })
+    {
+        auto policy = AcceptErrorPolicy {};
+        auto const expect = [&](int round, std::uint32_t failure, std::chrono::milliseconds want) {
+            auto const verdict = policy.onError(code, clock.now());
+            if (verdict.delay != want || verdict.action != AcceptAction::AcceptAgain)
+                wrong += std::format("{} round {} answer {}: {}, expected {} ms; ",
+                                     core::net::toString(code),
+                                     round,
+                                     failure,
+                                     describe(verdict),
+                                     want.count());
+        };
+        for (auto const round: { 1, 2, 3 })
+        {
+            for (auto const failure:
+                 std::views::iota(std::uint32_t { 1 }, AcceptErrorPolicy::FailuresBeforeYield))
+                expect(round, failure, std::chrono::milliseconds {});
+            // The same short yield every time: it does not grow.
+            expect(round, AcceptErrorPolicy::FailuresBeforeYield, AcceptErrorPolicy::FirstBackoff);
+        }
+        // One accept and the count starts again.
+        std::ignore = policy.onAccepted(clock.now());
+        expect(4, 1, std::chrono::milliseconds {});
+    }
+    INFO(wrong);
+    CHECK(wrong.empty());
 }
 
 TEST_CASE("A closed listener stops quietly, a dead one gives up, and a poll tick says nothing",

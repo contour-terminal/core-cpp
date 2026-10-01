@@ -58,7 +58,12 @@ NetErrorCode classifySocketError(int systemCode) noexcept
         case EMFILE:
         case ENFILE:
         case ENOBUFS:
-        case ENOMEM: return NetErrorCode::ResourceExhausted;
+        case ENOMEM:
+#ifdef ENOSR
+        // Out of STREAMS resources, which accept(2) documents among its errors.
+        case ENOSR:
+#endif
+            return NetErrorCode::ResourceExhausted;
         default: return NetErrorCode::SystemError;
     }
 }

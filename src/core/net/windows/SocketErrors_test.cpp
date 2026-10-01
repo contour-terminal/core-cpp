@@ -52,6 +52,7 @@ constexpr auto Rows = std::array {
     // answers under load, and transient, which `SystemError` may not be.
     Row { .systemCode = WSAEMFILE, .code = NetErrorCode::ResourceExhausted },
     Row { .systemCode = WSAENOBUFS, .code = NetErrorCode::ResourceExhausted },
+    Row { .systemCode = WSA_NOT_ENOUGH_MEMORY, .code = NetErrorCode::ResourceExhausted },
     // Not resets, on purpose: an abort this end's stack made and a keepalive-detected loss are
     // `SystemError`, as `EPIPE` is on POSIX.
     Row { .systemCode = WSAECONNABORTED, .code = NetErrorCode::SystemError },
