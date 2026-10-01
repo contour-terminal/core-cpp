@@ -7,6 +7,7 @@
 #include <core/net/IoBackend.hpp>
 #include <core/net/Sockets.hpp>
 #include <core/net/WithTimeout.hpp>
+#include <core/net/testing/FailingListener.hpp>
 #include <core/net/testing/InMemoryTransport.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -23,6 +24,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 using core::async::Task;
 using core::net::EventLoop;
@@ -667,7 +669,7 @@ TEST_CASE("serve dispatches a request through a handler and closes", "[net][http
                   std::string* out,
                   auto clientFn) -> Task<void> {
         static_cast<void>(
-            co_await core::async::whenAny(core::net::serve(lis, std::move(h)), clientFn(l, p, out)));
+            co_await core::async::whenAny(core::net::serve(l, lis, std::move(h)), clientFn(l, p, out)));
     };
     loop.blockOn(run(&loop, listener->get(), std::move(handler), port, &reply, client));
 
@@ -710,7 +712,7 @@ TEST_CASE("serve answers 500 when a handler throws rather than dying", "[net][ht
                   std::string* out,
                   auto clientFn) -> Task<void> {
         static_cast<void>(
-            co_await core::async::whenAny(core::net::serve(lis, std::move(h)), clientFn(l, p, out)));
+            co_await core::async::whenAny(core::net::serve(l, lis, std::move(h)), clientFn(l, p, out)));
     };
     loop.blockOn(run(&loop, listener->get(), std::move(handler), port, &reply, client));
 
@@ -739,7 +741,7 @@ TEST_CASE("serve completes the transport handshake before it reads a request", "
     // Bounded: a serve() that read the socket after all would not return, and the wait says so
     // rather than leaving it to ctest's TIMEOUT.
     auto const served = loop.blockOn(core::net::withTimeout(
-        &loop, core::net::serve(&listener, std::move(handler)), std::chrono::seconds { 10 }));
+        &loop, core::net::serve(&loop, &listener, std::move(handler)), std::chrono::seconds { 10 }));
     REQUIRE(served);
 
     CHECK(reads == 0);
@@ -800,7 +802,8 @@ TEST_CASE("serve's refusal of a request whose body it did not read reaches the c
                   Received* out,
                   auto clientFn) -> Task<void> {
         static_cast<void>(co_await core::async::whenAny(
-            core::net::serve(lis, std::move(h), HttpLimits { .maxBodyBytes = 1024 }), clientFn(l, p, out)));
+            core::net::serve(l, lis, std::move(h), HttpLimits { .maxBodyBytes = 1024 }),
+            clientFn(l, p, out)));
     };
 
     auto received = Received {};
@@ -816,4 +819,153 @@ TEST_CASE("serve's refusal of a request whose body it did not read reaches the c
     INFO("the client's reads ended in "
          << (received.end->has_value() ? "EOF" : received.end->error().context));
     CHECK(received.end->has_value());
+}
+
+namespace
+{
+
+/// What a `serve` under test reported, and what its one client read back.
+struct ServeObservation
+{
+    std::string reply;                        ///< Every byte the client read.
+    std::vector<std::string> failureLines;    ///< `AcceptLoopReporting::onFailure`'s lines.
+    std::vector<core::net::NetError> givenUp; ///< `AcceptLoopReporting::onGiveUp`'s errors.
+    std::size_t handled = 0;                  ///< Requests the handler saw.
+};
+
+/// @param seen Where the reports go.
+/// @return Reporting that records into @p seen.
+[[nodiscard]] core::net::AcceptLoopReporting recordInto(ServeObservation* seen)
+{
+    return core::net::AcceptLoopReporting {
+        .surface = "http",
+        .onFailure = [seen](std::string_view line) { seen->failureLines.emplace_back(line); },
+        .onGiveUp = [seen](core::net::NetError const& error) { seen->givenUp.push_back(error); },
+    };
+}
+
+/// One GET, and the reply drained into @p out.
+Task<void> getHello(EventLoop* loop, std::uint16_t port, std::string* out)
+{
+    auto connected = co_await core::net::connect(loop, "127.0.0.1", port);
+    if (!connected.has_value())
+        co_return;
+    auto socket = std::move(*connected);
+    auto const request = std::string { "GET /hello HTTP/1.1\r\nHost: x\r\n\r\n" };
+    co_await sendText(socket.get(), &request);
+    co_await drain(socket.get(), out);
+}
+
+/// Races `serve` over @p listener against one client, bounded.
+/// @return Whether the race finished inside its bound.
+[[nodiscard]] bool serveOneClient(EventLoop& loop,
+                                  core::net::IListener* listener,
+                                  std::uint16_t port,
+                                  ServeObservation* seen)
+{
+    auto handler = core::net::HttpHandler { [seen](HttpRequest const& request) {
+        ++seen->handled;
+        return HttpResponse::ok("served:" + request.path);
+    } };
+    auto run = [](EventLoop* l,
+                  core::net::IListener* lis,
+                  core::net::HttpHandler h,
+                  std::uint16_t p,
+                  ServeObservation* s) -> Task<void> {
+        static_cast<void>(co_await core::async::whenAny(
+            core::net::serve(l, lis, std::move(h), {}, recordInto(s)), getHello(l, p, &s->reply)));
+    };
+    return loop.blockOn(core::net::withTimeout(
+        &loop, run(&loop, listener, std::move(handler), port, seen), std::chrono::seconds { 10 }));
+}
+
+} // namespace
+
+TEST_CASE("serve backs off on exhausted accepts and serves the connection queued behind them",
+          "[net][http][accept-policy]")
+{
+    // Before the accept policy, `serve` returned on ANY failed accept and left the port open: one
+    // `EMFILE` and the server accepted nothing more, while the kernel went on queueing handshakes
+    // for it. The client below is queued on the real listener behind three scripted failures --
+    // exhaustion, a connection reset while queued, exhaustion again -- and is answered only by a
+    // loop that backs off and accepts again.
+    auto const source = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *source };
+    auto listener = core::net::listen(loop, "127.0.0.1", 0);
+    REQUIRE(listener.has_value());
+    auto const port = (*listener)->boundPort();
+    auto failing = core::net::testing::FailingListener {
+        **listener,
+        { core::net::makeNetError(NetErrorCode::ResourceExhausted, 0, "accept"),
+          core::net::makeNetError(NetErrorCode::ConnReset, 0, "AcceptEx"),
+          core::net::makeNetError(NetErrorCode::ResourceExhausted, 0, "accept") }
+    };
+
+    auto seen = ServeObservation {};
+    REQUIRE(serveOneClient(loop, &failing, port, &seen));
+
+    // One assertion over everything that distinguishes a loop that went on from one that ended.
+    auto wrong = std::string {};
+    if (failing.failuresAnswered() != 3)
+        wrong += "the loop stopped after " + std::to_string(failing.failuresAnswered()) + " of 3 failures; ";
+    if (seen.handled != 1)
+        wrong += "the handler saw " + std::to_string(seen.handled) + " requests; ";
+    if (!seen.reply.starts_with("HTTP/1.1 200 OK\r\n") || !seen.reply.ends_with("served:/hello"))
+        wrong += "the client read \"" + seen.reply + "\"; ";
+    if (!seen.givenUp.empty())
+        wrong += "the loop gave up on " + seen.givenUp.front().toString() + "; ";
+    // The first failure warns; the two after it fall inside the rate limit.
+    if (seen.failureLines.size() != 1 || !seen.failureLines.front().contains("resource exhausted"))
+        wrong += std::to_string(seen.failureLines.size()) + " warning lines; ";
+    INFO(wrong);
+    CHECK(wrong.empty());
+}
+
+TEST_CASE("serve ends on a dead listener and reports it once, and ends quietly on a closed one",
+          "[net][http][accept-policy]")
+{
+    // The control beside the case above: going on is right for a failed ACCEPT, never for a failed
+    // LISTENER. A dead listener ends the loop at once -- accepting again would fail the same way
+    // forever -- and the end is reported, because nobody asked for it. A closed listener is the
+    // owner's own doing and ends it quietly.
+    struct Case
+    {
+        NetErrorCode code;   ///< What the one scripted accept answers.
+        std::size_t givenUp; ///< How many times the loop must report giving up.
+    };
+    for (auto const& [code, givenUp]: { Case { .code = NetErrorCode::BadHandle, .givenUp = 1 },
+                                        Case { .code = NetErrorCode::Cancelled, .givenUp = 0 } })
+    {
+        INFO(core::net::toString(code));
+        auto const source = core::net::makeDefaultBackend();
+        auto loop = EventLoop { *source };
+        auto listener = core::net::listen(loop, "127.0.0.1", 0);
+        REQUIRE(listener.has_value());
+        auto failing =
+            core::net::testing::FailingListener { **listener, core::net::testing::repeatedFailures(code, 1) };
+
+        auto seen = ServeObservation {};
+        auto handler = core::net::HttpHandler { [&seen](HttpRequest const&) {
+            ++seen.handled;
+            return HttpResponse::ok("unreachable");
+        } };
+        // `serve` alone, bounded: it must END, with no client and no cancellation to end it.
+        auto const ended = loop.blockOn(core::net::withTimeout(
+            &loop,
+            core::net::serve(&loop, &failing, std::move(handler), {}, recordInto(&seen)),
+            std::chrono::seconds { 10 }));
+        REQUIRE(ended);
+
+        auto wrong = std::string {};
+        if (seen.givenUp.size() != givenUp)
+            wrong += "reported giving up " + std::to_string(seen.givenUp.size()) + " times; ";
+        if (givenUp == 1 && !seen.givenUp.empty() && seen.givenUp.front().code != code)
+            wrong += "reported " + seen.givenUp.front().toString() + "; ";
+        if (!seen.failureLines.empty())
+            wrong += "warned: " + seen.failureLines.front() + "; ";
+        if (seen.handled != 0)
+            wrong += "the handler ran; ";
+        INFO(wrong);
+        CHECK(wrong.empty());
+    }
 }

@@ -11,6 +11,21 @@ workflow refuses one without a section here.
 
 ### Breaking
 
+- **`serve()` takes the loop it runs on, and a failed accept no longer ends it.** `serve` returned
+  on ANY failed accept and left the listening socket open, so one `EMFILE` or one client resetting
+  its queued connection stopped the server for good while the kernel went on completing handshakes
+  into a backlog nobody drained. It now answers each failed accept through `AcceptErrorPolicy`
+  (below): a connection that failed is accepted past, exhaustion backs off on the loop's timer and
+  serves again, and only a closed listener (`Cancelled`) or a dead one (`BadHandle`) ends it at once.
+  The new parameter is that loop, whose timer waits out a backoff and whose clock paces the
+  warnings; a trailing `AcceptLoopReporting` says where the rate-limited warnings and the giving up
+  are reported, and is optional.
+  - *Migration*: `serve(listener, handler)` is `serve(&loop, listener, handler)`, and
+    `serve(listener, handler, limits)` is `serve(&loop, listener, handler, limits)`. A server that
+    wants to see what its accept loop went on past, or know when it gave up, passes
+    `AcceptLoopReporting { .surface = "...", .onFailure = ..., .onGiveUp = ... }`. No consumer
+    calls `core::net::serve` yet; endo's `httpServe` builtin, which calls contour's copy, takes
+    the loop it already has when it moves onto core-cpp.
 - **`EMFILE`, `ENFILE`, `ENOBUFS` and `ENOMEM`, and Winsock's `WSAEMFILE` and `WSAENOBUFS`, are
   `NetErrorCode::ResourceExhausted`, no longer `SystemError`,** from every transport, the dial and
   accept alike: the one socket-error table per platform classifies them. `SystemError` is what
@@ -24,7 +39,6 @@ workflow refuses one without a section here.
 
 - **`NetErrorCode::ResourceExhausted`**: the process or the system ran out of descriptors, buffer
   space or memory. See Breaking for the codes that now report it.
-
 - **`<core/net/AcceptPolicy.hpp>`: what an accept loop does about a failed accept,** graduated from
   fastcached so that a consumer's own accept loops answer it the way `serve` does.
   `AcceptErrorTable` sorts every `NetErrorCode` into a disposition, in enumerator order, so a code
@@ -35,33 +49,15 @@ workflow refuses one without a section here.
   each one consumed a queued connection; and `SystemError` backs off the same way but gives up after
   32 in a row with no accept and no failed connection between them. `describeAcceptFailure()` and
   `describeAcceptLoopEnded()` word the two lines a loop logs.
-
 - **`<core/net/AcceptLoopHealth.hpp>`: which accept loops of a process gave up while they were
   meant to be serving,** for a liveness probe to answer from: a listening port is not a serving one.
   Graduated from fastcached, with `subscribe()` and `forward()` for a component that keeps a
   registry of its own.
-
 - **`<core/net/testing/FailingListener.hpp>`: an `IListener` decorator whose first accepts answer
   scripted `NetError`s,** then accept from the listener it decorates, owned or not. It is how a
   consumer tests its own accept loop against failures no kernel produces on demand: the
   `IAcceptCall` seam of 0.5.1 is private to the POSIX accept. Graduated from fastcached's
   `FailingAcceptsListener`.
-
-### Breaking
-
-- **`EMFILE`, `ENFILE`, `ENOBUFS` and `ENOMEM`, and Winsock's `WSAEMFILE` and `WSAENOBUFS`, are
-  `NetErrorCode::ResourceExhausted`, no longer `SystemError`,** from every transport, the dial and
-  accept alike: the one socket-error table per platform classifies them. `SystemError` is what
-  nothing classified further, and may be permanent; exhaustion is transient, and a caller backing
-  off on `SystemError` as though it were exhaustion backed off on a dead listener forever.
-  - *Migration*: a caller that read `SystemError` as "out of something, try again later" tests
-    `ResourceExhausted` instead. `ResourceExhausted` comes after `SystemError` in the enumeration,
-    so no code's value moved, and `toString` says `resource exhausted`.
-
-### Added
-
-- **`NetErrorCode::ResourceExhausted`**: the process or the system ran out of descriptors, buffer
-  space or memory. See Breaking for the codes that now report it.
 
 ## [0.5.1] - 2026-09-29
 

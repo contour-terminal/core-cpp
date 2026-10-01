@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/HttpServer.hpp>
 
+#include <core/net/AcceptPolicy.hpp>
 #include <core/net/AsyncBufferedReader.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <charconv>
+#include <chrono>
 #include <cstddef>
 #include <optional>
 #include <span>
@@ -325,13 +327,38 @@ async::Task<IoResult> writeResponse(ISocket* socket, HttpResponse response)
     co_return co_await socket->write(bytes);
 }
 
-async::Task<void> serve(IListener* listener, HttpHandler handler, HttpLimits limits)
+async::Task<void> serve(EventLoop* loop,
+                        IListener* listener,
+                        HttpHandler handler,
+                        HttpLimits limits,
+                        AcceptLoopReporting reporting)
 {
+    auto policy = AcceptErrorPolicy {};
     while (true)
     {
         auto accepted = co_await listener->accept();
         if (!accepted.has_value())
-            co_return; // listener closed or cancelled
+        {
+            // One failed accept is almost never a failed listener: only a closed or dead one ends
+            // the loop, and everything else is accepted past (`AcceptPolicy.hpp`).
+            auto const& error = accepted.error();
+            auto const verdict = policy.onError(error.code, loop->clock().now());
+            switch (verdict.action)
+            {
+                case AcceptAction::Stop: co_return;
+                case AcceptAction::GiveUp:
+                    if (reporting.onGiveUp)
+                        reporting.onGiveUp(error);
+                    co_return;
+                case AcceptAction::AcceptAgain: break;
+            }
+            if (verdict.warning.has_value() && reporting.onFailure)
+                reporting.onFailure(describeAcceptFailure(reporting.surface, error, verdict));
+            if (verdict.delay > std::chrono::milliseconds {})
+                co_await loop->delay(verdict.delay);
+            continue;
+        }
+        policy.onAccepted();
         auto conn = std::move(*accepted);
         // Once per connection, before anything frames the stream: a transport that negotiates
         // (TLS) has finished doing so before the first request byte is read. A connection whose

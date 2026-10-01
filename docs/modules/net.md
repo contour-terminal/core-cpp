@@ -50,7 +50,9 @@ directory `src/core/net/`. Three targets:
 | `<core/net/WriteQueue.hpp>` | the single writer per connection: whole frames in order, bounded by bytes, with superseding by tag |
 | `<core/net/SplitSocket.hpp>` | one duplex `ISocket` from two simplex halves |
 | `<core/net/WithTimeout.hpp>` | `withTimeout()`: a task raced against a timer on the loop's clock |
-| `<core/net/HttpServer.hpp>` | a minimal HTTP/1.1 server: `serve()`, `readRequest()`, `writeResponse()`; `Content-Length` bodies only, every response closes, and a refusal closes lingering (`HttpLimits::linger`) |
+| `<core/net/HttpServer.hpp>` | a minimal HTTP/1.1 server: `serve()`, `readRequest()`, `writeResponse()`; `Content-Length` bodies only, every response closes, and a refusal closes lingering (`HttpLimits::linger`). A failed accept is answered by `AcceptErrorPolicy` and reported through `AcceptLoopReporting` |
+| `<core/net/AcceptPolicy.hpp>` | `AcceptErrorPolicy`, `AcceptErrorTable`, `acceptDispositionOf()`, `describeAcceptFailure()`, `describeAcceptLoopEnded()`: what an accept loop does about a failed accept (see [Accept loops](#accept-loops)) |
+| `<core/net/AcceptLoopHealth.hpp>` | `AcceptLoopHealth`: the accept loops of a process that gave up while they were meant to be serving, for a liveness probe |
 | `<core/net/LingeringClose.hpp>` | `closeLingering()`: half-close, drain the peer within `LingerBounds` (time, bytes, reads), then close, so a reply written over a request left unread is not destroyed by the reset a bare close sends |
 | `<core/net/IDatagramSocket.hpp>`, `<core/net/UdpSocket.hpp>` | `IDatagramSocket` (`send`, a bounded `receive`, `close`, `boundAddress`), `DatagramAddress`, `ReceivedDatagram`, `DatagramWait`; `openUdpSocket()` with `BroadcastMode` and `PortSharing`, answering WHY a bind failed. Blocking, on a thread of its own: a datagram socket is not an `ISocket` |
 | `<core/net/SharedPortDatagram.hpp>` | `answerFromOwnAddress()` and `openSharedPortUdpSocket()`: hear the segment on a shared port, send and be answered from an address only this node holds |

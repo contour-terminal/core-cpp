@@ -13,10 +13,12 @@
 /// rather than speculatively.
 
 #include <core/async/Task.hpp>
+#include <core/net/EventLoop.hpp>
 #include <core/net/IListener.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/IoResult.hpp>
 #include <core/net/LingeringClose.hpp>
+#include <core/net/NetError.hpp>
 
 #include <chrono>
 #include <cstddef>
@@ -100,10 +102,35 @@ struct HttpLimits
                           .reads = 4 };
 };
 
+/// Where @c serve's accept loop reports what @c AcceptErrorPolicy decided (`AcceptPolicy.hpp`).
+/// Every member is optional: an empty callback is not called.
+struct AcceptLoopReporting
+{
+    std::string surface = "http"; ///< What the loop serves, as the lines below name it.
+    /// Told each failed accept the loop goes on past that the warning rate limit lets through, as
+    /// one line (@c describeAcceptFailure).
+    std::function<void(std::string_view)> onFailure;
+    /// Told once, with what the last accept answered, when the loop gives up on a listener that was
+    /// not closed (@c AcceptAction::GiveUp) -- the moment @c serve stops serving although nobody
+    /// asked it to. @c describeAcceptLoopEnded words it, and @c AcceptLoopHealth::stopped records
+    /// it for a liveness probe.
+    std::function<void(NetError const&)> onGiveUp;
+};
+
 /// Serves connections from @p listener until it is closed, dispatching each request
 /// to @p handler. Connections are handled in sequence on the loop thread (a slow
 /// handler stalls the accept loop), which suits the single-threaded model this
-/// layer targets. Returns when the listener is closed or the flow is cancelled.
+/// layer targets. Returns when the listener is closed, when it is dead, or when the flow is
+/// cancelled.
+///
+/// **A failed accept is answered by @c AcceptErrorPolicy, and only a closed or dead listener ends
+/// the loop.** A connection that failed before it was handed over is accepted past; exhaustion
+/// (@c NetErrorCode::ResourceExhausted: out of descriptors, buffers or memory) backs off on
+/// @p loop's timer, up to @c AcceptErrorPolicy::MaxBackoff, and serves again; a failure nothing
+/// classifies is backed off on too, until @c AcceptErrorPolicy::UnclassifiedBeforeGiveUp of them
+/// in a row give up. Before 0.6.0 any failed accept ended the loop with the port left open, so one
+/// `EMFILE` stopped a server for good while its port kept accepting handshakes into a backlog
+/// nobody drained. @p reporting says what was accepted past and when the loop gave up.
 ///
 /// Each connection's @c ISocket::handshakeIfNeeded is awaited before its request is
 /// read, and a connection whose handshake fails is dropped without an answer. **Neither
@@ -118,11 +145,18 @@ struct HttpLimits
 /// So the refusal is followed by @c closeLingering, bounded by @c HttpLimits::linger, and **each
 /// refused request holds the accept loop for up to `linger.total`** (250 ms by default) while it
 /// does. A request that was read in full and answered is closed by its destructor, which is a FIN.
+/// @param loop The loop @p listener runs on: its timer waits out a backoff, and its clock paces the
+///        warnings (not owned).
 /// @param listener The bound listener to accept from (not owned).
 /// @param handler The request handler.
 /// @param limits Parsing limits applied to every request.
+/// @param reporting Where the accept loop's failures and its giving up are reported.
 /// @return A task that completes when serving stops.
-[[nodiscard]] async::Task<void> serve(IListener* listener, HttpHandler handler, HttpLimits limits = {});
+[[nodiscard]] async::Task<void> serve(EventLoop* loop,
+                                      IListener* listener,
+                                      HttpHandler handler,
+                                      HttpLimits limits = {},
+                                      AcceptLoopReporting reporting = {});
 
 /// Reads and parses a single HTTP/1.1 request from @p socket. Exposed so the
 /// framing can be tested without a listener.

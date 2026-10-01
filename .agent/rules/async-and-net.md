@@ -711,6 +711,19 @@ finish on another thread, and `CMakeLists.txt` compiles it only where `CORE_CPP_
 
 ## Sockets
 
+- **Only a closed or dead listener ends an accept loop.** A failed accept is almost never a failed
+  listener -- a client reset its queued connection, the process is out of descriptors -- and a loop
+  that ends on one leaves the port open, so the kernel completes handshakes into a backlog nobody
+  drains and then refuses every connect. Every accept loop asks `AcceptErrorPolicy`
+  (`AcceptPolicy.hpp`) and waits, warns and gives up as its verdict says; none decides it in a
+  conditional of its own. **Exhaustion is `ResourceExhausted`, never `SystemError`**: the first is
+  transient and backed off on without end, the second may be permanent and is given up on after a
+  bounded run, so a classifier that moves an exhaustion `errno` back into `SystemError` turns a busy
+  server into a stopped one half a minute later. A new `NetErrorCode` fails the build in
+  `AcceptErrorTable` until its row is decided. Origin: fastcached's compile node, nine hours
+  serving nothing on its port while its health endpoint answered `200`
+  (fastcached `src/FastCache/Transport/AcceptPolicy.hpp`); `serve` returned on any failed accept
+  until 0.6.0.
 - **Every connected stream socket gets its options in one place, dialled or accepted.**
   `detail::applyStreamSocketOptions` sets close-on-exec, `TCP_NODELAY`, and keepalive when a dial
   asks for it, and every dial and every accept path on every platform calls it. Before it, the
