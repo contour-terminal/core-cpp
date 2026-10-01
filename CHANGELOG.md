@@ -25,6 +25,44 @@ workflow refuses one without a section here.
 - **`NetErrorCode::ResourceExhausted`**: the process or the system ran out of descriptors, buffer
   space or memory. See Breaking for the codes that now report it.
 
+- **`<core/net/AcceptPolicy.hpp>`: what an accept loop does about a failed accept,** graduated from
+  fastcached so that a consumer's own accept loops answer it the way `serve` does.
+  `AcceptErrorTable` sorts every `NetErrorCode` into a disposition, in enumerator order, so a code
+  added to the enumeration fails the build until its row is decided; `AcceptErrorPolicy` turns a
+  failed accept and the loop's clock into a verdict -- accept again after a delay, stop, or give up
+  -- with a rate-limited warning. Exhaustion backs off from 10 ms, doubling to 1 s, for as long as
+  it lasts; a run of failed connections yields for 10 ms every 16 rather than backing off, because
+  each one consumed a queued connection; and `SystemError` backs off the same way but gives up after
+  32 in a row with no accept and no failed connection between them. `describeAcceptFailure()` and
+  `describeAcceptLoopEnded()` word the two lines a loop logs.
+
+- **`<core/net/AcceptLoopHealth.hpp>`: which accept loops of a process gave up while they were
+  meant to be serving,** for a liveness probe to answer from: a listening port is not a serving one.
+  Graduated from fastcached, with `subscribe()` and `forward()` for a component that keeps a
+  registry of its own.
+
+- **`<core/net/testing/FailingListener.hpp>`: an `IListener` decorator whose first accepts answer
+  scripted `NetError`s,** then accept from the listener it decorates, owned or not. It is how a
+  consumer tests its own accept loop against failures no kernel produces on demand: the
+  `IAcceptCall` seam of 0.5.1 is private to the POSIX accept. Graduated from fastcached's
+  `FailingAcceptsListener`.
+
+### Breaking
+
+- **`EMFILE`, `ENFILE`, `ENOBUFS` and `ENOMEM`, and Winsock's `WSAEMFILE` and `WSAENOBUFS`, are
+  `NetErrorCode::ResourceExhausted`, no longer `SystemError`,** from every transport, the dial and
+  accept alike: the one socket-error table per platform classifies them. `SystemError` is what
+  nothing classified further, and may be permanent; exhaustion is transient, and a caller backing
+  off on `SystemError` as though it were exhaustion backed off on a dead listener forever.
+  - *Migration*: a caller that read `SystemError` as "out of something, try again later" tests
+    `ResourceExhausted` instead. `ResourceExhausted` comes after `SystemError` in the enumeration,
+    so no code's value moved, and `toString` says `resource exhausted`.
+
+### Added
+
+- **`NetErrorCode::ResourceExhausted`**: the process or the system ran out of descriptors, buffer
+  space or memory. See Breaking for the codes that now report it.
+
 ## [0.5.1] - 2026-09-29
 
 ### Fixed

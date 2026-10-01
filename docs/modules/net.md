@@ -59,6 +59,7 @@ directory `src/core/net/`. Three targets:
 | `<core/net/HealthProbe.hpp>` | `probeHttpStatus()`, which returns the status an HTTP endpoint answered, and `httpHealthProbe()`, which is whether it was 200 |
 | `<core/net/testing/InMemorySocket.hpp>` | the deterministic fake: `InMemoryPipe`, `InMemorySocket`, `InMemorySocketPair`, `InMemoryListener` -- no descriptor, no loop, completed inline, and pinned to a real socket in every closed state by `SocketClosedStates_test.cpp`. Not `testing/InMemoryTransport.hpp`, whose `makeSocketPair()` is a pair of REAL sockets |
 | `<core/net/testing/InMemoryDatagram.hpp>`, `<core/net/testing/DatagramPayload.hpp>` | `DatagramBus`, a network segment in one process with scripted loss, and the text-to-payload helpers |
+| `<core/net/testing/FailingListener.hpp>` | `FailingListener`, an `IListener` decorator whose first accepts answer scripted `NetError`s and then accept from the listener it decorates, owned or not; `repeatedFailures()` |
 | `<core/net/testing/SocketDecorator.hpp>`, `<core/net/testing/ParkingReadableSocket.hpp>` | `SocketDecorator`, which forwards every verb so a double overrides only the one it stages; `ParkingReadableSocket` and `ParkingWritableSocket`, which park until the test decides and count how each parked operation ended |
 | `<core/net/Diagnostics.hpp>` | `setDiagnosticSink()`: where a failure nobody can be handed goes (a wait that fails mid-sweep); discarded by default |
 | `<core/net/ITlsContext.hpp>` (`core::net`) | `ITlsContext`, the seam a TLS implementation plugs in behind, and `wrapTls(socket, context, loop)`, which hands a socket back unchanged for a null context -- so an accept path compiles identically in a build without TLS |
@@ -102,6 +103,30 @@ ONE table per platform (`detail::classifySocketError`, `posix/SocketErrors.cpp` 
 `AddressNotAvail`, `PermissionDenied`, `Timeout` -- means the same thing whichever transport
 reported it. `EPIPE` is deliberately `SystemError`, not `ConnReset`: it is a write after this end's
 own half-close, and a caller counts a reset apart from a goodbye.
+
+## Accept loops
+
+**A failed accept is almost never a failed listener**, and a loop that ends on one leaves its port
+open, accepting handshakes into a backlog nobody drains. `AcceptErrorPolicy`
+(`<core/net/AcceptPolicy.hpp>`) is the one answer to *what does a loop do about this failed accept*,
+from a table with a row for every `NetErrorCode` (`AcceptErrorTable`, in enumerator order, so a new
+code fails the build until its row is decided):
+
+| Disposition | Codes | What the loop does |
+|---|---|---|
+| `Closed` | `Cancelled` | ends, quietly (`AcceptAction::Stop`): the owner closed the listener |
+| `Dead` | `BadHandle` | ends, and says so (`AcceptAction::GiveUp`): accepting again would fail the same way forever |
+| `PollTick` | `Timeout`, `WouldBlock` | accepts again at once, and says nothing |
+| `PeerFailed` | `Eof`, `ConnReset`, `ConnRefused`, `HostUnreach`, `PermissionDenied`, `Unsupported`, `MessageTooLarge` | accepts again at once with a rate-limited warning, yielding for `FirstBackoff` after `FailuresBeforeYield` in a row |
+| `Exhausted` | `ResourceExhausted` | backs off, 10 ms doubling to 1 s, and accepts again, for as long as it lasts |
+| `Unclassified` | `SystemError`, and the codes an accept never answers | backs off the same way, and gives up after `UnclassifiedBeforeGiveUp` in a row with no accept and no per-connection failure between them |
+
+The policy is pure: the loop hands it the code and the instant and does the waiting, the logging and
+the accepting itself. `serve()` is such a loop; `AcceptLoopReporting` says where its warnings and its
+giving up go, and `AcceptLoopHealth` (`<core/net/AcceptLoopHealth.hpp>`) records surfaces that gave
+up, for a liveness probe to answer from. `testing::FailingListener`
+(`<core/net/testing/FailingListener.hpp>`) scripts the failed accepts a consumer's own loop is
+tested against.
 
 `isDeadlineExpiry(code)` answers "did this operation run out of time", and it is `Timeout` **or**
 `WouldBlock`, because a deadline armed with `SO_RCVTIMEO`/`SO_SNDTIMEO` or a poll timeout expires as
