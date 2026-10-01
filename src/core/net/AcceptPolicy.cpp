@@ -160,6 +160,12 @@ std::string describeAcceptRecovered(std::string_view surface, AcceptStreak const
                        toString(streak.code));
 }
 
+std::string describeAcceptLoopStopped(std::string_view surface)
+{
+    return std::format("{}: accept loop stopped while degraded: its listener was closed or it was cancelled",
+                       surface);
+}
+
 std::string describeAcceptLoopEnded(std::string_view surface, NetError const& error)
 {
     return std::format(

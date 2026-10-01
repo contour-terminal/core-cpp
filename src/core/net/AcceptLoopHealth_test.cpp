@@ -63,11 +63,18 @@ TEST_CASE("A degraded surface is recorded until it recovers, and one that gave u
 
     health.record(eventOf("http", AcceptLoopEventKind::Recovered));
     CHECK(conditionsOf(health) == "admin gave up; ");
+
+    // A degraded loop that stops -- closed, or cancelled -- is cleared too.
+    health.record(eventOf("gossip", AcceptLoopEventKind::Degraded));
+    health.record(eventOf("gossip", AcceptLoopEventKind::Stopped));
+    CHECK(conditionsOf(health) == "admin gave up; ");
     CHECK(told
           == std::vector { AcceptLoopEventKind::Degraded,
                            AcceptLoopEventKind::GaveUp,
                            AcceptLoopEventKind::Degraded,
-                           AcceptLoopEventKind::Recovered });
+                           AcceptLoopEventKind::Recovered,
+                           AcceptLoopEventKind::Degraded,
+                           AcceptLoopEventKind::Stopped });
 }
 
 TEST_CASE("A forwarded registry passes on its conditions, the earlier ones included", "[net][accept-policy]")

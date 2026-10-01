@@ -234,6 +234,11 @@ class AcceptErrorPolicy
     ///         reported degraded, and @c AcceptConditionChange::None with an empty run otherwise.
     [[nodiscard]] AcceptVerdict onAccepted(platform::SteadyTimePoint now) noexcept;
 
+    /// @return Whether the loop is degraded now: a run was reported and nothing has ended it. A
+    ///         loop that stops in that state says so (@c AcceptLoopEventKind::Stopped), or a
+    ///         liveness registry would go on showing a surface that was shut down as degraded.
+    [[nodiscard]] bool degraded() const noexcept { return _degraded; }
+
   private:
     /// @param now The loop's clock.
     /// @return The warning, if the rate limit lets one through now.
@@ -285,6 +290,12 @@ class AcceptErrorPolicy
 /// @return The line.
 [[nodiscard]] std::string describeAcceptRecovered(std::string_view surface, AcceptStreak const& streak);
 
+/// The line for an accept loop that stopped -- its listener closed, or its flow cancelled -- while
+/// it was degraded.
+/// @param surface What the loop serves.
+/// @return The line.
+[[nodiscard]] std::string describeAcceptLoopStopped(std::string_view surface);
+
 /// The line for an accept loop that gave up (@c AcceptAction::GiveUp).
 /// @param surface What the loop serves.
 /// @param error What the last accept answered.
@@ -299,6 +310,8 @@ enum class AcceptLoopEventKind : std::uint8_t
     Degraded,  ///< The loop is backing off on a long run of unclassified failures.
     Recovered, ///< A degraded loop is accepting again.
     GaveUp,    ///< The loop ended on a dead listener, which it then closed.
+    Stopped,   ///< A degraded loop ended because its listener was closed or its flow cancelled:
+               ///< it is no longer degraded, it is no longer serving, and nothing went wrong.
 };
 
 /// One report from an accept loop.
@@ -306,7 +319,8 @@ struct AcceptLoopEvent
 {
     std::string surface;      ///< What the loop serves.
     std::string line;         ///< The event in words, ready for a log.
-    NetError error;           ///< What the accept answered; empty for @c AcceptLoopEventKind::Recovered.
+    NetError error;           ///< What the accept answered; empty for @c AcceptLoopEventKind::Recovered
+                              ///< and @c AcceptLoopEventKind::Stopped.
     AcceptLoopEventKind kind; ///< What happened.
 };
 

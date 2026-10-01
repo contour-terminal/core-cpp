@@ -1059,7 +1059,7 @@ IocpListener::IocpListener(EventLoop& loop,
                            int family,
                            std::uint16_t boundPort,
                            void* acceptEx,
-                           void* acceptAddresses) noexcept:
+                           void* acceptAddresses):
     _loop(loop),
     _shared(std::make_shared<Shared>(Shared { .socket = socket, .accepting = {} })),
     _family(family),

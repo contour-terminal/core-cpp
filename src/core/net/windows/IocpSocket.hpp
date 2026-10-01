@@ -373,7 +373,7 @@ class IocpListener final: public IListener
                  int family,
                  std::uint16_t boundPort,
                  void* acceptEx,
-                 void* acceptAddresses) noexcept;
+                 void* acceptAddresses);
 
     EventLoop& _loop;
     std::shared_ptr<Shared> _shared; ///< The listening socket, shared with every parked accept.

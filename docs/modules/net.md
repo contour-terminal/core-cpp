@@ -173,11 +173,17 @@ and the accepting itself. `serve()` is such a loop:
   backoff runs out, and it asks the token before every accept, so it never calls into a listener its
   owner has destroyed;
 - a listener it finds dead it closes, so the port refuses rather than queues, and then reports;
+- a loop that stops -- closed or cancelled -- while degraded reports `Stopped`, which clears it;
 - `AcceptLoopReporting::onEvent` receives every report, and when it is empty each report's line goes
   to `reportDiagnostic()`, so a degraded or dead loop is never silent by default.
 
 `AcceptLoopHealth` (`<core/net/AcceptLoopHealth.hpp>`) records which loops are degraded or gave up,
-for a liveness probe to answer from (`record` takes `serve`'s reports whole).
+for a liveness probe to answer from (`record` takes `serve`'s reports whole; `Recovered` and
+`Stopped` clear a degraded entry).
+
+A refused registration of the listening descriptor reaches the loop as the refusal's own code: on
+POSIX the registration is made again at every accept, so a refusal for want of kernel memory or
+descriptors is `ResourceExhausted` and backed off on, never a dead listener.
 `testing::FailingListener` (`<core/net/testing/FailingListener.hpp>`) scripts the failed accepts a
 consumer's own loop is tested against.
 

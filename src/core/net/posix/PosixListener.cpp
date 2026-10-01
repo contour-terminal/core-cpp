@@ -61,7 +61,7 @@ namespace
     }
 } // namespace
 
-PosixListener::PosixListener(EventLoop& loop, int fd, std::uint16_t boundPort) noexcept:
+PosixListener::PosixListener(EventLoop& loop, int fd, std::uint16_t boundPort):
     _loop(loop), _fd(fd), _boundPort(boundPort)
 {
 }

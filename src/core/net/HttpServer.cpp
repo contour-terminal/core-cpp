@@ -380,7 +380,10 @@ async::Task<void> serve(EventLoop* loop,
     // owner closed and destroyed while the loop was backing off or serving a connection.
     auto const closed = listener->closeToken();
     auto policy = AcceptErrorPolicy {};
-    while (!closed.stop_requested())
+    // Set when the listener was closed or the flow cancelled where the loop could see it; the end
+    // that follows is the owner's, and only the way out below says anything about it.
+    auto stopping = false;
+    while (!stopping && !closed.stop_requested())
     {
         auto accepted = co_await listener->accept();
         if (!accepted.has_value())
@@ -391,7 +394,7 @@ async::Task<void> serve(EventLoop* loop,
             auto const verdict = policy.onError(error.code, loop->clock().now());
             switch (verdict.action)
             {
-                case AcceptAction::Stop: co_return;
+                case AcceptAction::Stop: stopping = true; continue;
                 case AcceptAction::GiveUp:
                     // A dead listener left open would go on queueing handshakes nobody accepts: the
                     // port is closed, so it refuses them, and then the end is reported.
@@ -424,9 +427,8 @@ async::Task<void> serve(EventLoop* loop,
                                          .line = describeAcceptFailure(reporting.surface, error, verdict),
                                          .error = error,
                                          .kind = AcceptLoopEventKind::Warning });
-            if (verdict.delay > std::chrono::milliseconds {}
-                && !co_await backOff(loop, closed, verdict.delay))
-                co_return;
+            if (verdict.delay > std::chrono::milliseconds {})
+                stopping = !co_await backOff(loop, closed, verdict.delay);
             continue;
         }
         if (auto const recovered = policy.onAccepted(loop->clock().now());
@@ -445,6 +447,16 @@ async::Task<void> serve(EventLoop* loop,
             continue;
         co_await handleConnection(conn.get(), &handler, limits);
     }
+    // Every way out but giving up comes here: a closed listener, a destroyed one, a cancelled flow.
+    // A loop that was degraded says it has stopped, or a liveness registry goes on showing a surface
+    // that was shut down as degraded -- and, restarted under the same name, the new loop has a
+    // fresh policy that never reports the recovery that would clear it.
+    if (policy.degraded())
+        report(reporting,
+               AcceptLoopEvent { .surface = reporting.surface,
+                                 .line = describeAcceptLoopStopped(reporting.surface),
+                                 .error = {},
+                                 .kind = AcceptLoopEventKind::Stopped });
 }
 
 } // namespace core::net

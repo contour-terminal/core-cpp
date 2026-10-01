@@ -44,7 +44,7 @@ class FailingListener final: public IListener
     /// @param inner The listener accepted from once the failures are spent; must outlive this.
     /// @param failures What the first accepts answer, in order. Required: a decorator that fails
     ///        nothing tests nothing.
-    FailingListener(IListener& inner, std::vector<NetError> failures) noexcept:
+    FailingListener(IListener& inner, std::vector<NetError> failures):
         _inner { &inner }, _failures { std::move(failures) }
     {
     }
@@ -52,7 +52,7 @@ class FailingListener final: public IListener
     /// Decorates a listener this owns, for a factory that hands one listener over.
     /// @param inner The listener accepted from once the failures are spent.
     /// @param failures What the first accepts answer, in order.
-    FailingListener(std::unique_ptr<IListener> inner, std::vector<NetError> failures) noexcept:
+    FailingListener(std::unique_ptr<IListener> inner, std::vector<NetError> failures):
         _owned { std::move(inner) }, _inner { _owned.get() }, _failures { std::move(failures) }
     {
     }

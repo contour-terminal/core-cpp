@@ -23,7 +23,8 @@ workflow refuses one without a section here.
   destroyed while it waited; cancelling the flow returns from `serve` in a backoff as in an accept.
   The new parameter is the loop, whose timer waits out a backoff and whose clock paces the reports;
   a trailing `AcceptLoopReporting` says where the reports go, and with no `onEvent` they go to
-  `reportDiagnostic()`, so a loop that degrades or gives up is never silent by default.
+  `reportDiagnostic()`, so a loop that degrades or gives up is never silent by default. A loop that
+  stops -- closed or cancelled -- while degraded says so, so no registry keeps it degraded.
   - *Migration*: `serve(listener, handler)` is `serve(&loop, listener, handler)`, and
     `serve(listener, handler, limits)` is `serve(&loop, listener, handler, limits)`. A server that
     wants the reports itself passes `AcceptLoopReporting { .surface = "...", .onEvent = ... }`, which
@@ -38,7 +39,9 @@ workflow refuses one without a section here.
   - *Migration*: rename your override `void close() noexcept override` to a `protected`
     `void doClose() noexcept override`; the token fires for you, on `close()` and on destruction. A
     private helper named `close` with other parameters is renamed too, or it hides the base's
-    `close()`. Callers of `close()` change nothing.
+    `close()`. The base's constructor allocates the token's state, so an implementation's
+    constructor is not `noexcept`, or an allocation failure there ends the process. Callers of
+    `close()` change nothing.
     fastcached has five implementations (`BlockingListener` and four test listeners); no other
     consumer implements one.
 - **Exhaustion is `NetErrorCode::ResourceExhausted`, no longer `SystemError`:** `EMFILE`, `ENFILE`,
@@ -67,11 +70,12 @@ workflow refuses one without a section here.
   cannot hold the loop; and `SystemError` backs off the same way, for as long as it lasts, with a
   run of 32 in a row and nothing else between them reported once as the loop being degraded and the
   next accept or failed connection reported as its recovery. `describeAcceptFailure()`,
-  `describeAcceptDegraded()`, `describeAcceptRecovered()` and `describeAcceptLoopEnded()` word the
-  lines, and `AcceptLoopEvent` carries a report.
+  `describeAcceptDegraded()`, `describeAcceptRecovered()`, `describeAcceptLoopStopped()` and
+  `describeAcceptLoopEnded()` word the lines, and `AcceptLoopEvent` carries a report.
 - **`<core/net/AcceptLoopHealth.hpp>`: which accept loops of a process are degraded or gave up,**
   for a liveness probe to answer from: a listening port is not a serving one. `record` takes an
-  accept loop's reports whole; a recovery removes the degraded entry. Graduated from fastcached,
+  accept loop's reports whole; a recovery, or a degraded loop's stopping, removes the degraded
+  entry. Graduated from fastcached,
   whose health probe is its consumer once it moves onto this release, with `subscribe()` and
   `forward()` for a component that keeps a registry of its own.
 - **`<core/net/testing/FailingListener.hpp>`: an `IListener` decorator whose first accepts answer
@@ -82,9 +86,13 @@ workflow refuses one without a section here.
 
 ### Fixed
 
-- **A POSIX accept whose listening descriptor the loop refuses to watch reports `BadHandle`** rather
-  than throwing `FdRegistrationFailed` out of `IListener::accept()`, where it ended an accept loop as
-  an exception nobody reported. A pending `ETIMEDOUT` from `accept` is `HostUnreach` -- one
+- **A POSIX accept whose listening descriptor the loop refuses to watch reports the refusal**
+  rather than throwing `FdRegistrationFailed` out of `IListener::accept()`, where it ended an accept
+  loop as an exception nobody reported. It reports the refusal's own code, which the backend's
+  socket-error table already classified -- a refusal for want of kernel memory or descriptors is
+  `ResourceExhausted`, which an accept loop backs off on, since the registration is made again at
+  the next accept -- and `BadHandle` only where the refusal says the descriptor is bad, or says
+  nothing. A pending `ETIMEDOUT` from `accept` is `HostUnreach` -- one
   connection that timed out -- rather than `Timeout`, which an accept loop reads as its own poll
   ticking.
 

@@ -104,7 +104,7 @@ std::expected<void, NetError> ensureOwnedPrivateDirectory(std::filesystem::path 
     return {};
 }
 
-UnixListener::UnixListener(EventLoop& loop, int fd, std::filesystem::path path) noexcept:
+UnixListener::UnixListener(EventLoop& loop, int fd, std::filesystem::path path):
     _loop(loop), _fd(fd), _path(std::move(path))
 {
 }

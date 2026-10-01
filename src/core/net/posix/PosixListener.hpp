@@ -69,7 +69,7 @@ class PosixListener final: public IListener
     void doClose() noexcept override;
 
   private:
-    PosixListener(EventLoop& loop, int fd, std::uint16_t boundPort) noexcept;
+    PosixListener(EventLoop& loop, int fd, std::uint16_t boundPort);
 
     /// Closes the listening fd, telling the loop first so a parked accept is
     /// resumed rather than left waiting on a descriptor the poller can no longer

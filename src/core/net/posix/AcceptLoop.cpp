@@ -162,10 +162,16 @@ async::Task<AcceptResult> acceptOne(EventLoop* loop,
         }
         catch (FdRegistrationFailed const& refused)
         {
-            // The loop could not watch the listening descriptor, so this listener can never be
-            // waited on again: a dead listener, which an accept loop gives up on and closes. Thrown
-            // on, it would end the loop as an exception nobody reports.
-            co_return std::unexpected(makeNetError(NetErrorCode::BadHandle,
+            // The loop could not watch the listening descriptor THIS time. Reported as what the
+            // backend said, which its one socket-error table already classified: a refusal for want
+            // of kernel memory or descriptors (`ENOMEM`, `EMFILE` from the duplicate registration's
+            // `dup`) is exhaustion an accept loop backs off on, and one nothing classifies is
+            // backed off on too -- the registration is not resident, so the next accept asks
+            // again. Only a refusal that says the descriptor itself is bad, or says nothing, is a
+            // dead listener. Thrown on, it would end the loop as an exception nobody reports.
+            auto const code =
+                refused.reason.code == NetErrorCode::Ok ? NetErrorCode::BadHandle : refused.reason.code;
+            co_return std::unexpected(makeNetError(code,
                                                    refused.reason.systemCode,
                                                    "accept: the loop could not watch the listener ("
                                                        + refused.reason.toString() + ")"));

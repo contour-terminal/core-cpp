@@ -69,9 +69,9 @@ class AcceptLoopHealth
     ///        back to it.
     void forward(AcceptLoopHealth& target);
 
-    /// Records one report of an accept loop: a degraded loop is added, a recovered one removed, and
-    /// one that gave up is added for good. A @c AcceptLoopEventKind::Warning changes nothing here and
-    /// is not passed on. What `serve`'s @c AcceptLoopReporting::onEvent is written to feed.
+    /// Records one report of an accept loop: a degraded loop is added, one that recovered or stopped
+    /// is removed, and one that gave up is added for good. A @c AcceptLoopEventKind::Warning changes nothing
+    /// here and is not passed on. What `serve`'s @c AcceptLoopReporting::onEvent is written to feed.
     /// @param event The report.
     void record(AcceptLoopEvent const& event);
 

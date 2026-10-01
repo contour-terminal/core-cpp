@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/async/Task.hpp>
 #include <core/async/WhenAny.hpp>
+#include <core/net/AcceptLoopHealth.hpp>
 #include <core/net/Diagnostics.hpp>
 #include <core/net/HttpServer.hpp>
 #include <core/net/IListener.hpp>
@@ -134,7 +135,7 @@ class OneShotListener final: public core::net::IListener
 {
   public:
     /// @param connection The connection the first accept returns.
-    explicit OneShotListener(std::unique_ptr<core::net::ISocket> connection) noexcept:
+    explicit OneShotListener(std::unique_ptr<core::net::ISocket> connection):
         _connection { std::move(connection) }
     {
     }
@@ -953,6 +954,7 @@ struct DiagnosticSinkGuard
             case core::net::AcceptLoopEventKind::Degraded: kinds += "degraded; "; break;
             case core::net::AcceptLoopEventKind::Recovered: kinds += "recovered; "; break;
             case core::net::AcceptLoopEventKind::GaveUp: kinds += "gave up; "; break;
+            case core::net::AcceptLoopEventKind::Stopped: kinds += "stopped; "; break;
         }
     }
     return kinds;
@@ -1241,4 +1243,58 @@ TEST_CASE("serve reports a degraded loop once, and recovery when the error clear
     listener.close();
     std::ignore = loop.drain();
     CHECK(ending == Ending::Returned);
+}
+
+TEST_CASE("A degraded serve that is closed or cancelled says it stopped, so no registry keeps it degraded",
+          "[net][http][accept-policy]")
+{
+    // A degraded loop is cleared only by its own recovery. One whose owner closes its listener --
+    // or cancels it -- while it is degraded recovers never, and a liveness registry would show the
+    // surface degraded for good: shut down on purpose, or restarted under the same name and serving
+    // fine. So the way out says it stopped, and the registry drops the entry.
+    for (auto const how: { 0, 1 })
+    {
+        INFO((how == 0 ? "closed" : "cancelled"));
+        auto clock = core::platform::ManualClock {};
+        auto seen = ServeObservation {};
+        auto health = core::net::AcceptLoopHealth {};
+        auto loop = core::net::testing::TestLoop { clock };
+        constexpr auto Failures = core::net::AcceptErrorPolicy::UnclassifiedBeforeDegraded + 4;
+        auto listener = core::net::testing::FailingListener {
+            std::make_unique<core::net::testing::InMemoryListener>(),
+            core::net::testing::repeatedFailures(NetErrorCode::SystemError, Failures)
+        };
+        auto reporting = core::net::AcceptLoopReporting {
+            .surface = "http",
+            .onEvent =
+                [&seen, &health](core::net::AcceptLoopEvent const& event) {
+                    seen.events.push_back(event);
+                    health.record(event);
+                },
+        };
+        auto handler = core::net::HttpHandler { [](HttpRequest const&) { return HttpResponse::ok("x"); } };
+        loop.spawn(core::net::serve(&loop, &listener, std::move(handler), {}, std::move(reporting)));
+        // Into the degraded run: every pass answers one failure and waits out its backoff.
+        for ([[maybe_unused]] auto const pass:
+             std::views::iota(0U, core::net::AcceptErrorPolicy::UnclassifiedBeforeDegraded + 2))
+        {
+            std::ignore = loop.drain();
+            clock.advance(core::net::AcceptErrorPolicy::MaxBackoff);
+        }
+        std::ignore = loop.drain();
+        REQUIRE(health.snapshot().size() == 1); // degraded, and parked in a backoff
+
+        if (how == 0)
+            listener.close();
+        else
+            loop.requestStop();
+        std::ignore = loop.drain();
+
+        auto events = seen.events;
+        std::erase_if(events, [](core::net::AcceptLoopEvent const& event) {
+            return event.kind == core::net::AcceptLoopEventKind::Warning;
+        });
+        CHECK(kindsOf(events) == "degraded; stopped; ");
+        CHECK(health.snapshot().empty());
+    }
 }

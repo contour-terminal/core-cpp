@@ -66,7 +66,7 @@ class UnixListener final: public IListener
     void doClose() noexcept override;
 
   private:
-    UnixListener(EventLoop& loop, int fd, std::filesystem::path path) noexcept;
+    UnixListener(EventLoop& loop, int fd, std::filesystem::path path);
 
     /// Closes the listening fd and unlinks the socket file, telling the loop first
     /// so a parked accept is resumed rather than left waiting on a descriptor the

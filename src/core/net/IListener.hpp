@@ -35,6 +35,9 @@ using AcceptResult = SocketResult;
 class IListener
 {
   public:
+    /// Allocates the close token's shared state, so it may throw @c std::bad_alloc: an
+    /// implementation's constructor is not `noexcept`, or an allocation failure there would end the
+    /// process rather than reach the caller that asked for the listener.
     IListener() = default;
 
     /// Fires @c closeToken() if @c close() did not, after the implementation's own destructor has
@@ -78,8 +81,10 @@ class IListener
   protected:
     /// What closing does for this implementation: release the handle, and resolve a pending
     /// @c accept() with @c NetErrorCode::Cancelled. Called at most once, by @c close(), after
-    /// @c closeToken() has fired. A destructor that must release the handle calls its own code for
-    /// it rather than this, which the base's @c close() would refuse to run twice anyway.
+    /// @c closeToken() has fired. An implementation's destructor may call @c close() -- inside its
+    /// own destructor the call still reaches its own @c doClose(), as `IocpListener`'s does -- or
+    /// release the handle by code of its own, as `PosixListener`'s does when a parked accept must
+    /// unwind rather than resume. The base destructor fires the token either way.
     virtual void doClose() noexcept = 0;
 
   private:

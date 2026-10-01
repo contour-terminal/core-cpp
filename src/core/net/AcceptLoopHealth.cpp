@@ -38,7 +38,7 @@ void AcceptLoopHealth::record(AcceptLoopEvent const& event)
         std::erase_if(_conditions, [&event](SurfaceCondition const& condition) {
             return condition.surface == event.surface && condition.kind == AcceptLoopEventKind::Degraded;
         });
-        if (event.kind != AcceptLoopEventKind::Recovered)
+        if (event.kind != AcceptLoopEventKind::Recovered && event.kind != AcceptLoopEventKind::Stopped)
             _conditions.push_back(
                 SurfaceCondition { .surface = event.surface, .reason = event.line, .kind = event.kind });
         listener = _listener;
