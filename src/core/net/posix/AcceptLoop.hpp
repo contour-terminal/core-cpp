@@ -78,9 +78,14 @@ namespace detail
     /// REPORTED through `classifySocketError`, so a per-connection answer that HAS a category
     /// reaches the caller as it: a packet filter's `EPERM` as `PermissionDenied`, `EHOSTUNREACH`,
     /// `ENETUNREACH`, `EHOSTDOWN`, `ENETDOWN` and `ENONET` as `HostUnreach` -- where it used to be
-    /// `SystemError`, which a caller must read as exhaustion and back off on. One error is accept's
-    /// own to classify: `EINVAL`, a socket that is not listening, is `BadHandle` like `EBADF` and
-    /// `ENOTSOCK`, not the argument error it is from other calls.
+    /// `SystemError`, which an accept loop backs off on and then gives up on. Exhaustion (`EMFILE`,
+    /// `ENFILE`, `ENOBUFS`, `ENOMEM`) is `ResourceExhausted`, the one category it backs off on
+    /// without end. One error is accept's own to classify: `EINVAL`, a socket that is not
+    /// listening, is `BadHandle` like `EBADF` and `ENOTSOCK`, not the argument error it is from
+    /// other calls.
+    ///
+    /// This decides what ONE accept does inside itself; what a loop over accepts does with what it
+    /// reports is `AcceptErrorPolicy`'s (`core/net/AcceptPolicy.hpp`), for every transport.
     /// @param err The `errno` a failed `accept(2)` left.
     /// @return What the accept loop does about it, and for `Report` the category it reports.
     [[nodiscard]] AcceptFailure acceptFailureOf(int err) noexcept;

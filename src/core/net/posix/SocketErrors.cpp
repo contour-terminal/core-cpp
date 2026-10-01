@@ -17,7 +17,8 @@ NetErrorCode classifySocketError(int systemCode) noexcept
         // A route that does not exist and a host that does not answer are one category: both mean
         // this endpoint is unreachable from here, and neither is retryable at this layer. A host
         // reported down and a network that is down or absent belong with them; `accept` answers
-        // all of these for one pending connection, and unclassified they read as exhaustion.
+        // all of these for one pending connection, and unclassified an accept loop would back off on
+        // them, then give up on a listener that is fine.
         case EHOSTUNREACH:
         case ENETUNREACH:
         case EHOSTDOWN:
@@ -51,6 +52,13 @@ NetErrorCode classifySocketError(int systemCode) noexcept
         case EAGAIN:
 #endif
             return NetErrorCode::WouldBlock;
+        // Out of descriptors (the process's, the system's), buffer space or memory: transient where
+        // `SystemError` may be permanent, which is what lets an accept loop back off on these and
+        // give up on that (`AcceptPolicy.hpp`). `accept`, `socket` and a dial all answer them.
+        case EMFILE:
+        case ENFILE:
+        case ENOBUFS:
+        case ENOMEM: return NetErrorCode::ResourceExhausted;
         default: return NetErrorCode::SystemError;
     }
 }

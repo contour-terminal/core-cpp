@@ -9,6 +9,22 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Breaking
+
+- **`EMFILE`, `ENFILE`, `ENOBUFS` and `ENOMEM`, and Winsock's `WSAEMFILE` and `WSAENOBUFS`, are
+  `NetErrorCode::ResourceExhausted`, no longer `SystemError`,** from every transport, the dial and
+  accept alike: the one socket-error table per platform classifies them. `SystemError` is what
+  nothing classified further, and may be permanent; exhaustion is transient, and a caller backing
+  off on `SystemError` as though it were exhaustion backed off on a dead listener forever.
+  - *Migration*: a caller that read `SystemError` as "out of something, try again later" tests
+    `ResourceExhausted` instead. `ResourceExhausted` comes after `SystemError` in the enumeration,
+    so no code's value moved, and `toString` says `resource exhausted`.
+
+### Added
+
+- **`NetErrorCode::ResourceExhausted`**: the process or the system ran out of descriptors, buffer
+  space or memory. See Breaking for the codes that now report it.
+
 ## [0.5.1] - 2026-09-29
 
 ### Fixed

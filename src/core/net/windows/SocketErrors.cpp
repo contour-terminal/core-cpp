@@ -20,7 +20,8 @@ NetErrorCode classifySocketError(int systemCode) noexcept
         // has failed, for every call on the machine, where Linux's accept(2) answers ENETDOWN for
         // one pending connection. `AcceptEx` failures are classified by this table too, and as
         // `HostUnreach` a caller would read a machine-wide failure as one peer's and accept again
-        // at once, forever; left `SystemError`, it reads as the condition it is and backs off.
+        // at once, forever; left `SystemError`, it reads as the condition it is: one an accept loop
+        // backs off on, and gives up on if it persists (`AcceptErrorPolicy::UnclassifiedBeforeGiveUp`).
         case WSAEHOSTUNREACH:
         case WSAENETUNREACH:
         case WSAEHOSTDOWN: return NetErrorCode::HostUnreach;
@@ -36,6 +37,11 @@ NetErrorCode classifySocketError(int systemCode) noexcept
         case WSAETIMEDOUT: return NetErrorCode::Timeout;
         case WSAEMSGSIZE: return NetErrorCode::MessageTooLarge;
         case WSAEWOULDBLOCK: return NetErrorCode::WouldBlock;
+        // Out of sockets, and out of buffer space: what a `WSASocketW` for the next `AcceptEx`
+        // answers under load. Transient where `SystemError` may be permanent, which is what lets an
+        // accept loop back off on these and give up on that (`AcceptPolicy.hpp`).
+        case WSAEMFILE:
+        case WSAENOBUFS: return NetErrorCode::ResourceExhausted;
         default: return NetErrorCode::SystemError;
     }
 }

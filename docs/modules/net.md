@@ -88,7 +88,8 @@ switch with no `default`, which is what makes a compiler name it when a code is 
 | `PermissionDenied` | `permission denied` | The OS refused the operation — a low-numbered port without privileges, a firewall's `EACCES` |
 | `Unsupported` | `unsupported` | The operation is not supported on this platform or transport |
 | `MessageTooLarge` | `message too large` | A framed unit (line, PDU, datagram) exceeded its configured bound |
-| `SystemError` | `system error` | An OS error nothing classified further; read `NetError::systemCode` |
+| `SystemError` | `system error` | An OS error nothing classified further; read `NetError::systemCode`. It may be permanent |
+| `ResourceExhausted` | `resource exhausted` | The process or the system ran out of descriptors, buffer space or memory (`EMFILE`, `ENFILE`, `ENOBUFS`, `ENOMEM`, `WSAEMFILE`, `WSAENOBUFS`). Transient: the same call can succeed once something is released. After `SystemError`, so no earlier code was renumbered when it was added in 0.6.0 |
 | `Last` | `unknown error` | Not a code: the number of codes above it, so a table or a test covers every one without restating the list. Never constructed, never returned |
 
 A new code goes **above** `Last`, never below. One appended after it still satisfies the

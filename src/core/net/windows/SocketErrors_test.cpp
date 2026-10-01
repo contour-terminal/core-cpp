@@ -48,6 +48,10 @@ constexpr auto Rows = std::array {
     Row { .systemCode = WSAETIMEDOUT, .code = NetErrorCode::Timeout },
     Row { .systemCode = WSAEMSGSIZE, .code = NetErrorCode::MessageTooLarge },
     Row { .systemCode = WSAEWOULDBLOCK, .code = NetErrorCode::WouldBlock },
+    // Out of sockets, and out of buffer space: what a failed `WSASocketW` for the next `AcceptEx`
+    // answers under load, and transient, which `SystemError` may not be.
+    Row { .systemCode = WSAEMFILE, .code = NetErrorCode::ResourceExhausted },
+    Row { .systemCode = WSAENOBUFS, .code = NetErrorCode::ResourceExhausted },
     // Not resets, on purpose: an abort this end's stack made and a keepalive-detected loss are
     // `SystemError`, as `EPIPE` is on POSIX.
     Row { .systemCode = WSAECONNABORTED, .code = NetErrorCode::SystemError },

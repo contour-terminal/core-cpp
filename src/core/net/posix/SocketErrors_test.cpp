@@ -52,7 +52,12 @@ constexpr auto Rows = std::array {
     Row { .systemCode = EWOULDBLOCK, .code = NetErrorCode::WouldBlock },
     Row { .systemCode = EAGAIN, .code = NetErrorCode::WouldBlock },
     Row { .systemCode = EPIPE, .code = NetErrorCode::SystemError },
-    Row { .systemCode = ENOMEM, .code = NetErrorCode::SystemError },
+    // The process or the system ran out of something: transient, where `SystemError` may not be,
+    // which is what lets an accept loop back off on these and on nothing else.
+    Row { .systemCode = EMFILE, .code = NetErrorCode::ResourceExhausted },
+    Row { .systemCode = ENFILE, .code = NetErrorCode::ResourceExhausted },
+    Row { .systemCode = ENOBUFS, .code = NetErrorCode::ResourceExhausted },
+    Row { .systemCode = ENOMEM, .code = NetErrorCode::ResourceExhausted },
 };
 
 } // namespace

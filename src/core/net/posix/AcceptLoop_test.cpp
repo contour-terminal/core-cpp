@@ -67,11 +67,12 @@ constexpr auto Rows = std::array {
 #endif
     // Also what a socket that is not a stream answers on every call, so reported rather than retried.
     Row { .systemCode = EOPNOTSUPP, .step = AcceptStep::Report, .code = NetErrorCode::Unsupported },
-    // Exhaustion stays SystemError, which is what tells a caller to back off.
-    Row { .systemCode = EMFILE, .step = AcceptStep::Report, .code = NetErrorCode::SystemError },
-    Row { .systemCode = ENFILE, .step = AcceptStep::Report, .code = NetErrorCode::SystemError },
-    Row { .systemCode = ENOBUFS, .step = AcceptStep::Report, .code = NetErrorCode::SystemError },
-    Row { .systemCode = ENOMEM, .step = AcceptStep::Report, .code = NetErrorCode::SystemError },
+    // Exhaustion is ResourceExhausted, which is what tells a caller to back off: never SystemError,
+    // which may be permanent and must not be backed off on forever (`AcceptPolicy.hpp`).
+    Row { .systemCode = EMFILE, .step = AcceptStep::Report, .code = NetErrorCode::ResourceExhausted },
+    Row { .systemCode = ENFILE, .step = AcceptStep::Report, .code = NetErrorCode::ResourceExhausted },
+    Row { .systemCode = ENOBUFS, .step = AcceptStep::Report, .code = NetErrorCode::ResourceExhausted },
+    Row { .systemCode = ENOMEM, .step = AcceptStep::Report, .code = NetErrorCode::ResourceExhausted },
     // A listener that is not one, whichever errno says so: `EINVAL` is a socket that is not listening,
     // accept's own row, and must not read as exhaustion (see `AcceptOwnClassifications`).
     Row { .systemCode = EBADF, .step = AcceptStep::Report, .code = NetErrorCode::BadHandle },
@@ -180,7 +181,7 @@ TEST_CASE("The accept loop retries, reports and parks as the decision says, thro
                    .calls = 1 },
         LoopCase { .name = "exhaustion is reported for the caller to back off on",
                    .script = { EMFILE, Connects },
-                   .error = NetErrorCode::SystemError,
+                   .error = NetErrorCode::ResourceExhausted,
                    .calls = 1 },
         // Parked: nothing pending; the listener is readable, so the park returns and accepts.
         LoopCase { .name = "nothing pending parks, then accepts",
