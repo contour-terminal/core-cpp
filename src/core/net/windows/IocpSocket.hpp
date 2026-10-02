@@ -350,15 +350,16 @@ class IocpListener final: public IListener
 
     [[nodiscard]] std::uint16_t boundPort() const noexcept override { return _boundPort; }
 
-    /// Closes the listening socket, which aborts a pending `AcceptEx`: that accept resolves with
-    /// @c NetErrorCode::Cancelled when its completion arrives.
-    void close() noexcept override;
-
     /// @return The listening socket, or `INVALID_SOCKET` once closed; for diagnostics and tests.
     [[nodiscard]] SOCKET native() const noexcept;
 
     /// What a parked accept reads after it resumes; defined in the implementation.
     struct Shared;
+
+  protected:
+    /// Closes the listening socket, which aborts a pending `AcceptEx`: that accept resolves with
+    /// @c NetErrorCode::Cancelled when its completion arrives.
+    void doClose() noexcept override;
 
   private:
     /// @param loop The loop whose port completes the accepts.
@@ -372,7 +373,7 @@ class IocpListener final: public IListener
                  int family,
                  std::uint16_t boundPort,
                  void* acceptEx,
-                 void* acceptAddresses) noexcept;
+                 void* acceptAddresses);
 
     EventLoop& _loop;
     std::shared_ptr<Shared> _shared; ///< The listening socket, shared with every parked accept.

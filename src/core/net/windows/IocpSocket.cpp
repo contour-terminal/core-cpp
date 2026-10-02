@@ -1059,7 +1059,7 @@ IocpListener::IocpListener(EventLoop& loop,
                            int family,
                            std::uint16_t boundPort,
                            void* acceptEx,
-                           void* acceptAddresses) noexcept:
+                           void* acceptAddresses):
     _loop(loop),
     _shared(std::make_shared<Shared>(Shared { .socket = socket, .accepting = {} })),
     _family(family),
@@ -1077,7 +1077,7 @@ IocpListener::~IocpListener()
     close();
 }
 
-void IocpListener::close() noexcept
+void IocpListener::doClose() noexcept
 {
     if (_closed)
         return;
@@ -1253,8 +1253,7 @@ std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::bindUnix(Ev
     {
         auto const err = ::WSAGetLastError();
         ::closesocket(socket);
-        return std::unexpected(makeNetError(
-            err == WSAEADDRINUSE ? NetErrorCode::AddressInUse : NetErrorCode::SystemError, err, "bind unix"));
+        return std::unexpected(detail::fromWinsockError(err, "bind unix"));
     }
 
     // Bound, so the socket FILE exists now, and it is this call's: every way out below that does
@@ -1266,7 +1265,7 @@ std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::bindUnix(Ev
         auto const err = ::WSAGetLastError();
         ::closesocket(socket);
         ::DeleteFileA(pathString.c_str());
-        return std::unexpected(makeNetError(NetErrorCode::SystemError, err, "listen unix"));
+        return std::unexpected(detail::fromWinsockError(err, "listen unix"));
     }
 
     auto acceptEx = LPFN_ACCEPTEX { nullptr };

@@ -42,7 +42,7 @@ directory `src/core/net/`. Three targets:
 | `<core/net/IoBackend.hpp>` | `IoBackend`, the injected blocking wait the loop drives and the readiness dispatcher behind it: `ReadinessHandler` (a handle, an owner and the callbacks a backend invokes), `Interest`, `HandleKind`, `Readiness`, `selectReadinessCallback()`, `BackendKind`, `WaitResult`; and the factories `makeDefaultBackend()`, `makeBackend(BackendKind)` and `preferredBackendKind()`. Every backend's own header is private, so the factories are how a program gets one: poll(2) on POSIX, epoll on Linux, kqueue on macOS and the BSDs, and on Windows an I/O completion port, which `preferredBackendKind()` answers since Task B7b and which is Windows' only backend since 0.5.0: the `WSAEventSelect` + `WaitForMultipleObjects` one it replaced was removed ([core-cpp#6](https://github.com/contour-terminal/core-cpp/issues/6)). `completionPort()` answers non-null on a completion-based backend and `nullptr` on every other, which is how a socket factory knows whether to hand out a socket that issues overlapped operations or one that parks on readiness; `EventLoop::completionPort()` asks it for them. `HandleKind::Completion` is a park on an overlapped operation an owner issued, which is how a completion reaches the loop's turn |
 | `<core/net/IHostScheduler.hpp>` | `IHostScheduler::callAfter()`, the one thing a host event loop has to lend core-cpp's, and `HostCallback` |
 | `<core/net/HostDrivenBackend.hpp>` | `HostDrivenBackend`: the backend for a loop that is PUMPED rather than one that blocks. It has no readiness (`attach` and `setInterest` answer `Unsupported`), its `wait()` never blocks, `wake()` and `armWakeAt()` ask the host for a pump and coalesce, and `isHostDriven()` is true. Portable, and the browser is only one of its hosts |
-| `<core/net/ISocket.hpp>`, `<core/net/IListener.hpp>` | the transport interfaces. `read`, `readWithFd`, `write`, `writeVectored`, `waitReadable`, `handshakeIfNeeded`, `cancelRead`, `shutdownWrite`, `setReceiveDeadline`, `close`; `accept`, `boundPort`. Every operation is a frame-free, stop-aware awaitable, not a `Task` |
+| `<core/net/ISocket.hpp>`, `<core/net/IListener.hpp>` | the transport interfaces. `read`, `readWithFd`, `write`, `writeVectored`, `waitReadable`, `handshakeIfNeeded`, `cancelRead`, `shutdownWrite`, `setReceiveDeadline`, `close`; `accept`, `boundPort`, `close` and `closeToken` -- a listener's `close()` is the base class's, fires the token (as its destructor does) and runs the implementation's `doClose()`. Every operation is a frame-free, stop-aware awaitable, not a `Task` |
 | `<core/net/IoAwaitable.hpp>` | `ResultAwaitable<R>` and its byte-count alias `IoAwaitable`: what a socket operation resolves through, and why it allocates nothing. `core::async::asTask` is the escape hatch for a caller that must store one |
 | `<core/net/SocketContract.hpp>` | `core::net::contract` — the socket contract's tripwires: `claimReadSlot` and `claimWriteSlot`, which end the process in every build, and the Debug assertions `requireReadBuffer` and `assertTeardownIsSerialisedWithDispatch`; public so a transport outside this library gets them too |
 | `<core/net/Sockets.hpp>` | `listen()`, `connect()`, `listenUnix()`, `connectUnix()`, `adoptFd()`, `appendReadChunk()` |
@@ -50,7 +50,9 @@ directory `src/core/net/`. Three targets:
 | `<core/net/WriteQueue.hpp>` | the single writer per connection: whole frames in order, bounded by bytes, with superseding by tag |
 | `<core/net/SplitSocket.hpp>` | one duplex `ISocket` from two simplex halves |
 | `<core/net/WithTimeout.hpp>` | `withTimeout()`: a task raced against a timer on the loop's clock |
-| `<core/net/HttpServer.hpp>` | a minimal HTTP/1.1 server: `serve()`, `readRequest()`, `writeResponse()`; `Content-Length` bodies only, every response closes, and a refusal closes lingering (`HttpLimits::linger`) |
+| `<core/net/HttpServer.hpp>` | a minimal HTTP/1.1 server: `serve()`, `readRequest()`, `writeResponse()`; `Content-Length` bodies only, every response closes, and a refusal closes lingering (`HttpLimits::linger`). A failed accept is answered by `AcceptErrorPolicy` and reported through `AcceptLoopReporting` |
+| `<core/net/AcceptPolicy.hpp>` | `AcceptErrorPolicy`, `AcceptErrorTable`, `acceptDispositionOf()`, `describeAcceptFailure()`, `describeAcceptLoopEnded()`: what an accept loop does about a failed accept (see [Accept loops](#accept-loops)) |
+| `<core/net/AcceptLoopHealth.hpp>` | `AcceptLoopHealth`: the accept loops of a process that gave up while they were meant to be serving, for a liveness probe |
 | `<core/net/LingeringClose.hpp>` | `closeLingering()`: half-close, drain the peer within `LingerBounds` (time, bytes, reads), then close, so a reply written over a request left unread is not destroyed by the reset a bare close sends |
 | `<core/net/IDatagramSocket.hpp>`, `<core/net/UdpSocket.hpp>` | `IDatagramSocket` (`send`, a bounded `receive`, `close`, `boundAddress`), `DatagramAddress`, `ReceivedDatagram`, `DatagramWait`; `openUdpSocket()` with `BroadcastMode` and `PortSharing`, answering WHY a bind failed. Blocking, on a thread of its own: a datagram socket is not an `ISocket` |
 | `<core/net/SharedPortDatagram.hpp>` | `answerFromOwnAddress()` and `openSharedPortUdpSocket()`: hear the segment on a shared port, send and be answered from an address only this node holds |
@@ -59,6 +61,7 @@ directory `src/core/net/`. Three targets:
 | `<core/net/HealthProbe.hpp>` | `probeHttpStatus()`, which returns the status an HTTP endpoint answered, and `httpHealthProbe()`, which is whether it was 200 |
 | `<core/net/testing/InMemorySocket.hpp>` | the deterministic fake: `InMemoryPipe`, `InMemorySocket`, `InMemorySocketPair`, `InMemoryListener` -- no descriptor, no loop, completed inline, and pinned to a real socket in every closed state by `SocketClosedStates_test.cpp`. Not `testing/InMemoryTransport.hpp`, whose `makeSocketPair()` is a pair of REAL sockets |
 | `<core/net/testing/InMemoryDatagram.hpp>`, `<core/net/testing/DatagramPayload.hpp>` | `DatagramBus`, a network segment in one process with scripted loss, and the text-to-payload helpers |
+| `<core/net/testing/FailingListener.hpp>` | `FailingListener`, an `IListener` decorator whose first accepts answer scripted `NetError`s and then accept from the listener it decorates, owned or not; `repeatedFailures()` |
 | `<core/net/testing/SocketDecorator.hpp>`, `<core/net/testing/ParkingReadableSocket.hpp>` | `SocketDecorator`, which forwards every verb so a double overrides only the one it stages; `ParkingReadableSocket` and `ParkingWritableSocket`, which park until the test decides and count how each parked operation ended |
 | `<core/net/Diagnostics.hpp>` | `setDiagnosticSink()`: where a failure nobody can be handed goes (a wait that fails mid-sweep); discarded by default |
 | `<core/net/ITlsContext.hpp>` (`core::net`) | `ITlsContext`, the seam a TLS implementation plugs in behind, and `wrapTls(socket, context, loop)`, which hands a socket back unchanged for a null context -- so an accept path compiles identically in a build without TLS |
@@ -88,7 +91,8 @@ switch with no `default`, which is what makes a compiler name it when a code is 
 | `PermissionDenied` | `permission denied` | The OS refused the operation — a low-numbered port without privileges, a firewall's `EACCES` |
 | `Unsupported` | `unsupported` | The operation is not supported on this platform or transport |
 | `MessageTooLarge` | `message too large` | A framed unit (line, PDU, datagram) exceeded its configured bound |
-| `SystemError` | `system error` | An OS error nothing classified further; read `NetError::systemCode` |
+| `SystemError` | `system error` | An OS error nothing classified further; read `NetError::systemCode`. It may be permanent |
+| `ResourceExhausted` | `resource exhausted` | The process or the system ran out of descriptors, buffer space or memory (`EMFILE`, `ENFILE`, `ENOBUFS`, `ENOMEM`, `ENOSR`, `WSAEMFILE`, `WSAENOBUFS`, `WSA_NOT_ENOUGH_MEMORY`). Transient: the same call can succeed once something is released. After `SystemError`, so no earlier code was renumbered when it was added in 0.6.0 |
 | `Last` | `unknown error` | Not a code: the number of codes above it, so a table or a test covers every one without restating the list. Never constructed, never returned |
 
 A new code goes **above** `Last`, never below. One appended after it still satisfies the
@@ -141,6 +145,48 @@ under `#ifndef _WIN32`. `detail/` has the rest that is private: the ready batch 
 dispatches through, the wakeup channel every blocking one is woken by, the timeout conversion, the
 chunking arithmetic of the Windows wait, `PeerAddress.hpp` (which includes `<winsock2.h>`), and two
 helpers.
+
+## Accept loops
+
+**A failed accept is almost never a failed listener**, and a loop that ends on one leaves its port
+open, accepting handshakes into a backlog nobody drains. `AcceptErrorPolicy`
+(`<core/net/AcceptPolicy.hpp>`) is the one answer to *what does a loop do about this failed accept*,
+from a table with a row for every `NetErrorCode` (`AcceptErrorTable`, in enumerator order, so a new
+code fails the build until its row is decided):
+
+| Disposition | Codes | What the loop does |
+|---|---|---|
+| `Closed` | `Cancelled` | ends, quietly (`AcceptAction::Stop`): the owner closed the listener |
+| `Dead` | `BadHandle` | ends, and says so (`AcceptAction::GiveUp`): accepting again would fail the same way forever |
+| `PollTick` | `Timeout`, `WouldBlock` | accepts again and says nothing, yielding for `FirstBackoff` after `FailuresBeforeYield` in a row |
+| `PeerFailed` | `Eof`, `ConnReset`, `ConnRefused`, `HostUnreach`, `PermissionDenied`, `Unsupported`, `MessageTooLarge` | accepts again with a rate-limited warning, yielding the same way |
+| `Exhausted` | `ResourceExhausted` | backs off, 10 ms doubling to 1 s, and accepts again, for as long as it lasts |
+| `Unclassified` | `SystemError`, and the codes an accept never answers | backs off the same way for as long as it lasts, and after `UnclassifiedBeforeDegraded` in a row with no accept and no failed connection between them reports the loop **degraded**, once; the next accept or failed connection reports it **recovered** |
+
+Only the first two end a loop. An unclassified error is never one of them, because what nobody
+classified may well pass, and ending the loop on it would make a transient condition permanent.
+
+The policy is pure: the loop hands it the code and the instant and does the waiting, the reporting
+and the accepting itself. `serve()` is such a loop:
+
+- its backoff races `IListener::closeToken()`, so a close ends it at once rather than when the
+  backoff runs out, and it asks the token before every accept, so it never calls into a listener its
+  owner has destroyed;
+- a listener it finds dead it closes, so the port refuses rather than queues, and then reports;
+- a loop that stops -- closed or cancelled -- while degraded reports `Stopped`, which clears it;
+- `AcceptLoopReporting::onEvent` receives every report, and when it is empty each report's line goes
+  to `reportDiagnostic()`, so a degraded or dead loop is never silent by default.
+
+`AcceptLoopHealth` (`<core/net/AcceptLoopHealth.hpp>`) records which loops are degraded or gave up,
+for a liveness probe to answer from (`record` takes `serve`'s reports whole; `Recovered` and
+`Stopped` clear a degraded entry).
+
+A refused registration of the listening descriptor reaches the loop as the refusal's own code: on
+POSIX the registration is made again at every accept, so a refusal for want of kernel memory or
+descriptors is `ResourceExhausted` and backed off on, never a dead listener -- and never a close:
+one that classifies as `Cancelled` is `SystemError`.
+`testing::FailingListener` (`<core/net/testing/FailingListener.hpp>`) scripts the failed accepts a
+consumer's own loop is tested against.
 
 ## Invariants
 

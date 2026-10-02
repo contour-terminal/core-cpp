@@ -9,6 +9,94 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Breaking
+
+- **`serve()` takes the loop it runs on, and a failed accept no longer ends it.** `serve` returned
+  on ANY failed accept and left the listening socket open, so one `EMFILE` or one client resetting
+  its queued connection stopped the server for good while the kernel went on completing handshakes
+  into a backlog nobody drained. It now answers each failed accept through `AcceptErrorPolicy`
+  (below): a connection that failed is accepted past, exhaustion backs off on the loop's timer and
+  serves again, an error nothing classifies is backed off on without end and reported as a degraded
+  loop if it persists, and only a closed listener (`Cancelled`) or a dead one (`BadHandle`) ends it.
+  A dead listener is closed before `serve` returns, so its port refuses rather than queues. A close
+  that lands during a backoff ends `serve` at once, and `serve` never calls into a listener its owner
+  destroyed while it waited; cancelling the flow returns from `serve` in a backoff as in an accept.
+  The new parameter is the loop, whose timer waits out a backoff and whose clock paces the reports;
+  a trailing `AcceptLoopReporting` says where the reports go, and with no `onEvent` they go to
+  `reportDiagnostic()`, so a loop that degrades or gives up is never silent by default. A loop that
+  stops -- closed or cancelled -- while degraded says so, so no registry keeps it degraded.
+  - *Migration*: `serve(listener, handler)` is `serve(&loop, listener, handler)`, and
+    `serve(listener, handler, limits)` is `serve(&loop, listener, handler, limits)`. A server that
+    wants the reports itself passes `AcceptLoopReporting { .surface = "...", .onEvent = ... }`, which
+    `AcceptLoopHealth::record` can be handed whole. No consumer calls `core::net::serve` yet; endo's
+    `httpServe` builtin, which calls contour's copy, takes the loop it already has when it moves
+    onto core-cpp.
+- **`IListener::close()` is the base class's, and an implementation overrides `doClose()`.** `close()`
+  fires the new `IListener::closeToken()` and then runs `doClose()`, once; the base destructor fires
+  the token too. The token is how a loop that waits on something other than `accept()` -- a backoff
+  -- hears a close at once, and how it learns that a listener was destroyed without touching it. A
+  virtual `close()` each implementation had to remember to signal from could promise neither.
+  - *Migration*: rename your override `void close() noexcept override` to a `protected`
+    `void doClose() noexcept override`; the token fires for you, on `close()` and on destruction. A
+    private helper named `close` with other parameters is renamed too, or it hides the base's
+    `close()`. The base's constructor allocates the token's state, so an implementation's
+    constructor is not `noexcept`, or an allocation failure there ends the process. Callers of
+    `close()` change nothing.
+    fastcached has five implementations (`BlockingListener` and four test listeners); no other
+    consumer implements one.
+- **Exhaustion is `NetErrorCode::ResourceExhausted`, no longer `SystemError`:** `EMFILE`, `ENFILE`,
+  `ENOBUFS`, `ENOMEM` and `ENOSR` on POSIX, and `WSAEMFILE`, `WSAENOBUFS` and
+  `WSA_NOT_ENOUGH_MEMORY` on Winsock, through the one socket-error table per platform. That table
+  now classifies, besides what it did, the POSIX listener's `socket`, the AF_UNIX dial's `socket`
+  and `connect`, the AF_UNIX listener's `socket`, `bind` and `listen` (Windows' too), and a
+  registration the epoll or kqueue backend refuses -- all of which built `SystemError` for these
+  `errno`s directly. `SystemError` is what nothing classified further; exhaustion is transient.
+  - *Migration*: a caller that read `SystemError` as "out of something, try again later" tests
+    `ResourceExhausted` instead. `ResourceExhausted` comes after `SystemError` in the enumeration,
+    so no code's value moved, and `toString` says `resource exhausted`.
+
+### Added
+
+- **`NetErrorCode::ResourceExhausted`**: the process or the system ran out of descriptors, buffer
+  space or memory. See Breaking for the codes that now report it.
+- **`<core/net/AcceptPolicy.hpp>`: what an accept loop does about a failed accept,** graduated from
+  fastcached so that a consumer's own accept loops answer it the way `serve` does.
+  `AcceptErrorTable` sorts every `NetErrorCode` into a disposition, in enumerator order, so a code
+  added to the enumeration fails the build until its row is decided; `AcceptErrorPolicy` turns a
+  failed accept and the loop's clock into a verdict -- accept again after a delay, stop, or give up
+  on a dead listener -- with a rate-limited warning and a change of condition. Exhaustion backs off
+  from 10 ms, doubling to 1 s, for as long as it lasts; a run of failed connections or poll ticks
+  yields for 10 ms every 16 rather than backing off, so a listener that answers without suspending
+  cannot hold the loop; and `SystemError` backs off the same way, for as long as it lasts, with a
+  run of 32 in a row and nothing else between them reported once as the loop being degraded and the
+  next accept or failed connection reported as its recovery. `describeAcceptFailure()`,
+  `describeAcceptDegraded()`, `describeAcceptRecovered()`, `describeAcceptLoopStopped()` and
+  `describeAcceptLoopEnded()` word the lines, and `AcceptLoopEvent` carries a report.
+- **`<core/net/AcceptLoopHealth.hpp>`: which accept loops of a process are degraded or gave up,**
+  for a liveness probe to answer from: a listening port is not a serving one. `record` takes an
+  accept loop's reports whole; a recovery, or a degraded loop's stopping, removes the degraded
+  entry. Graduated from fastcached,
+  whose health probe is its consumer once it moves onto this release, with `subscribe()` and
+  `forward()` for a component that keeps a registry of its own.
+- **`<core/net/testing/FailingListener.hpp>`: an `IListener` decorator whose first accepts answer
+  scripted `NetError`s,** then accept from the listener it decorates, owned or not; closed, it
+  answers no more of its script. It is how a consumer tests its own accept loop against failures no
+  kernel produces on demand: the `IAcceptCall` seam of 0.5.1 is private to the POSIX accept.
+  Graduated from fastcached's `FailingAcceptsListener`.
+
+### Fixed
+
+- **A POSIX accept whose listening descriptor the loop refuses to watch reports the refusal**
+  rather than throwing `FdRegistrationFailed` out of `IListener::accept()`, where it ended an accept
+  loop as an exception nobody reported. It reports the refusal's own code, which the backend's
+  socket-error table already classified -- a refusal for want of kernel memory or descriptors is
+  `ResourceExhausted`, which an accept loop backs off on, since the registration is made again at
+  the next accept -- and `BadHandle` only where the refusal says the descriptor is bad, or says
+  nothing. A refusal is never a close: one that classifies as `Cancelled` (`EINTR`) is reported as
+  `SystemError`. A pending `ETIMEDOUT` from `accept` is `HostUnreach` -- one
+  connection that timed out -- rather than `Timeout`, which an accept loop reads as its own poll
+  ticking.
+
 ## [0.5.1] - 2026-09-29
 
 ### Fixed

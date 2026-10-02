@@ -88,7 +88,8 @@ markdown, never with an `@` import, or every session loads all of them.
 - **[`rules/async-and-net.md`](.agent/rules/async-and-net.md)**: backends dispatch, the loop
   resumes; a loop-owned object dies on the loop's thread; a loop frees only what nothing else
   owns; one read and one write operation per socket; `close()` touches no member after completing;
-  a profiling zone never spans `co_await`.
+  only a closed or dead listener ends an accept loop (`AcceptErrorPolicy`), and its backoff races
+  `closeToken()`; a profiling zone never spans `co_await`.
 - **[`rules/platform.md`](.agent/rules/platform.md)**: an OS difference is an injected
   implementation, never an `#ifdef` in logic; no `<Windows.h>` in a public header.
 - **[`rules/tui.md`](.agent/rules/tui.md)**: `core::tui_output` depends on base only; every byte

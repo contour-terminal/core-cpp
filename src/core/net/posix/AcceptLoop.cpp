@@ -90,8 +90,15 @@ namespace detail
         /// The shared table cannot say so, because `EINVAL` from another call is an argument error
         /// that says nothing about the handle; left `SystemError`, a caller backs off and tries a
         /// dead listener again forever.
+        ///
+        /// `ETIMEDOUT` from `accept` is a network error pending on ONE new connection -- the peer
+        /// went silent before the handshake finished -- where from a receive with a deadline armed
+        /// it is the deadline: the shared table's `Timeout`, which an accept loop reads as its own
+        /// poll ticking and says nothing about. As `HostUnreach` it is what it is: one connection's
+        /// failure, warned about and counted toward the loop's yield.
         constexpr auto AcceptOwnClassifications = std::array {
             AcceptOwnClassification { .systemCode = EINVAL, .code = NetErrorCode::BadHandle },
+            AcceptOwnClassification { .systemCode = ETIMEDOUT, .code = NetErrorCode::HostUnreach },
         };
 
     } // namespace
@@ -152,6 +159,29 @@ async::Task<AcceptResult> acceptOne(EventLoop* loop,
         catch (async::OperationCancelled const&)
         {
             co_return std::unexpected(makeNetError(NetErrorCode::Cancelled, 0, "accept cancelled"));
+        }
+        catch (FdRegistrationFailed const& refused)
+        {
+            // The loop could not watch the listening descriptor THIS time. Reported as what the
+            // backend said, which its one socket-error table already classified: a refusal for want
+            // of kernel memory or descriptors (`ENOMEM`, `EMFILE` from the duplicate registration's
+            // `dup`) is exhaustion an accept loop backs off on, and one nothing classifies is
+            // backed off on too -- the registration is not resident, so the next accept asks
+            // again. Only a refusal that says the descriptor itself is bad, or says nothing, is a
+            // dead listener. Thrown on, it would end the loop as an exception nobody reports.
+            //
+            // And a refusal is never a CLOSE: one whose errno classifies as `Cancelled` (`EINTR`)
+            // would read as the listener's own close and stop the loop quietly with the port open,
+            // so it is a failure nothing classifies instead, which is backed off on.
+            auto code = refused.reason.code;
+            if (code == NetErrorCode::Ok)
+                code = NetErrorCode::BadHandle;
+            else if (code == NetErrorCode::Cancelled)
+                code = NetErrorCode::SystemError;
+            co_return std::unexpected(makeNetError(code,
+                                                   refused.reason.systemCode,
+                                                   "accept: the loop could not watch the listener ("
+                                                       + refused.reason.toString() + ")"));
         }
         // Asked before `*closed` and `*fd` are: the listener's `close()` woke this park, and
         // its owner may have destroyed it before the loop got here.
