@@ -67,7 +67,7 @@ that is not in any export set.
 ```
 
 ```cmake
-CPMAddPackage(NAME core-cpp GITHUB_REPOSITORY contour-terminal/core-cpp GIT_TAG v0.5.1
+CPMAddPackage(NAME core-cpp GITHUB_REPOSITORY contour-terminal/core-cpp GIT_TAG v0.6.0
               OPTIONS "CORE_CPP_INSTALL ON")
 ```
 
