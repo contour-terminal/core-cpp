@@ -347,7 +347,8 @@ TEST_CASE("A listener the loop refuses to watch is reported as the refusal says,
          { Row { .refusal = NetErrorCode::ResourceExhausted, .reported = NetErrorCode::ResourceExhausted },
            Row { .refusal = NetErrorCode::SystemError, .reported = NetErrorCode::SystemError },
            Row { .refusal = NetErrorCode::BadHandle, .reported = NetErrorCode::BadHandle },
-           Row { .refusal = NetErrorCode::Ok, .reported = NetErrorCode::BadHandle } })
+           Row { .refusal = NetErrorCode::Ok, .reported = NetErrorCode::BadHandle },
+           Row { .refusal = NetErrorCode::Cancelled, .reported = NetErrorCode::SystemError } })
     {
         auto source = core::net::testing::ScriptedBackend {};
         source.refuseNextAttach(core::net::makeNetError(row.refusal, 0, "refused"));

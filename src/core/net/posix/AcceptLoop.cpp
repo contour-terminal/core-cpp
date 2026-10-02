@@ -169,8 +169,15 @@ async::Task<AcceptResult> acceptOne(EventLoop* loop,
             // backed off on too -- the registration is not resident, so the next accept asks
             // again. Only a refusal that says the descriptor itself is bad, or says nothing, is a
             // dead listener. Thrown on, it would end the loop as an exception nobody reports.
-            auto const code =
-                refused.reason.code == NetErrorCode::Ok ? NetErrorCode::BadHandle : refused.reason.code;
+            //
+            // And a refusal is never a CLOSE: one whose errno classifies as `Cancelled` (`EINTR`)
+            // would read as the listener's own close and stop the loop quietly with the port open,
+            // so it is a failure nothing classifies instead, which is backed off on.
+            auto code = refused.reason.code;
+            if (code == NetErrorCode::Ok)
+                code = NetErrorCode::BadHandle;
+            else if (code == NetErrorCode::Cancelled)
+                code = NetErrorCode::SystemError;
             co_return std::unexpected(makeNetError(code,
                                                    refused.reason.systemCode,
                                                    "accept: the loop could not watch the listener ("

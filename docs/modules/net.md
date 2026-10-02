@@ -183,7 +183,8 @@ for a liveness probe to answer from (`record` takes `serve`'s reports whole; `Re
 
 A refused registration of the listening descriptor reaches the loop as the refusal's own code: on
 POSIX the registration is made again at every accept, so a refusal for want of kernel memory or
-descriptors is `ResourceExhausted` and backed off on, never a dead listener.
+descriptors is `ResourceExhausted` and backed off on, never a dead listener -- and never a close:
+one that classifies as `Cancelled` is `SystemError`.
 `testing::FailingListener` (`<core/net/testing/FailingListener.hpp>`) scripts the failed accepts a
 consumer's own loop is tested against.
 

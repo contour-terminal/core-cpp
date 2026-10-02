@@ -1298,3 +1298,76 @@ TEST_CASE("A degraded serve that is closed or cancelled says it stopped, so no r
         CHECK(health.snapshot().empty());
     }
 }
+
+namespace
+{
+
+/// A listener whose accept parks on its loop's timer, so the flow's stop reaches it, and answers that
+/// stop by THROWING `OperationCancelled` -- as a listener over a loop-bound `ResultAwaitable` does --
+/// where core-cpp's socket listeners answer it with `Cancelled`. (`InMemoryListener` does neither: an
+/// in-memory park hears no stop.)
+class ThrowsOnStopListener final: public core::net::IListener
+{
+  public:
+    /// @param loop The loop whose timer the accept parks on; must outlive this.
+    explicit ThrowsOnStopListener(EventLoop& loop): _loop { &loop } {}
+
+    [[nodiscard]] Task<core::net::AcceptResult> accept() override
+    {
+        co_await _loop->delay(std::chrono::hours { 1 });
+        co_return std::unexpected(core::net::makeNetError(NetErrorCode::Cancelled, 0, "an hour passed"));
+    }
+
+    [[nodiscard]] std::uint16_t boundPort() const noexcept override { return 0; }
+
+  protected:
+    void doClose() noexcept override {}
+
+  private:
+    EventLoop* _loop;
+};
+
+} // namespace
+
+TEST_CASE("Cancelling serve parked in an accept that throws returns, and a degraded loop says it stopped",
+          "[net][http][accept-policy]")
+{
+    // The flow's own stop, met in an accept that answers it by throwing: `serve` returns, as it does
+    // from a backoff and from an accept that answers `Cancelled`, and the way out still reports a
+    // degraded loop's stopping. Two arms: a healthy loop, and one parked in its accept just after a
+    // degraded run.
+    for (auto const degradedFirst: { false, true })
+    {
+        INFO((degradedFirst ? "degraded, then parked in an accept" : "parked in an accept"));
+        auto clock = core::platform::ManualClock {};
+        auto ending = Ending::Running;
+        auto seen = ServeObservation {};
+        auto loop = core::net::testing::TestLoop { clock };
+        auto const failures = degradedFirst ? core::net::AcceptErrorPolicy::UnclassifiedBeforeDegraded : 0U;
+        auto listener = core::net::testing::FailingListener { std::make_unique<ThrowsOnStopListener>(loop),
+                                                              core::net::testing::repeatedFailures(
+                                                                  NetErrorCode::SystemError, failures) };
+
+        loop.spawn(serveAndRecord(&loop, &listener, &seen, &ending));
+        // Through the failures, each waiting out its backoff of at most a second, into the accept,
+        // which parks for an hour.
+        for ([[maybe_unused]] auto const pass: std::views::iota(0U, failures + 2))
+        {
+            std::ignore = loop.drain();
+            clock.advance(core::net::AcceptErrorPolicy::MaxBackoff);
+        }
+        std::ignore = loop.drain();
+        REQUIRE(listener.failuresAnswered() == failures);
+        REQUIRE(ending == Ending::Running);
+
+        loop.requestStop();
+        std::ignore = loop.drain();
+
+        auto events = seen.events;
+        std::erase_if(events, [](core::net::AcceptLoopEvent const& event) {
+            return event.kind == core::net::AcceptLoopEventKind::Warning;
+        });
+        CHECK(ending == Ending::Returned);
+        CHECK(kindsOf(events) == (degradedFirst ? "degraded; stopped; " : ""));
+    }
+}

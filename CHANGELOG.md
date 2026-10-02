@@ -92,7 +92,8 @@ workflow refuses one without a section here.
   socket-error table already classified -- a refusal for want of kernel memory or descriptors is
   `ResourceExhausted`, which an accept loop backs off on, since the registration is made again at
   the next accept -- and `BadHandle` only where the refusal says the descriptor is bad, or says
-  nothing. A pending `ETIMEDOUT` from `accept` is `HostUnreach` -- one
+  nothing. A refusal is never a close: one that classifies as `Cancelled` (`EINTR`) is reported as
+  `SystemError`. A pending `ETIMEDOUT` from `accept` is `HostUnreach` -- one
   connection that timed out -- rather than `Timeout`, which an accept loop reads as its own poll
   ticking.
 

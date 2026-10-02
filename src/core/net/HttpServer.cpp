@@ -385,7 +385,20 @@ async::Task<void> serve(EventLoop* loop,
     auto stopping = false;
     while (!stopping && !closed.stop_requested())
     {
-        auto accepted = co_await listener->accept();
+        auto accepted = AcceptResult {};
+        try
+        {
+            accepted = co_await listener->accept();
+        }
+        catch (async::OperationCancelled const&)
+        {
+            // The flow's own stop, met in an accept that answers it by THROWING `OperationCancelled`
+            // -- one parked on a loop timer, say, or any `ResultAwaitable` resumed without a value --
+            // where core-cpp's socket listeners answer `Cancelled`. Either way `serve` returns, and
+            // the way out still says whether a degraded loop stopped.
+            stopping = true;
+            continue;
+        }
         if (!accepted.has_value())
         {
             // One failed accept is almost never a failed listener: only a closed or dead one ends
