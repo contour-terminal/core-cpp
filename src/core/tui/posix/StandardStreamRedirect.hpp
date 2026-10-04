@@ -22,7 +22,7 @@ class StandardStreamRedirect
     StandardStreamRedirect(int standardStream, int fd) noexcept:
         _standardStream(standardStream),
         _saved(::dup(standardStream)),
-        _redirected(_saved >= 0 && ::dup2(fd, standardStream) == standardStream)
+        _isRedirected(_saved >= 0 && ::dup2(fd, standardStream) == standardStream)
     {
     }
 
@@ -42,12 +42,12 @@ class StandardStreamRedirect
 
     /// @brief Whether the descriptor was swapped.
     /// @return True when the redirect is in effect.
-    [[nodiscard]] bool redirected() const noexcept { return _redirected; }
+    [[nodiscard]] bool isRedirected() const noexcept { return _isRedirected; }
 
   private:
     int _standardStream;
     int _saved;
-    bool _redirected;
+    bool _isRedirected;
 };
 
 } // namespace core::tui::test

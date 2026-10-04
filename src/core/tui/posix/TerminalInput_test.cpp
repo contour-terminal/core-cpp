@@ -106,7 +106,7 @@ template <typename Change>
     {
         auto const stdoutRedirect = StandardStreamRedirect { STDOUT_FILENO, out.writeEnd() };
         auto const stdinRedirect = StandardStreamRedirect { STDIN_FILENO, devNull };
-        run.isRedirected = stdoutRedirect.redirected() && stdinRedirect.redirected();
+        run.isRedirected = stdoutRedirect.isRedirected() && stdinRedirect.isRedirected();
         if (run.isRedirected)
         {
             auto input = TerminalInput {};
@@ -193,4 +193,20 @@ TEST_CASE("TerminalInput.posix.hover_raises_the_requested_mode_to_any_motion", "
     CHECK(raised == MouseTracking::AnyMotion);
     CHECK(run.changed == "\033[?1002l\033[?1003h");
     CHECK(run.disabled.contains("\033[?1006l\033[?1003l"));
+}
+
+TEST_CASE("TerminalInput.posix.hover_from_off_sets_any_motion_with_sgr_and_lowering_resets_both", "[tui]")
+{
+    auto const run = runProtocols(MouseTracking::Off, [](TerminalInput& input) {
+        input.setAnyMotionTracking(true);
+        input.setAnyMotionTracking(false);
+    });
+    REQUIRE(run.isRedirected);
+    REQUIRE(run.isInitialized);
+
+    // Raising writes the set and then SGR encoding; lowering writes the reset of both in reverse.
+    CHECK(run.changed == "\033[?1003h\033[?1006h\033[?1006l\033[?1003l");
+    // Back at Off, so shutdown writes no mouse mode of its own.
+    CHECK_FALSE(run.disabled.contains("\033[?1003"));
+    CHECK_FALSE(run.disabled.contains("\033[?1006"));
 }

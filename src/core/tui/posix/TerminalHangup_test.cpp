@@ -169,7 +169,7 @@ TEST_CASE("core-cpp#49: a pty whose master closed ends the runtime's input withi
     {
         auto const ignoreSighup = IgnoreSighup {};
         auto const redirect = StandardStreamRedirect { STDIN_FILENO, slave.get() };
-        if (!redirect.redirected())
+        if (!redirect.isRedirected())
             SKIP("standard input could not be redirected to the pseudo-terminal");
         slave.reset();  // standard input holds it now
         master.reset(); // the hangup
