@@ -228,6 +228,12 @@ core_cpp_module(NAME cli KIND STATIC DEPS base log PLATFORMS any)
 # log to apply the LOG filter.
 core_cpp_module(NAME testing KIND STATIC DEPS base log PLATFORMS any)
 
+# Reactive primitives (header-only)
+core_cpp_module(NAME rx KIND INTERFACE PLATFORMS any)
+
+# MVC/Declarative controllers (header-only)
+core_cpp_module(NAME mvc KIND INTERFACE PLATFORMS any)
+
 # Header-only, and needing nothing but the standard library.
 core_cpp_module(NAME async KIND INTERFACE PLATFORMS any)
 
