@@ -256,8 +256,7 @@ void TerminalInput::enableProtocols()
     writeProtocol(protocols::EnableCsiU);
     writeProtocol(
         protocols::EnablePassiveMouseTracking); // Implicitly enables SGR (1006) + button tracking (1002)
-    if (_anyMotionTracking)
-        writeProtocol(protocols::EnableAnyMotionTracking);
+    writeMouseTrackingChange(MouseTracking::Off, mouseTracking());
     writeProtocol(protocols::EnableBracketedPaste);
     writeProtocol(protocols::EnableColorSchemeNotify);
     writeProtocol(protocols::QueryColorScheme);
@@ -269,8 +268,7 @@ void TerminalInput::disableProtocols()
     writeProtocol(protocols::DisableFocusTracking);
     writeProtocol(protocols::DisableColorSchemeNotify);
     writeProtocol(protocols::DisableBracketedPaste);
-    if (_anyMotionTracking)
-        writeProtocol(protocols::DisableAnyMotionTracking);
+    writeMouseTrackingChange(mouseTracking(), MouseTracking::Off);
     writeProtocol(protocols::DisablePassiveMouseTracking); // Also clears implicit mouse modes
     writeProtocol(protocols::DisableCsiU);
 }

@@ -4,6 +4,7 @@
 #include <core/platform/Clock.hpp>
 #include <core/tui/Error.hpp>
 #include <core/tui/InputEvent.hpp>
+#include <core/tui/MouseTracking.hpp>
 #include <core/tui/TerminalInput.hpp>
 #include <core/tui/TerminalOutput.hpp>
 
@@ -162,6 +163,14 @@ class Terminal
 
     /// @brief Returns whether the terminal is currently suspended.
     [[nodiscard]] auto isSuspended() const noexcept -> bool;
+
+    /// @brief Sets how much mouse input the terminal is asked to report.
+    ///
+    /// Forwards to @c TerminalInput::setMouseTracking(): effective at @c initialize() when called
+    /// before it, and at once on an initialized terminal. A terminal over a mock output never enables
+    /// its protocols, so there the mode is only recorded.
+    /// @param mode The mode the application asks for.
+    void setMouseTracking(MouseTracking mode);
 
     /// @brief Queries the current cursor position from the terminal.
     ///

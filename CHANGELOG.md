@@ -17,6 +17,14 @@ workflow refuses one without a section here.
   them: from `Off` the mode's set and then SGR encoding (1006), to `Off` the reverse, and between two modes
   only the swap. `protocols::EnableButtonTracking`, `EnableDragTracking` and their `Disable` twins join the
   existing 1003 constants, with `mouseTrackingSet()` and `mouseTrackingReset()` mapping a mode to its own.
+- **`TerminalInput::setMouseTracking()` and `Terminal::setMouseTracking()`: standard mouse tracking.**
+  core::tui enabled only Contour's passive mode 2029, so xterm, kitty, WezTerm, iTerm2 and Windows Terminal
+  reported no mouse events at all. An application now asks for a `MouseTracking` mode, which
+  `enableProtocols()` writes with SGR encoding and `disableProtocols()` resets in reverse order; a change
+  while the protocols are enabled writes only the transition. The default stays `Off`, so no existing
+  program changes what a click-and-drag does in its terminal. The hover path that enables 1003 once the
+  terminal confirms 2029 now raises the requested mode to `AnyMotion`, and so also writes 1006;
+  `TerminalInput::mouseTracking()` answers the mode in effect.
 
 ## [0.6.0] - 2026-10-02
 

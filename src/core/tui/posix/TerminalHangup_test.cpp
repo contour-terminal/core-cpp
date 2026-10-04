@@ -12,6 +12,7 @@
 #include <core/net/IoBackend.hpp>
 #include <core/tui/MockTerminalOutput.hpp>
 #include <core/tui/Terminal.hpp>
+#include <core/tui/posix/StandardStreamRedirect.hpp>
 #include <core/tui/runtime/TerminalInputSource.hpp>
 #include <core/tui/runtime/TuiRuntime.hpp>
 
@@ -32,6 +33,7 @@
 #include <unistd.h>
 
 using namespace std::chrono_literals;
+using core::tui::test::StandardStreamRedirect;
 
 namespace
 {
@@ -60,37 +62,6 @@ class OwnedFd
 
   private:
     int _fd;
-};
-
-/// Makes @p fd this process's standard input until destroyed. @c TerminalInput reads
-/// `STDIN_FILENO`, and has no other seam to hand it a descriptor.
-class StandardInputRedirect
-{
-  public:
-    explicit StandardInputRedirect(int fd) noexcept:
-        _saved(::dup(STDIN_FILENO)), _redirected(_saved >= 0 && ::dup2(fd, STDIN_FILENO) == STDIN_FILENO)
-    {
-    }
-
-    ~StandardInputRedirect()
-    {
-        if (_saved >= 0)
-        {
-            ::dup2(_saved, STDIN_FILENO);
-            ::close(_saved);
-        }
-    }
-
-    StandardInputRedirect(StandardInputRedirect const&) = delete;
-    StandardInputRedirect& operator=(StandardInputRedirect const&) = delete;
-    StandardInputRedirect(StandardInputRedirect&&) = delete;
-    StandardInputRedirect& operator=(StandardInputRedirect&&) = delete;
-
-    [[nodiscard]] bool redirected() const noexcept { return _redirected; }
-
-  private:
-    int _saved;
-    bool _redirected;
 };
 
 /// Ignores SIGHUP until destroyed, as the reporter's process did: with the default disposition a
@@ -197,7 +168,7 @@ TEST_CASE("core-cpp#49: a pty whose master closed ends the runtime's input withi
     auto cancelled = false; // outlives the loop, which the waiting flow writes it from
     {
         auto const ignoreSighup = IgnoreSighup {};
-        auto const redirect = StandardInputRedirect { slave.get() };
+        auto const redirect = StandardStreamRedirect { STDIN_FILENO, slave.get() };
         if (!redirect.redirected())
             SKIP("standard input could not be redirected to the pseudo-terminal");
         slave.reset();  // standard input holds it now

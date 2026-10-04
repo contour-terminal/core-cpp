@@ -3,6 +3,8 @@
 
 #include <core/tui/TerminalProtocols.hpp>
 
+#include <string>
+
 /// @file
 /// The @c TerminalInput members that touch no operating-system state, so that the two platform
 /// files hold only what genuinely differs: the wait, the raw-mode switch and the protocol write.
@@ -49,9 +51,34 @@ auto TerminalInput::isSuspended() const noexcept -> bool
 
 void TerminalInput::setAnyMotionTracking(bool enabled)
 {
-    _anyMotionTracking = enabled;
+    updateMouseTracking(enabled, _mouseTracking);
+}
+
+void TerminalInput::setMouseTracking(MouseTracking mode)
+{
+    updateMouseTracking(_anyMotionTracking, mode);
+}
+
+auto TerminalInput::mouseTracking() const noexcept -> MouseTracking
+{
+    return _anyMotionTracking ? MouseTracking::AnyMotion : _mouseTracking;
+}
+
+void TerminalInput::updateMouseTracking(bool anyMotion, MouseTracking requested)
+{
+    auto const before = mouseTracking();
+    _anyMotionTracking = anyMotion;
+    _mouseTracking = requested;
     if (_rawMode)
-        writeProtocol(enabled ? protocols::EnableAnyMotionTracking : protocols::DisableAnyMotionTracking);
+        writeMouseTrackingChange(before, mouseTracking());
+}
+
+void TerminalInput::writeMouseTrackingChange(MouseTracking from, MouseTracking to) const
+{
+    auto sequence = std::string {};
+    protocols::appendMouseTrackingChange(sequence, from, to);
+    if (!sequence.empty())
+        writeProtocol(sequence);
 }
 
 } // namespace core::tui
