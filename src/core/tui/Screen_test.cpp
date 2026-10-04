@@ -1661,3 +1661,73 @@ TEST_CASE("Screen.mousePress_overAnOverlayGoesToTheOverlay")
     CHECK(overlay.received[0].y == 2);
     CHECK(tree.received.empty());
 }
+
+namespace
+{
+
+/// @brief A mouse recorder that paints its whole area with one character.
+struct PaintedRecorder: MouseRecorder
+{
+    char glyph = ' '; ///< What this component fills its canvas with.
+
+    void render(Canvas& canvas) override
+    {
+        canvas.fill(
+            Rect { .x = 0, .y = 0, .width = canvas.width(), .height = canvas.height() }, glyph, Style {});
+    }
+};
+
+} // namespace
+
+TEST_CASE("Screen.componentAt_agreesWithPaintingWhenZIndicesTie")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    constexpr auto Count = 40; // enough siblings that an unstable sort would reorder ties
+    auto siblings = std::vector<PaintedRecorder>(Count);
+    for (auto const i: std::views::iota(size_t { 0 }, siblings.size()))
+    {
+        auto& sibling = siblings[i];
+        sibling.glyph = static_cast<char>('A' + (i % 26));
+        screen.root().addChild(sibling, LayoutParams { .area = { .x = 0, .y = 0, .width = 5, .height = 2 } });
+    }
+    screen.draw();
+
+    // Whichever sibling is painted last covers the cell; that one must be the hit-test answer.
+    auto const painted = screen.renderedBuffer().at(0, 0).grapheme;
+    auto* const hit = screen.componentAt(0, 0);
+    REQUIRE(hit != nullptr);
+    auto const* const hitSibling = static_cast<PaintedRecorder const*>(hit);
+    CHECK(std::string(1, hitSibling->glyph) == painted);
+    CHECK(hit == &siblings.back());
+
+    // A pair, at the default z-index.
+    auto first = PaintedRecorder {};
+    auto second = PaintedRecorder {};
+    first.glyph = '1';
+    second.glyph = '2';
+    screen.root().addChild(first, LayoutParams { .area = { .x = 10, .y = 0, .width = 5, .height = 2 } });
+    screen.root().addChild(second, LayoutParams { .area = { .x = 10, .y = 0, .width = 5, .height = 2 } });
+    screen.draw();
+    CHECK(screen.renderedBuffer().at(0, 10).grapheme == "2");
+    CHECK(screen.componentAt(0, 10) == &second);
+}
+
+TEST_CASE("Screen.componentAt_agreesWithPaintingForAnOverlaysChildren")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto overlay = MouseRecorder {};
+    auto high = PaintedRecorder {};
+    auto low = PaintedRecorder {};
+    high.glyph = 'H';
+    low.glyph = 'L';
+    // The higher z-index is added first, so insertion order alone would paint it underneath.
+    overlay.addChild(high, LayoutParams { .area = { .x = 0, .y = 0, .width = 4, .height = 2 }, .zIndex = 1 });
+    overlay.addChild(low, LayoutParams { .area = { .x = 0, .y = 0, .width = 4, .height = 2 } });
+    screen.showOverlay(overlay, Point { .x = 5, .y = 2 });
+    screen.draw();
+
+    CHECK(screen.renderedBuffer().at(2, 5).grapheme == "H");
+    CHECK(screen.componentAt(2, 5) == &high);
+}

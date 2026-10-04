@@ -37,6 +37,13 @@ workflow refuses one without a section here.
   now tested first, the one shown last on top. The screen's own tooltip is not a target, so the hover
   stays with the component it describes.
 
+### Fixed
+
+- **Hit-testing breaks z-index ties the way painting does.** Siblings with the same z-index are painted in
+  the order they were added, so the last one is on top; hit-testing picked the first. A mouse event, and
+  `Screen::componentAt()`, now answer the component the user sees. An overlay's direct children are
+  painted by z-index too, where they used to be painted in insertion order.
+
 ## [0.6.0] - 2026-10-02
 
 ### Breaking

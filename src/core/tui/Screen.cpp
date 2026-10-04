@@ -378,6 +378,23 @@ void Screen::beginFrame()
     _current.clear(_theme.textNormal);
 }
 
+namespace
+{
+
+    /// Returns a component's children in paint order: ascending z-index, children with the same z-index
+    /// in the order they were added. A stable sort makes the last-added of a tie the one drawn on top, and
+    /// hit-testing walks this order backwards so that it finds what the user sees.
+    std::vector<Component*> paintOrder(Component const& component)
+    {
+        auto const children = component.children();
+        std::vector<Component*> ordered(children.begin(), children.end());
+        std::ranges::stable_sort(ordered,
+                                 [](Component* a, Component* b) { return a->zIndex() < b->zIndex(); });
+        return ordered;
+    }
+
+} // namespace
+
 void Screen::renderTree()
 {
     // Calculate root bounds based on viewport
@@ -387,10 +404,7 @@ void Screen::renderTree()
     _root->setScreenBounds(rootBounds);
 
     // Render root's children sorted by z-index
-    std::vector<Component*> sortedChildren(_root->children().begin(), _root->children().end());
-    std::ranges::sort(sortedChildren, [](Component* a, Component* b) { return a->zIndex() < b->zIndex(); });
-
-    for (Component* child: sortedChildren)
+    for (Component* child: paintOrder(*_root))
     {
         if (child->visible())
             renderComponent(*child, rootBounds);
@@ -417,10 +431,7 @@ void Screen::renderComponent(Component& component, Rect parentBounds)
     component.render(canvas);
 
     // Render children sorted by z-index
-    std::vector<Component*> sortedChildren(component.children().begin(), component.children().end());
-    std::ranges::sort(sortedChildren, [](Component* a, Component* b) { return a->zIndex() < b->zIndex(); });
-
-    for (Component* child: sortedChildren)
+    for (Component* child: paintOrder(component))
     {
         if (child->visible())
             renderComponent(*child, screenBounds);
@@ -455,7 +466,7 @@ void Screen::renderOverlays()
         entry.component->render(canvas);
 
         // Render overlay's children (if any)
-        for (Component* child: entry.component->children())
+        for (Component* child: paintOrder(*entry.component))
         {
             if (child->visible())
                 renderComponent(*child, overlayBounds);
@@ -942,11 +953,8 @@ Component* Screen::hitTest(int row, int col) const
 
 Component* Screen::componentAtRecursive(Component& component, int row, int col) const
 {
-    // Check children in reverse z-order (highest z-index first)
-    std::vector<Component*> sortedChildren(component.children().begin(), component.children().end());
-    std::ranges::sort(sortedChildren, [](Component* a, Component* b) { return a->zIndex() > b->zIndex(); });
-
-    for (Component* child: sortedChildren)
+    // Check children top-most first: the reverse of the order they are painted in.
+    for (Component* child: paintOrder(component) | std::views::reverse)
     {
         if (child->visible() && child->screenBounds().contains(col, row))
         {
