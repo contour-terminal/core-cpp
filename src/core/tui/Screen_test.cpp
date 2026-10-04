@@ -208,7 +208,7 @@ TEST_CASE("Screen.unscrollMode_enumValues")
 TEST_CASE("Screen.screenConfig_defaultUnscrollMode")
 {
     // Verify default unscroll mode is Auto
-    ScreenConfig config;
+    ScreenConfig const config;
     CHECK(config.unscrollMode == UnscrollMode::Auto);
 }
 
