@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 using namespace core::tui;
 
@@ -1004,4 +1005,78 @@ TEST_CASE("VtParser.Utf8.what_is_not_a_scalar_value_is_dropped", "[tui,vtparser]
     auto const* key = std::get_if<KeyEvent>(next.data());
     REQUIRE(key != nullptr);
     CHECK(key->codepoint == U'a');
+}
+
+// ============================================================================
+// SGR mouse reports (DEC 1006), as every tracking mode delivers them
+// ============================================================================
+
+namespace
+{
+
+/// @brief Parses a VT sequence and returns every MouseEvent in it, in order.
+auto parseMice(std::string_view seq) -> std::vector<MouseEvent>
+{
+    auto parser = VtParser {};
+    auto mice = std::vector<MouseEvent> {};
+    for (auto const& event: parser.feed(seq))
+        if (auto const* mouse = std::get_if<MouseEvent>(&event))
+            mice.push_back(*mouse);
+    return mice;
+}
+
+} // namespace
+
+TEST_CASE("VtParser.SGRMouse.motion_with_the_left_button_held_is_a_move_of_button_0", "[tui,vtparser]")
+{
+    // DEC 1002 and 1003 report motion with a button held as that button's code plus 32.
+    auto const mice = parseMice("\033[<32;10;5M");
+    REQUIRE(mice.size() == 1);
+    CHECK(mice[0].type == MouseEvent::Type::Move);
+    CHECK(mice[0].button == 0);
+    CHECK(mice[0].x == 10);
+    CHECK(mice[0].y == 5);
+}
+
+TEST_CASE("VtParser.SGRMouse.motion_with_no_button_held_is_a_move_of_button_3", "[tui,vtparser]")
+{
+    // Only DEC 1003 reports motion with no button held: code 3, "no button", plus 32.
+    auto const mice = parseMice("\033[<35;11;6M");
+    REQUIRE(mice.size() == 1);
+    CHECK(mice[0].type == MouseEvent::Type::Move);
+    CHECK(mice[0].button == 3);
+    CHECK(mice[0].x == 11);
+    CHECK(mice[0].y == 6);
+}
+
+TEST_CASE("VtParser.SGRMouse.motion_with_the_right_button_held_is_a_move_of_button_2", "[tui,vtparser]")
+{
+    auto const mice = parseMice("\033[<34;3;4M");
+    REQUIRE(mice.size() == 1);
+    CHECK(mice[0].type == MouseEvent::Type::Move);
+    CHECK(mice[0].button == 2);
+}
+
+TEST_CASE("VtParser.SGRMouse.a_shift_drag_carries_the_modifier", "[tui,vtparser]")
+{
+    // 36 = 32 (motion) | 4 (Shift) | 0 (left button).
+    auto const mice = parseMice("\033[<36;7;8M");
+    REQUIRE(mice.size() == 1);
+    CHECK(mice[0].type == MouseEvent::Type::Move);
+    CHECK(mice[0].button == 0);
+    CHECK(mice[0].modifiers == Modifier::Shift);
+}
+
+TEST_CASE("VtParser.SGRMouse.a_drag_is_a_press_moves_and_a_release", "[tui,vtparser]")
+{
+    auto const mice = parseMice("\033[<0;2;3M\033[<32;4;3M\033[<0;4;3m");
+    REQUIRE(mice.size() == 3);
+    CHECK(mice[0].type == MouseEvent::Type::Press);
+    CHECK(mice[0].x == 2);
+    CHECK(mice[1].type == MouseEvent::Type::Move);
+    CHECK(mice[1].x == 4);
+    CHECK(mice[2].type == MouseEvent::Type::Release);
+    CHECK(mice[2].button == 0);
+    CHECK(mice[2].x == 4);
+    CHECK(mice[2].y == 3);
 }
