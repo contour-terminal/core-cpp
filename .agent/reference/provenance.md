@@ -544,6 +544,7 @@ others in notes.
 | `src/core/tui/MockTerminalOutput.cpp` | contour-terminal/endo | `src/tui/MockTerminalOutput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `syncGuard()` returns `{}` where endo returns `SyncGuard()`; otherwise left exactly as endo has it, so no renderer test changes meaning |
 | `src/core/tui/MockTerminalOutput.hpp` | contour-terminal/endo | `src/tui/MockTerminalOutput.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Modifier.hpp` | contour-terminal/endo | `src/tui/Modifier.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/MouseTracking.hpp` | origin: core-cpp | - | - | - |
 | `src/core/tui/PopupKeyDispatch.hpp` | contour-terminal/endo | `src/tui/PopupKeyDispatch.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/PopupKeyDispatch_test.cpp` | contour-terminal/endo | `src/tui/PopupKeyDispatch_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/QuestionComponent.cpp` | contour-terminal/endo | `src/tui/QuestionComponent.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | spells the constants `QuestionComponent.hpp` renames |

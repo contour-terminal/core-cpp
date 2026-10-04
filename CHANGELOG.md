@@ -9,6 +9,15 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Added
+
+- **`core::tui::MouseTracking` and `protocols::appendMouseTrackingChange()`** (`<core/tui/MouseTracking.hpp>`,
+  in `core::tui_output`): the standard mouse tracking modes -- `Buttons` (DEC 1000), `Drag` (1002) and
+  `AnyMotion` (1003), with `Off` the default -- and the one function that writes a change between two of
+  them: from `Off` the mode's set and then SGR encoding (1006), to `Off` the reverse, and between two modes
+  only the swap. `protocols::EnableButtonTracking`, `EnableDragTracking` and their `Disable` twins join the
+  existing 1003 constants, with `mouseTrackingSet()` and `mouseTrackingReset()` mapping a mode to its own.
+
 ## [0.6.0] - 2026-10-02
 
 ### Breaking

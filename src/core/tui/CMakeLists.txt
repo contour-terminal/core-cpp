@@ -16,6 +16,7 @@ core_cpp_add_module(tui_output KIND STATIC
     HEADERS
         CursorShape.hpp
         Error.hpp
+        MouseTracking.hpp
         SgrBuilder.hpp
         TerminalOutput.hpp
         TerminalProtocols.hpp
