@@ -920,6 +920,23 @@ void Screen::applyCursorShape()
 
 Component* Screen::componentAt(int row, int col) const
 {
+    auto* const found = hitTest(row, col);
+    return found == _root.get() ? nullptr : found;
+}
+
+Component* Screen::hitTest(int row, int col) const
+{
+    // Overlays are drawn after the tree, in the order they were first shown, so the last of them is on
+    // top. The tooltip is not a target: it opens under the pointer, and hit-testing it would end the
+    // hover over the component it describes.
+    for (auto const& entry: _overlays | std::views::reverse)
+    {
+        auto* const overlay = entry.component;
+        if (overlay == nullptr || overlay == &_tooltip || !overlay->visible()
+            || !overlay->screenBounds().contains(col, row))
+            continue;
+        return componentAtRecursive(*overlay, row, col);
+    }
     return componentAtRecursive(*_root, row, col);
 }
 
@@ -1012,7 +1029,7 @@ EventResult Screen::dispatchMouseEvent(MouseEvent const& mouse)
     }
 
     // Hit test to find target component
-    Component* target = componentAt(mouseRow, mouseCol);
+    Component* target = hitTest(mouseRow, mouseCol);
 
     // Update hover state for mouse move events
     // Use viewport-relative 1-based coordinates for consistency with component bounds

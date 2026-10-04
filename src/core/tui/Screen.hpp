@@ -194,7 +194,7 @@ class Screen
     // --- Event Dispatch ---
 
     /// Dispatches an event through the component tree.
-    /// For mouse events: hit tests to find target, then bubbles up.
+    /// For mouse events: hit tests to find the target (overlays first, see componentAt()), then bubbles up.
     /// For keyboard events: sends to focused component, then bubbles up.
     /// @param event The event to dispatch.
     /// @return The result of event handling.
@@ -256,6 +256,20 @@ class Screen
 
     /// Returns true if the overlay is currently visible.
     [[nodiscard]] bool isOverlayVisible(Component const& overlay) const noexcept;
+
+    // --- Hit Testing ---
+
+    /// @brief Returns the top-most visible component at a cell, as the last draw() laid the screen out.
+    ///
+    /// Overlays come first, in the order they are drawn, so the one shown last is on top; then the
+    /// tree, siblings in reverse z-order and the deepest descendant that contains the cell. The
+    /// screen's own tooltip is never returned. Mouse events are routed by the same lookup; a drag
+    /// source asks it, at the release, which component lies under the pointer.
+    /// @param row 0-based row, in the coordinates of Component::screenBounds() (rows from the top of
+    ///            the inline content in Viewport::Inline).
+    /// @param col 0-based column, in the same coordinates.
+    /// @return The component, or nullptr when nothing but the root covers the cell.
+    [[nodiscard]] Component* componentAt(int row, int col) const;
 
     // --- Hover and Tooltip System ---
 
@@ -358,7 +372,12 @@ class Screen
     void applyCursorShape(); ///< Applies cursor shape based on focused component.
 
     // Hit testing
-    [[nodiscard]] Component* componentAt(int row, int col) const;
+    /// componentAt() without its last step: an empty cell answers the root, which is what mouse
+    /// dispatch and the hover state expect.
+    /// @param row 0-based row, as for componentAt().
+    /// @param col 0-based column, as for componentAt().
+    /// @return The top-most visible component at the cell, the root, or nullptr outside the root.
+    [[nodiscard]] Component* hitTest(int row, int col) const;
     [[nodiscard]] Component* componentAtRecursive(Component& component, int row, int col) const;
 
     // Event dispatch helpers

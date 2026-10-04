@@ -25,6 +25,17 @@ workflow refuses one without a section here.
   program changes what a click-and-drag does in its terminal. The hover path that enables 1003 once the
   terminal confirms 2029 now raises the requested mode to `AnyMotion`, and so also writes 1006;
   `TerminalInput::mouseTracking()` answers the mode in effect.
+- **`Screen::componentAt(row, col)` is public**: the top-most visible component at a cell, as the last
+  `draw()` laid the screen out -- overlays first, the one shown last on top, then the tree in reverse
+  z-order, deepest descendant first -- or null where nothing but the root is. A drag source asks it for
+  the component under the pointer at the release.
+
+### Changed
+
+- **A mouse event over an overlay goes to the overlay.** `Screen` hit-tested only the component tree, so
+  a click on a popup or dialog shown with `showOverlay()` reached the component beneath it. Overlays are
+  now tested first, the one shown last on top. The screen's own tooltip is not a target, so the hover
+  stays with the component it describes.
 
 ## [0.6.0] - 2026-10-02
 

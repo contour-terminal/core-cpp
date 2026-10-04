@@ -13,6 +13,8 @@
 #include <memory>
 #include <ranges>
 #include <thread>
+#include <variant>
+#include <vector>
 
 using namespace core::tui;
 
@@ -1533,4 +1535,129 @@ TEST_CASE("Screen.fixedViewport_repaintsItsAreaAndClosesFraming")
     CHECK(mock->hyperlinkRuns()[0].text == "abcdefgh");
     CHECK_FALSE(mock->hyperlinkOpen());
     CHECK(mock->unbalancedHyperlinkCloses() == 0);
+}
+
+// ============================================================================
+// Hit testing and pointer capture
+// ============================================================================
+
+namespace
+{
+
+/// @brief Records every mouse event it receives, in the coordinates it receives them in.
+struct MouseRecorder: Component
+{
+    EventResult pressResult = EventResult::Handled; ///< What a press returns.
+    Size size { .width = 10, .height = 3 };         ///< Preferred size, which an overlay is shown at.
+    std::vector<MouseEvent> received;               ///< Every mouse event, in order.
+
+    void render(Canvas& /*canvas*/) override {}
+
+    [[nodiscard]] Size preferredSize() const override { return size; }
+
+    EventResult onEvent(InputEvent const& event) override
+    {
+        auto const* mouse = std::get_if<MouseEvent>(&event);
+        if (mouse == nullptr)
+            return EventResult::Ignored;
+        received.push_back(*mouse);
+        return mouse->type == MouseEvent::Type::Press ? pressResult : EventResult::Handled;
+    }
+};
+
+/// @brief A mouse event at a 1-based terminal cell, as the parser delivers it.
+[[nodiscard]] InputEvent mouseAt(MouseEvent::Type type, int x, int y)
+{
+    return InputEvent { MouseEvent { .type = type, .button = 0, .x = x, .y = y } };
+}
+
+} // namespace
+
+TEST_CASE("Screen.componentAt_findsTheDeepestVisibleComponent")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto panel = MouseRecorder {};
+    auto leaf = MouseRecorder {};
+    auto hidden = MouseRecorder {};
+    screen.root().addChild(panel, LayoutParams { .area = { .x = 2, .y = 1, .width = 20, .height = 5 } });
+    panel.addChild(leaf, LayoutParams { .area = { .x = 1, .y = 1, .width = 5, .height = 2 } });
+    screen.root().addChild(
+        hidden, LayoutParams { .area = { .x = 30, .y = 1, .width = 5, .height = 2 }, .visible = false });
+    screen.draw();
+
+    CHECK(screen.componentAt(2, 4) == &leaf);     // leaf covers columns 3..7, rows 2..3
+    CHECK(screen.componentAt(1, 2) == &panel);    // the panel's own top-left cell
+    CHECK(screen.componentAt(1, 31) == nullptr);  // only the invisible component is there
+    CHECK(screen.componentAt(20, 70) == nullptr); // nothing but the root
+}
+
+TEST_CASE("Screen.componentAt_prefersTheHigherZIndex")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto high = MouseRecorder {};
+    auto low = MouseRecorder {};
+    // Added first, so insertion order alone would put it underneath.
+    screen.root().addChild(
+        high, LayoutParams { .area = { .x = 5, .y = 0, .width = 10, .height = 3 }, .zIndex = 1 });
+    screen.root().addChild(low, LayoutParams { .area = { .x = 0, .y = 0, .width = 10, .height = 3 } });
+    screen.draw();
+
+    CHECK(screen.componentAt(0, 6) == &high);
+    CHECK(screen.componentAt(0, 2) == &low);
+}
+
+TEST_CASE("Screen.componentAt_findsOverlaysBeforeTheTree")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto tree = MouseRecorder {};
+    auto first = MouseRecorder {};
+    auto second = MouseRecorder {};
+    screen.root().addChild(tree, LayoutParams { .area = { .x = 0, .y = 0, .width = 40, .height = 10 } });
+    screen.showOverlay(first, Point { .x = 5, .y = 2 });  // columns 5..14, rows 2..4
+    screen.showOverlay(second, Point { .x = 8, .y = 3 }); // columns 8..17, rows 3..5
+    screen.draw();
+
+    CHECK(screen.componentAt(2, 6) == &first);
+    CHECK(screen.componentAt(4, 10) == &second); // shown last, so on top where they overlap
+    CHECK(screen.componentAt(0, 0) == &tree);
+
+    // Showing an overlay again moves it but keeps its place in the stack.
+    screen.showOverlay(first, Point { .x = 5, .y = 2 });
+    screen.draw();
+    CHECK(screen.componentAt(4, 10) == &second);
+}
+
+TEST_CASE("Screen.componentAt_neverReturnsTheTooltip")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto tree = MouseRecorder {};
+    screen.root().addChild(tree, LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 10 } });
+    screen.showTooltip("a tooltip", Point { .x = 0, .y = 0 }); // drawn from row 1 down
+    screen.draw();
+
+    REQUIRE(screen.isTooltipVisible());
+    CHECK(screen.componentAt(1, 1) == &tree);
+}
+
+TEST_CASE("Screen.mousePress_overAnOverlayGoesToTheOverlay")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto tree = MouseRecorder {};
+    auto overlay = MouseRecorder {};
+    screen.root().addChild(tree, LayoutParams { .area = { .x = 0, .y = 0, .width = 40, .height = 10 } });
+    screen.showOverlay(overlay, Point { .x = 5, .y = 2 });
+    screen.draw();
+
+    CHECK(screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 7, 4))
+          == EventResult::Handled); // cell (3, 6)
+
+    REQUIRE(overlay.received.size() == 1);
+    CHECK(overlay.received[0].x == 2); // overlay-relative, 1-based, as for any component
+    CHECK(overlay.received[0].y == 2);
+    CHECK(tree.received.empty());
 }
