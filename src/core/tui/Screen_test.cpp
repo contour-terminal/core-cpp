@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <ranges>
 #include <thread>
@@ -1571,6 +1572,31 @@ struct MouseRecorder: Component
     return InputEvent { MouseEvent { .type = type, .button = 0, .x = x, .y = y } };
 }
 
+/// @brief Runs @c onPress when pressed, which may destroy this component, and answers @c pressResult.
+struct PressCallback: Component
+{
+    std::function<void()> onPress;                  ///< Called on a press.
+    EventResult pressResult = EventResult::Handled; ///< What a press returns.
+
+    void render(Canvas& /*canvas*/) override {}
+
+    EventResult onEvent(InputEvent const& event) override
+    {
+        auto const* mouse = std::get_if<MouseEvent>(&event);
+        if (mouse == nullptr || mouse->type != MouseEvent::Type::Press)
+            return EventResult::Ignored;
+        // Both members die with this component.
+        auto const callback = onPress;
+        auto const result = pressResult;
+        callback();
+        return result;
+    }
+};
+
+/// @brief The layout of the capture cases: A at columns 2..11, B at columns 20..29, both on rows 1..3.
+constexpr auto AreaA = Rect { .x = 2, .y = 1, .width = 10, .height = 3 };
+constexpr auto AreaB = Rect { .x = 20, .y = 1, .width = 10, .height = 3 };
+
 } // namespace
 
 TEST_CASE("Screen.componentAt_findsTheDeepestVisibleComponent")
@@ -1730,4 +1756,412 @@ TEST_CASE("Screen.componentAt_agreesWithPaintingForAnOverlaysChildren")
 
     CHECK(screen.renderedBuffer().at(2, 5).grapheme == "H");
     CHECK(screen.componentAt(2, 5) == &high);
+}
+
+TEST_CASE("Screen.pointerCapture_followsTheDragOutsideThePressedComponent")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto source = MouseRecorder {};
+    auto other = MouseRecorder {};
+    screen.root().addChild(source, LayoutParams { .area = AreaA });
+    screen.root().addChild(other, LayoutParams { .area = AreaB });
+    screen.draw();
+
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 4, 2)); // cell (1, 3): inside A
+    CHECK(screen.pointerCapture() == &source);
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Move, 25, 2));    // over B
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Release, 1, 10)); // left of and below A
+
+    REQUIRE(source.received.size() == 3);
+    CHECK(source.received[0].type == MouseEvent::Type::Press);
+    CHECK(source.received[0].x == 2);
+    CHECK(source.received[0].y == 1);
+    CHECK(source.received[1].type == MouseEvent::Type::Move);
+    CHECK(source.received[1].x == 23);
+    CHECK(source.received[1].y == 1);
+    CHECK(source.received[2].type == MouseEvent::Type::Release);
+    CHECK(source.received[2].x == -1); // A-relative, so left of A is below 1
+    CHECK(source.received[2].y == 9);
+    CHECK(other.received.empty());
+    CHECK(screen.pointerCapture() == nullptr);
+}
+
+TEST_CASE("Screen.pointerCapture_isTakenByTheAncestorThatHandledThePress")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto panel = MouseRecorder {};
+    auto leaf = MouseRecorder {};
+    leaf.pressResult = EventResult::Ignored;
+    screen.root().addChild(panel, LayoutParams { .area = { .x = 2, .y = 1, .width = 20, .height = 5 } });
+    panel.addChild(leaf, LayoutParams { .area = { .x = 1, .y = 1, .width = 5, .height = 2 } });
+    screen.draw();
+
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 5, 3)); // cell (2, 4): inside the leaf
+    CHECK(screen.pointerCapture() == &panel);
+
+    // The press bubbles as any event does: the panel sees it in the leaf's coordinates.
+    REQUIRE(panel.received.size() == 1);
+    CHECK(panel.received[0].type == MouseEvent::Type::Press);
+    CHECK(panel.received[0].x == 2); // leaf-relative: 4 - 3 + 1, where panel-relative would be 3
+    CHECK(panel.received[0].y == 1); // 2 - 2 + 1, where panel-relative would be 2
+
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Move, 40, 10)); // cell (9, 39)
+    REQUIRE(panel.received.size() == 2);
+    CHECK(panel.received[1].type == MouseEvent::Type::Move);
+    CHECK(panel.received[1].x == 38); // panel-relative: 39 - 2 + 1
+    CHECK(panel.received[1].y == 9);  // 9 - 1 + 1
+    CHECK(leaf.received.size() == 1); // the press only
+}
+
+TEST_CASE("Screen.pointerCapture_isNotTakenByAPressNobodyHandled")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto source = MouseRecorder {};
+    auto other = MouseRecorder {};
+    source.pressResult = EventResult::Ignored;
+    screen.root().addChild(source, LayoutParams { .area = AreaA });
+    screen.root().addChild(other, LayoutParams { .area = AreaB });
+    screen.draw();
+
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 4, 2));
+    CHECK(screen.pointerCapture() == nullptr);
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Move, 25, 2));
+    REQUIRE(other.received.size() == 1);
+    CHECK(other.received[0].type == MouseEvent::Type::Move);
+}
+
+TEST_CASE("Screen.pointerCapture_endsWhenTheTargetIsDestroyed")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto source = std::make_unique<MouseRecorder>();
+    auto other = MouseRecorder {};
+    screen.root().addChild(*source, LayoutParams { .area = AreaA });
+    screen.root().addChild(other, LayoutParams { .area = AreaB });
+    screen.draw();
+
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 4, 2));
+    REQUIRE(screen.pointerCapture() == source.get());
+    source.reset();
+    CHECK(screen.pointerCapture() == nullptr);
+
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Move, 25, 2)); // hit-tested again
+    REQUIRE(other.received.size() == 1);
+    CHECK(other.received[0].type == MouseEvent::Type::Move);
+}
+
+TEST_CASE("Screen.pointerCapture_endsWhenTheTargetOrItsAncestorLeavesTheTree")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto panel = MouseRecorder {};
+    auto source = MouseRecorder {};
+    panel.pressResult = EventResult::Ignored;
+    screen.root().addChild(panel, LayoutParams { .area = { .x = 0, .y = 0, .width = 30, .height = 10 } });
+    panel.addChild(source, LayoutParams { .area = AreaA });
+    screen.draw();
+
+    SECTION("the target itself")
+    {
+        (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 4, 2));
+        REQUIRE(screen.pointerCapture() == &source);
+        panel.removeChild(source);
+        CHECK(screen.pointerCapture() == nullptr);
+    }
+    SECTION("an ancestor")
+    {
+        (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 4, 2));
+        REQUIRE(screen.pointerCapture() == &source);
+        screen.root().removeChild(panel);
+        CHECK(screen.pointerCapture() == nullptr);
+    }
+}
+
+TEST_CASE("Screen.pointerCapture_endsWhenTheOverlayHoldingItIsHidden")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto overlay = MouseRecorder {};
+    screen.showOverlay(overlay, Point { .x = 5, .y = 2 });
+    screen.draw();
+
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 7, 4));
+    REQUIRE(screen.pointerCapture() == &overlay);
+    screen.hideOverlay(overlay);
+    CHECK(screen.pointerCapture() == nullptr);
+}
+
+TEST_CASE("Screen.releasePointer_endsTheCapture")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto source = MouseRecorder {};
+    auto other = MouseRecorder {};
+    screen.root().addChild(source, LayoutParams { .area = AreaA });
+    screen.root().addChild(other, LayoutParams { .area = AreaB });
+    screen.draw();
+
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 4, 2));
+    screen.releasePointer();
+    CHECK(screen.pointerCapture() == nullptr);
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Move, 25, 2));
+    CHECK(other.received.size() == 1);
+    CHECK(source.received.size() == 1);
+}
+
+TEST_CASE("Screen.pointerCapture_neverTakesScrollEvents")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto source = MouseRecorder {};
+    auto other = MouseRecorder {};
+    screen.root().addChild(source, LayoutParams { .area = AreaA });
+    screen.root().addChild(other, LayoutParams { .area = AreaB });
+    screen.draw();
+
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 4, 2));
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::ScrollDown, 25, 2)); // over B
+    REQUIRE(other.received.size() == 1);
+    CHECK(other.received[0].type == MouseEvent::Type::ScrollDown);
+    CHECK(screen.pointerCapture() == &source); // the drag goes on
+
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Move, 25, 2));
+    CHECK(source.received.size() == 2);
+    CHECK(other.received.size() == 1);
+}
+
+TEST_CASE("Screen.pointerCapture_movesToTheComponentOfTheNextPress")
+{
+    // A release the terminal never delivered -- the window lost focus mid-drag -- holds the pointer
+    // only until the next press.
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto source = MouseRecorder {};
+    auto other = MouseRecorder {};
+    screen.root().addChild(source, LayoutParams { .area = AreaA });
+    screen.root().addChild(other, LayoutParams { .area = AreaB });
+    screen.draw();
+
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 4, 2));
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 25, 2)); // no release in between
+    CHECK(screen.pointerCapture() == &other);
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Move, 5, 2)); // over A
+    CHECK(source.received.size() == 1);
+    REQUIRE(other.received.size() == 2);
+    CHECK(other.received[1].type == MouseEvent::Type::Move);
+}
+
+TEST_CASE("Screen.pointerCapture_isNotTakenByAComponentItsPressDestroyed")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto doomed = std::make_unique<PressCallback>();
+    doomed->onPress = [&doomed] {
+        doomed.reset();
+    };
+    screen.root().addChild(*doomed, LayoutParams { .area = AreaA });
+    screen.draw();
+
+    CHECK(screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 4, 2)) == EventResult::Handled);
+    CHECK(doomed == nullptr);
+    CHECK(screen.pointerCapture() == nullptr);
+    // Delivered to the capture, this would reach freed memory: under ASan, a heap-use-after-free.
+    CHECK(screen.dispatchEvent(mouseAt(MouseEvent::Type::Move, 4, 2)) == EventResult::Ignored);
+}
+
+TEST_CASE("Screen.destructor_detachesOverlaysStillShown")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto overlay = MouseRecorder {};
+    {
+        auto screen = Screen(terminal);
+        screen.showOverlay(overlay, Point { .x = 5, .y = 5 });
+        screen.draw();
+        CHECK(overlay.screen() == &screen);
+    }
+    // The overlay outlives the screen; its own teardown must not reach the destroyed one.
+    CHECK(overlay.screen() == nullptr);
+}
+
+TEST_CASE("Screen.overlayDestroyedWhileShown_leavesTheOverlayList")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto overlay = std::make_unique<MouseRecorder>();
+    screen.showOverlay(*overlay, Point { .x = 5, .y = 2 });
+    screen.draw();
+    REQUIRE(screen.componentAt(3, 6) == overlay.get());
+
+    overlay.reset();
+    // Kept in the list, the destroyed overlay would be drawn and hit-tested here: under ASan, a
+    // heap-use-after-free.
+    screen.draw();
+    CHECK(screen.componentAt(3, 6) == nullptr);
+}
+
+namespace
+{
+
+/// @brief A mouse recorder that offers a tooltip at every cell.
+struct HoverableRecorder: MouseRecorder
+{
+    std::optional<HoverResult> onHover(int x, int y) override
+    {
+        return HoverResult {
+            .text = "a tooltip",
+            .position = { .x = x, .y = y },
+            .contentType = TooltipContentType::PlainText,
+        };
+    }
+};
+
+} // namespace
+
+TEST_CASE("Screen.mousePress_endsTheHoverSoNoTooltipOpensMidDrag")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto source = HoverableRecorder {};
+    screen.root().addChild(source, LayoutParams { .area = AreaA });
+    screen.hoverState().setDelay(std::chrono::milliseconds(0)); // a tick confirms any running timer
+    screen.draw();
+
+    SECTION("a hover timer running at the press")
+    {
+        (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Move, 4, 2));
+        REQUIRE(screen.hoverState().currentHover().has_value()); // the timer runs, unconfirmed
+        (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 4, 2));
+        screen.tickHover();
+        CHECK_FALSE(screen.isTooltipVisible());
+
+        (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Move, 6, 3)); // captured, still over A
+        screen.tickHover();
+        CHECK_FALSE(screen.isTooltipVisible());
+        CHECK_FALSE(screen.hoverState().isHoverConfirmed());
+
+        // After the release, the next move hovers as before.
+        (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Release, 6, 3));
+        (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Move, 5, 2));
+        screen.tickHover();
+        CHECK(screen.isTooltipVisible());
+    }
+    SECTION("a tooltip visible at the press")
+    {
+        (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Move, 4, 2));
+        screen.tickHover();
+        REQUIRE(screen.isTooltipVisible());
+        (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 4, 2));
+        CHECK_FALSE(screen.isTooltipVisible());
+        screen.tickHover();
+        CHECK_FALSE(screen.isTooltipVisible());
+    }
+}
+
+TEST_CASE("Screen.pointerCapture_endsAtAReleaseBeforeTheInlineContentIsPlaced")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal, ScreenConfig { .viewport = Viewport::Inline });
+    auto source = PaintedRecorder {};
+    auto other = PaintedRecorder {};
+    source.glyph = 'A'; // content, so the inline viewport has a height
+    other.glyph = 'B';
+    screen.root().addChild(source, LayoutParams { .area = AreaA });
+    screen.root().addChild(other, LayoutParams { .area = AreaB });
+    screen.draw();
+
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 4, 2));
+    REQUIRE(screen.pointerCapture() == &source);
+
+    // External output: the screen no longer knows where its content starts, so the release cannot be
+    // placed. It is not delivered, but the gesture is over.
+    screen.releaseCursor();
+    CHECK(screen.dispatchEvent(mouseAt(MouseEvent::Type::Release, 4, 2)) == EventResult::Ignored);
+    CHECK(screen.pointerCapture() == nullptr);
+
+    screen.draw();
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Move, 25, 2)); // over B
+    CHECK(source.received.size() == 1);                                  // the press only
+    REQUIRE(other.received.size() == 1);
+    CHECK(other.received[0].type == MouseEvent::Type::Move);
+}
+
+TEST_CASE("Screen.releasePointer_inAPressHandler")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto panel = MouseRecorder {};
+    auto leaf = PressCallback {};
+    leaf.onPress = [&screen] {
+        screen.releasePointer();
+    };
+    screen.root().addChild(panel, LayoutParams { .area = { .x = 2, .y = 1, .width = 20, .height = 5 } });
+    panel.addChild(leaf, LayoutParams { .area = { .x = 1, .y = 1, .width = 5, .height = 2 } });
+    screen.draw();
+
+    SECTION("that handles the press declines the capture")
+    {
+        CHECK(screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 5, 3)) == EventResult::Handled);
+        CHECK(screen.pointerCapture() == nullptr);
+        CHECK(panel.received.empty());
+    }
+    SECTION("that ignores the press lets it bubble, as any ignored event does")
+    {
+        leaf.pressResult = EventResult::Ignored;
+        CHECK(screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 5, 3)) == EventResult::Handled);
+        REQUIRE(panel.received.size() == 1);
+        CHECK(panel.received[0].type == MouseEvent::Type::Press);
+        CHECK(screen.pointerCapture() == &panel);
+    }
+}
+
+TEST_CASE("Screen.pointerCapture_aPressThatDestroysTheComponentIgnoringItEndsThere")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto panel = MouseRecorder {};
+    auto doomed = std::make_unique<PressCallback>();
+    doomed->pressResult = EventResult::Ignored;
+    doomed->onPress = [&doomed] {
+        doomed.reset();
+    };
+    screen.root().addChild(panel, LayoutParams { .area = { .x = 2, .y = 1, .width = 20, .height = 5 } });
+    panel.addChild(*doomed, LayoutParams { .area = { .x = 1, .y = 1, .width = 5, .height = 2 } });
+    screen.draw();
+
+    // Its parent cannot be read once it is gone, so the press does not bubble: under ASan, reading it
+    // would be a heap-use-after-free.
+    CHECK(screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 5, 3)) == EventResult::Ignored);
+    CHECK(doomed == nullptr);
+    CHECK(panel.received.empty());
+    CHECK(screen.pointerCapture() == nullptr);
+}
+
+TEST_CASE("Screen.pointerCapture_deliversToACapturedOverlayInItsOwnCoordinates")
+{
+    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(terminal);
+    auto tree = MouseRecorder {};
+    auto overlay = MouseRecorder {};
+    screen.root().addChild(tree, LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 24 } });
+    screen.showOverlay(overlay, Point { .x = 5, .y = 2 }); // columns 5..14, rows 2..4
+    screen.draw();
+
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Press, 7, 4));   // cell (3, 6)
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Move, 30, 10));  // cell (9, 29): over the tree
+    (void) screen.dispatchEvent(mouseAt(MouseEvent::Type::Release, 1, 1)); // cell (0, 0): above and left
+
+    REQUIRE(overlay.received.size() == 3);
+    CHECK(overlay.received[0].x == 2); // 6 - 5 + 1
+    CHECK(overlay.received[0].y == 2); // 3 - 2 + 1
+    CHECK(overlay.received[1].type == MouseEvent::Type::Move);
+    CHECK(overlay.received[1].x == 25); // 29 - 5 + 1
+    CHECK(overlay.received[1].y == 8);  // 9 - 2 + 1
+    CHECK(overlay.received[2].type == MouseEvent::Type::Release);
+    CHECK(overlay.received[2].x == -4); // 0 - 5 + 1
+    CHECK(overlay.received[2].y == -1); // 0 - 2 + 1
+    CHECK(tree.received.empty());
+    CHECK(screen.pointerCapture() == nullptr);
 }

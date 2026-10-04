@@ -12,6 +12,11 @@ namespace core::tui
 
 Component::~Component()
 {
+    // A component the screen still knows when it dies -- an overlay never hidden, say -- tells the
+    // screen first, so that neither the pointer capture nor the overlay list outlives it.
+    if (_screen)
+        _screen->componentDestroyed(*this);
+
     // Remove from parent if attached
     if (_parent)
         _parent->removeChild(*this);
@@ -123,6 +128,11 @@ void Component::setParent(Component* parent)
 
 void Component::setScreen(Screen* screen)
 {
+    // Leaving a screen -- removed from its tree, directly or with an ancestor, or hidden as an overlay --
+    // ends that screen's pointer capture on this component.
+    if (_screen && _screen != screen)
+        _screen->componentDetached(*this);
+
     _screen = screen;
 
     // Propagate to children

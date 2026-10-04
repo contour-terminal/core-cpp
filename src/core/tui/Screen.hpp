@@ -194,7 +194,10 @@ class Screen
     // --- Event Dispatch ---
 
     /// Dispatches an event through the component tree.
-    /// For mouse events: hit tests to find the target (overlays first, see componentAt()), then bubbles up.
+    /// For mouse events: a move or release goes to the pointer capture target if there is one (see
+    /// pointerCapture()); anything else hit tests to find the target (overlays first, see
+    /// componentAt()) and bubbles up, and a handled press makes its handler the capture target. A press
+    /// also hides the tooltip and resets the hover state, so no tooltip opens during the drag it starts.
     /// For keyboard events: sends to focused component, then bubbles up.
     /// @param event The event to dispatch.
     /// @return The result of event handling.
@@ -271,6 +274,29 @@ class Screen
     /// @return The component, or nullptr when nothing but the root covers the cell.
     [[nodiscard]] Component* componentAt(int row, int col) const;
 
+    // --- Pointer Capture ---
+
+    /// @brief Returns the component the pointer is captured by, or nullptr.
+    ///
+    /// A press makes the component that handled it (after bubbling) the capture target. Until the
+    /// capture ends, every move and the next release go to it directly -- no hit test, no bubbling --
+    /// in its own coordinates, which are below 1 or beyond its size once the pointer has left it. The
+    /// press itself bubbles as any mouse event does, so an ancestor that takes the capture sees the
+    /// press in the coordinates of the component under the pointer, and the moves and the release in
+    /// its own. The release ends the capture, as do the next press, releasePointer(), and the target
+    /// leaving this screen: destroyed, removed from the tree (an ancestor's removal included, and a
+    /// move to another parent, which removes it on the way) or hidden as an overlay. Scroll events are
+    /// never captured, and a captured move does not update the hover state.
+    /// @return The capture target, or nullptr when the pointer is not captured.
+    [[nodiscard]] Component* pointerCapture() const noexcept { return _pointerCapture; }
+
+    /// @brief Ends the pointer capture, if any: the next move or release is hit-tested again.
+    ///
+    /// A press handler that calls it and handles the press declines the capture its press would take.
+    /// One that calls it and ignores the press lets the press bubble on, as any ignored event does, and
+    /// the ancestor that handles it takes the capture.
+    void releasePointer() noexcept { _pointerCapture = nullptr; }
+
     // --- Hover and Tooltip System ---
 
     /// Returns the hover state manager.
@@ -306,10 +332,18 @@ class Screen
     [[nodiscard]] Buffer const& renderedBuffer() const noexcept { return _previous; }
 
   private:
+    friend class Component;
+
     Terminal& _terminal;
     ScreenConfig _config;
     Theme _theme;
     RenderMode _renderMode = RenderMode::Diff;
+
+    /// The component the pointer is captured by, or nullptr.
+    Component* _pointerCapture = nullptr;
+
+    /// The component dispatchPress() is waiting on, cleared if it leaves this screen meanwhile.
+    Component const* _pressTarget = nullptr;
 
     std::unique_ptr<RootComponent> _root;
     Buffer _current;
@@ -383,7 +417,34 @@ class Screen
     // Event dispatch helpers
     [[nodiscard]] static EventResult bubbleEvent(Component* target, InputEvent const& event);
     [[nodiscard]] EventResult dispatchKeyEvent(InputEvent const& event);
+
+    /// @brief Routes a mouse event: to the capture target, or to the component under the pointer.
+    ///
+    /// A move or release while the pointer is captured goes to the capture target alone, in its
+    /// coordinates. Anything else is hit-tested and bubbles from the component under the pointer, in
+    /// that component's coordinates; a press goes through dispatchPress(), so the component that
+    /// handles it takes the capture, and first ends any capture left over and the hover.
+    /// @param mouse The event, in 1-based terminal coordinates.
+    /// @return The result of the component that handled it, or Ignored.
     [[nodiscard]] EventResult dispatchMouseEvent(MouseEvent const& mouse);
+
+    /// @brief Delivers a press from @p target up through its ancestors, making each the capture target
+    /// while it decides, so that the one that handles it keeps the capture.
+    /// @param target The component under the pointer.
+    /// @param event The press, in @p target's coordinates.
+    /// @return The first result that is not Ignored, or Ignored.
+    [[nodiscard]] EventResult dispatchPress(Component* target, InputEvent const& event);
+
+    /// @brief Called by a component that leaves this screen -- removed from the tree, directly or with
+    /// an ancestor, or hidden as an overlay -- so that no capture outlives its place on the screen.
+    /// @param component The component leaving.
+    void componentDetached(Component const& component) noexcept;
+
+    /// @brief Called by a component this screen still knows when it is destroyed: what
+    /// componentDetached() does, and an overlay that was never hidden leaves the overlay list, so
+    /// nothing draws, hit-tests or detaches it after it is gone.
+    /// @param component The component being destroyed.
+    void componentDestroyed(Component const& component) noexcept;
 
     // Focus helpers
     static void updateFocus(Component* oldFocus, Component* newFocus);

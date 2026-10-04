@@ -62,6 +62,14 @@ and on stb when `CORE_CPP_WITH_IMAGES` is on. Native only: there is no terminal 
   terminal confirms it, hover tooltips raise the mode to `AnyMotion` (`mouseTracking()` answers the raised
   mode). `VtParser` decodes every mode's reports into `MouseEvent`s: motion with a button held is a `Move`
   of that button, motion with none a `Move` of button 3.
+- **Pointer.** `Screen` routes a mouse event to the top-most visible component under it -- overlays first,
+  the one shown last on top, then the tree -- and `componentAt(row, col)` answers the same question for a
+  caller, such as a drag source looking for its drop target. A press makes the component that handled it
+  the capture target: until the release, every move and that release go to it, in its own coordinates and
+  wherever the pointer is, so a component sees its whole drag. The release ends the capture, as do the
+  next press, `releasePointer()`, and the component leaving the screen -- destroyed, removed from the tree
+  or hidden as an overlay. Scroll events are never captured, and a press hides the tooltip, so none opens
+  mid-drag.
 - **Drawing.** `Buffer` is a grid of `Cell`s, `Canvas` a clipped view of one, and `Screen` the
   renderer that diffs a frame against the last and writes only what changed, inline, full-screen or
   in a fixed area. `Theme`, `StyledText`, `Text`, `Box`, `Rect` and `HyperlinkEmitter` sit under it.

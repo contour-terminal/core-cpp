@@ -29,6 +29,12 @@ workflow refuses one without a section here.
   `draw()` laid the screen out -- overlays first, the one shown last on top, then the tree in reverse
   z-order, deepest descendant first -- or null where nothing but the root is. A drag source asks it for
   the component under the pointer at the release.
+- **Pointer capture in `Screen`.** `Screen` hit-tested every mouse event, so a drag that left the component
+  it started on lost its moves and its release. A press now makes the component that handled it the
+  capture target: every move and the next release go to it directly, in its own coordinates, wherever the
+  pointer is. The release ends the capture, as do the next press, `Screen::releasePointer()` and the
+  target leaving the screen (destroyed, removed from the tree or hidden as an overlay); scroll events are
+  never captured. `Screen::pointerCapture()` answers the target.
 
 ### Changed
 
@@ -36,6 +42,8 @@ workflow refuses one without a section here.
   a click on a popup or dialog shown with `showOverlay()` reached the component beneath it. Overlays are
   now tested first, the one shown last on top. The screen's own tooltip is not a target, so the hover
   stays with the component it describes.
+- **A mouse press hides the tooltip and resets the hover**, as a key press does, so no tooltip opens over
+  the drag the press starts.
 
 ### Fixed
 
@@ -43,6 +51,10 @@ workflow refuses one without a section here.
   the order they were added, so the last one is on top; hit-testing picked the first. A mouse event, and
   `Screen::componentAt()`, now answer the component the user sees. An overlay's direct children are
   painted by z-index too, where they used to be painted in insertion order.
+- **An overlay and its `Screen` may be destroyed in either order.** The screen's destructor detaches every
+  overlay still shown and its tree; before, an overlay that outlived the screen reached the destroyed one
+  from its own destructor, through `invalidate()`. A component destroyed while shown as an overlay leaves
+  the overlay list; before, the next `draw()` rendered the destroyed component.
 
 ## [0.6.0] - 2026-10-02
 

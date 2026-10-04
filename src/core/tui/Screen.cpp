@@ -9,6 +9,7 @@
 #include <chrono>
 #include <ranges>
 #include <unordered_map>
+#include <vector>
 
 namespace core::tui
 {
@@ -91,6 +92,16 @@ Screen::Screen(Terminal& terminal, ScreenConfig config):
 
 Screen::~Screen()
 {
+    // Overlays and the tree's components belong to the caller and may outlive this screen. Each
+    // forgets it here, while every member is alive, so that no teardown -- theirs later, or the root's
+    // among this screen's members -- reaches a destroyed screen.
+    for (auto const& entry: _overlays)
+        entry.component->setScreen(nullptr);
+    _overlays.clear();
+    // _root is declared before _overlays and the other containers, so it is destroyed after them;
+    // still attached, ~RootComponent would call back into those destroyed members.
+    _root->setScreen(nullptr);
+
     if (_enteredAlternateScreen)
     {
         auto& out = _terminal.output();
@@ -1006,6 +1017,22 @@ EventResult Screen::dispatchMouseEvent(MouseEvent const& mouse)
     // works even when the terminal (e.g., Contour with passive tracking) has
     // already processed the event for its own UI purposes.
 
+    // A press starts a new gesture, so it ends whatever capture is left: a release the terminal never
+    // delivered (the window lost focus mid-drag) holds the pointer only until the next press. It ends
+    // the hover too, as a key press does: a tooltip must not open over the drag that follows, and
+    // captured moves do not update the hover state, so a timer left running would confirm.
+    if (mouse.type == MouseEvent::Type::Press)
+    {
+        _pointerCapture = nullptr;
+        hideTooltip();
+        _hoverState.reset();
+    }
+
+    // Moves and the release go to the capture target; presses and scroll events are hit-tested.
+    auto const isCaptured =
+        _pointerCapture != nullptr
+        && (mouse.type == MouseEvent::Type::Move || mouse.type == MouseEvent::Type::Release);
+
     int mouseRow = mouse.y - 1; // Convert to 0-based
     int const mouseCol = mouse.x - 1;
 
@@ -1018,22 +1045,42 @@ EventResult Screen::dispatchMouseEvent(MouseEvent const& mouse)
         // height
         if (_inlineContentStartRow < 0)
         {
-            // Not yet rendered - skip mouse handling
+            // Not yet rendered - skip mouse handling. A release cannot be placed, so it is not
+            // delivered, but it still ends the gesture: kept, the capture would take the buttonless
+            // moves that follow the next draw.
             if (mouse.type == MouseEvent::Type::Move)
                 _hoverState.onMouseMove(mouseCol + 1, 0, nullptr);
+            else if (mouse.type == MouseEvent::Type::Release)
+                _pointerCapture = nullptr;
             return EventResult::Ignored;
         }
 
         mouseRow = mouse.y - 1 - _inlineContentStartRow;
 
-        // If mouse is above the inline content area, ignore
-        if (mouseRow < 0 || mouseRow >= contentHeight)
+        // Outside the inline content only a captured event is delivered: the drag it belongs to may
+        // leave the content and come back.
+        if (!isCaptured && (mouseRow < 0 || mouseRow >= contentHeight))
         {
             // Still update hover state (to trigger leave if needed)
             if (mouse.type == MouseEvent::Type::Move)
                 _hoverState.onMouseMove(mouseCol + 1, mouseRow + 1, nullptr);
             return EventResult::Ignored;
         }
+    }
+
+    if (isCaptured)
+    {
+        // No hit test and no bubbling: the capture target sees its whole gesture, in its own
+        // coordinates, wherever the pointer is. A release ends the capture before it is delivered, so
+        // its handler may start the next gesture or destroy the component.
+        auto* const captureTarget = _pointerCapture;
+        if (mouse.type == MouseEvent::Type::Release)
+            _pointerCapture = nullptr;
+        auto relative = mouse;
+        auto const captureBounds = captureTarget->screenBounds();
+        relative.x = mouseCol - captureBounds.x + 1;
+        relative.y = mouseRow - captureBounds.y + 1;
+        return captureTarget->onEvent(relative);
     }
 
     // Hit test to find target component
@@ -1055,7 +1102,50 @@ EventResult Screen::dispatchMouseEvent(MouseEvent const& mouse)
     adjusted.x = mouseCol - bounds.x + 1; // Back to 1-based for component
     adjusted.y = mouseRow - bounds.y + 1;
 
+    if (mouse.type == MouseEvent::Type::Press)
+        return dispatchPress(target, adjusted);
     return bubbleEvent(target, adjusted);
+}
+
+EventResult Screen::dispatchPress(Component* target, InputEvent const& event)
+{
+    // Each component is the capture target while it decides, and a component's teardown clears the
+    // capture (componentDetached()): one destroyed or detached while handling its own press is never
+    // left holding the pointer, and one that handles the press after calling releasePointer() declines
+    // it. Whether the component left this screen is tracked apart from the capture, because only that
+    // stops the press from bubbling: a component that ignores the press passes it on, as bubbleEvent()
+    // does, whether or not it released the pointer.
+    while (target)
+    {
+        _pointerCapture = target;
+        _pressTarget = target;
+        EventResult const result = target->onEvent(event);
+        auto const hasLeft = _pressTarget != target;
+        _pressTarget = nullptr;
+        if (result != EventResult::Ignored)
+            return result;
+        // It left this screen while handling the press, so it may be gone and its parent cannot be read.
+        if (hasLeft)
+            return EventResult::Ignored;
+        _pointerCapture = nullptr;
+        target = target->parent();
+    }
+    return EventResult::Ignored;
+}
+
+void Screen::componentDetached(Component const& component) noexcept
+{
+    if (_pointerCapture == &component)
+        _pointerCapture = nullptr;
+    if (_pressTarget == &component)
+        _pressTarget = nullptr;
+}
+
+void Screen::componentDestroyed(Component const& component) noexcept
+{
+    componentDetached(component);
+    std::erase_if(_overlays,
+                  [&component](OverlayEntry const& entry) { return entry.component == &component; });
 }
 
 int Screen::pollTimeoutMs() const
