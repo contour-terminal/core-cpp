@@ -2,8 +2,10 @@
 #include <core/tui/TerminalProtocols.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <string>
+#include <string_view>
 
 using namespace core::tui::protocols;
 
@@ -89,4 +91,62 @@ TEST_CASE("TerminalProtocols.da1_tolerates_surrounding_noise")
 {
     // Other terminal replies may arrive in the same read.
     CHECK(parseSixelFromDeviceAttributes("\033[1;1R\033[?62;4;6c"));
+}
+
+// ============================================================================
+// Mouse tracking modes (DEC 1000, 1002, 1003 with SGR 1006)
+// ============================================================================
+
+namespace
+{
+
+/// @brief One transition and the exact bytes it writes.
+struct MouseTrackingChange
+{
+    core::tui::MouseTracking from;
+    core::tui::MouseTracking to;
+    std::string_view bytes;
+};
+
+} // namespace
+
+TEST_CASE("TerminalProtocols.mouse_tracking_change_byte_exact")
+{
+    using enum core::tui::MouseTracking;
+    auto const change = GENERATE(values<MouseTrackingChange>({
+        { Off, Off, "" },
+        { Off, Buttons, "\033[?1000h\033[?1006h" },
+        { Off, Drag, "\033[?1002h\033[?1006h" },
+        { Off, AnyMotion, "\033[?1003h\033[?1006h" },
+        { Buttons, Off, "\033[?1006l\033[?1000l" },
+        { Buttons, Buttons, "" },
+        { Buttons, Drag, "\033[?1000l\033[?1002h" },
+        { Buttons, AnyMotion, "\033[?1000l\033[?1003h" },
+        { Drag, Off, "\033[?1006l\033[?1002l" },
+        { Drag, Buttons, "\033[?1002l\033[?1000h" },
+        { Drag, Drag, "" },
+        { Drag, AnyMotion, "\033[?1002l\033[?1003h" },
+        { AnyMotion, Off, "\033[?1006l\033[?1003l" },
+        { AnyMotion, Buttons, "\033[?1003l\033[?1000h" },
+        { AnyMotion, Drag, "\033[?1003l\033[?1002h" },
+        { AnyMotion, AnyMotion, "" },
+    }));
+    CAPTURE(change.from, change.to);
+    auto out = std::string {};
+    appendMouseTrackingChange(out, change.from, change.to);
+    CHECK(out == change.bytes);
+}
+
+TEST_CASE("TerminalProtocols.mouse_tracking_change_appends")
+{
+    auto out = std::string { "x" };
+    appendMouseTrackingChange(out, core::tui::MouseTracking::Off, core::tui::MouseTracking::Drag);
+    CHECK(out == "x\033[?1002h\033[?1006h");
+}
+
+TEST_CASE("TerminalProtocols.mouse_tracking_off_has_no_mode_sequence")
+{
+    CHECK(mouseTrackingSet(core::tui::MouseTracking::Off).empty());
+    CHECK(mouseTrackingReset(core::tui::MouseTracking::Off).empty());
+    STATIC_REQUIRE(mouseTrackingSet(core::tui::MouseTracking::Drag) == "\033[?1002h");
 }

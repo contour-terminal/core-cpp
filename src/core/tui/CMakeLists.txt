@@ -16,6 +16,7 @@ core_cpp_add_module(tui_output KIND STATIC
     HEADERS
         CursorShape.hpp
         Error.hpp
+        MouseTracking.hpp
         SgrBuilder.hpp
         TerminalOutput.hpp
         TerminalProtocols.hpp
@@ -205,7 +206,8 @@ core_cpp_add_test(tui NAME tui_output
 
 # One binary for the module. windows/TerminalInput_test.cpp is Windows-only: it drives the console
 # API directly, and serialises its cases on a named mutex because they share the one console the
-# test process has. posix/TerminalHangup_test.cpp is POSIX-only: it hangs up a pseudo-terminal.
+# test process has. posix/TerminalHangup_test.cpp and posix/TerminalInput_test.cpp are POSIX-only: one
+# hangs up a pseudo-terminal, the other swaps standard output for a pipe with dup2.
 core_cpp_add_test(tui
     SOURCES
         ${_coreCppTuiImageTests}
@@ -231,6 +233,7 @@ core_cpp_add_test(tui
         Sixel_test.cpp
         SmartCaseMatch_test.cpp
         StyledText_test.cpp
+        TerminalInput_test.cpp
         TerminalQuery_test.cpp
         TreeTableView_test.cpp
         Unicode_test.cpp
@@ -239,5 +242,6 @@ core_cpp_add_test(tui
         runtime/TuiRuntime_test.cpp
     SOURCES_POSIX
         posix/TerminalHangup_test.cpp
+        posix/TerminalInput_test.cpp
     SOURCES_WINDOWS
         windows/TerminalInput_test.cpp)

@@ -96,10 +96,9 @@ auto Terminal::initialize() -> VoidResult
     // Detect HUD overlay support (DEC mode 2035, Contour terminal)
     _hudSupported = isChangeable(queryDecMode(2035));
 
-    // Detect passive mouse tracking support (DEC mode 2029).
-    // When supported, also enable any-motion tracking (mode 1003) for hover tooltips.
-    // Non-supporting terminals silently ignored mode 2029 in enableProtocols(),
-    // so we only add 1003 when the terminal actually recognized it.
+    // Detect passive mouse tracking support (DEC mode 2029). Where the terminal recognises it, hover
+    // tooltips raise the mouse tracking mode to any-motion (1003); a terminal that silently ignores
+    // mode 2029 in enableProtocols() is not asked to report every motion.
     if (isChangeable(queryDecMode(2029)))
         _input.setAnyMotionTracking(true);
 

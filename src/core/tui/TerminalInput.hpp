@@ -4,6 +4,7 @@
 #include <core/platform/Types.hpp>
 #include <core/tui/Error.hpp>
 #include <core/tui/InputEvent.hpp>
+#include <core/tui/MouseTracking.hpp>
 #include <core/tui/VtParser.hpp>
 
 #include <iterator>
@@ -131,14 +132,29 @@ class TerminalInput
     /// @brief Returns whether the terminal is currently suspended.
     [[nodiscard]] auto isSuspended() const noexcept -> bool;
 
-    /// @brief Enables or disables any-motion mouse tracking (mode 1003).
+    /// @brief Raises the mouse tracking mode to any-motion (mode 1003) while @p enabled, for hover
+    /// tooltips.
     ///
-    /// When enabled, the terminal reports all mouse movements (not just button presses),
-    /// which is required for hover tooltip support. This should only be enabled after
-    /// confirming passive mouse tracking (mode 2029) support via DECRQPM, to avoid
-    /// capturing the mouse in terminals that don't support passive tracking.
-    /// @param enabled True to enable, false to disable.
+    /// Call it only after confirming passive mouse tracking (mode 2029) via DECRQPM, so that a terminal
+    /// without it is not asked to report every motion. While raised, @c mouseTracking() answers
+    /// @c MouseTracking::AnyMotion whatever @c setMouseTracking() requested; lowered, the requested
+    /// mode applies again. The change is written at once when the protocols are enabled.
+    /// @param enabled True to raise the mode, false to return to the requested one.
     void setAnyMotionTracking(bool enabled);
+
+    /// @brief Sets how much mouse input the terminal is asked to report.
+    ///
+    /// Effective at the next enableProtocols() -- @c initialize() or @c resume() -- and at once when
+    /// the protocols are enabled now, by writing only the change from the current mode. The default
+    /// is @c MouseTracking::Off: a terminal that reports the mouse stops selecting text on a
+    /// click-and-drag, so an application opts in.
+    /// @param mode The mode the application asks for.
+    void setMouseTracking(MouseTracking mode);
+
+    /// @brief Returns the mode the terminal is asked for.
+    /// @return The mode @c setMouseTracking() requested, or @c MouseTracking::AnyMotion while
+    ///         @c setAnyMotionTracking() raises it.
+    [[nodiscard]] auto mouseTracking() const noexcept -> MouseTracking;
 
     /// @brief Sets a cross-platform wakeup handle for poll() integration.
     ///
@@ -161,7 +177,8 @@ class TerminalInput
     bool _rawMode = false;
     bool _suspended = false;         ///< True when suspended for external command execution.
     bool _inputClosed = false;       ///< True once the input handle was found at its end.
-    bool _anyMotionTracking = false; ///< True when any-motion tracking (mode 1003) should be enabled.
+    bool _anyMotionTracking = false; ///< True while hover tracking raises the mode to any-motion (1003).
+    MouseTracking _mouseTracking = MouseTracking::Off; ///< The mode setMouseTracking() requested.
 
     std::unique_ptr<NativeState> _native;      ///< Never null; the platform's own state.
     core::platform::Wakeup* _wakeup = nullptr; ///< Optional cross-thread wakeup handle.
@@ -172,6 +189,17 @@ class TerminalInput
     void enableProtocols();
     void disableProtocols();
     void writeProtocol(std::string_view data) const;
+
+    /// @brief Writes the sequences that move the terminal from mouse tracking @p from to @p to.
+    /// @param from The mode the terminal is in.
+    /// @param to The mode it is to be in.
+    void writeMouseTrackingChange(MouseTracking from, MouseTracking to) const;
+
+    /// @brief Stores the hover flag and the requested mode, and writes the resulting change when the
+    /// protocols are enabled.
+    /// @param anyMotion Whether hover raises the mode to any-motion.
+    /// @param requested The mode the application asked for.
+    void updateMouseTracking(bool anyMotion, MouseTracking requested);
 };
 
 } // namespace core::tui

@@ -271,6 +271,11 @@ auto Terminal::isSuspended() const noexcept -> bool
     return _input.isSuspended();
 }
 
+void Terminal::setMouseTracking(MouseTracking mode)
+{
+    _input.setMouseTracking(mode);
+}
+
 auto Terminal::hudSupported() const noexcept -> bool
 {
     return _hudSupported;

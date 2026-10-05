@@ -9,6 +9,53 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Added
+
+- **`core::tui::MouseTracking` and `protocols::appendMouseTrackingChange()`** (`<core/tui/MouseTracking.hpp>`,
+  in `core::tui_output`): the standard mouse tracking modes -- `Buttons` (DEC 1000), `Drag` (1002) and
+  `AnyMotion` (1003), with `Off` the default -- and the one function that writes a change between two of
+  them: from `Off` the mode's set and then SGR encoding (1006), to `Off` the reverse, and between two modes
+  only the swap. `protocols::EnableButtonTracking`, `EnableDragTracking` and their `Disable` twins join the
+  existing 1003 constants, with `mouseTrackingSet()` and `mouseTrackingReset()` mapping a mode to its own.
+- **`TerminalInput::setMouseTracking()` and `Terminal::setMouseTracking()`: standard mouse tracking.**
+  core::tui enabled only Contour's passive mode 2029, so xterm, kitty, WezTerm, iTerm2 and Windows Terminal
+  reported no mouse events at all. An application now asks for a `MouseTracking` mode, which
+  `enableProtocols()` writes with SGR encoding and `disableProtocols()` resets in reverse order; a change
+  while the protocols are enabled writes only the transition. The default stays `Off`, so no existing
+  program changes what a click-and-drag does in its terminal. The hover path that enables 1003 once the
+  terminal confirms 2029 now raises the requested mode to `AnyMotion`, and so also writes 1006;
+  `TerminalInput::mouseTracking()` answers the mode in effect.
+- **`Screen::componentAt(row, col)` is public**: the top-most visible component at a cell, as the last
+  `draw()` laid the screen out -- overlays first, the one shown last on top, then the tree in reverse
+  z-order, deepest descendant first -- or null where nothing but the root is. A drag source asks it for
+  the component under the pointer at the release.
+- **Pointer capture in `Screen`.** `Screen` hit-tested every mouse event, so a drag that left the component
+  it started on lost its moves and its release. A press now makes the component that handled it the
+  capture target: every move and the next release go to it directly, in its own coordinates, wherever the
+  pointer is. The release ends the capture, as do the next press, `Screen::releasePointer()` and the
+  target leaving the screen (destroyed, removed from the tree or hidden as an overlay); scroll events are
+  never captured. `Screen::pointerCapture()` answers the target.
+
+### Changed
+
+- **A mouse event over an overlay goes to the overlay.** `Screen` hit-tested only the component tree, so
+  a click on a popup or dialog shown with `showOverlay()` reached the component beneath it. Overlays are
+  now tested first, the one shown last on top. The screen's own tooltip is not a target, so the hover
+  stays with the component it describes.
+- **A mouse press hides the tooltip and resets the hover**, as a key press does, so no tooltip opens over
+  the drag the press starts.
+
+### Fixed
+
+- **Hit-testing breaks z-index ties the way painting does.** Siblings with the same z-index are painted in
+  the order they were added, so the last one is on top; hit-testing picked the first. A mouse event, and
+  `Screen::componentAt()`, now answer the component the user sees. An overlay's direct children are
+  painted by z-index too, where they used to be painted in insertion order.
+- **An overlay and its `Screen` may be destroyed in either order.** The screen's destructor detaches every
+  overlay still shown and its tree; before, an overlay that outlived the screen reached the destroyed one
+  from its own destructor, through `invalidate()`. A component destroyed while shown as an overlay leaves
+  the overlay list; before, the next `draw()` rendered the destroyed component.
+
 ## [0.6.0] - 2026-10-02
 
 ### Breaking

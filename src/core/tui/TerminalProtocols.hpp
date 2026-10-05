@@ -4,6 +4,8 @@
 /// @file TerminalProtocols.hpp
 /// @brief Terminal protocol escape sequence constants shared between platform implementations.
 
+#include <core/tui/MouseTracking.hpp>
+
 #include <string>
 #include <string_view>
 
@@ -58,6 +60,73 @@ constexpr auto DisableAnyMotionTracking = "\033[?1003l"sv; ///< Disable any-moti
 // consumed the event (e.g., for scrollback selection).
 constexpr auto EnablePassiveMouseTracking = "\033[?2029h"sv;  ///< Enable passive mouse tracking.
 constexpr auto DisablePassiveMouseTracking = "\033[?2029l"sv; ///< Disable passive mouse tracking.
+
+// Button-event tracking (mode 1000): press and release only.
+constexpr auto EnableButtonTracking = "\033[?1000h"sv;  ///< Enable press/release mouse tracking.
+constexpr auto DisableButtonTracking = "\033[?1000l"sv; ///< Disable press/release mouse tracking.
+
+// Button-motion tracking (mode 1002): press, release, and motion while a button is held.
+constexpr auto EnableDragTracking = "\033[?1002h"sv;  ///< Enable drag mouse tracking.
+constexpr auto DisableDragTracking = "\033[?1002l"sv; ///< Disable drag mouse tracking.
+
+/// @brief Returns the DEC private mode set that asks for @p mode.
+/// @param mode The tracking mode.
+/// @return `CSI ? 1000 h`, `CSI ? 1002 h` or `CSI ? 1003 h`; empty for @c MouseTracking::Off.
+[[nodiscard]] constexpr auto mouseTrackingSet(MouseTracking mode) noexcept -> std::string_view
+{
+    switch (mode)
+    {
+        case MouseTracking::Off: return {};
+        case MouseTracking::Buttons: return EnableButtonTracking;
+        case MouseTracking::Drag: return EnableDragTracking;
+        case MouseTracking::AnyMotion: return EnableAnyMotionTracking;
+    }
+    return {};
+}
+
+/// @brief Returns the DEC private mode reset that ends @p mode.
+/// @param mode The tracking mode.
+/// @return `CSI ? 1000 l`, `CSI ? 1002 l` or `CSI ? 1003 l`; empty for @c MouseTracking::Off.
+[[nodiscard]] constexpr auto mouseTrackingReset(MouseTracking mode) noexcept -> std::string_view
+{
+    switch (mode)
+    {
+        case MouseTracking::Off: return {};
+        case MouseTracking::Buttons: return DisableButtonTracking;
+        case MouseTracking::Drag: return DisableDragTracking;
+        case MouseTracking::AnyMotion: return DisableAnyMotionTracking;
+    }
+    return {};
+}
+
+/// @brief Appends the sequences that move a terminal from mouse tracking @p from to @p to.
+///
+/// From @c MouseTracking::Off: the mode's set, then SGR encoding (1006). To @c MouseTracking::Off:
+/// the reverse, 1006's reset and then the mode's. Between two modes: the old mode's reset and the new
+/// one's set, leaving 1006 on. Nothing when the two are equal. Enabling a terminal's protocols is the
+/// change from Off and disabling them the change to Off, so what is reset always mirrors what was set.
+/// @param out Destination to append to.
+/// @param from The mode the terminal is in.
+/// @param to The mode it is to be in.
+inline void appendMouseTrackingChange(std::string& out, MouseTracking from, MouseTracking to)
+{
+    if (from == to)
+        return;
+    if (from == MouseTracking::Off)
+    {
+        out.append(mouseTrackingSet(to));
+        out.append(EnableSGRMouse);
+        return;
+    }
+    if (to == MouseTracking::Off)
+    {
+        out.append(DisableSGRMouse);
+        out.append(mouseTrackingReset(from));
+        return;
+    }
+    out.append(mouseTrackingReset(from));
+    out.append(mouseTrackingSet(to));
+}
 
 // Focus tracking (DEC mode 1004)
 // When enabled, the terminal sends CSI I on focus-in and CSI O on focus-out.

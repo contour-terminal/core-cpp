@@ -41,8 +41,8 @@ which fetches libunicode and, through libunicode's configure, `UCD.zip`.
 - `buildSgrSequence()` turns a `Style` into one SGR sequence.
 - `core::tui::protocols` holds the sequence constants the input and output sides share (the Kitty
   keyboard protocol, bracketed paste, mouse and focus tracking, colour-scheme notification,
-  win32-input-mode, OSC 8), `appendHyperlinkOpen()`, and `parseSixelFromDeviceAttributes()`, which
-  reads a DA1 answer.
+  win32-input-mode, OSC 8), `appendHyperlinkOpen()`, `appendMouseTrackingChange()`, which writes the change
+  between two `MouseTracking` modes, and `parseSixelFromDeviceAttributes()`, which reads a DA1 answer.
 - `Result<T>` and `VoidResult`, the module's `std::expected` aliases.
 
 ## `core::tui`
@@ -55,6 +55,21 @@ and on stb when `CORE_CPP_WITH_IMAGES` is on. Native only: there is no terminal 
   paste, focus, resize, and the protocol reports a query waits for. `Terminal` pairs it with a
   `TerminalOutput` and owns the query round-trips (`queryCursorPosition()`, `queryCellSize()`,
   `queryDecMode()`, `queryDeviceAttributes()`), each on an injected clock and each bounded.
+- **Mouse.** `TerminalInput::setMouseTracking()`, or `Terminal::setMouseTracking()`, asks the terminal for a
+  `MouseTracking` mode: `Buttons` (DEC 1000), `Drag` (1002) or `AnyMotion` (1003), each with SGR encoding
+  (1006). The default is `Off`, because a terminal that reports the mouse stops selecting text on a
+  click-and-drag; an application opts in. Contour's passive mode 2029 is enabled either way, and where the
+  terminal confirms it, hover tooltips raise the mode to `AnyMotion` (`mouseTracking()` answers the raised
+  mode). `VtParser` decodes every mode's reports into `MouseEvent`s: motion with a button held is a `Move`
+  of that button, motion with none a `Move` of button 3.
+- **Pointer.** `Screen` routes a mouse event to the top-most visible component under it -- overlays first,
+  the one shown last on top, then the tree -- and `componentAt(row, col)` answers the same question for a
+  caller, such as a drag source looking for its drop target. A press makes the component that handled it
+  the capture target: until the release, every move and that release go to it, in its own coordinates and
+  wherever the pointer is, so a component sees its whole drag. The release ends the capture, as do the
+  next press, `releasePointer()`, and the component leaving the screen -- destroyed, removed from the tree
+  or hidden as an overlay. Scroll events are never captured, and a press hides the tooltip, so none opens
+  mid-drag.
 - **Drawing.** `Buffer` is a grid of `Cell`s, `Canvas` a clipped view of one, and `Screen` the
   renderer that diffs a frame against the last and writes only what changed, inline, full-screen or
   in a fixed area. `Theme`, `StyledText`, `Text`, `Box`, `Rect` and `HyperlinkEmitter` sit under it.
