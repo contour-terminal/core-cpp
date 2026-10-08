@@ -69,8 +69,10 @@ and on stb when `CORE_CPP_WITH_IMAGES` is on. Native only: there is no terminal 
   `openControllingTerminal()` opens `/dev/tty` (or `CONIN$`/`CONOUT$`) beside standard I/O, so
   redirected output does not stop a copy, with echo and line buffering off while it is open; a
   process outside the terminal's foreground process group gets a write-only channel and OSC 52.
-  Opening a readable channel discards input already queued, so a reply that arrived after an
-  earlier exchange gave up waiting does not answer this one -- typeahead goes with it. A reply that
+  Before an exchange it will wait on -- the probe, an OSC 5522 write -- the writer discards input
+  already queued (`TerminalChannel::discardPendingInput()`), so a reply that arrived after an
+  earlier exchange gave up waiting does not answer this one; typeahead goes with it. An OSC 52 copy
+  waits for nothing and discards nothing. A reply that
   arrives after the channel has closed cannot be caught: a terminal that confirms an OSC 5522 copy
   later than the status timeout leaves that reply for whatever reads the terminal next.
   `VtParser` decodes OSC replies into `OscResponse` only when constructed with

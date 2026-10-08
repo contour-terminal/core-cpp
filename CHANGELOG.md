@@ -21,9 +21,11 @@ workflow refuses one without a section here.
   short-lived connection to the controlling terminal beside standard I/O -- `/dev/tty` with ICANON and ECHO off
   while open, or the Windows console's `CONIN$`/`CONOUT$` -- so a program whose output is redirected can still
   query its terminal. A process outside the terminal's foreground process group gets a write-only channel.
-  Opening a readable channel discards queued input, so a late reply to an earlier exchange cannot answer the
-  next one.
-- **`ClipboardProtocol.hpp`** in `core::tui_output`: `encodeOsc52()`, `encodeOsc5522Write()`,
+  `discardPendingInput()` drops queued input; `ClipboardWriter` calls it before each exchange it waits on, so a
+  late reply to an earlier exchange cannot answer the next one. A channel's errors are its own
+  (`TerminalChannelError`).
+- **`ClipboardProtocol.hpp`** in `core::tui_output`: `encodeOsc52()`, `appendOsc52()`, `encodeOsc5522Write()`,
+  the `Osc5522Probe` and `Osc5522ModeQuery` sequences,
   `parseOsc5522WriteStatus()`, `describe(ClipboardWriteError)` and `isPlainTextMimeType()`, pure functions.
 - **`OscResponse`, and `VtParser::Options`** with `OscRecognition::Response`: a parser constructed so decodes an
   OSC reply (ST or BEL terminated, capped at `MaxOscLength`). The default, `AltKey`, keeps `ESC ]` as Alt+], so
@@ -36,7 +38,8 @@ workflow refuses one without a section here.
 - **`InputEvent` has one more alternative, `OscResponse`.** A `std::visit` over it with one overload per
   alternative and no generic fallback stops compiling until it handles `OscResponse`; no released parser emits
   one unless constructed with `OscRecognition::Response`.
-- `TerminalOutput::copyToClipboard()` composes its sequence with `encodeOsc52()`; the bytes are unchanged.
+- `TerminalOutput::copyToClipboard()` composes its sequence with `appendOsc52()`, encoding straight into the output
+  buffer; the bytes are unchanged.
 
 ## [0.7.0] - 2026-10-05
 

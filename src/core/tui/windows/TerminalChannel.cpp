@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -20,13 +21,6 @@ namespace core::tui
 
 namespace
 {
-    /// @brief Whether a console mode was changed, and so must be given back.
-    enum class ModeChange : std::uint8_t
-    {
-        Unchanged,
-        Changed,
-    };
-
     /// @brief The console's input and output, and the modes to give back when they are closed.
     class WindowsTerminalChannel final: public TerminalChannel
     {
@@ -35,25 +29,24 @@ namespace
         /// @param output CONOUT$; owned from here on.
         WindowsTerminalChannel(HANDLE input, HANDLE output): _input(input), _output(output)
         {
-            if (GetConsoleMode(_input, &_savedInput) != 0
+            auto savedInput = DWORD { 0 };
+            if (GetConsoleMode(_input, &savedInput) != 0
                 && SetConsoleMode(_input, ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_PROCESSED_INPUT) != 0)
-                _inputChanged = ModeChange::Changed;
-            if (GetConsoleMode(_output, &_savedOutput) != 0
+                _restoreInput = savedInput;
+            auto savedOutput = DWORD { 0 };
+            if (GetConsoleMode(_output, &savedOutput) != 0
                 && SetConsoleMode(_output,
-                                  _savedOutput | ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+                                  savedOutput | ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING)
                        != 0)
-                _outputChanged = ModeChange::Changed;
-            // A reply to an earlier exchange that gave up waiting may still be queued; read now, it
-            // would answer this exchange instead.
-            FlushConsoleInputBuffer(_input);
+                _restoreOutput = savedOutput;
         }
 
         ~WindowsTerminalChannel() override
         {
-            if (_inputChanged == ModeChange::Changed)
-                SetConsoleMode(_input, _savedInput);
-            if (_outputChanged == ModeChange::Changed)
-                SetConsoleMode(_output, _savedOutput);
+            if (_restoreInput)
+                SetConsoleMode(_input, *_restoreInput);
+            if (_restoreOutput)
+                SetConsoleMode(_output, *_restoreOutput);
             CloseHandle(_input);
             CloseHandle(_output);
         }
@@ -68,35 +61,35 @@ namespace
             return ChannelAccess::ReadWrite;
         }
 
-        [[nodiscard]] auto write(std::string_view bytes) -> std::expected<void, ClipboardWriteError> override
+        [[nodiscard]] auto write(std::string_view bytes) -> std::expected<void, TerminalChannelError> override
         {
             while (!bytes.empty())
             {
                 auto written = DWORD { 0 };
                 if (WriteFile(_output, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) == 0
                     || written == 0)
-                    return std::unexpected { ClipboardWriteError::IoError };
+                    return std::unexpected { TerminalChannelError::IoError };
                 bytes.remove_prefix(written);
             }
             return {};
         }
 
         [[nodiscard]] auto poll(int timeoutMs)
-            -> std::expected<std::vector<InputEvent>, ClipboardWriteError> override
+            -> std::expected<std::vector<InputEvent>, TerminalChannelError> override
         {
             if (WaitForSingleObject(_input, static_cast<DWORD>(timeoutMs)) != WAIT_OBJECT_0)
                 return std::vector<InputEvent> {};
 
             auto pending = DWORD { 0 };
             if (GetNumberOfConsoleInputEvents(_input, &pending) == 0)
-                return std::unexpected { ClipboardWriteError::IoError };
+                return std::unexpected { TerminalChannelError::IoError };
             if (pending == 0)
                 return std::vector<InputEvent> {};
 
             auto records = std::vector<INPUT_RECORD>(pending);
             auto read = DWORD { 0 };
             if (ReadConsoleInputW(_input, records.data(), pending, &read) == 0)
-                return std::unexpected { ClipboardWriteError::IoError };
+                return std::unexpected { TerminalChannelError::IoError };
 
             // With ENABLE_VIRTUAL_TERMINAL_INPUT a terminal's replies arrive as key events, one
             // UTF-16 unit each, exactly as TerminalInput reads them.
@@ -110,13 +103,13 @@ namespace
             return _parser.feed(bytes);
         }
 
+        void discardPendingInput() override { FlushConsoleInputBuffer(_input); }
+
       private:
         HANDLE _input;
         HANDLE _output;
-        DWORD _savedInput = 0;
-        DWORD _savedOutput = 0;
-        ModeChange _inputChanged = ModeChange::Unchanged;
-        ModeChange _outputChanged = ModeChange::Unchanged;
+        std::optional<DWORD> _restoreInput;  ///< The input mode to give back, when this channel changed it.
+        std::optional<DWORD> _restoreOutput; ///< The output mode to give back, when this channel changed it.
         detail::Utf16ToUtf8 _utf16;
         VtParser _parser { VtParser::Options { .osc = VtParser::OscRecognition::Response } };
     };
@@ -138,12 +131,12 @@ auto openControllingTerminal() -> TerminalChannelResult
 {
     auto const input = openConsole(L"CONIN$");
     if (input == INVALID_HANDLE_VALUE)
-        return std::unexpected { ClipboardWriteError::NoTerminal };
+        return std::unexpected { TerminalChannelError::NoTerminal };
     auto const output = openConsole(L"CONOUT$");
     if (output == INVALID_HANDLE_VALUE)
     {
         CloseHandle(input);
-        return std::unexpected { ClipboardWriteError::NoTerminal };
+        return std::unexpected { TerminalChannelError::NoTerminal };
     }
     return std::make_unique<WindowsTerminalChannel>(input, output);
 }

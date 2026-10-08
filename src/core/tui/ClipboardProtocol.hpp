@@ -53,11 +53,25 @@ constexpr int Osc5522Mode = 5522;
 /// @brief The most raw bytes one OSC 5522 data packet carries, before base64 encoding.
 constexpr std::size_t Osc5522ChunkSize = 4096;
 
+/// @brief DECRQM for mode 5522: the terminal answers with a @c DecModeReport for it, if at all.
+constexpr std::string_view Osc5522ModeQuery = "\033[?5522$p";
+
+/// @brief The OSC 5522 probe: DECRQM for mode 5522, then DA1, which every terminal answers.
+///
+/// Terminals answer in order, so the DA1 reply ends the probe whether or not DECRQM was answered.
+constexpr std::string_view Osc5522Probe = "\033[?5522$p\033[c";
+
 /// @brief Composes the OSC 52 sequence that copies @p data.
 /// @param data The bytes to copy.
 /// @param target The selection to replace.
 /// @return `ESC ] 52 ; c|p ; <base64> ESC \`.
 [[nodiscard]] auto encodeOsc52(std::string_view data, ClipboardTarget target) -> std::string;
+
+/// @brief Appends the OSC 52 sequence that copies @p data to @p out, encoding in place.
+/// @param out The buffer to append to.
+/// @param data The bytes to copy.
+/// @param target The selection to replace.
+void appendOsc52(std::string& out, std::string_view data, ClipboardTarget target);
 
 /// @brief Composes the whole OSC 5522 packet sequence that copies @p data as @p mime.
 ///

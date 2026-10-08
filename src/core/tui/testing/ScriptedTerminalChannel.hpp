@@ -15,8 +15,12 @@
 #include <core/tui/ClipboardProtocol.hpp>
 #include <core/tui/InputEvent.hpp>
 #include <core/tui/TerminalChannel.hpp>
+#include <core/tui/TerminalProtocols.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -34,7 +38,7 @@ namespace core::tui::testing
 enum class TerminalPresence : std::uint8_t
 {
     Present, ///< Opening it succeeds.
-    Absent,  ///< Opening it fails with @c ClipboardWriteError::NoTerminal.
+    Absent,  ///< Opening it fails with @c TerminalChannelError::NoTerminal.
 };
 
 /// @brief A scripted terminal: its answers, and a record of what it was sent.
@@ -46,8 +50,10 @@ struct ScriptedTerminal
     bool answersDeviceAttributes = true;       ///< Whether `CSI c` (DA1) is answered.
     std::optional<std::string> writeStatus;    ///< OSC 5522 status (`DONE`, `EPERM`, ...); nullopt: none.
     std::vector<InputEvent> beforeWriteStatus; ///< Replies sent ahead of the write status.
+    std::vector<InputEvent> queuedAtOpen;      ///< Input already waiting when a channel opens.
     std::vector<std::string> written;          ///< Every write, in order.
     int opens = 0;                             ///< How many channels were opened.
+    int discards = 0;                          ///< How often queued input was discarded.
 
     /// @brief A factory that opens a channel onto this terminal, timed by @p clock.
     /// @param clock The clock a poll with nothing to deliver advances.
@@ -70,15 +76,29 @@ struct ScriptedTerminal
             std::ranges::count_if(written, [needle](std::string const& w) { return w.contains(needle); }));
     }
 
+    /// The prefix of every OSC 5522 data packet, up to its base64 MIME type.
+    static constexpr auto DataPacket = std::string_view { "\033]5522;type=wdata:mime=" };
+
+    /// The OSC 52 introducer.
+    static constexpr auto Osc52Introducer = std::string_view { "\033]52;" };
+
   private:
     /// @brief The last write that carried a copy, or nullptr.
     [[nodiscard]] auto lastCopy() const -> std::string const*
     {
         auto const isCopy = [](std::string const& w) {
-            return w.contains("\033]52;") || w.contains("\033]5522;type=wdata:mime=");
+            return w.contains(Osc52Introducer) || w.contains(DataPacket);
         };
         auto const found = std::ranges::find_if(written | std::views::reverse, isCopy);
         return found == std::ranges::end(written | std::views::reverse) ? nullptr : &*found;
+    }
+
+    /// @brief The base64 between @p start and the next @p terminator in @p copy, decoded.
+    [[nodiscard]] static auto decodeUntil(std::string_view copy,
+                                          std::size_t start,
+                                          std::string_view terminator) -> std::string
+    {
+        return core::base64::decode(copy.substr(start, copy.find(terminator, start) - start));
     }
 };
 
@@ -94,20 +114,22 @@ class ScriptedTerminalChannel final: public TerminalChannel
     /// @param terminal The terminal this channel is onto.
     /// @param clock The clock an empty poll advances.
     ScriptedTerminalChannel(ScriptedTerminal& terminal, core::platform::ManualClock& clock):
-        _terminal(terminal), _clock(clock)
+        _terminal(terminal),
+        _clock(clock),
+        _replies(terminal.queuedAtOpen.begin(), terminal.queuedAtOpen.end())
     {
     }
 
     [[nodiscard]] auto access() const noexcept -> ChannelAccess override { return _terminal.access; }
 
-    [[nodiscard]] auto write(std::string_view bytes) -> std::expected<void, ClipboardWriteError> override
+    [[nodiscard]] auto write(std::string_view bytes) -> std::expected<void, TerminalChannelError> override
     {
         _terminal.written.emplace_back(bytes);
         if (_terminal.access == ChannelAccess::WriteOnly)
             return {};
-        if (bytes.contains("\033[?5522$p") && _terminal.decModeStatus)
+        if (bytes.contains(Osc5522ModeQuery) && _terminal.decModeStatus)
             _replies.emplace_back(DecModeReport { .mode = Osc5522Mode, .status = *_terminal.decModeStatus });
-        if (bytes.contains("\033[c") && _terminal.answersDeviceAttributes)
+        if (bytes.contains(protocols::QueryPrimaryDeviceAttributes) && _terminal.answersDeviceAttributes)
             _replies.emplace_back(DeviceAttributesReport { .attributes = { 62, 4, 22 } });
         if (bytes.ends_with("\033]5522;type=wdata\033\\"))
         {
@@ -121,7 +143,7 @@ class ScriptedTerminalChannel final: public TerminalChannel
     }
 
     [[nodiscard]] auto poll(int timeoutMs)
-        -> std::expected<std::vector<InputEvent>, ClipboardWriteError> override
+        -> std::expected<std::vector<InputEvent>, TerminalChannelError> override
     {
         if (_replies.empty())
         {
@@ -132,6 +154,12 @@ class ScriptedTerminalChannel final: public TerminalChannel
         events.push_back(std::move(_replies.front()));
         _replies.pop_front();
         return events;
+    }
+
+    void discardPendingInput() override
+    {
+        ++_terminal.discards;
+        _replies.clear();
     }
 
   private:
@@ -145,7 +173,7 @@ inline auto ScriptedTerminal::factory(core::platform::ManualClock& clock)
 {
     return [this, &clock]() -> TerminalChannelResult {
         if (presence == TerminalPresence::Absent)
-            return std::unexpected { ClipboardWriteError::NoTerminal };
+            return std::unexpected { TerminalChannelError::NoTerminal };
         ++opens;
         return std::make_unique<ScriptedTerminalChannel>(*this, clock);
     };
@@ -158,22 +186,17 @@ inline auto ScriptedTerminal::decodedPayload() const -> std::string
         return {};
 
     // OSC 52: ESC ] 52 ; <sel> ; <base64> ST
-    if (auto const osc52 = copy->find("\033]52;"); osc52 != std::string::npos)
-    {
-        auto const start = copy->find(';', osc52 + 5) + 1;
-        return core::base64::decode(
-            std::string_view { *copy }.substr(start, copy->find("\033\\", start) - start));
-    }
+    if (auto const osc52 = copy->find(Osc52Introducer); osc52 != std::string::npos)
+        return decodeUntil(
+            *copy, copy->find(';', osc52 + Osc52Introducer.size()) + 1, protocols::StringTerminator);
 
     // OSC 5522: every data packet's payload, decoded and concatenated.
-    constexpr auto DataPacket = std::string_view { "\033]5522;type=wdata:mime=" };
     auto payload = std::string {};
     auto pos = copy->find(DataPacket);
     while (pos != std::string::npos)
     {
-        auto const start = copy->find(';', pos + DataPacket.size()) + 1;
-        payload += core::base64::decode(
-            std::string_view { *copy }.substr(start, copy->find("\033\\", start) - start));
+        payload +=
+            decodeUntil(*copy, copy->find(';', pos + DataPacket.size()) + 1, protocols::StringTerminator);
         pos = copy->find(DataPacket, pos + 1);
     }
     return payload;
@@ -181,15 +204,13 @@ inline auto ScriptedTerminal::decodedPayload() const -> std::string
 
 inline auto ScriptedTerminal::mimeType() const -> std::string
 {
-    constexpr auto DataPacket = std::string_view { "\033]5522;type=wdata:mime=" };
     auto const* copy = lastCopy();
     if (copy == nullptr)
         return {};
     auto const pos = copy->find(DataPacket);
     if (pos == std::string::npos)
         return {};
-    auto const start = pos + DataPacket.size();
-    return core::base64::decode(std::string_view { *copy }.substr(start, copy->find(';', start) - start));
+    return decodeUntil(*copy, pos + DataPacket.size(), ";");
 }
 
 inline auto ScriptedTerminal::target() const -> std::optional<ClipboardTarget>

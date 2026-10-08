@@ -2,11 +2,16 @@
 #include <core/tui/ClipboardProtocol.hpp>
 
 #include <core/Base64.hpp>
+#include <core/tui/TerminalProtocols.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <ranges>
+#include <string>
+#include <string_view>
 
 namespace core::tui
 {
@@ -68,8 +73,10 @@ namespace
     };
 
     constexpr auto OscIntroducer = "\033]"sv;
-    constexpr auto StringTerminator = "\033\\"sv;
     constexpr auto Osc5522Prefix = "5522;"sv;
+    using protocols::StringTerminator;
+
+    static_assert(Osc5522Probe.ends_with(protocols::QueryPrimaryDeviceAttributes));
 
     auto targetRow(ClipboardTarget target) noexcept -> TargetRow const&
     {
@@ -89,47 +96,78 @@ namespace
         return std::nullopt;
     }
 
-    auto appendOsc5522Packet(std::string& out, std::string_view metadata, std::string_view payload) -> void
+    /// @brief How many characters base64 turns @p size bytes into.
+    constexpr auto base64Size(std::size_t size) noexcept -> std::size_t
+    {
+        return (size + 2) / 3 * 4;
+    }
+
+    /// @brief Appends the base64 of @p data to @p out, without a temporary.
+    void appendBase64(std::string& out, std::string_view data)
+    {
+        auto state = base64::EncoderState {};
+        auto const sink = [&out](char a, char b, char c, char d) {
+            out += a;
+            out += b;
+            out += c;
+            out += d;
+        };
+        for (auto const ch: data)
+            base64::encode(static_cast<std::uint8_t>(ch), state, sink);
+        base64::finish(state, sink);
+    }
+
+    /// @brief Appends an OSC 5522 packet that carries no payload.
+    void appendOsc5522Control(std::string& out, std::string_view metadata)
     {
         out += OscIntroducer;
         out += Osc5522Prefix;
         out += metadata;
-        if (!payload.empty() || metadata.contains("mime="))
-        {
-            out += ';';
-            out += payload;
-        }
         out += StringTerminator;
     }
 
 } // namespace
 
-auto encodeOsc52(std::string_view data, ClipboardTarget target) -> std::string
+void appendOsc52(std::string& out, std::string_view data, ClipboardTarget target)
 {
-    auto out = std::string { OscIntroducer };
+    out.reserve(out.size() + OscIntroducer.size() + 5 + base64Size(data.size()) + StringTerminator.size());
+    out += OscIntroducer;
     out += "52;";
     out += targetRow(target).osc52Selector;
     out += ';';
-    out += base64::encode(data);
+    appendBase64(out, data);
     out += StringTerminator;
+}
+
+auto encodeOsc52(std::string_view data, ClipboardTarget target) -> std::string
+{
+    auto out = std::string {};
+    appendOsc52(out, data, target);
     return out;
 }
 
 auto encodeOsc5522Write(std::string_view data, std::string_view mime, ClipboardTarget target) -> std::string
 {
+    auto dataHeader = std::string { OscIntroducer };
+    dataHeader += Osc5522Prefix;
+    dataHeader += "type=wdata:mime=";
+    appendBase64(dataHeader, mime);
+    dataHeader += ';';
+
+    // Empty data is still one packet, so the MIME type is declared. Offsets rather than
+    // std::views::chunk, which Apple's libc++ does not have yet.
+    auto const chunkCount = std::max<std::size_t>(1, (data.size() + Osc5522ChunkSize - 1) / Osc5522ChunkSize);
+
     auto out = std::string {};
-    appendOsc5522Packet(out, std::string { "type=write" }.append(targetRow(target).osc5522Location), {});
-
-    auto const dataHeader = std::string { "type=wdata:mime=" }.append(base64::encode(mime));
-    if (data.empty())
-        appendOsc5522Packet(out, dataHeader, {});
-    // Offsets rather than std::views::chunk, which Apple's libc++ does not have yet.
-    auto const chunkCount = (data.size() + Osc5522ChunkSize - 1) / Osc5522ChunkSize;
+    out.reserve(64 + chunkCount * (dataHeader.size() + StringTerminator.size()) + base64Size(data.size()));
+    appendOsc5522Control(out, std::string { "type=write" }.append(targetRow(target).osc5522Location));
     for (auto const index: std::views::iota(std::size_t { 0 }, chunkCount))
-        appendOsc5522Packet(
-            out, dataHeader, base64::encode(data.substr(index * Osc5522ChunkSize, Osc5522ChunkSize)));
-
-    appendOsc5522Packet(out, "type=wdata", {});
+    {
+        out += dataHeader;
+        appendBase64(out, data.substr(std::min(index * Osc5522ChunkSize, data.size()), Osc5522ChunkSize));
+        out += StringTerminator;
+    }
+    appendOsc5522Control(out, "type=wdata");
     return out;
 }
 

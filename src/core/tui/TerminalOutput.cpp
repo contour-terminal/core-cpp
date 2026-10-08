@@ -211,7 +211,7 @@ void TerminalOutput::writeSixel(std::string_view sixelData)
 
 void TerminalOutput::copyToClipboard(std::string_view text)
 {
-    _buffer += encodeOsc52(text, ClipboardTarget::Clipboard);
+    appendOsc52(_buffer, text, ClipboardTarget::Clipboard);
 }
 
 void TerminalOutput::unscroll(int n)

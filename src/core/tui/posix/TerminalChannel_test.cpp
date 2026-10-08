@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // The POSIX TerminalChannel over a pseudo-terminal: the test holds the master, the channel opens the
 // slave by name, as it opens /dev/tty in production.
-#include <core/tui/ClipboardProtocol.hpp>
 #include <core/tui/InputEvent.hpp>
 #include <core/tui/TerminalChannel.hpp>
 #include <core/tui/posix/TerminalChannelPosix.hpp>
@@ -23,11 +22,11 @@
 
 using namespace std::chrono_literals;
 using core::tui::ChannelAccess;
-using core::tui::ClipboardWriteError;
 using core::tui::DecModeReport;
 using core::tui::InputEvent;
 using core::tui::OscResponse;
 using core::tui::TerminalChannel;
+using core::tui::TerminalChannelError;
 
 namespace
 {
@@ -168,7 +167,8 @@ TEST_CASE("tui.TerminalChannel: the terminal's replies come back decoded, OSC in
     CHECK(osc->payload == "5522;type=write:status=DONE");
 }
 
-TEST_CASE("tui.TerminalChannel: a reply left over from an earlier exchange is not delivered", "[posix]")
+TEST_CASE("tui.TerminalChannel: discarding pending input drops a reply left over from an earlier exchange",
+          "[posix]")
 {
     auto pty = Pty {};
     if (!pty.open())
@@ -180,6 +180,7 @@ TEST_CASE("tui.TerminalChannel: a reply left over from an earlier exchange is no
 
     auto channel = core::tui::openTerminalChannelAt(pty.slaveName.data(), ChannelAccess::ReadWrite);
     REQUIRE(channel.has_value());
+    (*channel)->discardPendingInput();
     CHECK_FALSE(firstEvent(**channel).has_value());
 }
 
@@ -187,7 +188,7 @@ TEST_CASE("tui.TerminalChannel: a terminal that cannot be opened is NoTerminal",
 {
     auto const channel = core::tui::openTerminalChannelAt("/nonexistent/tty", std::nullopt);
     REQUIRE_FALSE(channel.has_value());
-    CHECK(channel.error() == ClipboardWriteError::NoTerminal);
+    CHECK(channel.error() == TerminalChannelError::NoTerminal);
 }
 
 TEST_CASE("tui.TerminalChannel: the controlling terminal opens, or there is none", "[posix]")
@@ -197,5 +198,5 @@ TEST_CASE("tui.TerminalChannel: the controlling terminal opens, or there is none
     if (channel.has_value())
         CHECK(*channel != nullptr);
     else
-        CHECK(channel.error() == ClipboardWriteError::NoTerminal);
+        CHECK(channel.error() == TerminalChannelError::NoTerminal);
 }

@@ -67,13 +67,6 @@ class ClipboardWriter
                             std::string_view mime,
                             ClipboardTarget target) -> std::expected<ClipboardTransport, ClipboardWriteError>;
 
-    /// @brief Polls @p channel until @p isWanted accepts an event or @p timeout elapses on the clock.
-    /// @return Whether an event was accepted, or the channel's error.
-    [[nodiscard]] auto awaitEvent(TerminalChannel& channel,
-                                  std::chrono::milliseconds timeout,
-                                  std::function<bool(InputEvent const&)> const& isWanted)
-        -> std::expected<bool, ClipboardWriteError>;
-
     ChannelFactory _openChannel;
     core::platform::IClock& _clock;
     ClipboardWriterTimeouts _timeouts;

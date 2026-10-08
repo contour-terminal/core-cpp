@@ -1216,26 +1216,19 @@ void VtParser::processDcsBody(std::uint8_t byte, std::vector<InputEvent>& events
 
 void VtParser::processOscBody(std::uint8_t byte, std::vector<InputEvent>& events)
 {
-    if (byte == Bell)
+    // BEL ends an OSC as ST does; xterm accepts both, and terminals answer with either.
+    if (byte != Bell)
     {
-        events.emplace_back(OscResponse { .payload = std::move(_oscBuf) });
-        _oscBuf.clear();
-        _state = State::Ground;
-        return;
-    }
-
-    _oscBuf += static_cast<char>(byte);
-
-    if (_oscBuf.ends_with(StringTerminator))
-    {
+        _oscBuf += static_cast<char>(byte);
+        if (!_oscBuf.ends_with(StringTerminator))
+        {
+            std::ignore = abandonIfOverlong(_oscBuf, MaxOscBuffer);
+            return;
+        }
         _oscBuf.resize(_oscBuf.size() - StringTerminator.size());
-        events.emplace_back(OscResponse { .payload = std::move(_oscBuf) });
-        _oscBuf.clear();
-        _state = State::Ground;
-        return;
     }
-
-    std::ignore = abandonIfOverlong(_oscBuf, MaxOscBuffer);
+    events.emplace_back(OscResponse { .payload = std::exchange(_oscBuf, {}) });
+    _state = State::Ground;
 }
 
 void VtParser::emitCodepoint(char32_t cp, std::vector<InputEvent>& events)

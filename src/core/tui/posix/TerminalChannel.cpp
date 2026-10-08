@@ -35,23 +35,24 @@ namespace
         ///               outside the foreground group that tried would be stopped by SIGTTOU.
         PosixTerminalChannel(int fd, ChannelAccess access): _fd(fd), _access(access)
         {
-            if (_access == ChannelAccess::WriteOnly || ::tcgetattr(_fd, &_saved) != 0)
+            auto saved = termios {};
+            if (_access == ChannelAccess::WriteOnly || ::tcgetattr(_fd, &saved) != 0)
                 return;
-            auto raw = _saved;
+            auto raw = saved;
             raw.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO); // ISIG stays: Ctrl+C still interrupts
             raw.c_cc[VMIN] = 0;
             raw.c_cc[VTIME] = 0;
-            _modeChanged = ::tcsetattr(_fd, TCSANOW, &raw) == 0 ? ModeChange::Changed : ModeChange::Unchanged;
-            // A reply to an earlier exchange that gave up waiting may still be queued; read now, it
-            // would answer this exchange instead. What the user typed ahead goes with it.
-            std::ignore = ::tcflush(_fd, TCIFLUSH);
+            if (::tcsetattr(_fd, TCSANOW, &raw) == 0)
+                _restore = saved;
         }
 
         ~PosixTerminalChannel() override
         {
-            // TCSADRAIN: what was written reaches the terminal before echo comes back on.
-            if (_modeChanged == ModeChange::Changed)
-                std::ignore = ::tcsetattr(_fd, TCSADRAIN, &_saved);
+            // TCSANOW, not TCSADRAIN: only local flags change, which do not affect bytes already
+            // written, and a drain waits for a reader -- forever on a terminal nobody reads (macOS
+            // ptys wait for the master to read even an echo).
+            if (_restore)
+                std::ignore = ::tcsetattr(_fd, TCSANOW, &*_restore);
             ::close(_fd);
         }
 
@@ -62,43 +63,42 @@ namespace
 
         [[nodiscard]] auto access() const noexcept -> ChannelAccess override { return _access; }
 
-        [[nodiscard]] auto write(std::string_view bytes) -> std::expected<void, ClipboardWriteError> override
+        [[nodiscard]] auto write(std::string_view bytes) -> std::expected<void, TerminalChannelError> override
         {
             if (safeWrite(_fd, bytes.data(), bytes.size()) < 0)
-                return std::unexpected { ClipboardWriteError::IoError };
+                return std::unexpected { TerminalChannelError::IoError };
             return {};
         }
 
         [[nodiscard]] auto poll(int timeoutMs)
-            -> std::expected<std::vector<InputEvent>, ClipboardWriteError> override
+            -> std::expected<std::vector<InputEvent>, TerminalChannelError> override
         {
             auto watch = pollfd { .fd = _fd, .events = POLLIN, .revents = 0 };
             auto const ready = ::poll(&watch, 1, timeoutMs);
             if (ready < 0 && errno != EINTR)
-                return std::unexpected { ClipboardWriteError::IoError };
+                return std::unexpected { TerminalChannelError::IoError };
             if (ready <= 0)
                 return std::vector<InputEvent> {}; // timeout, or a signal: the caller's deadline decides
 
             auto buffer = std::array<char, 4096> {};
-            auto const count = ::read(_fd, buffer.data(), buffer.size());
-            if (count < 0 && errno != EINTR && errno != EAGAIN)
-                return std::unexpected { ClipboardWriteError::IoError };
+            auto const count = safeRead(_fd, buffer.data(), buffer.size());
+            if (count < 0 && errno != EAGAIN)
+                return std::unexpected { TerminalChannelError::IoError };
             if (count <= 0)
                 return std::vector<InputEvent> {};
             return _parser.feed(std::string_view { buffer.data(), static_cast<std::size_t>(count) });
         }
 
-      private:
-        enum class ModeChange : std::uint8_t
+        void discardPendingInput() override
         {
-            Unchanged,
-            Changed,
-        };
+            if (_access == ChannelAccess::ReadWrite)
+                std::ignore = ::tcflush(_fd, TCIFLUSH);
+        }
 
+      private:
         int _fd;
         ChannelAccess _access;
-        termios _saved {};
-        ModeChange _modeChanged = ModeChange::Unchanged;
+        std::optional<termios> _restore; ///< The mode to give back, when this channel changed it.
         VtParser _parser { VtParser::Options { .osc = VtParser::OscRecognition::Response } };
     };
 
@@ -113,7 +113,7 @@ auto openTerminalChannelAt(char const* path, std::optional<ChannelAccess> access
 {
     auto const fd = ::open(path, O_RDWR | O_NOCTTY | O_CLOEXEC);
     if (fd < 0)
-        return std::unexpected { ClipboardWriteError::NoTerminal };
+        return std::unexpected { TerminalChannelError::NoTerminal };
     return std::make_unique<PosixTerminalChannel>(fd, access ? *access : foregroundAccess(fd));
 }
 

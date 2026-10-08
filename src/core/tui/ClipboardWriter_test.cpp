@@ -30,7 +30,7 @@ using namespace std::chrono_literals;
 namespace
 {
 
-constexpr auto Probe = std::string_view { "\033[?5522$p\033[c" };
+constexpr auto Probe = core::tui::Osc5522Probe;
 
 /// A terminal that answers the DECRQM probe with @p decModeStatus (nullopt: not at all) and an
 /// OSC 5522 write with @p writeStatus (nullopt: not at all); DA1 is always answered.
@@ -136,7 +136,7 @@ TEST_CASE("tui.ClipboardWriter: the probe runs once, and each copy opens its own
     REQUIRE(writer.write("one", "text/plain", ClipboardTarget::Clipboard).has_value());
     REQUIRE(writer.write("two", "text/plain", ClipboardTarget::Clipboard).has_value());
 
-    CHECK(terminal.writesContaining("\033[?5522$p") == 1);
+    CHECK(terminal.writesContaining(core::tui::Osc5522ModeQuery) == 1);
     CHECK(terminal.opens == 2);
     CHECK(terminal.decodedPayload() == "two");
 }
@@ -221,13 +221,41 @@ TEST_CASE("tui.ClipboardWriter: a write-only channel is not probed, and that is 
     auto const background = writer.write("hi", "text/plain", ClipboardTarget::Clipboard);
     REQUIRE(background.has_value());
     CHECK(*background == ClipboardTransport::Osc52);
-    CHECK(terminal.writesContaining("\033[?5522$p") == 0);
+    CHECK(terminal.writesContaining(core::tui::Osc5522ModeQuery) == 0);
 
     // Back in the foreground, the terminal is asked after all.
     terminal.access = ChannelAccess::ReadWrite;
     auto const foreground = writer.write("hi", "text/plain", ClipboardTarget::Clipboard);
     REQUIRE(foreground.has_value());
     CHECK(*foreground == ClipboardTransport::Osc5522);
+}
+
+TEST_CASE("tui.ClipboardWriter: a reply left over from an earlier copy does not confirm this one")
+{
+    auto clock = ManualClock {};
+    auto terminal = terminalWith(2); // knows OSC 5522, never confirms
+    auto writer = ClipboardWriter { terminal.factory(clock), clock };
+    REQUIRE(writer.write("probe", "text/plain", ClipboardTarget::Clipboard).error()
+            == ClipboardWriteError::NoConfirmation);
+
+    // The previous copy's status arrives late, and is waiting when the next copy opens its channel.
+    terminal.queuedAtOpen.emplace_back(OscResponse { .payload = "5522;type=write:status=DONE" });
+    auto const result = writer.write("hi", "text/plain", ClipboardTarget::Clipboard);
+
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error() == ClipboardWriteError::NoConfirmation);
+}
+
+TEST_CASE("tui.ClipboardWriter: an OSC 52 copy, which waits for nothing, keeps what was typed ahead")
+{
+    auto clock = ManualClock {};
+    auto terminal = terminalWith(0);
+    auto writer = ClipboardWriter { terminal.factory(clock), clock };
+    REQUIRE(writer.write("one", "text/plain", ClipboardTarget::Clipboard).has_value()); // probes
+    auto const discardsAfterProbe = terminal.discards;
+
+    REQUIRE(writer.write("two", "text/plain", ClipboardTarget::Clipboard).has_value());
+    CHECK(terminal.discards == discardsAfterProbe);
 }
 
 TEST_CASE("tui.ClipboardWriter: no terminal to open is NoTerminal")

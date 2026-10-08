@@ -18,7 +18,7 @@ namespace core::tui
 /// @param path The terminal device to open.
 /// @param access The access to grant, or nullopt to derive it: read-write when this process is in
 ///               the terminal's foreground process group, write-only otherwise.
-/// @return The channel, or @c ClipboardWriteError::NoTerminal when @p path cannot be opened.
+/// @return The channel, or @c TerminalChannelError::NoTerminal when @p path cannot be opened.
 [[nodiscard]] auto openTerminalChannelAt(char const* path, std::optional<ChannelAccess> access)
     -> TerminalChannelResult;
 
