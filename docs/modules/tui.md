@@ -38,6 +38,10 @@ which fetches libunicode and, through libunicode's configure, `UCD.zip`.
   writes through the `TerminalOutput` it was made from, so a retargeted output is bracketed on its
   own stream, and only when that output's `isTerminal()` is true: on any other destination it
   flushes at both ends and writes no sequence, so a caller takes one unconditionally.
+- `ClipboardProtocol.hpp` composes both terminal clipboard protocols and reads their answers, with
+  no I/O: `encodeOsc52()`, `encodeOsc5522Write()` (kitty's protocol: any MIME type, 4096-byte
+  chunks), `parseOsc5522WriteStatus()`, and `describe()` for a `ClipboardWriteError`.
+  `TerminalOutput::copyToClipboard()` uses the same OSC 52 encoder.
 - `buildSgrSequence()` turns a `Style` into one SGR sequence.
 - `core::tui::protocols` holds the sequence constants the input and output sides share (the Kitty
   keyboard protocol, bracketed paste, mouse and focus tracking, colour-scheme notification,
@@ -55,6 +59,18 @@ and on stb when `CORE_CPP_WITH_IMAGES` is on. Native only: there is no terminal 
   paste, focus, resize, and the protocol reports a query waits for. `Terminal` pairs it with a
   `TerminalOutput` and owns the query round-trips (`queryCursorPosition()`, `queryCellSize()`,
   `queryDecMode()`, `queryDeviceAttributes()`), each on an injected clock and each bounded.
+- **Clipboard.** `ClipboardWriter` copies through the terminal rather than an OS clipboard API, so
+  it works over SSH: OSC 5522 where the terminal says it knows mode 5522, OSC 52 otherwise. The
+  first copy asks with DECRQM followed by DA1, which every terminal answers, so the probe ends at
+  the DA1 reply and times out only when nothing answers at all; the answer is kept for the
+  writer's lifetime. An OSC 5522 copy waits for the terminal's status (`DONE` or an error such as
+  `EPERM`); an OSC 52 copy cannot be confirmed, and a non-text MIME type over it is refused before
+  anything is sent. Each copy opens a `TerminalChannel` from an injected factory:
+  `openControllingTerminal()` opens `/dev/tty` (or `CONIN$`/`CONOUT$`) beside standard I/O, so
+  redirected output does not stop a copy, with echo and line buffering off while it is open; a
+  process outside the terminal's foreground process group gets a write-only channel and OSC 52.
+  `VtParser` decodes OSC replies into `OscResponse` only when constructed with
+  `OscRecognition::Response`; by default `ESC ]` stays Alt+].
 - **Mouse.** `TerminalInput::setMouseTracking()`, or `Terminal::setMouseTracking()`, asks the terminal for a
   `MouseTracking` mode: `Buttons` (DEC 1000), `Drag` (1002) or `AnyMotion` (1003), each with SGR encoding
   (1006). The default is `Off`, because a terminal that reports the mouse stops selecting text on a
@@ -110,7 +126,10 @@ and on stb when `CORE_CPP_WITH_IMAGES` is on. Native only: there is no terminal 
   emitting VT, `runtime::testing::ScriptedInputSource` scripts the decoding and, with
   `closeInput()`, the end of the input (readiness comes from
   `core::net::testing::ScriptedBackend` or from a real `core::platform::SystemPipe`), and
-  `TestHelpers.hpp` reads a rendered `Buffer` back as text.
+  `TestHelpers.hpp` reads a rendered `Buffer` back as text. `testing::ScriptedTerminal` is a
+  terminal on a `ManualClock` for anything built on `TerminalChannel`: how it answers the OSC 5522
+  probe and a write, and every byte it was sent, decoded back with `decodedPayload()`,
+  `mimeType()` and `target()`.
 
 ## Registering a language
 
