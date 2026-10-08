@@ -99,7 +99,7 @@ namespace
     /// @brief How many characters base64 turns @p size bytes into.
     constexpr auto base64Size(std::size_t size) noexcept -> std::size_t
     {
-        return (size + 2) / 3 * 4;
+        return ((size + 2) / 3) * 4;
     }
 
     /// @brief Appends the base64 of @p data to @p out, without a temporary.
@@ -159,7 +159,7 @@ auto encodeOsc5522Write(std::string_view data, std::string_view mime, ClipboardT
     auto const chunkCount = std::max<std::size_t>(1, (data.size() + Osc5522ChunkSize - 1) / Osc5522ChunkSize);
 
     auto out = std::string {};
-    out.reserve(64 + chunkCount * (dataHeader.size() + StringTerminator.size()) + base64Size(data.size()));
+    out.reserve(64 + (chunkCount * (dataHeader.size() + StringTerminator.size())) + base64Size(data.size()));
     appendOsc5522Control(out, std::string { "type=write" }.append(targetRow(target).osc5522Location));
     for (auto const index: std::views::iota(std::size_t { 0 }, chunkCount))
     {
