@@ -196,10 +196,13 @@ core_cpp_add_module(tui KIND STATIC
     SOURCES_POSIX
         ${_coreCppTuiImagePosix}
         posix/Terminal.cpp
+        posix/TerminalChannel.cpp
+        posix/TerminalChannelPosix.hpp
         posix/TerminalInput.cpp
     SOURCES_WINDOWS
         ${_coreCppTuiImageWindows}
         windows/Terminal.cpp
+        windows/TerminalChannel.cpp
         windows/TerminalInput.cpp
     PUBLIC_LIBS core::base core::tui_output core::platform core::async core::net unicode::unicode
     PRIVATE_LIBS ${_coreCppTuiImageLibs})
@@ -249,6 +252,7 @@ core_cpp_add_test(tui
         runtime/Modal_test.cpp
         runtime/TuiRuntime_test.cpp
     SOURCES_POSIX
+        posix/TerminalChannel_test.cpp
         posix/TerminalHangup_test.cpp
         posix/TerminalInput_test.cpp
     SOURCES_WINDOWS
