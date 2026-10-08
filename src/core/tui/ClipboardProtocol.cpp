@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <ranges>
 
 namespace core::tui
@@ -122,8 +123,11 @@ auto encodeOsc5522Write(std::string_view data, std::string_view mime, ClipboardT
     auto const dataHeader = std::string { "type=wdata:mime=" }.append(base64::encode(mime));
     if (data.empty())
         appendOsc5522Packet(out, dataHeader, {});
-    for (auto const chunk: data | std::views::chunk(Osc5522ChunkSize))
-        appendOsc5522Packet(out, dataHeader, base64::encode(std::string_view { chunk.begin(), chunk.end() }));
+    // Offsets rather than std::views::chunk, which Apple's libc++ does not have yet.
+    auto const chunkCount = (data.size() + Osc5522ChunkSize - 1) / Osc5522ChunkSize;
+    for (auto const index: std::views::iota(std::size_t { 0 }, chunkCount))
+        appendOsc5522Packet(
+            out, dataHeader, base64::encode(data.substr(index * Osc5522ChunkSize, Osc5522ChunkSize)));
 
     appendOsc5522Packet(out, "type=wdata", {});
     return out;
