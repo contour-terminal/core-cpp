@@ -21,6 +21,8 @@ workflow refuses one without a section here.
   short-lived connection to the controlling terminal beside standard I/O -- `/dev/tty` with ICANON and ECHO off
   while open, or the Windows console's `CONIN$`/`CONOUT$` -- so a program whose output is redirected can still
   query its terminal. A process outside the terminal's foreground process group gets a write-only channel.
+  Opening a readable channel discards queued input, so a late reply to an earlier exchange cannot answer the
+  next one.
 - **`ClipboardProtocol.hpp`** in `core::tui_output`: `encodeOsc52()`, `encodeOsc5522Write()`,
   `parseOsc5522WriteStatus()`, `describe(ClipboardWriteError)` and `isPlainTextMimeType()`, pure functions.
 - **`OscResponse`, and `VtParser::Options`** with `OscRecognition::Response`: a parser constructed so decodes an

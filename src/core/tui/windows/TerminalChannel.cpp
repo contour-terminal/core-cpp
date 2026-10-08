@@ -43,6 +43,9 @@ namespace
                                   _savedOutput | ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING)
                        != 0)
                 _outputChanged = ModeChange::Changed;
+            // A reply to an earlier exchange that gave up waiting may still be queued; read now, it
+            // would answer this exchange instead.
+            FlushConsoleInputBuffer(_input);
         }
 
         ~WindowsTerminalChannel() override

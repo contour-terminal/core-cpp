@@ -12,6 +12,7 @@
 #include <chrono>
 #include <optional>
 #include <string>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -165,6 +166,21 @@ TEST_CASE("tui.TerminalChannel: the terminal's replies come back decoded, OSC in
     auto const* osc = std::get_if<OscResponse>(&*status);
     REQUIRE(osc != nullptr);
     CHECK(osc->payload == "5522;type=write:status=DONE");
+}
+
+TEST_CASE("tui.TerminalChannel: a reply left over from an earlier exchange is not delivered", "[posix]")
+{
+    auto pty = Pty {};
+    if (!pty.open())
+        SKIP("no pseudo-terminal could be opened");
+
+    // A status that arrived after the previous copy gave up waiting, still in the terminal's input.
+    pty.writeToMaster("\033]5522;type=write:status=DONE\033\\");
+    std::this_thread::sleep_for(50ms); // let the line discipline queue it before the channel opens
+
+    auto channel = core::tui::openTerminalChannelAt(pty.slaveName.data(), ChannelAccess::ReadWrite);
+    REQUIRE(channel.has_value());
+    CHECK_FALSE(firstEvent(**channel).has_value());
 }
 
 TEST_CASE("tui.TerminalChannel: a terminal that cannot be opened is NoTerminal", "[posix]")

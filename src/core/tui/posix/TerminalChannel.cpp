@@ -42,6 +42,9 @@ namespace
             raw.c_cc[VMIN] = 0;
             raw.c_cc[VTIME] = 0;
             _modeChanged = ::tcsetattr(_fd, TCSANOW, &raw) == 0 ? ModeChange::Changed : ModeChange::Unchanged;
+            // A reply to an earlier exchange that gave up waiting may still be queued; read now, it
+            // would answer this exchange instead. What the user typed ahead goes with it.
+            std::ignore = ::tcflush(_fd, TCIFLUSH);
         }
 
         ~PosixTerminalChannel() override
