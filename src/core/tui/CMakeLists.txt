@@ -90,6 +90,7 @@ core_cpp_add_module(tui KIND STATIC
         Buffer.hpp
         Canvas.hpp
         Cell.hpp
+        ClipboardWriter.hpp
         CommandPalettePopup.hpp
         CommandRegistry.hpp
         CompletionPopup.hpp
@@ -126,6 +127,7 @@ core_cpp_add_module(tui KIND STATIC
         StatusBar.hpp
         StyledText.hpp
         Terminal.hpp
+        TerminalChannel.hpp
         TerminalInput.hpp
         TestHelpers.hpp
         Text.hpp
@@ -147,12 +149,14 @@ core_cpp_add_module(tui KIND STATIC
         runtime/TerminalInputSource.hpp
         runtime/TuiRuntime.hpp
         runtime/testing/ScriptedInputSource.hpp
+        testing/ScriptedTerminalChannel.hpp
     SOURCES
         ${_coreCppTuiImageSources}
         Box.cpp
         Buffer.cpp
         Canvas.cpp
         Cell.cpp
+        ClipboardWriter.cpp
         CommandPalettePopup.cpp
         CommandRegistry.cpp
         CompletionPopup.cpp
@@ -214,6 +218,7 @@ core_cpp_add_test(tui NAME tui_output
 core_cpp_add_test(tui
     SOURCES
         ${_coreCppTuiImageTests}
+        ClipboardWriter_test.cpp
         CommandPalettePopup_test.cpp
         CommandRegistry_test.cpp
         Completer_test.cpp
