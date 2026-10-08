@@ -433,6 +433,10 @@ namespace
     // cap would be a few bytes larger than the longest sequence that actually works.
     constexpr auto MaxPasteBuffer = VtParser::MaxPasteLength + PasteEnd.size();
     constexpr auto MaxDcsBuffer = VtParser::MaxDcsLength + StringTerminator.size();
+    constexpr auto MaxOscBuffer = VtParser::MaxOscLength + StringTerminator.size();
+
+    /// @brief BEL, the terminator xterm also accepts for an OSC in place of ST.
+    constexpr auto Bell = std::uint8_t { 0x07 };
 
 } // namespace
 
@@ -453,6 +457,7 @@ auto VtParser::feed(std::string_view data) -> std::vector<InputEvent>
             case State::Utf8Sequence: processUtf8(byte, events); break;
             case State::DcsEntry: processDcsEntry(byte, events); break;
             case State::DcsBody: processDcsBody(byte, events); break;
+            case State::OscBody: processOscBody(byte, events); break;
         }
     }
     return events;
@@ -566,6 +571,14 @@ void VtParser::processEscape(std::uint8_t byte, std::vector<InputEvent>& events)
     {
         _dcsBuf.clear();
         _state = State::DcsEntry;
+        return;
+    }
+
+    // OSC introducer: ESC ], an OSC reply only where the caller asked for those.
+    if (byte == ']' && _options.osc == OscRecognition::Response)
+    {
+        _oscBuf.clear();
+        _state = State::OscBody;
         return;
     }
 
@@ -1199,6 +1212,30 @@ void VtParser::processDcsBody(std::uint8_t byte, std::vector<InputEvent>& events
     }
 
     std::ignore = abandonIfOverlong(_dcsBuf, MaxDcsBuffer);
+}
+
+void VtParser::processOscBody(std::uint8_t byte, std::vector<InputEvent>& events)
+{
+    if (byte == Bell)
+    {
+        events.emplace_back(OscResponse { .payload = std::move(_oscBuf) });
+        _oscBuf.clear();
+        _state = State::Ground;
+        return;
+    }
+
+    _oscBuf += static_cast<char>(byte);
+
+    if (_oscBuf.ends_with(StringTerminator))
+    {
+        _oscBuf.resize(_oscBuf.size() - StringTerminator.size());
+        events.emplace_back(OscResponse { .payload = std::move(_oscBuf) });
+        _oscBuf.clear();
+        _state = State::Ground;
+        return;
+    }
+
+    std::ignore = abandonIfOverlong(_oscBuf, MaxOscBuffer);
 }
 
 void VtParser::emitCodepoint(char32_t cp, std::vector<InputEvent>& events)
