@@ -25,9 +25,12 @@ namespace
 auto countOf(std::string_view haystack, std::string_view needle) -> std::size_t
 {
     auto count = std::size_t { 0 };
-    for (auto pos = haystack.find(needle); pos != std::string_view::npos;
-         pos = haystack.find(needle, pos + needle.size()))
+    auto pos = haystack.find(needle);
+    while (pos != std::string_view::npos)
+    {
         ++count;
+        pos = haystack.find(needle, pos + needle.size());
+    }
     return count;
 }
 

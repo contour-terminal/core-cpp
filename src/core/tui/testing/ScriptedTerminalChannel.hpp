@@ -168,11 +168,13 @@ inline auto ScriptedTerminal::decodedPayload() const -> std::string
     // OSC 5522: every data packet's payload, decoded and concatenated.
     constexpr auto DataPacket = std::string_view { "\033]5522;type=wdata:mime=" };
     auto payload = std::string {};
-    for (auto pos = copy->find(DataPacket); pos != std::string::npos; pos = copy->find(DataPacket, pos + 1))
+    auto pos = copy->find(DataPacket);
+    while (pos != std::string::npos)
     {
         auto const start = copy->find(';', pos + DataPacket.size()) + 1;
         payload += core::base64::decode(
             std::string_view { *copy }.substr(start, copy->find("\033\\", start) - start));
+        pos = copy->find(DataPacket, pos + 1);
     }
     return payload;
 }
