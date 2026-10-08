@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/tui/TerminalOutput.hpp>
 
-#include <core/Base64.hpp>
+#include <core/tui/ClipboardProtocol.hpp>
 #include <core/tui/SgrBuilder.hpp>
 #include <core/tui/TerminalProtocols.hpp>
 
@@ -211,11 +211,7 @@ void TerminalOutput::writeSixel(std::string_view sixelData)
 
 void TerminalOutput::copyToClipboard(std::string_view text)
 {
-    // OSC 52 format: 'ESC ] 52 ; c ; <base64-data> ESC \'
-    // 'c' means system clipboard (could also use 'p' for primary selection)
-    _buffer += "\033]52;c;";
-    _buffer += base64::encode(text);
-    _buffer += "\033\\";
+    _buffer += encodeOsc52(text, ClipboardTarget::Clipboard);
 }
 
 void TerminalOutput::unscroll(int n)

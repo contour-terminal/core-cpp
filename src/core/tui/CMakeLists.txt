@@ -14,6 +14,7 @@
 # is left is only what actually differs.
 core_cpp_add_module(tui_output KIND STATIC
     HEADERS
+        ClipboardProtocol.hpp
         CursorShape.hpp
         Error.hpp
         MouseTracking.hpp
@@ -21,6 +22,7 @@ core_cpp_add_module(tui_output KIND STATIC
         TerminalOutput.hpp
         TerminalProtocols.hpp
     SOURCES
+        ClipboardProtocol.cpp
         SgrBuilder.cpp
         TerminalOutput.cpp
         detail/Utf16ToUtf8.hpp
@@ -200,6 +202,7 @@ core_cpp_add_module(tui KIND STATIC
 
 core_cpp_add_test(tui NAME tui_output
     SOURCES
+        ClipboardProtocol_test.cpp
         TerminalOutput_test.cpp
         TerminalProtocols_test.cpp
         detail/Utf16ToUtf8_test.cpp)
