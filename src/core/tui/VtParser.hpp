@@ -52,6 +52,35 @@ class VtParser
     /// exactly this length still ends at its own terminator.
     static constexpr std::size_t MaxDcsLength = std::size_t { 64 } * 1024;
 
+    /// @brief The largest OSC payload delivered whole.
+    ///
+    /// An OSC reply a program waits for -- an OSC 5522 status, a colour report -- is a few dozen
+    /// bytes. The same reasoning and the same reserved room for the ST apply as for DCS.
+    static constexpr std::size_t MaxOscLength = std::size_t { 64 } * 1024;
+
+    /// @brief What `ESC ]` introduces.
+    enum class OscRecognition : std::uint8_t
+    {
+        AltKey,   ///< Alt+] followed by ordinary input: what a terminal sends when the user types it.
+        Response, ///< An OSC reply, delivered as @c OscResponse once its ST or BEL arrives.
+    };
+
+    /// @brief How a parser reads ambiguous input, fixed at construction.
+    struct Options
+    {
+        /// Response only where a program has asked the terminal something it answers with an
+        /// OSC. An interactive prompt keeps AltKey: there, reading `ESC ]` as an OSC would
+        /// swallow everything typed after Alt+] until a BEL.
+        OscRecognition osc = OscRecognition::AltKey;
+    };
+
+    /// @brief Constructs a parser with the default options.
+    VtParser() = default;
+
+    /// @brief Constructs a parser with @p options.
+    /// @param options How to read ambiguous input.
+    explicit VtParser(Options options) noexcept: _options(options) {}
+
     /// @brief Feeds raw bytes and produces zero or more parsed events.
     /// @param data Raw bytes from stdin.
     /// @return Vector of parsed input events.
@@ -77,13 +106,17 @@ class VtParser
         Utf8Sequence, ///< Collecting UTF-8 continuation bytes.
         DcsEntry,     ///< Received ESC P, collecting parameter/intermediate bytes.
         DcsBody,      ///< Inside DCS body, collecting data until ST (ESC \).
+        OscBody,      ///< Inside an OSC reply, collecting data until ST (ESC \) or BEL.
     };
+
+    Options _options;
 
     State _state = State::Ground;
     std::string _paramBuf;  ///< Buffer for CSI parameter bytes.
     std::string _utf8Buf;   ///< Buffer for UTF-8 multi-byte sequence.
     std::string _pasteBuf;  ///< Buffer for bracketed paste content.
     std::string _dcsBuf;    ///< Buffer for DCS (Device Control String) payload.
+    std::string _oscBuf;    ///< Buffer for an OSC reply's payload.
     int _utf8Remaining = 0; ///< Expected remaining UTF-8 continuation bytes.
 
     /// A Win32-input-mode key's high surrogate, waiting for the key that carries its low half, or 0.
@@ -125,6 +158,9 @@ class VtParser
 
     /// @brief Processes a single byte in the DcsBody state.
     void processDcsBody(std::uint8_t byte, std::vector<InputEvent>& events);
+
+    /// @brief Processes a single byte in the OscBody state.
+    void processOscBody(std::uint8_t byte, std::vector<InputEvent>& events);
 
     /// @brief Parses a complete CSI sequence from _paramBuf and the final byte.
     void dispatchCsi(char finalByte, std::vector<InputEvent>& events);

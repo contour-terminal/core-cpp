@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -1079,4 +1080,78 @@ TEST_CASE("VtParser.SGRMouse.a_drag_is_a_press_moves_and_a_release", "[tui,vtpar
     CHECK(mice[2].button == 0);
     CHECK(mice[2].x == 4);
     CHECK(mice[2].y == 3);
+}
+
+// ---------------------------------------------------------------------------
+// OSC replies (opt-in: VtParser::OscRecognition::Response)
+// ---------------------------------------------------------------------------
+
+namespace
+{
+auto oscParser() -> VtParser
+{
+    return VtParser { VtParser::Options { .osc = VtParser::OscRecognition::Response } };
+}
+} // namespace
+
+TEST_CASE("VtParser.OSC.reply_ended_by_ST", "[tui,vtparser]")
+{
+    auto parser = oscParser();
+    auto const events = parser.feed("\033]5522;type=write:status=DONE\033\\");
+    REQUIRE(events.size() == 1);
+    auto const* osc = std::get_if<OscResponse>(events.data());
+    REQUIRE(osc != nullptr);
+    CHECK(osc->payload == "5522;type=write:status=DONE");
+}
+
+TEST_CASE("VtParser.OSC.reply_ended_by_BEL", "[tui,vtparser]")
+{
+    auto parser = oscParser();
+    auto const events = parser.feed("\033]52;c;aGk=\a");
+    REQUIRE(events.size() == 1);
+    auto const* osc = std::get_if<OscResponse>(events.data());
+    REQUIRE(osc != nullptr);
+    CHECK(osc->payload == "52;c;aGk=");
+}
+
+TEST_CASE("VtParser.OSC.reply_split_across_feeds", "[tui,vtparser]")
+{
+    auto parser = oscParser();
+    CHECK(parser.feed("\033]5522;ty").empty());
+    CHECK(parser.feed("pe=write:status=EPERM\033").empty());
+    auto const events = parser.feed("\\");
+    REQUIRE(events.size() == 1);
+    auto const* osc = std::get_if<OscResponse>(events.data());
+    REQUIRE(osc != nullptr);
+    CHECK(osc->payload == "5522;type=write:status=EPERM");
+}
+
+TEST_CASE("VtParser.OSC.overlong_reply_is_abandoned", "[tui,vtparser]")
+{
+    auto parser = oscParser();
+    auto const events = parser.feed("\033]" + std::string(VtParser::MaxOscLength + 10, 'a'));
+    CHECK(std::ranges::none_of(events, [](auto const& e) { return std::holds_alternative<OscResponse>(e); }));
+
+    // Back in Ground: the next byte is a key again.
+    auto const after = parser.feed("x");
+    REQUIRE(after.size() == 1);
+    auto const* key = std::get_if<KeyEvent>(after.data());
+    REQUIRE(key != nullptr);
+    CHECK(key->codepoint == U'x');
+}
+
+TEST_CASE("VtParser.OSC.default_parser_reads_ESC_bracket_as_Alt_bracket", "[tui,vtparser]")
+{
+    auto parser = VtParser {};
+    auto const events = parser.feed("\033]");
+    REQUIRE(events.size() == 1);
+    auto const* key = std::get_if<KeyEvent>(events.data());
+    REQUIRE(key != nullptr);
+    CHECK(key->codepoint == U']');
+    CHECK(key->modifiers == Modifier::Alt);
+}
+
+TEST_CASE("VtParser.OSC.response_is_a_protocol_report", "[tui,vtparser]")
+{
+    CHECK(isProtocolReport(InputEvent { OscResponse { .payload = "52;c;" } }));
 }

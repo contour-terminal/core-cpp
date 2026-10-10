@@ -14,6 +14,7 @@
 # is left is only what actually differs.
 core_cpp_add_module(tui_output KIND STATIC
     HEADERS
+        ClipboardProtocol.hpp
         CursorShape.hpp
         Error.hpp
         MouseTracking.hpp
@@ -21,6 +22,7 @@ core_cpp_add_module(tui_output KIND STATIC
         TerminalOutput.hpp
         TerminalProtocols.hpp
     SOURCES
+        ClipboardProtocol.cpp
         SgrBuilder.cpp
         TerminalOutput.cpp
         detail/Utf16ToUtf8.hpp
@@ -88,6 +90,7 @@ core_cpp_add_module(tui KIND STATIC
         Buffer.hpp
         Canvas.hpp
         Cell.hpp
+        ClipboardWriter.hpp
         CommandPalettePopup.hpp
         CommandRegistry.hpp
         CompletionPopup.hpp
@@ -124,6 +127,7 @@ core_cpp_add_module(tui KIND STATIC
         StatusBar.hpp
         StyledText.hpp
         Terminal.hpp
+        TerminalChannel.hpp
         TerminalInput.hpp
         TestHelpers.hpp
         Text.hpp
@@ -145,12 +149,14 @@ core_cpp_add_module(tui KIND STATIC
         runtime/TerminalInputSource.hpp
         runtime/TuiRuntime.hpp
         runtime/testing/ScriptedInputSource.hpp
+        testing/ScriptedTerminalChannel.hpp
     SOURCES
         ${_coreCppTuiImageSources}
         Box.cpp
         Buffer.cpp
         Canvas.cpp
         Cell.cpp
+        ClipboardWriter.cpp
         CommandPalettePopup.cpp
         CommandRegistry.cpp
         CompletionPopup.cpp
@@ -190,16 +196,20 @@ core_cpp_add_module(tui KIND STATIC
     SOURCES_POSIX
         ${_coreCppTuiImagePosix}
         posix/Terminal.cpp
+        posix/TerminalChannel.cpp
+        posix/TerminalChannelPosix.hpp
         posix/TerminalInput.cpp
     SOURCES_WINDOWS
         ${_coreCppTuiImageWindows}
         windows/Terminal.cpp
+        windows/TerminalChannel.cpp
         windows/TerminalInput.cpp
     PUBLIC_LIBS core::base core::tui_output core::platform core::async core::net unicode::unicode
     PRIVATE_LIBS ${_coreCppTuiImageLibs})
 
 core_cpp_add_test(tui NAME tui_output
     SOURCES
+        ClipboardProtocol_test.cpp
         TerminalOutput_test.cpp
         TerminalProtocols_test.cpp
         detail/Utf16ToUtf8_test.cpp)
@@ -211,6 +221,7 @@ core_cpp_add_test(tui NAME tui_output
 core_cpp_add_test(tui
     SOURCES
         ${_coreCppTuiImageTests}
+        ClipboardWriter_test.cpp
         CommandPalettePopup_test.cpp
         CommandRegistry_test.cpp
         Completer_test.cpp
@@ -241,6 +252,7 @@ core_cpp_add_test(tui
         runtime/Modal_test.cpp
         runtime/TuiRuntime_test.cpp
     SOURCES_POSIX
+        posix/TerminalChannel_test.cpp
         posix/TerminalHangup_test.cpp
         posix/TerminalInput_test.cpp
     SOURCES_WINDOWS

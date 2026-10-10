@@ -101,6 +101,16 @@ struct DcsResponse
     std::string payload; ///< DCS content (excludes ESC P prefix and ST terminator).
 };
 
+/// @brief OSC (Operating System Command) reply from the terminal: ESC ] ... ST (or BEL).
+///
+/// Only a @c VtParser constructed with @c VtParser::OscRecognition::Response emits it; by default
+/// `ESC ]` reads as Alt+]. The payload is what lies between the introducer and the terminator,
+/// e.g. `5522;type=write:status=DONE`.
+struct OscResponse
+{
+    std::string payload; ///< OSC content (excludes ESC ] prefix and the ST/BEL terminator).
+};
+
 /// @brief DECRQM (DEC Request Mode) response: CSI ? mode ; status $ y.
 ///
 /// Reports whether a specific DEC private mode is set, reset, or unsupported.
@@ -137,6 +147,7 @@ using InputEvent = std::variant<KeyEvent,
                                 CellSizeReport,
                                 FocusEvent,
                                 DcsResponse,
+                                OscResponse,
                                 DecModeReport,
                                 DeviceAttributesReport>;
 
@@ -144,7 +155,7 @@ using InputEvent = std::variant<KeyEvent,
 /// than an application input event.
 ///
 /// Protocol reports are terminal responses to queries / mode changes
-/// (color-scheme, cursor-position, cell-size, DEC-mode, device-attributes, focus, DCS). They are
+/// (color-scheme, cursor-position, cell-size, DEC-mode, device-attributes, focus, DCS, OSC). They are
 /// consumed internally and never surfaced to application code. This is the
 /// single source of truth for that classification, shared by
 /// @c Terminal::consumeProtocolReports (which also dispatches the color-scheme
@@ -160,7 +171,7 @@ using InputEvent = std::variant<KeyEvent,
             return std::is_same_v<T, ColorSchemeReport> || std::is_same_v<T, CellSizeReport>
                    || std::is_same_v<T, CursorPositionReport> || std::is_same_v<T, DecModeReport>
                    || std::is_same_v<T, FocusEvent> || std::is_same_v<T, DcsResponse>
-                   || std::is_same_v<T, DeviceAttributesReport>;
+                   || std::is_same_v<T, OscResponse> || std::is_same_v<T, DeviceAttributesReport>;
         },
         event);
 }
