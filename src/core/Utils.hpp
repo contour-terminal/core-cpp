@@ -764,8 +764,19 @@ inline std::filesystem::path homeResolvedPath(std::string const& input,
 /// A `$${` sequence escapes substitution: it emits a literal `${` and leaves the rest of the
 /// would-be variable untouched, so machine-emitted config (e.g. SaveLayout) can round-trip values
 /// that contain literal `${...}` text without them being re-expanded on reload.
+///
+/// Malformed input passes through as written, and a well-formed variable beside it still
+/// expands. NAME runs from `${` to the first `}`; a `${` with no `}` before the next `${` or the
+/// end of @p text is unterminated, is emitted as written, and scanning resumes right after it.
+/// So `ab${x` stays `ab${x`, `${a}x${b` is `replace("a")` followed by `x${b`, and `${a${b}}` is
+/// `${a`, `replace("b")`, `}`. A `$` not followed by `{` is literal, and `${}` calls
+/// `replace("")`.
+///
+/// @param text The text to substitute in.
+/// @param replace Called with each NAME; its result is appended in place of `${NAME}`.
+/// @return @p text with each well-formed `${NAME}` substituted.
 template <typename VariableReplacer>
-inline std::string replaceVariables(std::string_view text, VariableReplacer const& replace)
+[[nodiscard]] inline std::string replaceVariables(std::string_view text, VariableReplacer const& replace)
 {
     using namespace std::string_view_literals;
 
@@ -795,15 +806,22 @@ inline std::string replaceVariables(std::string_view text, VariableReplacer cons
         auto const gapText = text.substr(i, markerStartOffset - i);
         output += gapText;
 
-        auto const markerEndOffset = text.find(MarkerEnd, markerStartOffset + MarkerStart.size());
-        if (markerEndOffset == Npos)
-            break; // Invalid variable format. Closing variable marker not found.
+        // The name ends at the first "}" before the next "${". Searching no further than that keeps
+        // the scan linear in the length of the text, however many unterminated markers it holds.
+        auto const nameOffset = markerStartOffset + MarkerStart.size();
+        auto const nextMarkerStartOffset = std::min(text.find(MarkerStart, nameOffset), text.size());
+        auto const nameLength = text.substr(nameOffset, nextMarkerStartOffset - nameOffset).find(MarkerEnd);
+        if (nameLength == Npos)
+        {
+            // Unterminated: emit the "${" as written and scan on right after it, so the text it
+            // would have opened passes through and a variable within it still expands.
+            output += MarkerStart;
+            i = nameOffset;
+            continue;
+        }
 
-        auto const nameLength = markerEndOffset - (markerStartOffset + MarkerStart.size());
-        auto const name = text.substr(markerStartOffset + MarkerStart.size(), nameLength);
-        output += replace(name);
-
-        i = markerEndOffset + MarkerEnd.size();
+        output += replace(text.substr(nameOffset, nameLength));
+        i = nameOffset + nameLength + MarkerEnd.size();
     }
     output += text.substr(i);
 

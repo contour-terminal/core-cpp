@@ -65,6 +65,13 @@ workflow refuses one without a section here.
   and 0xFF as `FFFFFFFF`: longer than two digits a byte, and not what `fromHexString()` reads back. ASCII input, the only kind its callers in core-cpp's consumers pass, is spelled as before. It shares
   one implementation with `toLowerHexString()`, and is now `constexpr` and `[[nodiscard]]`; its template
   accepts only `char`, the one type it ever compiled for.
+- **`core::replaceVariables()` no longer repeats the text before an unterminated `${`.** Finding no `}`, it
+  appended the text before the marker and then, leaving its loop, everything from the same offset again, so
+  `ab${x` came out as `abab${x` and `${HOME}/a${b` as `/home/user/a/a${b`. A `${` with no `}` before the next
+  `${` is now unterminated as well, instead of reading that variable into its name: `${x ${HOME}` gives
+  `${x /home/user`, where `replace()` used to be asked for `x ${HOME`. Malformed markers pass through as
+  written and a well-formed variable beside one still expands, as the function's documentation now says;
+  well-formed input and the `$${` escape are unchanged. It is now `[[nodiscard]]`.
 
 ## [0.7.0] - 2026-10-05
 

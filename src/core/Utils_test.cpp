@@ -223,6 +223,17 @@ TEST_CASE("replaceVariables")
     CHECK("${a} (b)"sv == core::replaceVariables("$${a} ${b}", VariableCollector()));
     CHECK("s/${VERSION}/1.0/"sv == core::replaceVariables("s/$${VERSION}/1.0/", VariableCollector()));
     CHECK("a $ b"sv == core::replaceVariables("a $ b", VariableCollector())); // lone '$' untouched
+
+    // Malformed markers pass through as written, and a well-formed variable beside one still expands.
+    CHECK("ab${x"sv == core::replaceVariables("ab${x", VariableCollector()));         // unterminated after text
+    CHECK("ab${x yz"sv == core::replaceVariables("ab${x yz", VariableCollector()));   // ... with text after it
+    CHECK("ab${"sv == core::replaceVariables("ab${", VariableCollector()));           // "${" at the very end
+    CHECK("ab$"sv == core::replaceVariables("ab$", VariableCollector()));             // '$' at the very end
+    CHECK("(a)${b"sv == core::replaceVariables("${a}${b", VariableCollector()));      // adjacent to a variable
+    CHECK("(a)x${b"sv == core::replaceVariables("${a}x${b", VariableCollector()));    // ... with text between
+    CHECK("${x (y)"sv == core::replaceVariables("${x ${y}", VariableCollector()));    // a variable after one
+    CHECK("${a(b)}"sv == core::replaceVariables("${a${b}}", VariableCollector()));    // nested
+    CHECK("${a${b}"sv == core::replaceVariables("${a$${b}", VariableCollector()));    // an escape after one
     // clang-format on
 }
 
