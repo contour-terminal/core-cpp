@@ -27,6 +27,7 @@ core_cpp_add_module(base KIND STATIC
         Overloaded.hpp
         Profiling.hpp
         Ranges.hpp
+        Sha256.hpp
         Times.hpp
         UserInfo.hpp
         Utils.hpp
@@ -52,6 +53,7 @@ core_cpp_add_test(base
         Generator_test.cpp
         Profiling_test.cpp
         Ranges_test.cpp
+        Sha256_test.cpp
         Times_test.cpp
         Utils_test.cpp
     SOURCES_WINDOWS

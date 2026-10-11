@@ -20,6 +20,7 @@
 #include <mutex>
 #include <optional>
 #include <ranges>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -547,6 +548,27 @@ std::basic_string<T> toHexString(std::basic_string_view<T> input)
     for (T const ch: input)
         output += std::format("{:02X}", static_cast<unsigned>(ch));
 
+    return output;
+}
+
+/// Spells @p bytes in lower-case hexadecimal, two digits per byte, the high nibble first.
+///
+/// `toHexString()` spells characters in upper case; a digest, a key or an identifier is
+/// conventionally written in lower case.
+/// @param bytes The bytes to spell.
+/// @return `2 * bytes.size()` characters from `0123456789abcdef`.
+[[nodiscard]] constexpr std::string toLowerHexString(std::span<std::byte const> bytes)
+{
+    constexpr auto Digits = std::string_view { "0123456789abcdef" };
+
+    auto output = std::string {};
+    output.reserve(bytes.size() * 2);
+    for (auto const byte: bytes)
+    {
+        auto const value = std::to_integer<std::size_t>(byte);
+        output.push_back(Digits[value >> 4U]);
+        output.push_back(Digits[value & 0x0FU]);
+    }
     return output;
 }
 

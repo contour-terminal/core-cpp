@@ -32,6 +32,16 @@ workflow refuses one without a section here.
   an interactive prompt is unaffected. `isProtocolReport()` counts `OscResponse` as a report.
 - **`core::tui::testing::ScriptedTerminal`** (`<core/tui/testing/ScriptedTerminalChannel.hpp>`): a scripted
   terminal on a `ManualClock` for tests of code built on `TerminalChannel`.
+- **SHA-256 and HMAC-SHA256 in `core::base`: `core::Sha256` and `core::hmacSha256()`** (`<core/Sha256.hpp>`),
+  needing nothing but the standard library, so code that must not depend on TLS can hash; until now core-cpp
+  had SHA-256 only through OpenSSL in `core::net_tls`. `Sha256` is incremental -- `update()`, then `finish()`,
+  which leaves the hasher usable -- with a one-shot `hash()`, over `std::span<std::byte const>` or
+  `std::string_view`; a digest is `Sha256::Digest`, a `std::array<std::byte, 32>`. All of it is `constexpr`.
+  It is fastcached's scalar engine (`Core/Sha256`) without the hardware engines, so it suits identifiers and
+  keys rather than bulk data, and HMAC does not erase its stack copies of the key. Checked against the
+  FIPS 180-4 examples and RFC 4231's seven test cases.
+- **`core::toLowerHexString()`** (`<core/Utils.hpp>`): bytes as lower-case hexadecimal, two digits each, in a
+  constant expression too. `toHexString()` spells characters, in upper case.
 
 ### Changed
 

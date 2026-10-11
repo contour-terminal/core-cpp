@@ -4,6 +4,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <map>
@@ -170,6 +172,20 @@ TEST_CASE("fromHexString")
     CHECK(core::fromHexString(""sv).value().empty());
     CHECK(core::fromHexString("61"sv).value() == "a"sv);
     CHECK(core::fromHexString("4162"sv).value() == "Ab"sv);
+}
+
+TEST_CASE("toLowerHexString spells each byte as two lower-case digits")
+{
+    // Every nibble value appears, in both halves of a byte, and 0x80 and above: a byte read as a
+    // signed char would spell those with a sign extension.
+    constexpr auto Bytes =
+        std::array { std::byte { 0x00 }, std::byte { 0x0f }, std::byte { 0x10 }, std::byte { 0x7f },
+                     std::byte { 0x80 }, std::byte { 0xa5 }, std::byte { 0xc3 }, std::byte { 0xff },
+                     std::byte { 0x12 }, std::byte { 0x34 }, std::byte { 0x56 }, std::byte { 0x9b },
+                     std::byte { 0xde } };
+    CHECK(core::toLowerHexString(Bytes) == "000f107f80a5c3ff1234569bde");
+    CHECK(core::toLowerHexString({}).empty());
+    STATIC_CHECK(core::toLowerHexString(Bytes) == "000f107f80a5c3ff1234569bde");
 }
 
 namespace

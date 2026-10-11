@@ -5,8 +5,8 @@ The generic utilities every other module may use. Namespace `core`, headers dire
 WebAssembly included, and links `Threads::Threads` except there.
 
 Imported from contour's `src/crispy` at `6777ff05`, with crispy's namespace renamed `core`, from
-fastcached's `src/FastCache/Core` at `ee71f868`, and `Generator.hpp` from endo's
-`src/platform/Generator.hpp` at `f774a210`.
+fastcached's `src/FastCache/Core` at `ee71f868` (and `Sha256.hpp` at `8c27b162`), and
+`Generator.hpp` from endo's `src/platform/Generator.hpp` at `f774a210`.
 
 | Header | What it has |
 |---|---|
@@ -23,9 +23,10 @@ fastcached's `src/FastCache/Core` at `ee71f868`, and `Generator.hpp` from endo's
 | `<core/Overloaded.hpp>` | `core::Overloaded`, lambdas combined into one visitor |
 | `<core/Profiling.hpp>` | the `CORE_ZONE_*`, `CORE_FRAME_MARK*`, `CORE_THREAD_NAME` and `CORE_PLOT` macros; see [Profiling](../design/profiling.md) |
 | `<core/Ranges.hpp>` | `core::findOrNull()` and `findIfOrNull()`, which answer a pointer; `core::ranges::Iota` and `FoldLeft`, the standard facility where the library has it and a fallback where it does not |
+| `<core/Sha256.hpp>` | `core::Sha256`, SHA-256 incremental (`update()`, `finish()`) and one-shot (`hash()`), and `core::hmacSha256()`; see [SHA-256 and HMAC](#sha-256-and-hmac) below |
 | `<core/Times.hpp>` | `core::times()`, a counted range to iterate or to pipe a callable into |
 | `<core/UserInfo.hpp>` | the calling user's password-database entry (`getpwuid_r()`); none on Windows or under Emscripten |
-| `<core/Utils.hpp>` | string splitting, trimming, joining and case mapping, `toInteger()`, hex strings, `${VAR}` substitution, `nextPowerOfTwo()`, `views::enumerate()`, `threadName()` |
+| `<core/Utils.hpp>` | string splitting, trimming, joining and case mapping, `toInteger()`, hex strings (`toLowerHexString()` for bytes), `${VAR}` substitution, `nextPowerOfTwo()`, `views::enumerate()`, `threadName()` |
 
 ## Generator
 
@@ -50,6 +51,34 @@ the compiler's coroutine language support — the one header here that does.
 - The fallback is always defined and is tested on every platform. Each yielded value lives in the
   coroutine frame until the next increment, so yield owning values. Breaking out of the loop
   destroys the suspended frame.
+
+## SHA-256 and HMAC
+
+`<core/Sha256.hpp>` has SHA-256 (FIPS 180-4) and HMAC-SHA256 (RFC 2104) with nothing but the
+standard library, so code that must not depend on TLS can hash: core-cpp links OpenSSL only for
+`core::net_tls`, behind `CORE_CPP_WITH_TLS`. It is the scalar engine of fastcached's
+`Core/Sha256` (`8c27b162`); fastcached's x86 SHA-NI and ARMv8 engines stayed there.
+
+```cpp
+auto hasher = core::Sha256 {};
+hasher.update(header);      // std::span<std::byte const>, or std::string_view
+hasher.update(payload);
+auto const digest = hasher.finish();                    // core::Sha256::Digest, 32 bytes
+auto const tag = core::hmacSha256(key, message);        // the same, keyed
+auto const text = core::toLowerHexString(digest);       // 64 hex digits, <core/Utils.hpp>
+```
+
+- **How the message is split never changes the digest.** `finish()` is `const`: it digests what has
+  been absorbed so far and leaves the hasher as it was, so more input may follow.
+- **Everything is `constexpr`**, so a digest or a tag can be computed at compile time.
+- **A key longer than the 64-byte block is hashed first**, as RFC 2104 says; any key length is
+  accepted.
+- **Limits.** It uses no SHA instructions, so it is meant for identifiers, keys and other short
+  inputs rather than bulk data. HMAC does not erase the copies of the key it makes on its stack,
+  and there is no constant-time comparison: comparing a tag an untrusted peer supplied with `==`
+  stops at the first byte that differs.
+- Verified against the FIPS 180-4 examples, including one million `a`s, and RFC 4231's test cases
+  1 to 7.
 
 ## Assertions that log
 
