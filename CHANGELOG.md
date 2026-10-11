@@ -41,6 +41,16 @@ workflow refuses one without a section here.
 - `TerminalOutput::copyToClipboard()` composes its sequence with `appendOsc52()`, encoding straight into the output
   buffer; the bytes are unchanged.
 
+### Fixed
+
+- **`core::platform::hostName()` answers the DNS host name on Windows, not the NetBIOS name.** It called
+  `GetComputerNameA`, whose name is upper-cased and cut to 15 characters, while POSIX `gethostname()`, Qt's
+  `QHostInfo::localHostName()` and the host of a shell's OSC 7 `file://host/path` URL all give the DNS host name.
+  A consumer comparing the two called a directory on its own machine remote whenever the machine's name was
+  longer than 15 characters or had a lower-case letter. It now asks `GetComputerNameExW` for
+  `ComputerNameDnsHostname`, as Qt does, and converts the answer to UTF-8 rather than reading it through the ANSI
+  code page. `cachedHostName()` answers the same name; POSIX is unchanged.
+
 ## [0.7.0] - 2026-10-05
 
 ### Added
