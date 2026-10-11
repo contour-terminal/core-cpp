@@ -6,6 +6,7 @@
 #include <core/Overloaded.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <concepts>
 #include <cstddef>
@@ -540,15 +541,46 @@ std::optional<std::basic_string<T>> fromHexString(std::basic_string_view<T> hexS
     return output;
 }
 
-template <typename T>
-std::basic_string<T> toHexString(std::basic_string_view<T> input)
+namespace detail
 {
-    std::basic_string<T> output;
+    /// The upper-case hexadecimal digits, indexed by the nibble each one spells.
+    inline constexpr auto UpperHexDigits = std::string_view { "0123456789ABCDEF" };
 
-    for (T const ch: input)
-        output += std::format("{:02X}", static_cast<unsigned>(ch));
+    /// The lower-case hexadecimal digits, indexed by the nibble each one spells.
+    inline constexpr auto LowerHexDigits = std::string_view { "0123456789abcdef" };
 
-    return output;
+    /// Spells @p bytes in hexadecimal, two digits per byte, the high nibble first.
+    ///
+    /// Each element is read as the unsigned byte it holds, whatever its type: widened with its
+    /// sign instead, a `char` from 0x80 up spells eight digits (`FFFFFF80`).
+    /// @param bytes The bytes to spell, each one byte wide.
+    /// @param digits The sixteen digits, `UpperHexDigits` or `LowerHexDigits`.
+    /// @return `2 * bytes.size()` characters from @p digits.
+    template <typename Byte>
+        requires(sizeof(Byte) == 1)
+    [[nodiscard]] constexpr std::string spellHex(std::span<Byte const> bytes, std::string_view digits)
+    {
+        auto output = std::string {};
+        output.reserve(bytes.size() * 2);
+        for (auto const byte: bytes)
+        {
+            auto const value = std::size_t { std::bit_cast<unsigned char>(byte) };
+            output.push_back(digits[value >> 4U]);
+            output.push_back(digits[value & 0x0FU]);
+        }
+        return output;
+    }
+} // namespace detail
+
+/// Spells each character of @p input in upper-case hexadecimal, as the byte it holds: two digits
+/// per character, the high nibble first. `fromHexString()` reads it back.
+/// @param input The characters to spell.
+/// @return `2 * input.size()` characters from `0123456789ABCDEF`.
+template <typename T>
+    requires std::same_as<T, char>
+[[nodiscard]] constexpr std::basic_string<T> toHexString(std::basic_string_view<T> input)
+{
+    return detail::spellHex(std::span { input }, detail::UpperHexDigits);
 }
 
 /// Spells @p bytes in lower-case hexadecimal, two digits per byte, the high nibble first.
@@ -559,17 +591,7 @@ std::basic_string<T> toHexString(std::basic_string_view<T> input)
 /// @return `2 * bytes.size()` characters from `0123456789abcdef`.
 [[nodiscard]] constexpr std::string toLowerHexString(std::span<std::byte const> bytes)
 {
-    constexpr auto Digits = std::string_view { "0123456789abcdef" };
-
-    auto output = std::string {};
-    output.reserve(bytes.size() * 2);
-    for (auto const byte: bytes)
-    {
-        auto const value = std::to_integer<std::size_t>(byte);
-        output.push_back(Digits[value >> 4U]);
-        output.push_back(Digits[value & 0x0FU]);
-    }
-    return output;
+    return detail::spellHex(bytes, detail::LowerHexDigits);
 }
 
 namespace detail

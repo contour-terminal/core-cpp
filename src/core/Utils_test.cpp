@@ -174,6 +174,18 @@ TEST_CASE("fromHexString")
     CHECK(core::fromHexString("4162"sv).value() == "Ab"sv);
 }
 
+TEST_CASE("toHexString spells each char as two upper-case digits of the byte it holds")
+{
+    // A char is signed on most platforms, and each one from 0x80 up was widened to `unsigned`
+    // with its sign: 0x80 was spelled FFFFFF80 and 0xFF FFFFFFFF, so the spelling was longer than
+    // two digits a byte and did not decode back to the input.
+    auto const input = "\x00\x7f\x80\xff"sv;
+    CHECK(core::toHexString(input) == "007F80FF");
+    CHECK(core::fromHexString(std::string_view { core::toHexString(input) }) == std::string { input });
+    CHECK(core::toHexString("Ab"sv) == "4162");
+    STATIC_CHECK(core::toHexString("\x00\x7f\x80\xff"sv) == "007F80FF");
+}
+
 TEST_CASE("toLowerHexString spells each byte as two lower-case digits")
 {
     // Every nibble value appears, in both halves of a byte, and 0x80 and above: a byte read as a

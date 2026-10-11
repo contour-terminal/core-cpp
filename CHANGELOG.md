@@ -60,6 +60,11 @@ workflow refuses one without a section here.
   longer than 15 characters or had a lower-case letter. It now asks `GetComputerNameExW` for
   `ComputerNameDnsHostname`, as Qt does, and converts the answer to UTF-8 rather than reading it through the ANSI
   code page. `cachedHostName()` answers the same name; POSIX is unchanged.
+- **`core::toHexString()` spells a character from 0x80 up as two digits.** It widened each `char` to
+  `unsigned` with its sign where `char` is signed, as on x86 and with MSVC, so 0x80 came out as `FFFFFF80`
+  and 0xFF as `FFFFFFFF`: longer than two digits a byte, and not what `fromHexString()` reads back. ASCII input, the only kind its callers in core-cpp's consumers pass, is spelled as before. It shares
+  one implementation with `toLowerHexString()`, and is now `constexpr` and `[[nodiscard]]`; its template
+  accepts only `char`, the one type it ever compiled for.
 
 ## [0.7.0] - 2026-10-05
 
