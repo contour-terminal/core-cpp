@@ -2,6 +2,7 @@
 #include <core/platform/windows/WindowsProcessEnvironment.hpp>
 
 #include <core/Environment.hpp>
+#include <core/WideString.hpp>
 
 #include <algorithm>
 #include <expected>
@@ -26,18 +27,6 @@ namespace
             return error == std::errc::invalid_argument ? PlatformError::InvalidArgument
                                                         : PlatformError::IoError;
         });
-    }
-
-    /// @return @p text in UTF-8, as every name core-cpp hands back is spelled.
-    [[nodiscard]] std::string toUtf8(std::wstring const& text)
-    {
-        if (text.empty())
-            return {};
-        auto const size = static_cast<int>(text.size());
-        auto const length = WideCharToMultiByte(CP_UTF8, 0, text.data(), size, nullptr, 0, nullptr, nullptr);
-        auto utf8 = std::string(static_cast<std::size_t>(length), '\0');
-        WideCharToMultiByte(CP_UTF8, 0, text.data(), size, utf8.data(), length, nullptr, nullptr);
-        return utf8;
     }
 
     /// @return @p text in UTF-16, for the comparison below. A byte that is not UTF-8 becomes
@@ -139,7 +128,7 @@ std::vector<std::string> WindowsProcessEnvironment::keys() const
             // Converted, not narrowed a code unit at a time: a name outside ASCII lost every high
             // byte that way (core-cpp#7).
             if (auto const eq = entry.find(L'='); eq != std::wstring_view::npos && eq > 0)
-                result.push_back(toUtf8(std::wstring { entry.substr(0, eq) }));
+                result.push_back(core::detail::toUtf8(entry.substr(0, eq)));
             p += entry.size() + 1;
         }
         FreeEnvironmentStringsW(envBlock);

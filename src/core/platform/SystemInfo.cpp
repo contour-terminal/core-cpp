@@ -2,10 +2,11 @@
 #include <core/platform/SystemInfo.hpp>
 
 #include <array>
-#include <cstddef>
 #include <tuple>
 
 #ifdef _WIN32
+    #include <core/WideString.hpp>
+
     #include <windows.h>
 #else
     #include <unistd.h>
@@ -23,14 +24,10 @@ std::string hostName()
     // call reports the size, NUL included; the name is fixed at startup, so it holds for the second.
     auto size = DWORD { 0 };
     std::ignore = GetComputerNameExW(ComputerNameDnsHostname, nullptr, &size);
-    auto wide = std::wstring(size, L'\0');
-    if (!GetComputerNameExW(ComputerNameDnsHostname, wide.data(), &size))
+    auto name = std::wstring(size, L'\0');
+    if (!GetComputerNameExW(ComputerNameDnsHostname, name.data(), &size))
         return {};
-    auto const wideSize = static_cast<int>(size);
-    auto const length = WideCharToMultiByte(CP_UTF8, 0, wide.data(), wideSize, nullptr, 0, nullptr, nullptr);
-    auto name = std::string(static_cast<std::size_t>(length), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wide.data(), wideSize, name.data(), length, nullptr, nullptr);
-    return name;
+    return core::detail::toUtf8({ name.data(), size });
 #else
     auto buf = std::array<char, 256> {};
     if (gethostname(buf.data(), buf.size()) == 0)

@@ -35,16 +35,24 @@ core_cpp_add_module(base KIND STATIC
         Environment.cpp
         UserInfo.cpp
         Utils.cpp
+    # The UTF-16 to UTF-8 conversion behind every wide Win32 read, base's and core::platform's. Its
+    # header is private, so in no file set; WideString.hpp says why it is not in a windows/ directory.
+    SOURCES_WINDOWS
+        WideString.cpp
+        WideString.hpp
     PUBLIC_LIBS ${_coreCppBaseLibs})
 
-core_cpp_add_test(base SOURCES
-    Base64_test.cpp
-    Environment_test.cpp
-    Escape_test.cpp
-    Flags_test.cpp
-    FNV_test.cpp
-    Generator_test.cpp
-    Profiling_test.cpp
-    Ranges_test.cpp
-    Times_test.cpp
-    Utils_test.cpp)
+core_cpp_add_test(base
+    SOURCES
+        Base64_test.cpp
+        Environment_test.cpp
+        Escape_test.cpp
+        Flags_test.cpp
+        FNV_test.cpp
+        Generator_test.cpp
+        Profiling_test.cpp
+        Ranges_test.cpp
+        Times_test.cpp
+        Utils_test.cpp
+    SOURCES_WINDOWS
+        WideString_test.cpp)

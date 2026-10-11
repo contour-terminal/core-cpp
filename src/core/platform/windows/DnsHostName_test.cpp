@@ -6,11 +6,11 @@
 // and the one a shell writes into an OSC 7 `file://host/path` URL. hostName() answered the NetBIOS
 // name, so a consumer comparing it with any of those called a directory on its own machine remote.
 // POSIX has one name and no such case; this file is the Windows half.
+#include <core/WideString.hpp>
 #include <core/platform/SystemInfo.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <cstddef>
 #include <string>
 #include <tuple>
 
@@ -24,15 +24,10 @@ namespace
 {
     auto size = DWORD { 0 };
     std::ignore = ::GetComputerNameExW(format, nullptr, &size);
-    auto wide = std::wstring(size, L'\0');
-    if (!::GetComputerNameExW(format, wide.data(), &size))
+    auto name = std::wstring(size, L'\0');
+    if (!::GetComputerNameExW(format, name.data(), &size))
         return {};
-    auto const wideSize = static_cast<int>(size);
-    auto const length =
-        ::WideCharToMultiByte(CP_UTF8, 0, wide.data(), wideSize, nullptr, 0, nullptr, nullptr);
-    auto utf8 = std::string(static_cast<std::size_t>(length), '\0');
-    ::WideCharToMultiByte(CP_UTF8, 0, wide.data(), wideSize, utf8.data(), length, nullptr, nullptr);
-    return utf8;
+    return core::detail::toUtf8({ name.data(), size });
 }
 
 } // namespace

@@ -9,6 +9,8 @@
 #include <vector>
 
 #ifdef _WIN32
+    #include <core/WideString.hpp>
+
     #include <Windows.h>
 #else
     #include <deque>
@@ -162,18 +164,6 @@ namespace
         MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), size, wide.data(), length);
         return wide;
     }
-
-    /// @return @p text in UTF-8. A lone surrogate, which UTF-8 cannot spell, reads as U+FFFD.
-    [[nodiscard]] std::string toUtf8(std::wstring const& text)
-    {
-        if (text.empty())
-            return {};
-        auto const size = static_cast<int>(text.size());
-        auto const length = WideCharToMultiByte(CP_UTF8, 0, text.data(), size, nullptr, 0, nullptr, nullptr);
-        auto utf8 = std::string(static_cast<std::size_t>(length), '\0');
-        WideCharToMultiByte(CP_UTF8, 0, text.data(), size, utf8.data(), length, nullptr, nullptr);
-        return utf8;
-    }
 #endif
 
     /// @return Whether @p name can name a variable of an environment block: it is not empty, and
@@ -211,7 +201,7 @@ std::optional<std::string> LiveEnvironment::get(std::string_view name) const
     auto const written = GetEnvironmentVariableW(wideName->c_str(), buffer.data(), required);
     if (written >= required || (written == 0 && GetLastError() != ERROR_SUCCESS))
         return std::nullopt;
-    return toUtf8(std::wstring { buffer.data(), written });
+    return detail::toUtf8({ buffer.data(), written });
 #else
     // The copy has to happen under the lock, not after it: the block holds pointers that a
     // concurrent setenv() may reallocate out from under a reader.
