@@ -101,6 +101,31 @@ TEST_CASE("pathToUtf8 spells a path in UTF-8", "[Utf8Path]")
     CHECK(core::pathToUtf8(std::filesystem::path {}).empty());
 }
 
+TEST_CASE("pathToUtf8 spells any path without throwing", "[Utf8Path]")
+{
+#ifdef _WIN32
+    // A Windows name is a sequence of UTF-16 code units, not of code points, and NTFS takes one
+    // with a lone surrogate, which UTF-8 cannot spell. Such a name comes from outside the program
+    // -- a directory listing, a path a peer sent -- so spelling it in a message is no defect, and
+    // it reads as U+FFFD, as the rest of core-cpp's wide reads do. path::u8string() throws here.
+    auto const replacement = std::string { "\xEF\xBF\xBD" };
+    auto const high = wchar_t { 0xD800 };
+    auto const low = wchar_t { 0xDC00 };
+    CHECK(core::pathToUtf8(std::filesystem::path { std::wstring { L'a', high, L'b' } })
+          == "a" + replacement + "b");
+    CHECK(core::pathToUtf8(std::filesystem::path { std::wstring { L'a', low, L'b' } })
+          == "a" + replacement + "b");
+    // At the end of the name, and a pair in the wrong order, which is two lone surrogates.
+    CHECK(core::pathToUtf8(std::filesystem::path { std::wstring { L'a', high } }) == "a" + replacement);
+    CHECK(core::pathToUtf8(std::filesystem::path { std::wstring { low, high } })
+          == replacement + replacement);
+#else
+    // A POSIX name is bytes, which are not always UTF-8; they pass through unchanged.
+    CHECK(core::pathToUtf8(std::filesystem::path { "J\xFCrgen" }) == "J\xFCrgen"sv);
+    CHECK(core::pathToUtf8(std::filesystem::path { "a\xED\xA0\x80z" }) == "a\xED\xA0\x80z"sv);
+#endif
+}
+
 TEST_CASE("pathFromUtf8 and pathToUtf8 are each other's inverse", "[Utf8Path]")
 {
     // Separators included: neither function rewrites one, so a path keeps its own.

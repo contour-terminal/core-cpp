@@ -62,12 +62,15 @@ namespace core
 /// spell comes out in that code page rather than in UTF-8, and one it cannot spell throws, so an
 /// error that names the file throws instead of being reported (core-cpp#26).
 ///
+/// It never throws for what the path holds. On POSIX a path is bytes, which pass through unchanged
+/// whether or not they are UTF-8. On Windows a path is UTF-16 code units rather than code points,
+/// and NTFS takes a name with a lone surrogate, which UTF-8 cannot spell: it becomes U+FFFD and
+/// the rest of the name is still spelled, where `path::u8string()` throws `std::system_error`. That
+/// is the one name this does not round-trip: pathFromUtf8() reads the U+FFFD back as itself, which
+/// names another file.
+///
 /// @param path The path.
 /// @return @p path in UTF-8, with the platform's own separators.
-[[nodiscard]] inline std::string pathToUtf8(std::filesystem::path const& path)
-{
-    auto const spelled = path.u8string();
-    return { spelled.begin(), spelled.end() };
-}
+[[nodiscard]] std::string pathToUtf8(std::filesystem::path const& path);
 
 } // namespace core

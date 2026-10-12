@@ -30,4 +30,16 @@ std::expected<std::filesystem::path, std::error_code> pathFromUtf8(std::string_v
 #endif
 }
 
+std::string pathToUtf8(std::filesystem::path const& path)
+{
+#ifdef _WIN32
+    // Leniently, unlike pathFromUtf8(): a name may hold a lone surrogate, and a message that names
+    // it must not throw, which the path's own conversion to a std::u8string does.
+    return detail::toUtf8(path.native());
+#else
+    // A path is the bytes it is given.
+    return path.native();
+#endif
+}
+
 } // namespace core

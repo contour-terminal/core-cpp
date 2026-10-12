@@ -75,7 +75,9 @@ workflow refuses one without a section here.
   form, an encoded surrogate -- names no file. `pathFromUtf8()`, for text from outside the program, answers
   `std::expected<std::filesystem::path, std::error_code>`, with `std::errc::illegal_byte_sequence` for such text,
   and never throws for it. `pathFromTrustedUtf8()`, for text the program spelled itself -- a literal, a string
-  built from a path -- throws `std::system_error` instead.
+  built from a path -- throws `std::system_error` instead. `pathToUtf8()` never throws: on Windows a lone
+  surrogate, which an NTFS name may hold and UTF-8 cannot spell, comes out as U+FFFD, where
+  `path::u8string()` throws.
 
 ### Changed
 

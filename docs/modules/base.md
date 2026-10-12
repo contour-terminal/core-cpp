@@ -114,7 +114,11 @@ auto const state = dir / core::pathFromTrustedUtf8("state"); // a std::filesyste
   caller a result it could only unwrap. In core-cpp these are the application's own name
   (`App`), the working directory's canonical spelling, and the test doubles and fixtures
   (`InMemoryFileSystem`'s keys, `TestWorkingDirectory`, `ScopedTempDir`).
-- A path core-cpp spells in a message goes through `pathToUtf8()`.
+- A path core-cpp spells in a message goes through `pathToUtf8()`, which never throws. On Windows a
+  name is UTF-16 code units, not code points, and NTFS takes one with a lone surrogate, which UTF-8
+  cannot spell: it comes out as U+FFFD, with the rest of the name spelled, where
+  `path::u8string()` throws `std::system_error`. That is the one name that does not survive the
+  round trip: `pathFromUtf8()` reads the U+FFFD back as itself, which names another file.
 
 ## Assertions that log
 
