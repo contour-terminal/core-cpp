@@ -92,10 +92,7 @@ class ScopedVariable
   private:
 #ifdef _WIN32
     /// @return @p text, in UTF-8, as the UTF-16 the block holds. Every caller's text is UTF-8.
-    [[nodiscard]] static std::wstring wide(std::string const& text)
-    {
-        return core::detail::toUtf16(text).value();
-    }
+    [[nodiscard]] static std::wstring wide(std::string const& text) { return core::toUtf16(text).value(); }
 #endif
 
     std::string _name;

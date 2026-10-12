@@ -1,19 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// core::detail::toUtf8() is the one UTF-16 to UTF-8 conversion behind every wide Win32 read in
-// core-cpp: an environment value, the environment's names, a thread's description, the host name.
-// core::detail::toUtf16() is the other direction, behind every wide write and every path built from
-// a string. Each case below tells one apart from a conversion that is wrong in one particular way.
+// core::toUtf8() is the one UTF-16 to UTF-8 conversion behind every wide Win32 read in core-cpp: an
+// environment value, the environment's names, a thread's description, the host name, a path spelled
+// in a message. core::toUtf16() is the other direction, behind every wide write and every path built
+// from a string. Each case below tells one apart from a conversion that is wrong in one particular
+// way.
+#include <core/Escape.hpp>
 #include <core/WideString.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 
-using core::detail::toUtf16;
-using core::detail::toUtf8;
+using namespace std::string_view_literals;
+
+using core::toUtf16;
+using core::toUtf8;
 
 namespace
 {
@@ -79,11 +83,20 @@ TEST_CASE("toUtf16 converts UTF-8 of every sequence length", "[WideString][windo
 
 TEST_CASE("toUtf16 refuses text that is not UTF-8", "[WideString][windows]")
 {
-    // Strict, unlike toUtf8(): read as U+FFFD, such text would name another file or variable.
-    CHECK_FALSE(toUtf16("J\xFCrgen").has_value());          // "Jürgen" in CP-1252
-    CHECK_FALSE(toUtf16("a\x80z").has_value());             // a lone continuation byte
-    CHECK_FALSE(toUtf16("a\xE2\x82").has_value());          // a sequence cut short
-    CHECK_FALSE(toUtf16("a\xED\xA0\x80z").has_value());     // an encoded surrogate
-    CHECK_FALSE(toUtf16("a\xC0\xAFz").has_value());         // an overlong form
-    CHECK_FALSE(toUtf16("a\xF4\x90\x80\x80z").has_value()); // past U+10FFFF
+    // Strict, unlike toUtf8(): read as U+FFFD, such text would name another file or variable. The
+    // error is the one pathFromUtf8() answers, so a caller passes it on as it is.
+    for (auto const text: {
+             "J\xFCrgen"sv,          // "Jürgen" in CP-1252
+             "a\x80z"sv,             // a lone continuation byte
+             "a\xE2\x82"sv,          // a sequence cut short
+             "a\xED\xA0\x80z"sv,     // an encoded surrogate
+             "a\xC0\xAFz"sv,         // an overlong form
+             "a\xF4\x90\x80\x80z"sv, // past U+10FFFF
+         })
+    {
+        INFO("text: " << core::escape(text));
+        auto const utf16 = toUtf16(text);
+        REQUIRE_FALSE(utf16.has_value());
+        CHECK(utf16.error() == std::errc::illegal_byte_sequence);
+    }
 }

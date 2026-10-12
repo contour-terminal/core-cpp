@@ -30,7 +30,7 @@ std::string threadName()
         return ""s;
 
     // One exit past this point, so the description is always freed.
-    auto result = detail::toUtf8(pwsz);
+    auto result = toUtf8(pwsz);
     LocalFree(pwsz);
     return result;
 #elifdef __EMSCRIPTEN__

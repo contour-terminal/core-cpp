@@ -28,6 +28,7 @@ fastcached's `src/FastCache/Core` at `ee71f868` (and `Sha256.hpp` at `8c27b162`)
 | `<core/UserInfo.hpp>` | the calling user's password-database entry (`getpwuid_r()`); none on Windows or under Emscripten |
 | `<core/Utf8Path.hpp>` | `core::pathFromUtf8()`, `pathFromTrustedUtf8()` and `pathToUtf8()`, between a UTF-8 string and a `std::filesystem::path`; see [Paths and UTF-8](#paths-and-utf-8) below |
 | `<core/Utils.hpp>` | string splitting, trimming, joining and case mapping, `toInteger()`, hex strings (`toLowerHexString()` for bytes), `${VAR}` substitution, `nextPowerOfTwo()`, `views::enumerate()`, `threadName()` |
+| `<core/WideString.hpp>` | Windows only: `core::toUtf16()` and `toUtf8()`, between UTF-8 and the UTF-16 of the wide Win32 API; see [UTF-16 on Windows](#utf-16-on-windows) below |
 
 ## Generator
 
@@ -119,6 +120,29 @@ auto const state = dir / core::pathFromTrustedUtf8("state"); // a std::filesyste
   cannot spell: it comes out as U+FFFD, with the rest of the name spelled, where
   `path::u8string()` throws `std::system_error`. That is the one name that does not survive the
   round trip: `pathFromUtf8()` reads the U+FFFD back as itself, which names another file.
+
+## UTF-16 on Windows
+
+The wide Win32 API takes and answers UTF-16, and its narrow ("A") API reads and writes the ANSI code
+page, which spells most of Unicode not at all. `<core/WideString.hpp>` has the two conversions every
+wide call in core-cpp goes through, for a consumer's own wide calls too. It is Windows only: a
+`wchar_t` is UTF-16 there and UTF-32 elsewhere, so on any other platform the header declares
+nothing.
+
+```cpp
+auto const commandLine = core::toUtf16(text); // std::expected<std::wstring, std::error_code>
+auto const value = core::toUtf8(buffer);      // std::string
+```
+
+- **`toUtf16()` is strict.** Text that is not UTF-8 -- a stray continuation byte, a truncated
+  sequence, an overlong form, an encoded surrogate, a code point past U+10FFFF -- answers
+  `std::errc::illegal_byte_sequence`, the error `pathFromUtf8()` answers, rather than a U+FFFD that
+  would name another file, variable or program.
+- **`toUtf8()` is lenient.** What it reads comes from the system, where a name or value is UTF-16
+  code units and may hold a lone surrogate, which UTF-8 cannot spell: that becomes U+FFFD, and the
+  rest is still converted. A surrogate pair becomes one four-byte sequence.
+- Both take a view and convert all of it, an embedded NUL included, so a buffer a wide call filled
+  converts without a copy, and a name needs no terminating NUL.
 
 ## Assertions that log
 

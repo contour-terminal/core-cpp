@@ -31,7 +31,7 @@ constexpr auto ValueBeyondAscii = "J\xC3\xBCrgen-\xE6\x97\xA5\xE6\x9C\xAC-\xF0\x
 /// @return Its value in UTF-8, or std::nullopt where the CRT's copy does not have it.
 [[nodiscard]] std::optional<std::string> crtValue(std::string_view name)
 {
-    auto const wideName = core::detail::toUtf16(name).value();
+    auto const wideName = core::toUtf16(name).value();
     auto required = std::size_t {};
     if (_wgetenv_s(&required, nullptr, 0, wideName.c_str()) != 0 || required == 0)
         return std::nullopt;
@@ -39,7 +39,7 @@ constexpr auto ValueBeyondAscii = "J\xC3\xBCrgen-\xE6\x97\xA5\xE6\x9C\xAC-\xF0\x
     if (_wgetenv_s(&required, value.data(), value.size(), wideName.c_str()) != 0 || required == 0)
         return std::nullopt;
     value.resize(required - 1); // `required` counts the terminating NUL
-    return core::detail::toUtf8(value);
+    return core::toUtf8(value);
 }
 #endif
 } // namespace

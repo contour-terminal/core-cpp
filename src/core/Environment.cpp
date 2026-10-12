@@ -166,7 +166,7 @@ std::optional<std::string> LiveEnvironment::get(std::string_view name) const
     // on a machine whose code page has none, anything outside Latin on most (core-cpp#7). The
     // conversion also gives the name the terminating NUL a string_view does not promise. A name
     // that is not UTF-8 has no UTF-16 spelling, so no variable is named so.
-    auto const wideName = detail::toUtf16(name);
+    auto const wideName = toUtf16(name);
     if (!wideName || wideName->empty())
         return std::nullopt;
 
@@ -186,7 +186,7 @@ std::optional<std::string> LiveEnvironment::get(std::string_view name) const
     auto const written = GetEnvironmentVariableW(wideName->c_str(), buffer.data(), required);
     if (written >= required || (written == 0 && GetLastError() != ERROR_SUCCESS))
         return std::nullopt;
-    return detail::toUtf8({ buffer.data(), written });
+    return toUtf8({ buffer.data(), written });
 #else
     // The copy has to happen under the lock, not after it: the block holds pointers that a
     // concurrent setenv() may reallocate out from under a reader.
@@ -227,8 +227,8 @@ std::expected<void, std::error_code> setProcessEnvironmentVariable(std::string_v
 #ifdef _WIN32
     // In UTF-16, as `LiveEnvironment::get` reads it; text that is not UTF-8 has no spelling there,
     // where the code-page API took each byte as whatever character the machine's code page gives it.
-    auto const wideName = detail::toUtf16(name);
-    auto const wideValue = detail::toUtf16(value);
+    auto const wideName = toUtf16(name);
+    auto const wideValue = toUtf16(value);
     if (!wideName || !wideValue)
         return std::unexpected(std::make_error_code(std::errc::invalid_argument));
     if (SetEnvironmentVariableW(wideName->c_str(), wideValue->c_str()) == 0)
@@ -245,7 +245,7 @@ std::expected<void, std::error_code> unsetProcessEnvironmentVariable(std::string
         return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
 #ifdef _WIN32
-    auto const wideName = detail::toUtf16(name);
+    auto const wideName = toUtf16(name);
     if (!wideName)
         return std::unexpected(std::make_error_code(std::errc::invalid_argument));
     if (SetEnvironmentVariableW(wideName->c_str(), nullptr) == 0)

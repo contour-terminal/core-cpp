@@ -78,6 +78,12 @@ workflow refuses one without a section here.
   built from a path -- throws `std::system_error` instead. `pathToUtf8()` never throws: on Windows a lone
   surrogate, which an NTFS name may hold and UTF-8 cannot spell, comes out as U+FFFD, where
   `path::u8string()` throws.
+- **`core::toUtf16()` and `core::toUtf8()`, on Windows** (`<core/WideString.hpp>`): the conversions between UTF-8
+  and the UTF-16 of the wide Win32 API. Every wide call in core-cpp already went through them, privately; a
+  consumer's own wide calls can now convert the same way rather than through a copy. `toUtf16(std::string_view)`
+  is strict, answering `std::expected<std::wstring, std::error_code>` with `std::errc::illegal_byte_sequence` for
+  text that is not UTF-8, as `pathFromUtf8()` does; `toUtf8(std::wstring_view)` reads a lone surrogate as U+FFFD
+  and converts the rest. The header declares nothing on other platforms, where a `wchar_t` is not UTF-16.
 
 ### Changed
 

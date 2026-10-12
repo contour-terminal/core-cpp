@@ -21,9 +21,8 @@ std::expected<std::filesystem::path, std::error_code> pathFromUtf8(std::string_v
 #ifdef _WIN32
     // A path is UTF-16 here, so the text is converted, and strictly: not through the path's own
     // conversion of a std::u8string, which throws for text that is not UTF-8.
-    if (auto utf16 = detail::toUtf16(text))
-        return std::filesystem::path { *std::move(utf16) };
-    return std::unexpected(std::make_error_code(std::errc::illegal_byte_sequence));
+    return toUtf16(text).transform(
+        [](std::wstring utf16) { return std::filesystem::path { std::move(utf16) }; });
 #else
     // A path is the bytes it is given.
     return std::filesystem::path { std::string { text } };
@@ -35,7 +34,7 @@ std::string pathToUtf8(std::filesystem::path const& path)
 #ifdef _WIN32
     // Leniently, unlike pathFromUtf8(): a name may hold a lone surrogate, and a message that names
     // it must not throw, which the path's own conversion to a std::u8string does.
-    return detail::toUtf8(path.native());
+    return toUtf8(path.native());
 #else
     // A path is the bytes it is given.
     return path.native();

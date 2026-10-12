@@ -30,7 +30,8 @@ namespace
     }
 
     /// @return @p text in UTF-16, for the comparison below. A byte that is not UTF-8 becomes
-    ///         U+FFFD: such a name cannot reach the process environment anyway.
+    ///         U+FFFD: such a name cannot reach the process environment anyway. Lenient, so not
+    ///         core::toUtf16(), which refuses such text: an ordering must place every name.
     [[nodiscard]] std::wstring toWide(std::string const& text)
     {
         if (text.empty())
@@ -128,7 +129,7 @@ std::vector<std::string> WindowsProcessEnvironment::keys() const
             // Converted, not narrowed a code unit at a time: a name outside ASCII lost every high
             // byte that way (core-cpp#7).
             if (auto const eq = entry.find(L'='); eq != std::wstring_view::npos && eq > 0)
-                result.push_back(core::detail::toUtf8(entry.substr(0, eq)));
+                result.push_back(core::toUtf8(entry.substr(0, eq)));
             p += entry.size() + 1;
         }
         FreeEnvironmentStringsW(envBlock);

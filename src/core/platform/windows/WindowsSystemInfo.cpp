@@ -21,7 +21,7 @@ std::string hostName()
     auto name = std::wstring(size, L'\0');
     if (!GetComputerNameExW(ComputerNameDnsHostname, name.data(), &size))
         return {};
-    return core::detail::toUtf8({ name.data(), size });
+    return core::toUtf8({ name.data(), size });
 }
 
 } // namespace core::platform

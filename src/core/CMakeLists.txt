@@ -32,18 +32,18 @@ core_cpp_add_module(base KIND STATIC
         UserInfo.hpp
         Utf8Path.hpp
         Utils.hpp
+        # Windows only, and on every other platform a header that declares nothing: it says why.
+        WideString.hpp
         "${CORE_CPP_GENERATED_INCLUDE_DIR}/core/Config.hpp"
     SOURCES
         Environment.cpp
         UserInfo.cpp
         Utf8Path.cpp
         Utils.cpp
-    # The conversions between UTF-16 and UTF-8 behind every wide Win32 call: base's, core::platform's
-    # and core::testing's. Its header is private, so in no file set; WideString.hpp says why it is not
-    # in a windows/ directory.
+    # The conversions between UTF-16 and UTF-8 behind every wide Win32 call, core-cpp's own and its
+    # consumers'.
     SOURCES_WINDOWS
         WideString.cpp
-        WideString.hpp
     PUBLIC_LIBS ${_coreCppBaseLibs})
 
 core_cpp_add_test(base
