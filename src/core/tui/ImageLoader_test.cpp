@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/Utf8Path.hpp>
+#include <core/testing/ScopedTempDir.hpp>
 #include <core/tui/ImageLoader.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -199,6 +201,22 @@ TEST_CASE("ImageLoader.loadImage_valid_ppm")
     CHECK(result->pixels[3] == 255); // A (opaque)
 
     std::filesystem::remove(path);
+}
+
+TEST_CASE("ImageLoader.loadImage_reads_its_path_as_UTF-8")
+{
+    // The path is UTF-8, as every core-cpp string is. On Windows stb_image opened it with fopen(),
+    // which reads the ANSI code page, so a file beyond ASCII was a file that did not exist.
+    auto const temp = core::testing::ScopedTempDir { "core-tui-image-loader" };
+    auto const file = temp.path() / std::filesystem::path { u8"Jürgen-Ω.ppm" };
+    auto const data = generateValidPpm();
+    std::ofstream { file, std::ios::binary }.write(reinterpret_cast<char const*>(data.data()),
+                                                   static_cast<std::streamsize>(data.size()));
+
+    auto const result = loadImage(core::pathToUtf8(file));
+    REQUIRE(result.has_value());
+    CHECK(result->width == 2);
+    CHECK(result->height == 2);
 }
 
 TEST_CASE("ImageLoader.loadImage_nonexistent_file")

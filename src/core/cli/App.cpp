@@ -3,6 +3,7 @@
 
 #include <core/Environment.hpp>
 #include <core/UserInfo.hpp>
+#include <core/Utf8Path.hpp>
 #include <core/Utils.hpp>
 #include <core/log/LogSink.hpp>
 #include <core/log/LogStore.hpp>
@@ -85,15 +86,17 @@ unsigned screenWidth()
 /// @return The base directory this application's local state belongs under.
 fs::path xdgStateHome(core::Environment const& env)
 {
+    // Each value is UTF-8, as the environment answers it, so each goes through pathFromUtf8():
+    // the narrow constructor reads the ANSI code page on Windows.
     if (auto const p = env.get("XDG_STATE_HOME"); p && !p->empty())
-        return { *p };
+        return core::pathFromUtf8(*p);
 
 #ifdef _WIN32
     if (auto const p = env.get("LOCALAPPDATA"); p && !p->empty())
-        return { *p };
+        return core::pathFromUtf8(*p);
 #else
     if (auto const home = core::userHomeDirectory(); !home.empty())
-        return fs::path(home) / ".local" / "state";
+        return core::pathFromUtf8(home) / ".local" / "state";
 #endif
 
     return fs::temp_directory_path();
@@ -124,7 +127,7 @@ App::App(Environment const& env,
     _appTitle { std::move(appTitle) },
     _appVersion { std::move(appVersion) },
     _appLicense { std::move(appLicense) },
-    _localStateDir { xdgStateHome(env) / _appName }
+    _localStateDir { xdgStateHome(env) / core::pathFromUtf8(_appName) }
 {
     if (auto const logFilterString = env.get("LOG"))
     {

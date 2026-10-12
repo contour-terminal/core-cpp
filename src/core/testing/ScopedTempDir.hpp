@@ -4,6 +4,8 @@
 /// @file ScopedTempDir.hpp
 /// @brief A uniquely-named temporary directory that removes itself.
 
+#include <core/Utf8Path.hpp>
+
 #include <filesystem>
 #include <stdexcept>
 #include <string>
@@ -45,7 +47,7 @@ class ScopedTempDir
 {
   public:
     /// @brief Creates a uniquely-named directory under the system temp directory.
-    /// @param prefix Human-readable prefix, to make stray directories identifiable.
+    /// @param prefix Human-readable prefix, to make stray directories identifiable, in UTF-8.
     /// @throws std::runtime_error if the directory cannot be created.
     ///
     /// Throwing rather than degrading: an empty path would make operator/ return a relative
@@ -60,8 +62,9 @@ class ScopedTempDir
         static std::atomic<unsigned> counter { 0 };
         for ([[maybe_unused]] auto const attempt: std::views::iota(0, 128))
         {
-            auto candidate = std::filesystem::temp_directory_path()
-                             / std::format("{}_{}_{}", prefix, _getpid(), counter.fetch_add(1));
+            auto candidate =
+                std::filesystem::temp_directory_path()
+                / core::pathFromUtf8(std::format("{}_{}_{}", prefix, _getpid(), counter.fetch_add(1)));
             auto ec = std::error_code {};
             if (std::filesystem::create_directory(candidate, ec))
             {
@@ -97,9 +100,10 @@ class ScopedTempDir
     [[nodiscard]] std::filesystem::path const& path() const noexcept { return _path; }
 
     /// @brief Builds a path inside the directory.
+    /// @param name The name, in UTF-8.
     [[nodiscard]] std::filesystem::path operator/(std::string_view name) const
     {
-        return _path / std::filesystem::path(name);
+        return _path / core::pathFromUtf8(name);
     }
 
     /// @brief The directory's path as a string, for interpolating into a command line.
@@ -108,7 +112,14 @@ class ScopedTempDir
     /// an escape would mangle a native Windows path -- and inside a glob pattern it would
     /// silently escape the character that follows it instead of separating a directory.
     /// Forward slashes are accepted by the Windows file APIs as well.
-    [[nodiscard]] std::string string() const { return _path.generic_string(); }
+    ///
+    /// In UTF-8, through generic_u8string(): generic_string() narrows through the ANSI code page on
+    /// Windows, and throws for a name it cannot spell, a user name in the temp path among them.
+    [[nodiscard]] std::string string() const
+    {
+        auto const generic = _path.generic_u8string();
+        return { generic.begin(), generic.end() };
+    }
 
   private:
     std::filesystem::path _path;

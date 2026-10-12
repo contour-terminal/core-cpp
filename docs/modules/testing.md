@@ -89,7 +89,7 @@ state that the whole test binary shares.
 
 | Header | What it has |
 |---|---|
-| `<core/testing/ScopedTempDir.hpp>` | `ScopedTempDir`, a directory unique to the instance (`mkdtemp`, or the process id and a counter on Windows), removed with its contents on destruction; `path()`, `operator/`, and `string()` in the generic form |
+| `<core/testing/ScopedTempDir.hpp>` | `ScopedTempDir`, a directory unique to the instance (`mkdtemp`, or the process id and a counter on Windows), removed with its contents on destruction; `path()`, `operator/`, and `string()` in the generic form; the prefix, a name and `string()` are UTF-8 |
 | `<core/testing/ScopedWorkingDirectory.hpp>` | `ScopedWorkingDirectory`, which changes the working directory and changes it back |
 | `<core/testing/EnvHelper.hpp>` | `setTestEnv()`, `unsetTestEnv()`, and `ScopedEnv`, which sets a variable and restores the value it replaced, or removes it |
 

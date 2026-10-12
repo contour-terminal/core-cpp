@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <vector>
@@ -242,6 +243,15 @@ TEST_CASE("homeResolvedPath")
     CHECK(core::homeResolvedPath("", "/var/tmp").generic_string().empty());
 
     CHECK("/var/tmp/workspace" == core::homeResolvedPath("~/workspace", "/var/tmp").generic_string());
+}
+
+TEST_CASE("homeResolvedPath reads its input as UTF-8")
+{
+    // A configuration value is UTF-8; on Windows the narrow constructor read it in the ANSI code page.
+    auto const home = std::filesystem::path { u8"C:/Users/Jürgen" };
+    CHECK(core::homeResolvedPath("~/\xCE\xA9-notes", home) == home / std::filesystem::path { u8"Ω-notes" });
+    CHECK(core::homeResolvedPath("D:/J\xC3\xBCrgen/notes", home)
+          == std::filesystem::path { u8"D:/Jürgen/notes" });
 }
 
 TEST_CASE("expandEnvironmentVariables")

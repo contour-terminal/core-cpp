@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <core/Utf8Path.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -112,17 +114,19 @@ inline constexpr bool FilesystemCaseInsensitive =
 /// lexical by design: callers resolving thousands of entries cannot afford a syscall each, and
 /// symlinks must not be followed.
 ///
-/// @param path The path to resolve.
-/// @param base Absolute directory to resolve against. Empty returns @p path normalized only,
-///             since there is nothing to resolve against.
-/// @return The resolved, forward-slash normalized path.
+/// @param path The path to resolve, in UTF-8.
+/// @param base Absolute directory to resolve against, in UTF-8. Empty returns @p path normalized
+///             only, since there is nothing to resolve against.
+/// @return The resolved, forward-slash normalized path, in UTF-8.
 [[nodiscard]] inline auto absolutePath(std::string_view path, std::string_view base) -> std::string
 {
-    auto const candidate = std::filesystem::path { path };
+    // Read as UTF-8, as normalizePath() spells the result: the narrow constructor reads the ANSI
+    // code page on Windows, so a name beyond ASCII came out spelled differently from how it went in.
+    auto const candidate = core::pathFromUtf8(path);
     if (base.empty() || candidate.is_absolute())
         return normalizePath(candidate.lexically_normal());
 
-    return normalizePath((std::filesystem::path { base } / candidate).lexically_normal());
+    return normalizePath((core::pathFromUtf8(base) / candidate).lexically_normal());
 }
 
 /// @brief Returns a path with its real on-disk capitalization and forward slashes.

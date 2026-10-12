@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/tui/FilesystemImageProvider.hpp>
 
+#include <core/Utf8Path.hpp>
 #include <core/tui/ImageLoader.hpp>
 #include <core/tui/Sixel.hpp>
 
@@ -53,19 +54,21 @@ auto FilesystemImageProvider::prepare(std::string_view src, std::optional<int> r
     if (isRemoteImageSource(src))
         return std::unexpected(std::format("remote image not supported: {}", src));
 
-    auto const srcPath = std::filesystem::path(src);
+    // The source is UTF-8, as markdown is, and goes back out as UTF-8 -- to loadImage() and to the
+    // messages. The narrow constructor and path::string() use the ANSI code page on Windows.
+    auto const srcPath = core::pathFromUtf8(src);
     auto const resolved = srcPath.is_absolute() ? srcPath : _config.baseDir / srcPath;
 
     // Same gate the `cat` builtin applies to image files, so the supported
     // format set is declared exactly once.
-    if (!isImageExtension(resolved.extension().string()))
-        return std::unexpected(std::format("unsupported image format: {}", resolved.string()));
+    if (!isImageExtension(core::pathToUtf8(resolved.extension())))
+        return std::unexpected(std::format("unsupported image format: {}", core::pathToUtf8(resolved)));
 
     auto const cellWidthPx = _config.cellWidthPx > 0 ? _config.cellWidthPx : FallbackCellWidthPx;
     auto const cellHeightPx = _config.cellHeightPx > 0 ? _config.cellHeightPx : FallbackCellHeightPx;
     auto const maxWidthPx = _config.maxColumns > 0 ? _config.maxColumns * cellWidthPx : 0;
 
-    return loadImage(resolved.string())
+    return loadImage(core::pathToUtf8(resolved))
         .and_then([&](OwnedImage image) -> Result<OwnedImage> {
             auto targetWidthPx = 0;
             if (requestedWidthPx.has_value())

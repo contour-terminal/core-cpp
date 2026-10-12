@@ -4,6 +4,7 @@
 #include <core/Defines.hpp>
 #include <core/Escape.hpp>
 #include <core/Overloaded.hpp>
+#include <core/Utf8Path.hpp>
 
 #include <algorithm>
 #include <bit>
@@ -746,6 +747,11 @@ inline std::string replace(std::string_view text, std::string_view pattern, T&& 
     return os.str();
 }
 
+/// Resolves a leading `~` in @p input against @p homeDirectory.
+///
+/// @param input A path in UTF-8 (core::pathFromUtf8()), such as a configuration value.
+/// @param homeDirectory What `~` stands for.
+/// @return @p input with a leading `~` or `~/` replaced by @p homeDirectory; otherwise @p input.
 inline std::filesystem::path homeResolvedPath(std::string const& input,
                                               std::filesystem::path const& homeDirectory)
 {
@@ -753,10 +759,10 @@ inline std::filesystem::path homeResolvedPath(std::string const& input,
     {
         bool const pathSepFound = input.size() >= 2 && (input[1] == '/' || input[1] == '\\');
         auto subPath = input.substr(pathSepFound ? 2 : 1);
-        return homeDirectory / std::filesystem::path(subPath);
+        return homeDirectory / pathFromUtf8(subPath);
     }
 
-    return { input };
+    return pathFromUtf8(input);
 }
 
 /// Substitutes each `${NAME}` in @p text with `replace(NAME)`.

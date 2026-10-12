@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/Utf8Path.hpp>
 #include <core/platform/PathUtils.hpp>
 #include <core/platform/WorkingDirectory.hpp>
 
@@ -33,8 +34,7 @@ namespace
             // PWD, and whatever shows the user the directory, agree with how it is actually stored,
             // rather than echoing whatever case was passed to SetCurrentDirectory. That spelling
             // is UTF-8, so it goes back into a path as UTF-8, never through the code page.
-            auto const spelled = canonicalCasePath(std::filesystem::current_path());
-            return std::filesystem::path { std::u8string { spelled.begin(), spelled.end() } };
+            return core::pathFromUtf8(canonicalCasePath(std::filesystem::current_path()));
         }
     };
 } // namespace

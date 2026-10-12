@@ -9,6 +9,18 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Breaking
+
+- **On Windows, a path handed to core-cpp as a string is read as UTF-8, not in the ANSI code page**: by
+  `core::log::parseLogFileSpec()` (so `--log-file`), `core::homeResolvedPath()`, `core::platform::absolutePath()`,
+  `FileInfoProvider::listDirectory()`, `core::tui::loadImage()`, `FilesystemImageProvider::prepare()`,
+  `ScopedTempDir`'s prefix and `operator/`, and `TestWorkingDirectory`. Each fixed a defect (see Fixed), and ASCII
+  reads as before. Text that is not UTF-8 throws `std::system_error` where a path is built from it
+  (`core::pathFromUtf8()`).
+  - *Migration*: a caller that passes one of these `path::string()` or `generic_string()`, which are in the ANSI
+    code page on Windows, passes `core::pathToUtf8()` instead, or `core::platform::normalizePath()` for the
+    generic form. Nothing changes on POSIX.
+
 ### Added
 
 - **Copying to the clipboard through the terminal: `core::tui::ClipboardWriter`** (`<core/tui/ClipboardWriter.hpp>`).
@@ -84,6 +96,18 @@ workflow refuses one without a section here.
   exited. It reads the value as UTF-8 now (`core::pathFromUtf8()`). `ScopedOutput::create()` names a log file it
   cannot open in UTF-8 too: it spelled the name through `path::string()`, which threw for a name outside the code
   page, so the refusal became an exception. POSIX is unchanged.
+- **Every other path core-cpp builds from a string reads it as UTF-8 on Windows** (`core::pathFromUtf8()`), so a
+  name beyond ASCII names the file it spells rather than another one. Each used the narrow constructor, which
+  reads the ANSI code page: `core::cli::App::localStateDir()` from `XDG_STATE_HOME` or `LOCALAPPDATA`;
+  `core::platform::homeDirectory()` and `configHome()` from `HOME`, `USERPROFILE`, `XDG_CONFIG_HOME` and
+  `APPDATA`; `core::homeResolvedPath()`; `core::platform::absolutePath()`, which spells its result in UTF-8 and so
+  changed a name between reading and writing it; the Windows `FileInfoProvider::listDirectory()`, which answered
+  nothing for a directory beyond ASCII; `core::tui::FilesystemImageProvider::prepare()`; and the test helpers
+  `core::testing::ScopedTempDir` (its prefix and `operator/`) and `core::platform::testing::TestWorkingDirectory`.
+  `core::tui::loadImage()` opens its path as UTF-8 on Windows too, through stb_image's `STBI_WINDOWS_UTF8`, where
+  `fopen()` read it in the ANSI code page. `FileSystem::listDirectoryRecursive()`'s refusal,
+  `ScopedTempDir::string()` and `FilesystemImageProvider::prepare()`'s refusals spell a path in UTF-8
+  (`core::pathToUtf8()`), where `path::string()` threw for a name outside the code page. POSIX is unchanged.
 
 ## [0.7.0] - 2026-10-05
 

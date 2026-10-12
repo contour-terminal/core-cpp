@@ -214,3 +214,13 @@ TEST_CASE("isCaseOnlyRename compares paths the native narrow encoding cannot spe
     auto const otherParent = std::filesystem::path { std::u8string { u8"/tmp/\u672c/NAME" } };
     CHECK_FALSE(isCaseOnlyRename(lower, otherParent));
 }
+
+TEST_CASE("absolutePath reads its arguments as UTF-8, as it spells its result", "[platform]")
+{
+    // On Windows both arguments went through the narrow constructor, which reads the ANSI code
+    // page, and came back out through normalizePath() as UTF-8: a name beyond ASCII was spelled
+    // differently on the way out than on the way in.
+    CHECK(absolutePath("J\xc3\xbcrgen/./notes", "/home") == "/home/J\xc3\xbcrgen/notes");
+    CHECK(absolutePath("notes", "/home/J\xc3\xbcrgen") == "/home/J\xc3\xbcrgen/notes");
+    CHECK(absolutePath("/home/\xe6\x97\xa5/../J\xc3\xbcrgen", "") == "/home/J\xc3\xbcrgen");
+}

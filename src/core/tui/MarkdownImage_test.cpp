@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/testing/ScopedTempDir.hpp>
 #include <core/tui/FilesystemImageProvider.hpp>
 #include <core/tui/ImageLoader.hpp>
 
@@ -155,6 +156,30 @@ TEST_CASE("FilesystemImageProvider.absolute_path_is_not_joined_to_baseDir")
     REQUIRE_FALSE(result.has_value());
     CHECK_FALSE(result.error().contains("/base/dir"));
     CHECK(result.error().contains("/elsewhere/logo.png"));
+}
+
+TEST_CASE("FilesystemImageProvider.reads_a_source_beyond_ASCII_as_UTF-8")
+{
+    // A markdown image source is UTF-8. On Windows the narrow constructor read it in the ANSI code
+    // page and stb_image opened the result with fopen(), which reads that code page too, so a name
+    // beyond ASCII named a file that did not exist; and path::string() threw for one the code page
+    // cannot spell while the refusal was being spelled.
+    auto const temp = core::testing::ScopedTempDir { "core-tui-markdown-image" };
+    auto const dir = temp.path() / std::filesystem::path { u8"Jürgen" };
+    std::filesystem::create_directories(dir);
+    auto const bytes = ppmBytes();
+    std::ofstream { dir / std::filesystem::path { u8"Ω.ppm" }, std::ios::binary }.write(
+        reinterpret_cast<char const*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    auto provider = makeProvider(dir);
+
+    auto const decoded = provider.prepare("\xCE\xA9.ppm", std::nullopt);
+    REQUIRE(decoded.has_value());
+    CHECK_FALSE(decoded->sixel.empty());
+
+    auto const missing = provider.prepare("\xE6\x97\xA5\xE6\x9C\xAC.png", std::nullopt);
+    REQUIRE_FALSE(missing.has_value());
+    CHECK(missing.error().contains("J\xC3\xBCrgen"));
+    CHECK(missing.error().contains("\xE6\x97\xA5\xE6\x9C\xAC.png"));
 }
 
 TEST_CASE("FilesystemImageProvider.missing_local_file_is_an_error")

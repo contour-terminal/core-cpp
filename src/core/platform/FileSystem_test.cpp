@@ -1065,6 +1065,11 @@ TEST_CASE("NativeFileSystem reports a failure on a path the narrow encoding cann
     REQUIRE_FALSE(listed.has_value());
     CHECK(listed.error().contains(spelled));
 
+    // FileSystem's own message, which every backend shares.
+    auto const walked = fs.listDirectoryRecursive(missing.parent_path());
+    REQUIRE_FALSE(walked.has_value());
+    CHECK(walked.error().contains(spelled));
+
     auto const renamed = fs.rename(missing, dir.path() / "elsewhere.txt");
     REQUIRE_FALSE(renamed.has_value());
     CHECK(renamed.error().contains(spelled));

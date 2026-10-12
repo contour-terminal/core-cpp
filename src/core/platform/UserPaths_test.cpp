@@ -67,6 +67,27 @@ TEST_CASE("configHome.nothing_to_derive_it_from", "[platform]")
     CHECK(!configHome(FakeEnvironment {}).has_value());
 }
 
+// A core::Environment answers UTF-8, on Windows by converting the wide environment block. Each
+// variable below names a directory under C:\Users\Jürgen there, which the narrow constructor read
+// back in the ANSI code page, so every one of them named a directory that does not exist.
+TEST_CASE("homeDirectory.reads_the_variable_as_UTF-8", "[platform]")
+{
+    CHECK(homeDirectory(FakeEnvironment { { { "HOME", "/home/j\xC3\xBCrgen" } } })
+          == std::filesystem::path { u8"/home/jürgen" });
+    CHECK(homeDirectory(FakeEnvironment { { { "USERPROFILE", "C:\\Users\\J\xC3\xBCrgen" } } })
+          == std::filesystem::path { u8"C:\\Users\\Jürgen" });
+}
+
+TEST_CASE("configHome.reads_the_variable_as_UTF-8", "[platform]")
+{
+    CHECK(configHome(FakeEnvironment { { { "XDG_CONFIG_HOME", "/home/j\xC3\xBCrgen/.config" } } })
+          == std::filesystem::path { u8"/home/jürgen/.config" });
+    CHECK(configHome(FakeEnvironment { { { "APPDATA", "C:\\Users\\J\xC3\xBCrgen\\AppData\\Roaming" } } })
+          == std::filesystem::path { u8"C:\\Users\\Jürgen\\AppData\\Roaming" });
+    CHECK(configHome(FakeEnvironment { { { "HOME", "/home/j\xC3\xBCrgen" } } })
+          == std::filesystem::path { u8"/home/jürgen/.config" });
+}
+
 TEST_CASE("userName.prefers_USER", "[platform]")
 {
     auto const environment =

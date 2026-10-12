@@ -118,6 +118,23 @@ TEST_CASE("cli::App::installLogging: a second call leaves the second output inst
     CHECK(!core::readFileAsString(tmp / "first.log").contains(Marker));
 }
 
+// The environment answers UTF-8 (core::LiveEnvironment converts the wide block on Windows), and the
+// narrow constructor read it back in the ANSI code page there: under C:\Users\Jürgen, every
+// application's local state went to a directory that does not exist.
+TEST_CASE("cli::App::localStateDir reads its environment variable as UTF-8", "[cli][app]")
+{
+    auto const xdg =
+        core::testing::FakeEnvironment { { { "XDG_STATE_HOME", "/home/j\xC3\xBCrgen/.state" } } };
+    CHECK(TestApp { xdg }.localStateDir() == std::filesystem::path { u8"/home/jürgen/.state" } / "a9app");
+
+#ifdef _WIN32
+    auto const local =
+        core::testing::FakeEnvironment { { { "LOCALAPPDATA", "C:\\Users\\J\xC3\xBCrgen\\AppData\\Local" } } };
+    CHECK(TestApp { local }.localStateDir()
+          == std::filesystem::path { u8"C:\\Users\\Jürgen\\AppData\\Local" } / "a9app");
+#endif
+}
+
 // `contour daemon --background` under C:\Users\Jürgen: the --log-file value is UTF-8, and a daemon
 // whose log does not open exits. On Windows it was read through the ANSI code page, so on a CP-1252
 // host the log went to a directory with two characters where the `ü` should have been.
