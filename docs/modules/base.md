@@ -28,7 +28,7 @@ fastcached's `src/FastCache/Core` at `ee71f868` (and `Sha256.hpp` at `8c27b162`)
 | `<core/UserInfo.hpp>` | the calling user's password-database entry (`getpwuid_r()`); none on Windows or under Emscripten |
 | `<core/Utf8Path.hpp>` | `core::pathFromUtf8()`, `pathFromTrustedUtf8()` and `pathToUtf8()`, between a UTF-8 string and a `std::filesystem::path`; see [Paths and UTF-8](#paths-and-utf-8) below |
 | `<core/Utils.hpp>` | string splitting, trimming, joining and case mapping, `toInteger()`, hex strings (`toLowerHexString()` for bytes), `${VAR}` substitution, `nextPowerOfTwo()`, `views::enumerate()`, `threadName()` |
-| `<core/WideString.hpp>` | Windows only: `core::toUtf16()` and `toUtf8()`, between UTF-8 and the UTF-16 of the wide Win32 API; see [UTF-16 on Windows](#utf-16-on-windows) below |
+| `<core/WideString.hpp>` | Windows only: `core::toUtf16()` and `toUtf8()`, between UTF-8 and the UTF-16 of the wide Win32 API, and `systemErrorMessage()`, a Win32 error's message in UTF-8; see [UTF-16 on Windows](#utf-16-on-windows) below |
 
 ## Generator
 
@@ -143,6 +143,13 @@ auto const value = core::toUtf8(buffer);      // std::string
   rest is still converted. A surrogate pair becomes one four-byte sequence.
 - Both take a view and convert all of it, an embedded NUL included, so a buffer a wide call filled
   converts without a copy, and a name needs no terminating NUL.
+- **`systemErrorMessage(GetLastError())` is the system's message for an error, in UTF-8**: what
+  `FormatMessageW()` answers, in the thread's UI language where the system has it, and without the
+  line break the system ends a message with; `unknown error <n>` where it has none. The narrow
+  `FormatMessageA()` spells a message in the ANSI code page -- the German one for
+  `ERROR_INVALID_HANDLE` has a `ü`, a byte UTF-8 cannot read -- and `std::system_category().message()`
+  in MSVC's library is that call, asking for US English first. Its parameter is a `DWORD`, spelled
+  `unsigned long` so the header needs no `<windows.h>`.
 
 ## Assertions that log
 

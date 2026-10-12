@@ -8,7 +8,8 @@
 ///
 /// Every wide Win32 call in core-cpp converts through these two, so that no name or value goes
 /// through the ANSI code page, which cannot spell most of Unicode (core-cpp#7), and a consumer
-/// making wide calls of its own converts the same way rather than keeping a copy.
+/// making wide calls of its own converts the same way rather than keeping a copy. The system's
+/// message for an error is read that way too.
 
 #ifdef _WIN32
 
@@ -47,6 +48,22 @@ namespace core
 /// @param text UTF-16 text.
 /// @return @p text in UTF-8; empty when @p text is.
 [[nodiscard]] std::string toUtf8(std::wstring_view text);
+
+/// @brief The system's message for a Win32 error, in UTF-8.
+///
+/// What `FormatMessageW()` answers for @p errorCode, converted by toUtf8(), in the language Windows
+/// picks for the calling thread's UI -- the user's, unless the thread chose another -- or, where
+/// the system has no message in it, in the user's, the system's or US English. The narrow
+/// `FormatMessageA()` spells a message in the ANSI code page, which is not UTF-8 beyond ASCII: the
+/// German one for `ERROR_INVALID_HANDLE` holds "ungültig", whose "ü" is a byte UTF-8 has no reading
+/// for. `std::system_category().message()` in MSVC's library is that narrow call, asking for US
+/// English first. The line break the system ends a message with is removed, so the message can
+/// stand inside a line of its own.
+///
+/// @param errorCode The error, as `GetLastError()` reports it: a `DWORD`, spelled without
+///        `<windows.h>`.
+/// @return The message; `unknown error <errorCode>`, in decimal, where the system has none.
+[[nodiscard]] std::string systemErrorMessage(unsigned long errorCode);
 
 } // namespace core
 

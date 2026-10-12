@@ -3,14 +3,29 @@
 
 #include <cstddef>
 #include <expected>
+#include <format>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 
 #include <windows.h>
 
+// The header spells a DWORD without <windows.h>; this is where the two spellings are held equal.
+static_assert(std::is_same_v<DWORD, unsigned long>);
+
 namespace core
 {
+
+namespace
+{
+    /// Frees what `FormatMessageW()` allocated.
+    struct LocalFreeDeleter
+    {
+        void operator()(wchar_t* buffer) const noexcept { LocalFree(buffer); }
+    };
+} // namespace
 
 std::expected<std::wstring, std::error_code> toUtf16(std::string_view text)
 {
@@ -42,6 +57,31 @@ std::string toUtf8(std::wstring_view text)
     WideCharToMultiByte(
         CP_UTF8, 0, text.data(), static_cast<int>(text.size()), utf8.data(), length, nullptr, nullptr);
     return utf8;
+}
+
+std::string systemErrorMessage(unsigned long errorCode)
+{
+    // Language 0 asks for the thread's UI language, then the user's, the system's and US English, so
+    // a message is found wherever one is installed. A message may hold an insert, such as %1, that no
+    // argument here fills, so inserts are left as they are.
+    wchar_t* buffer = nullptr;
+    auto const size = FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM
+                                         | FORMAT_MESSAGE_IGNORE_INSERTS,
+                                     nullptr,
+                                     errorCode,
+                                     0,
+                                     reinterpret_cast<wchar_t*>(&buffer),
+                                     0,
+                                     nullptr);
+    auto const owned = std::unique_ptr<wchar_t, LocalFreeDeleter> { buffer };
+    if (size == 0)
+        return std::format("unknown error {}", errorCode);
+
+    // A system message ends in a line break, which a caller that puts it inside a line of its own
+    // does not want.
+    auto const message = std::wstring_view { owned.get(), size };
+    auto const end = message.find_last_not_of(L" \t\r\n");
+    return toUtf8(message.substr(0, end == std::wstring_view::npos ? 0 : end + 1));
 }
 
 } // namespace core

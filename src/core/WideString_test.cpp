@@ -4,18 +4,23 @@
 // environment value, the environment's names, a thread's description, the host name, a path spelled
 // in a message. core::toUtf16() is the other direction, behind every wide write and every path built
 // from a string. Each case below tells one apart from a conversion that is wrong in one particular
-// way.
+// way. core::systemErrorMessage() reads the system's message for an error through the first.
 #include <core/Escape.hpp>
 #include <core/WideString.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
+
+#include <windows.h>
 
 using namespace std::string_view_literals;
 
+using core::systemErrorMessage;
 using core::toUtf16;
 using core::toUtf8;
 
@@ -29,6 +34,39 @@ constexpr auto LowSurrogate = wchar_t { 0xDE00 };
 
 /// U+FFFD, the replacement character, in UTF-8.
 constexpr auto Replacement = std::string_view { "\xEF\xBF\xBD" };
+
+/// Has the system's messages for this thread read in the languages @p names lists, for as long as
+/// it lives: each name ends in a NUL, and the list in another. A test's thread prefers no language
+/// of its own, so it is given none back.
+class ScopedThreadLanguages
+{
+  public:
+    explicit ScopedThreadLanguages(wchar_t const* names)
+    {
+        auto count = ULONG { 0 };
+        std::ignore = SetThreadPreferredUILanguages(MUI_LANGUAGE_NAME, names, &count);
+    }
+    ~ScopedThreadLanguages() { std::ignore = SetThreadPreferredUILanguages(0, nullptr, nullptr); }
+    ScopedThreadLanguages(ScopedThreadLanguages const&) = delete;
+    ScopedThreadLanguages(ScopedThreadLanguages&&) = delete;
+    ScopedThreadLanguages& operator=(ScopedThreadLanguages const&) = delete;
+    ScopedThreadLanguages& operator=(ScopedThreadLanguages&&) = delete;
+};
+
+/// @return Whether the system has its messages in @p language, asked without the function under
+///         test: a machine has those of the languages installed on it, and usually US English.
+[[nodiscard]] bool hasMessagesIn(LANGID language)
+{
+    auto buffer = std::array<wchar_t, 256> {};
+    return FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                          nullptr,
+                          ERROR_INVALID_HANDLE,
+                          language,
+                          buffer.data(),
+                          static_cast<DWORD>(buffer.size()),
+                          nullptr)
+           != 0;
+}
 
 } // namespace
 
@@ -99,4 +137,31 @@ TEST_CASE("toUtf16 refuses text that is not UTF-8", "[WideString][windows]")
         REQUIRE_FALSE(utf16.has_value());
         CHECK(utf16.error() == std::errc::illegal_byte_sequence);
     }
+}
+
+TEST_CASE("systemErrorMessage spells the system's message without its line break", "[WideString][windows]")
+{
+    if (!hasMessagesIn(MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US)))
+        SKIP("the system has no US English messages to compare with");
+    auto const english = ScopedThreadLanguages { L"en-US\0" };
+    // FormatMessageW() answers "The system cannot find the file specified.", then CR LF.
+    CHECK(systemErrorMessage(ERROR_FILE_NOT_FOUND) == "The system cannot find the file specified.");
+    CHECK(systemErrorMessage(ERROR_ACCESS_DENIED) == "Access is denied.");
+}
+
+TEST_CASE("systemErrorMessage spells a message beyond ASCII in UTF-8", "[WideString][windows]")
+{
+    // The German message holds a U+00FC, which FormatMessageA() spells in the ANSI code page: on a
+    // CP-1252 host as the byte 0xFC, which UTF-8 has no reading for. The thread asks for German, as
+    // a German user's does, and gets it where the system has it.
+    if (!hasMessagesIn(MAKELANGID(LANG_GERMAN, SUBLANG_GERMAN)))
+        SKIP("the system has no German messages, the language this case reads one beyond ASCII in");
+    auto const german = ScopedThreadLanguages { L"de-DE\0" };
+    CHECK(systemErrorMessage(ERROR_INVALID_HANDLE) == "Das Handle ist ung\xC3\xBCltig.");
+}
+
+TEST_CASE("systemErrorMessage names an error the system has no message for", "[WideString][windows]")
+{
+    // Bit 29 marks an error an application defined, which the system's table has no message for.
+    CHECK(systemErrorMessage(0x2000'0001UL) == "unknown error 536870913");
 }

@@ -84,6 +84,11 @@ workflow refuses one without a section here.
   is strict, answering `std::expected<std::wstring, std::error_code>` with `std::errc::illegal_byte_sequence` for
   text that is not UTF-8, as `pathFromUtf8()` does; `toUtf8(std::wstring_view)` reads a lone surrogate as U+FFFD
   and converts the rest. The header declares nothing on other platforms, where a `wchar_t` is not UTF-16.
+- **`core::systemErrorMessage()`, on Windows** (`<core/WideString.hpp>`): the system's message for a Win32 error, in
+  UTF-8 -- `FormatMessageW()` converted by `toUtf8()`, in the thread's UI language where the system has it, without
+  the line break the system ends it with, and `unknown error <n>` where it has none. `FormatMessageA()` spells a
+  message in the ANSI code page, so a localized one beyond ASCII was not UTF-8. It takes the `DWORD` that
+  `GetLastError()` answers, spelled `unsigned long`.
 
 ### Changed
 
