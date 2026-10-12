@@ -88,6 +88,37 @@ TEST_CASE("configHome.reads_the_variable_as_UTF-8", "[platform]")
           == std::filesystem::path { u8"/home/jürgen/.config" });
 }
 
+// A variable is text from outside the program, so one that is not UTF-8 -- "jürgen" in CP-1252
+// here, where 0xFC starts no UTF-8 sequence -- names no directory on Windows and is passed over,
+// as an unset one is. It threw there before. A POSIX path is bytes, so they are kept as they are.
+TEST_CASE("homeDirectory.passes_over_a_variable_that_is_not_UTF-8", "[platform]")
+{
+    auto const environment =
+        FakeEnvironment { { { "HOME", "/home/j\xFCrgen" }, { "USERPROFILE", "C:\\Users\\J\xC3\xBCrgen" } } };
+#ifdef _WIN32
+    CHECK(homeDirectory(environment) == std::filesystem::path { u8"C:\\Users\\Jürgen" });
+    CHECK_FALSE(homeDirectory(FakeEnvironment { { { "HOME", "/home/j\xFCrgen" } } }).has_value());
+#else
+    CHECK(homeDirectory(environment).value().native() == "/home/j\xFCrgen");
+#endif
+}
+
+TEST_CASE("configHome.passes_over_a_variable_that_is_not_UTF-8", "[platform]")
+{
+    auto const environment = FakeEnvironment { {
+        { "XDG_CONFIG_HOME", "/home/j\xFCrgen/.config" },
+        { "APPDATA", "C:\\Users\\J\xC3\xBCrgen\\AppData\\Roaming" },
+    } };
+#ifdef _WIN32
+    CHECK(configHome(environment) == std::filesystem::path { u8"C:\\Users\\Jürgen\\AppData\\Roaming" });
+    CHECK(configHome(FakeEnvironment {
+              { { "APPDATA", "C:\\Users\\J\xFCrgen" }, { "HOME", "/home/j\xC3\xBCrgen" } } })
+          == std::filesystem::path { u8"/home/jürgen/.config" });
+#else
+    CHECK(configHome(environment).value().native() == "/home/j\xFCrgen/.config");
+#endif
+}
+
 TEST_CASE("userName.prefers_USER", "[platform]")
 {
     auto const environment =

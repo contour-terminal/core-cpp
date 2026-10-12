@@ -31,14 +31,15 @@ namespace
     /// constructor reads a char sequence in the platform's *native* narrow encoding, which on
     /// Windows is the ANSI code page -- so building a path back from a key that way mangles or
     /// throws on any name the code page cannot spell, which is the same defect that keying the
-    /// map through generic_string() was. core::pathFromUtf8() reads it as UTF-8, so this is the
-    /// one way back out of the key space, as normalizePath() is the one way in.
+    /// map through generic_string() was. core::pathFromTrustedUtf8() reads it as UTF-8, so this is
+    /// the one way back out of the key space, as normalizePath() is the one way in -- and a key is
+    /// UTF-8 by construction, spelled from a path, so the trusted form.
     ///
     /// @param key A normalized key of this filesystem.
     /// @return The path it names.
     [[nodiscard]] std::filesystem::path pathFromKey(std::string_view key)
     {
-        return core::pathFromUtf8(key);
+        return core::pathFromTrustedUtf8(key);
     }
 
     /// Streambuf that appends into the string an InMemoryFileSystem holds for a file.

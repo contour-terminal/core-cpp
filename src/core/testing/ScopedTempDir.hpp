@@ -48,7 +48,8 @@ class ScopedTempDir
   public:
     /// @brief Creates a uniquely-named directory under the system temp directory.
     /// @param prefix Human-readable prefix, to make stray directories identifiable, in UTF-8.
-    /// @throws std::runtime_error if the directory cannot be created.
+    /// @throws std::runtime_error if the directory cannot be created; std::system_error on Windows
+    ///         if @p prefix is not UTF-8, the test's own text (core::pathFromTrustedUtf8()).
     ///
     /// Throwing rather than degrading: an empty path would make operator/ return a relative
     /// path, so the test would quietly build its fixtures in the current working directory
@@ -64,7 +65,7 @@ class ScopedTempDir
         {
             auto candidate =
                 std::filesystem::temp_directory_path()
-                / core::pathFromUtf8(std::format("{}_{}_{}", prefix, _getpid(), counter.fetch_add(1)));
+                / core::pathFromTrustedUtf8(std::format("{}_{}_{}", prefix, _getpid(), counter.fetch_add(1)));
             auto ec = std::error_code {};
             if (std::filesystem::create_directory(candidate, ec))
             {
@@ -101,9 +102,11 @@ class ScopedTempDir
 
     /// @brief Builds a path inside the directory.
     /// @param name The name, in UTF-8.
+    /// @throws std::system_error on Windows if @p name is not UTF-8, the test's own text
+    ///         (core::pathFromTrustedUtf8()).
     [[nodiscard]] std::filesystem::path operator/(std::string_view name) const
     {
-        return _path / core::pathFromUtf8(name);
+        return _path / core::pathFromTrustedUtf8(name);
     }
 
     /// @brief The directory's path as a string, for interpolating into a command line.

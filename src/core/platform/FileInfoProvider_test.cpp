@@ -96,6 +96,20 @@ TEST_CASE("nativeFileInfoProvider lists a directory beyond ASCII by its UTF-8 na
     CHECK(matched[0].name == "\xCE\xA9.txt");
 }
 
+#ifdef _WIN32
+TEST_CASE("nativeFileInfoProvider lists a path that is not UTF-8 as empty", "[platform]")
+{
+    // "Jürgen" in CP-1252: 0xFC starts no UTF-8 sequence, so on Windows the path names nothing,
+    // and lists as a path that does not exist does, rather than throwing. Both the directory and
+    // the glob are tried, beside a directory that does exist, so only the name can be missing.
+    TempDir const tmp;
+    auto const parent = core::pathToUtf8(tmp.path);
+    auto const provider = nativeFileInfoProvider();
+    CHECK(provider->listDirectory(parent + "/J\xFCrgen").empty());
+    CHECK(provider->listDirectory(parent + "/J\xFCrgen*").empty());
+}
+#endif
+
 // ===========================================================================
 // MockFileInfoProvider tests
 // ===========================================================================

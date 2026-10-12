@@ -334,8 +334,8 @@ class IocpListener final: public IListener
     /// @param loop The loop whose backend's port completes the accepts (not owned).
     /// @param path The socket file path, in UTF-8.
     /// @param backlog The listen backlog.
-    /// @return The listener, or why the path could not be bound.
-    /// @throws std::system_error if @p path is not UTF-8 (core::pathFromUtf8()).
+    /// @return The listener, or why the path could not be bound; @c NetErrorCode::AddressError where
+    ///         @p path is not UTF-8 (detail::unixSocketFile()).
     [[nodiscard]] static std::expected<std::unique_ptr<IocpListener>, NetError> bindUnix(
         EventLoop& loop, std::string_view path, int backlog = 128);
 

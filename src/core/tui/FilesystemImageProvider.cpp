@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/tui/FilesystemImageProvider.hpp>
 
+#include <core/Escape.hpp>
 #include <core/Utf8Path.hpp>
 #include <core/tui/ImageLoader.hpp>
 #include <core/tui/Sixel.hpp>
@@ -55,9 +56,12 @@ auto FilesystemImageProvider::prepare(std::string_view src, std::optional<int> r
         return std::unexpected(std::format("remote image not supported: {}", src));
 
     // The source is UTF-8, as markdown is, and goes back out as UTF-8 -- to loadImage() and to the
-    // messages. The narrow constructor and path::string() use the ANSI code page on Windows.
+    // messages. The narrow constructor and path::string() use the ANSI code page on Windows. A
+    // source that is not UTF-8 names no file there, and is refused like any other.
     auto const srcPath = core::pathFromUtf8(src);
-    auto const resolved = srcPath.is_absolute() ? srcPath : _config.baseDir / srcPath;
+    if (!srcPath)
+        return std::unexpected(std::format("image source is not UTF-8: {}", core::escape(src)));
+    auto const resolved = srcPath->is_absolute() ? *srcPath : _config.baseDir / *srcPath;
 
     // Same gate the `cat` builtin applies to image files, so the supported
     // format set is declared exactly once.

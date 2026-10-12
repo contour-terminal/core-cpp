@@ -26,7 +26,7 @@ fastcached's `src/FastCache/Core` at `ee71f868` (and `Sha256.hpp` at `8c27b162`)
 | `<core/Sha256.hpp>` | `core::Sha256`, SHA-256 incremental (`update()`, `finish()`) and one-shot (`hash()`), and `core::hmacSha256()`; see [SHA-256 and HMAC](#sha-256-and-hmac) below |
 | `<core/Times.hpp>` | `core::times()`, a counted range to iterate or to pipe a callable into |
 | `<core/UserInfo.hpp>` | the calling user's password-database entry (`getpwuid_r()`); none on Windows or under Emscripten |
-| `<core/Utf8Path.hpp>` | `core::pathFromUtf8()` and `pathToUtf8()`, between a UTF-8 string and a `std::filesystem::path`; see [Paths and UTF-8](#paths-and-utf-8) below |
+| `<core/Utf8Path.hpp>` | `core::pathFromUtf8()`, `pathFromTrustedUtf8()` and `pathToUtf8()`, between a UTF-8 string and a `std::filesystem::path`; see [Paths and UTF-8](#paths-and-utf-8) below |
 | `<core/Utils.hpp>` | string splitting, trimming, joining and case mapping, `toInteger()`, hex strings (`toLowerHexString()` for bytes), `${VAR}` substitution, `nextPowerOfTwo()`, `views::enumerate()`, `threadName()` |
 
 ## Generator
@@ -91,17 +91,30 @@ characters -- and `path::string()` throws for a name the code page cannot spell.
 conversion in both directions, which agrees with UTF-8 whatever the process code page is:
 
 ```cpp
-auto const log = core::pathFromUtf8(argument);          // a std::filesystem::path
-auto const text = core::pathToUtf8(log);                // UTF-8 again, native separators
+auto const log = core::pathFromUtf8(argument);          // std::expected<std::filesystem::path, std::error_code>
+auto const text = core::pathToUtf8(*log);               // UTF-8 again, native separators
+auto const state = dir / core::pathFromTrustedUtf8("state"); // a std::filesystem::path, or a throw
 ```
 
-- **On POSIX both are the identity on bytes**: a path there is the bytes it is given.
-- **On Windows, text that is not UTF-8 throws** `std::system_error` from `pathFromUtf8()`: the
-  path is UTF-16, so the bytes must be converted, and the standard library refuses them, as the
-  narrow constructor does in a process whose code page is UTF-8.
-- A path core-cpp builds from a string it was handed -- an option value, an environment value, a
-  configuration value -- goes through `pathFromUtf8()`, and a path it spells in a message goes
-  through `pathToUtf8()`.
+- **On POSIX each is the identity on bytes**: a path there is the bytes it is given, and
+  `pathFromUtf8()` never fails.
+- **On Windows the path is UTF-16**, so the text is converted, strictly: a stray continuation
+  byte, a truncated sequence, an overlong form, an encoded surrogate or a code point past
+  U+10FFFF names no file, rather than a U+FFFD that would name another one.
+- **Text from outside the program goes through `pathFromUtf8()`**, which answers
+  `std::errc::illegal_byte_sequence` for text that is not UTF-8 and never throws: an option value, an
+  environment value, a configuration value or a name a peer sent is often not, and that is an input
+  to handle. Each caller in core-cpp says what such text means for it: `homeResolvedPath()`,
+  `absolutePath()` and `parseLogFileSpec()` return the error, `homeDirectory()`, `configHome()` and
+  `App::localStateDir()` pass over the variable as unset, `listenUnix()` answers
+  `NetErrorCode::AddressError`, a listing is empty, and a refusal says so.
+- **Text the program spelled itself goes through `pathFromTrustedUtf8()`**: a literal, a test's
+  name, a string built from a path through `pathToUtf8()` or `normalizePath()`. Such text that is
+  not UTF-8 is a defect at the call site, so it throws `std::system_error` instead of handing every
+  caller a result it could only unwrap. In core-cpp these are the application's own name
+  (`App`), the working directory's canonical spelling, and the test doubles and fixtures
+  (`InMemoryFileSystem`'s keys, `TestWorkingDirectory`, `ScopedTempDir`).
+- A path core-cpp spells in a message goes through `pathToUtf8()`.
 
 ## Assertions that log
 

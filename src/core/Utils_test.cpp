@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <system_error>
 #include <vector>
 
 using std::string;
@@ -240,9 +241,9 @@ TEST_CASE("replaceVariables")
 
 TEST_CASE("homeResolvedPath")
 {
-    CHECK(core::homeResolvedPath("", "/var/tmp").generic_string().empty());
+    CHECK(core::homeResolvedPath("", "/var/tmp").value().generic_string().empty());
 
-    CHECK("/var/tmp/workspace" == core::homeResolvedPath("~/workspace", "/var/tmp").generic_string());
+    CHECK("/var/tmp/workspace" == core::homeResolvedPath("~/workspace", "/var/tmp").value().generic_string());
 }
 
 TEST_CASE("homeResolvedPath reads its input as UTF-8")
@@ -252,6 +253,25 @@ TEST_CASE("homeResolvedPath reads its input as UTF-8")
     CHECK(core::homeResolvedPath("~/\xCE\xA9-notes", home) == home / std::filesystem::path { u8"Ω-notes" });
     CHECK(core::homeResolvedPath("D:/J\xC3\xBCrgen/notes", home)
           == std::filesystem::path { u8"D:/Jürgen/notes" });
+}
+
+TEST_CASE("homeResolvedPath on input that is not UTF-8")
+{
+    // "Jürgen" in CP-1252: 0xFC starts no UTF-8 sequence. A configuration value comes from outside
+    // the program, so text that is not UTF-8 is an answer to report, never an exception.
+    auto const home = std::filesystem::path { "/home/user" };
+#ifdef _WIN32
+    for (auto const input: { "~/J\xFCrgen"sv, "J\xFCrgen"sv })
+    {
+        auto const resolved = core::homeResolvedPath(input, home);
+        REQUIRE_FALSE(resolved.has_value());
+        CHECK(resolved.error() == std::errc::illegal_byte_sequence);
+    }
+#else
+    // A POSIX path is bytes, so they are kept as they are.
+    CHECK(core::homeResolvedPath("~/J\xFCrgen", home).value().native() == "/home/user/J\xFCrgen");
+    CHECK(core::homeResolvedPath("J\xFCrgen", home).value().native() == "J\xFCrgen");
+#endif
 }
 
 TEST_CASE("expandEnvironmentVariables")
@@ -292,7 +312,7 @@ TEST_CASE("replaceVariables.and.homeResolvedPath.composition")
     };
 
     auto const resolve = [&](string const& input) {
-        return core::homeResolvedPath(core::replaceVariables(input, envReplacer), "/home/user");
+        return core::homeResolvedPath(core::replaceVariables(input, envReplacer), "/home/user").value();
     };
 
     // ${HOME}/path → env expansion → home resolution (no ~ involved)

@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cwctype>
+#include <expected>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -749,17 +750,19 @@ inline std::string replace(std::string_view text, std::string_view pattern, T&& 
 
 /// Resolves a leading `~` in @p input against @p homeDirectory.
 ///
-/// @param input A path in UTF-8 (core::pathFromUtf8()), such as a configuration value.
+/// @param input A path in UTF-8, such as a configuration value, read as core::pathFromUtf8() reads
+///              it.
 /// @param homeDirectory What `~` stands for.
 /// @return @p input with a leading `~` or `~/` replaced by @p homeDirectory; otherwise @p input.
-inline std::filesystem::path homeResolvedPath(std::string const& input,
-                                              std::filesystem::path const& homeDirectory)
+///         @c std::errc::illegal_byte_sequence on Windows where @p input is not UTF-8.
+[[nodiscard]] inline std::expected<std::filesystem::path, std::error_code> homeResolvedPath(
+    std::string_view input, std::filesystem::path const& homeDirectory)
 {
-    if (!input.empty() && input[0] == '~')
+    if (input.starts_with('~'))
     {
         bool const pathSepFound = input.size() >= 2 && (input[1] == '/' || input[1] == '\\');
-        auto subPath = input.substr(pathSepFound ? 2 : 1);
-        return homeDirectory / pathFromUtf8(subPath);
+        return pathFromUtf8(input.substr(pathSepFound ? 2 : 1))
+            .transform([&](std::filesystem::path const& subPath) { return homeDirectory / subPath; });
     }
 
     return pathFromUtf8(input);

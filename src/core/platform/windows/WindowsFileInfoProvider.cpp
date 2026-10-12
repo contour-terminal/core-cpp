@@ -120,11 +120,16 @@ std::vector<FileEntry> WindowsFileInfoProvider::listDirectory(std::string const&
     std::vector<FileEntry> result;
     std::error_code ec;
 
+    // UTF-8, as the names this answers are: the narrow constructor reads the ANSI code page. A path
+    // that is not UTF-8 names nothing, so it lists as empty, as a path that does not exist does.
+    auto const converted = core::pathFromUtf8(path);
+    if (!converted)
+        return result;
+
     // Case 1: Glob pattern — check first (pure string scan, avoids unnecessary syscalls).
     if (containsGlobChars(path))
     {
-        // UTF-8, as the names this answers are: the narrow constructor reads the ANSI code page.
-        auto const patternPath = core::pathFromUtf8(path);
+        auto const& patternPath = *converted;
         auto parentDir = patternPath.parent_path();
         // normalizePath(), not path::string(): the latter converts to the ANSI code page and throws
         // on any name it cannot represent, which would take the whole listing down.
@@ -154,7 +159,7 @@ std::vector<FileEntry> WindowsFileInfoProvider::listDirectory(std::string const&
     }
 
     // Case 2: Directory path — enumerate contents.
-    auto const dir = core::pathFromUtf8(path);
+    auto const& dir = *converted;
     if (fs::is_directory(dir, ec) && !ec)
     {
         auto const absoluteParent = absoluteDirectory(dir);

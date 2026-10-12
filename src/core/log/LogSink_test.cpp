@@ -246,17 +246,33 @@ class ScopedRedirect
 
 TEST_CASE("parseLogFileSpec maps the standard-error spellings onto nullopt", "[log][logsink]")
 {
-    CHECK_FALSE(core::log::parseLogFileSpec("").has_value());
-    CHECK_FALSE(core::log::parseLogFileSpec("-").has_value());
-    CHECK(core::log::parseLogFileSpec("/tmp/core-cpp.log") == std::filesystem::path { "/tmp/core-cpp.log" });
+    CHECK_FALSE(core::log::parseLogFileSpec("").value().has_value());
+    CHECK_FALSE(core::log::parseLogFileSpec("-").value().has_value());
+    CHECK(core::log::parseLogFileSpec("/tmp/core-cpp.log").value()
+          == std::filesystem::path { "/tmp/core-cpp.log" });
 }
 
 TEST_CASE("parseLogFileSpec reads the value as UTF-8", "[log][logsink]")
 {
     // What `--log-file` holds under a home directory beyond ASCII. On Windows the narrow
     // constructor read it in the ANSI code page, where the two bytes of the `ü` are two characters.
-    CHECK(core::log::parseLogFileSpec("C:/Users/J\xC3\xBCrgen/daemon.log")
+    CHECK(core::log::parseLogFileSpec("C:/Users/J\xC3\xBCrgen/daemon.log").value()
           == std::filesystem::path { u8"C:/Users/Jürgen/daemon.log" });
+}
+
+TEST_CASE("parseLogFileSpec on a value that is not UTF-8", "[log][logsink]")
+{
+    // "Jürgen" in CP-1252: 0xFC starts no UTF-8 sequence. A command-line value comes from outside
+    // the program, so it is an answer to report, never an exception.
+    constexpr auto Legacy = std::string_view { "C:/Users/J\xFCrgen/daemon.log" };
+    auto const destination = core::log::parseLogFileSpec(Legacy);
+#ifdef _WIN32
+    REQUIRE_FALSE(destination.has_value());
+    CHECK(destination.error() == std::errc::illegal_byte_sequence);
+#else
+    // A POSIX path is bytes, so they are kept as they are.
+    CHECK(destination.value().value().native() == Legacy);
+#endif
 }
 
 TEST_CASE("the standard formatter lays a line out as configured", "[log][logsink]")
@@ -406,7 +422,7 @@ TEST_CASE("ScopedOutput writes a --log-file under a directory beyond ASCII", "[l
     auto const spec = core::pathToUtf8(temp.path()) + "/J\xC3\xBCrgen/\xCE\xA9-\xE6\x97\xA5\xE6\x9C\xAC.log";
 
     {
-        auto output = core::log::ScopedOutput::create({ .file = core::log::parseLogFileSpec(spec) });
+        auto output = core::log::ScopedOutput::create({ .file = core::log::parseLogFileSpec(spec).value() });
         REQUIRE(output.has_value());
         category.value()("beyond ASCII");
     }

@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/windows/UnixSocketPath.hpp>
 
+#include <core/Escape.hpp>
 #include <core/Utf8Path.hpp>
 #include <core/net/windows/InvalidSocket.hpp>
 
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <system_error>
 
 #include <windows.h>
 
@@ -78,7 +80,19 @@ namespace
     }
 } // namespace
 
-std::expected<sockaddr_un, NetError> claimUnixSocketPath(std::string_view path)
+std::expected<std::filesystem::path, NetError> unixSocketFile(std::string_view path)
+{
+    // AF_UNIX reads `sun_path` as UTF-8 on Windows, so the file it names is made, probed and deleted
+    // by that name, through the wide API. The `...A` calls read the ANSI code page, and named a
+    // different file for a path beyond ASCII: a stale socket was never found, so it was never reclaimed.
+    return core::pathFromUtf8(path).transform_error([path](std::error_code const&) {
+        return makeNetError(
+            NetErrorCode::AddressError, 0, "unix socket path is not UTF-8: " + core::escape(path));
+    });
+}
+
+std::expected<sockaddr_un, NetError> claimUnixSocketPath(std::string_view path,
+                                                         std::filesystem::path const& file)
 {
     auto address = sockaddr_un {};
     address.sun_family = AF_UNIX;
@@ -86,10 +100,6 @@ std::expected<sockaddr_un, NetError> claimUnixSocketPath(std::string_view path)
         return std::unexpected(makeNetError(NetErrorCode::AddressError, 0, "unix socket path too long"));
     std::memcpy(address.sun_path, path.data(), path.size());
 
-    // AF_UNIX reads `sun_path` as UTF-8 on Windows, so the file it names is probed and deleted by
-    // that name, through the wide API. The `...A` calls read the ANSI code page, and named a different
-    // file for a path beyond ASCII: a stale socket was never found, so it was never reclaimed.
-    auto const file = core::pathFromUtf8(path);
     auto const pathString = std::string { path };
     if (auto const probe = probeUnixSocketOwner(address, file, pathString); !probe)
         return std::unexpected(probe.error());

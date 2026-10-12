@@ -182,6 +182,21 @@ TEST_CASE("FilesystemImageProvider.reads_a_source_beyond_ASCII_as_UTF-8")
     CHECK(missing.error().contains("\xE6\x97\xA5\xE6\x9C\xAC.png"));
 }
 
+TEST_CASE("FilesystemImageProvider.refuses_a_source_that_is_not_UTF-8")
+{
+    // A markdown document is text from outside the program. "Ω" spelled in CP-1253 (0xD9) followed
+    // by ASCII starts no UTF-8 sequence, so on Windows it names no file: it is refused, as a missing
+    // file is, rather than thrown. A POSIX path is bytes, so there it names a file that is missing.
+    auto provider = makeProvider("/base/dir");
+
+    auto const refused = provider.prepare("\xD9.ppm", std::nullopt);
+
+    REQUIRE_FALSE(refused.has_value());
+#ifdef _WIN32
+    CHECK(refused.error() == "image source is not UTF-8: \\xd9.ppm");
+#endif
+}
+
 TEST_CASE("FilesystemImageProvider.missing_local_file_is_an_error")
 {
     auto const dir = makeTempDir("missing");

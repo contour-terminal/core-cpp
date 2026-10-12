@@ -117,14 +117,16 @@ namespace
     }
 } // namespace
 
-std::optional<std::filesystem::path> parseLogFileSpec(std::string_view spec)
+std::expected<std::optional<std::filesystem::path>, std::error_code> parseLogFileSpec(std::string_view spec)
 {
     // "-" is the established spelling for a standard stream.
     if (spec.empty() || spec == "-")
-        return std::nullopt;
+        return std::optional<std::filesystem::path> {};
     // As UTF-8: the narrow constructor reads the ANSI code page on Windows, and opened a different
-    // file for any name beyond ASCII.
-    return core::pathFromUtf8(spec);
+    // file for any name beyond ASCII. A command-line value is text from outside, so one that is not
+    // UTF-8 is an answer for the caller to report.
+    return core::pathFromUtf8(spec).transform(
+        [](std::filesystem::path file) { return std::optional<std::filesystem::path> { std::move(file) }; });
 }
 
 Category::Formatter makeStandardFormatter(FormatterOptions options)

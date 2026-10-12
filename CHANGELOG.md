@@ -15,11 +15,24 @@ workflow refuses one without a section here.
   `core::log::parseLogFileSpec()` (so `--log-file`), `core::homeResolvedPath()`, `core::platform::absolutePath()`,
   `FileInfoProvider::listDirectory()`, `core::tui::loadImage()`, `FilesystemImageProvider::prepare()`,
   `ScopedTempDir`'s prefix and `operator/`, and `TestWorkingDirectory`. Each fixed a defect (see Fixed), and ASCII
-  reads as before. Text that is not UTF-8 throws `std::system_error` where a path is built from it
-  (`core::pathFromUtf8()`).
+  reads as before. Text that is not UTF-8 names no file there, and is reported rather than read as another name:
+  `core::pathFromUtf8()` answers `std::errc::illegal_byte_sequence`; `homeDirectory()`, `configHome()` and
+  `App::localStateDir()` pass over such a variable as unset; `listDirectory()` lists nothing;
+  `FilesystemImageProvider::prepare()`, `NativeFileSystem::createTempFile()` and `App::installLogging()` refuse it;
+  and `core::net::listenUnix()` answers `NetErrorCode::AddressError`. A test fixture or double handed such text
+  throws `std::system_error` (`core::pathFromTrustedUtf8()`).
   - *Migration*: a caller that passes one of these `path::string()` or `generic_string()`, which are in the ANSI
     code page on Windows, passes `core::pathToUtf8()` instead, or `core::platform::normalizePath()` for the
     generic form. Nothing changes on POSIX.
+- **`core::homeResolvedPath()`, `core::platform::absolutePath()` and `core::log::parseLogFileSpec()` return a
+  `std::expected`**, whose error is `std::errc::illegal_byte_sequence` on Windows where their text is not UTF-8.
+  Each reads text from outside the program -- a configuration value, a path to resolve, an option value -- where
+  such text is an input to report, not a defect to throw for. `homeResolvedPath()` takes a `std::string_view`.
+  - *Migration*: `homeResolvedPath()` is `std::expected<std::filesystem::path, std::error_code>`: test it, or
+    chain it with `transform()` and `and_then()`; comparing it with a path still compiles, and is false for an
+    error. `absolutePath()` is `std::expected<std::string, std::error_code>`. `parseLogFileSpec()` is
+    `std::expected<std::optional<std::filesystem::path>, std::error_code>`, so what it answered before is `*result`.
+    None of them fails on POSIX, where a path is the bytes it is given.
 
 ### Added
 
@@ -54,11 +67,15 @@ workflow refuses one without a section here.
   FIPS 180-4 examples and RFC 4231's seven test cases.
 - **`core::toLowerHexString()`** (`<core/Utils.hpp>`): bytes as lower-case hexadecimal, two digits each, in a
   constant expression too. `toHexString()` spells characters, in upper case.
-- **`core::pathFromUtf8()` and `core::pathToUtf8()`** (`<core/Utf8Path.hpp>`): a `std::filesystem::path` from a
-  UTF-8 string, and the path back as UTF-8, whatever the process code page. `std::filesystem::path`'s narrow
-  constructor and `path::string()` use the ANSI code page on Windows, so a path beyond ASCII named another file
-  there, or threw. On POSIX both are the identity on bytes; on Windows `pathFromUtf8()` throws
-  `std::system_error` for text that is not UTF-8.
+- **`core::pathFromUtf8()`, `core::pathFromTrustedUtf8()` and `core::pathToUtf8()`** (`<core/Utf8Path.hpp>`): a
+  `std::filesystem::path` from a UTF-8 string, and the path back as UTF-8, whatever the process code page.
+  `std::filesystem::path`'s narrow constructor and `path::string()` use the ANSI code page on Windows, so a path
+  beyond ASCII named another file there, or threw. On POSIX each is the identity on bytes. On Windows the text is
+  converted strictly, so text that is not UTF-8 -- a stray continuation byte, a truncated sequence, an overlong
+  form, an encoded surrogate -- names no file. `pathFromUtf8()`, for text from outside the program, answers
+  `std::expected<std::filesystem::path, std::error_code>`, with `std::errc::illegal_byte_sequence` for such text,
+  and never throws for it. `pathFromTrustedUtf8()`, for text the program spelled itself -- a literal, a string
+  built from a path -- throws `std::system_error` instead.
 
 ### Changed
 

@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: Apache-2.0
+#include <core/Utf8Path.hpp>
+
+#include <expected>
+#include <filesystem>
+#include <string>
+#include <string_view>
+#include <system_error>
+
+#ifdef _WIN32
+    #include <core/WideString.hpp>
+
+    #include <utility>
+#endif
+
+namespace core
+{
+
+std::expected<std::filesystem::path, std::error_code> pathFromUtf8(std::string_view text)
+{
+#ifdef _WIN32
+    // A path is UTF-16 here, so the text is converted, and strictly: not through the path's own
+    // conversion of a std::u8string, which throws for text that is not UTF-8.
+    if (auto utf16 = detail::toUtf16(text))
+        return std::filesystem::path { *std::move(utf16) };
+    return std::unexpected(std::make_error_code(std::errc::illegal_byte_sequence));
+#else
+    // A path is the bytes it is given.
+    return std::filesystem::path { std::string { text } };
+#endif
+}
+
+} // namespace core

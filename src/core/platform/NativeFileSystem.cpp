@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/platform/NativeFileSystem.hpp>
 
+#include <core/Escape.hpp>
 #include <core/Utf8Path.hpp>
 #include <core/platform/PathUtils.hpp>
 
@@ -501,9 +502,12 @@ std::expected<fs::path, std::string> NativeFileSystem::createTempFile(std::strin
     // The template is built as a path, not by concatenating path::string(): that narrows to the
     // platform's native narrow encoding, which on Windows is the ANSI code page, and MSVC throws
     // on a temp directory it cannot spell -- a user name outside the code page is enough. The
-    // prefix goes in as UTF-8, which is what every path string in core-cpp is.
-    auto const templatePath =
-        fs::temp_directory_path() / core::pathFromUtf8(std::string { prefix } + "_XXXXXX");
+    // prefix goes in as UTF-8, which is what every path string in core-cpp is; one that is not
+    // UTF-8 names no file on Windows.
+    auto const name = core::pathFromUtf8(std::string { prefix } + "_XXXXXX");
+    if (!name)
+        return std::unexpected(std::format("Temporary file prefix is not UTF-8: {}", core::escape(prefix)));
+    auto const templatePath = fs::temp_directory_path() / *name;
 
 #ifdef _WIN32
     // wchar_t end to end, for the same reason: a narrow template handed to _mktemp_s, or to

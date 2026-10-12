@@ -11,7 +11,6 @@
 
 #include <core/net/windows/IocpSocket.hpp>
 
-#include <core/Utf8Path.hpp>
 #include <core/net/SocketAddress.hpp>
 #include <core/net/SocketContract.hpp>
 #include <core/net/detail/PeerAddress.hpp>
@@ -1241,13 +1240,15 @@ std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::bindUnix(Ev
                                                                               int backlog)
 {
     platform::ensureWinsockInitialized();
-    auto const claimed = detail::claimUnixSocketPath(path);
-    if (!claimed)
-        return std::unexpected(claimed.error());
     // The file bind() is about to make, by the name it will have: AF_UNIX reads `sun_path` as UTF-8,
     // and the deletions below and in close() go through the wide API by that name. DeleteFileA read
     // the ANSI code page, and missed a file beyond ASCII, which then blocked the next bind.
-    auto file = core::pathFromUtf8(path);
+    auto file = detail::unixSocketFile(path);
+    if (!file)
+        return std::unexpected(std::move(file.error()));
+    auto const claimed = detail::claimUnixSocketPath(path, *file);
+    if (!claimed)
+        return std::unexpected(claimed.error());
 
     auto const socket =
         ::WSASocketW(AF_UNIX, SOCK_STREAM, 0, nullptr, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
@@ -1268,7 +1269,7 @@ std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::bindUnix(Ev
     {
         auto const err = ::WSAGetLastError();
         ::closesocket(socket);
-        ::DeleteFileW(file.c_str());
+        ::DeleteFileW(file->c_str());
         return std::unexpected(detail::fromWinsockError(err, "listen unix"));
     }
 
@@ -1276,7 +1277,7 @@ std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::bindUnix(Ev
     auto acceptAddresses = LPFN_GETACCEPTEXSOCKADDRS { nullptr };
     if (auto prepared = prepareListening(loop, socket, acceptEx, acceptAddresses); !prepared)
     {
-        ::DeleteFileW(file.c_str()); // `prepareListening` has closed the socket
+        ::DeleteFileW(file->c_str()); // `prepareListening` has closed the socket
         return std::unexpected(std::move(prepared.error()));
     }
 
@@ -1287,7 +1288,7 @@ std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::bindUnix(Ev
                                                          /*boundPort=*/0,
                                                          reinterpret_cast<void*>(acceptEx),
                                                          reinterpret_cast<void*>(acceptAddresses)) };
-    listener->_path = std::move(file);
+    listener->_path = *std::move(file);
     return listener;
 }
 

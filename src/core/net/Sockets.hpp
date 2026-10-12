@@ -165,8 +165,9 @@ struct ListenOptions
 /// On Windows the listener is an @c IocpListener handing out @c IocpSocket, as @c listen's is,
 /// and a loop whose backend lends no completion port is refused with
 /// @c NetErrorCode::Unsupported (since 0.5.0).
-/// @return The bound listener; @c NetErrorCode::Unsupported where AF_UNIX is not available.
-/// @throws std::system_error on Windows if @p path is not UTF-8 (core::pathFromUtf8()).
+/// @return The bound listener; @c NetErrorCode::Unsupported where AF_UNIX is not available;
+///         @c NetErrorCode::AddressError on Windows where @p path is not UTF-8, which names no file
+///         there (core::pathFromUtf8()).
 [[nodiscard]] std::expected<std::unique_ptr<IListener>, NetError> listenUnix(EventLoop& loop,
                                                                              std::string_view path,
                                                                              int backlog = 128);

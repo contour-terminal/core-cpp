@@ -4,33 +4,55 @@
 /// @file
 /// A path from the UTF-8 text core-cpp's strings are spelled in, and that text back from a path.
 
+#include <expected>
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <utility>
 
 namespace core
 {
 
-/// @brief The path that UTF-8 @p text spells.
+/// @brief The path that UTF-8 @p text spells, where the text came from outside the program.
 ///
-/// The one way a narrow string becomes a path in core-cpp: a command-line argument, an environment
-/// value, a configuration value, a file name. A `char` is UTF-8 here, but
-/// `std::filesystem::path`'s narrow constructor reads it in the platform's native narrow encoding,
-/// which on Windows is the process's ANSI code page: on a CP-1252 host the two bytes of the `ü` in
-/// `C:\Users\Jürgen` arrive as two characters, naming a directory that does not exist. This reads
-/// @p text as UTF-8 whatever the process code page is. On POSIX a path is the bytes it is given, so
-/// they pass through unchanged.
+/// The way a narrow string from outside becomes a path in core-cpp: a command-line argument, an
+/// environment value, a configuration value, a directory a remote shell reported. A `char` is
+/// UTF-8 here, but `std::filesystem::path`'s narrow constructor reads it in the platform's native
+/// narrow encoding, which on Windows is the process's ANSI code page: on a CP-1252 host the two
+/// bytes of the `ü` in `C:\Users\Jürgen` arrive as two characters, naming a directory that does
+/// not exist. This reads @p text as UTF-8 whatever the process code page is.
+///
+/// On POSIX a path is the bytes it is given, so they pass through unchanged and this never fails.
+/// On Windows a path is UTF-16, so the text is converted, strictly: a stray continuation byte, a
+/// truncated sequence, an overlong form, an encoded surrogate or a code point past U+10FFFF names
+/// no file there, and is an error rather than a U+FFFD that would name another one. Such text is
+/// an input to handle, not a defect, so it is a value and never an exception. Text the program
+/// spelled itself goes through pathFromTrustedUtf8() instead.
+///
+/// @param text The path, in UTF-8.
+/// @return The path @p text spells; @c std::errc::illegal_byte_sequence on Windows where @p text
+///         is not UTF-8.
+[[nodiscard]] std::expected<std::filesystem::path, std::error_code> pathFromUtf8(std::string_view text);
+
+/// @brief The path that UTF-8 @p text spells, where the program spelled the text itself.
+///
+/// For text that is UTF-8 by construction: a literal, a name a test chose, a string built from a
+/// path through pathToUtf8() or `normalizePath()`. Text that is not UTF-8 is then a defect at the
+/// call site rather than an input, so it throws instead of handing every such caller a result it
+/// could only unwrap. Anything from outside the program -- whatever it is expected to hold -- goes
+/// through pathFromUtf8().
 ///
 /// @param text The path, in UTF-8.
 /// @return The path @p text spells.
-/// @throws std::system_error on Windows, where a path is UTF-16, if @p text is not UTF-8 -- the
-///         standard library's own conversion refuses it, as the narrow constructor does in a
-///         process whose code page is UTF-8.
-[[nodiscard]] inline std::filesystem::path pathFromUtf8(std::string_view text)
+/// @throws std::system_error with @c std::errc::illegal_byte_sequence on Windows if @p text is not
+///         UTF-8. Never on POSIX, where a path is the bytes it is given.
+[[nodiscard]] inline std::filesystem::path pathFromTrustedUtf8(std::string_view text)
 {
-    // Through a std::u8string, which is UTF-8 by type. Not by reinterpret_cast to char8_t const*:
-    // char8_t is not among the types that may alias a char.
-    return std::filesystem::path { std::u8string(text.begin(), text.end()) };
+    auto path = pathFromUtf8(text);
+    if (!path)
+        throw std::system_error(path.error(), "pathFromTrustedUtf8");
+    return *std::move(path);
 }
 
 /// @brief @p path in UTF-8, in its native format: the inverse of pathFromUtf8().

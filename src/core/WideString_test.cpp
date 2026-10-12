@@ -2,14 +2,17 @@
 //
 // core::detail::toUtf8() is the one UTF-16 to UTF-8 conversion behind every wide Win32 read in
 // core-cpp: an environment value, the environment's names, a thread's description, the host name.
-// Each case below tells it apart from a conversion that is wrong in one particular way.
+// core::detail::toUtf16() is the other direction, behind every wide write and every path built from
+// a string. Each case below tells one apart from a conversion that is wrong in one particular way.
 #include <core/WideString.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <optional>
 #include <string>
 #include <string_view>
 
+using core::detail::toUtf16;
 using core::detail::toUtf8;
 
 namespace
@@ -62,4 +65,25 @@ TEST_CASE("toUtf8 reads a lone surrogate as U+FFFD and converts the rest", "[Wid
 TEST_CASE("toUtf8 converts the whole view and an embedded NUL with it", "[WideString][windows]")
 {
     CHECK(toUtf8(std::wstring_view { L"a\0b", 3 }) == std::string_view { "a\0b", 3 });
+}
+
+TEST_CASE("toUtf16 converts UTF-8 of every sequence length", "[WideString][windows]")
+{
+    CHECK(toUtf16("") == std::wstring {});
+    CHECK(toUtf16("build-agent-07.example") == L"build-agent-07.example");
+    CHECK(toUtf16("J\xC3\xBCrgen") == L"Jürgen");
+    CHECK(toUtf16("\xE2\x82\xAC") == L"€");
+    CHECK(toUtf16("\xF0\x9F\x98\x80") == std::wstring { HighSurrogate, LowSurrogate });
+    CHECK(toUtf16(std::string_view { "a\0b", 3 }) == std::wstring_view { L"a\0b", 3 });
+}
+
+TEST_CASE("toUtf16 refuses text that is not UTF-8", "[WideString][windows]")
+{
+    // Strict, unlike toUtf8(): read as U+FFFD, such text would name another file or variable.
+    CHECK_FALSE(toUtf16("J\xFCrgen").has_value());          // "Jürgen" in CP-1252
+    CHECK_FALSE(toUtf16("a\x80z").has_value());             // a lone continuation byte
+    CHECK_FALSE(toUtf16("a\xE2\x82").has_value());          // a sequence cut short
+    CHECK_FALSE(toUtf16("a\xED\xA0\x80z").has_value());     // an encoded surrogate
+    CHECK_FALSE(toUtf16("a\xC0\xAFz").has_value());         // an overlong form
+    CHECK_FALSE(toUtf16("a\xF4\x90\x80\x80z").has_value()); // past U+10FFFF
 }

@@ -131,7 +131,7 @@ Task<void> echoOnce(EventLoop* loop, IListener* listener, std::string path, Echo
 ///         reparse point, which `std::filesystem::exists` follows and then cannot answer for.
 [[nodiscard]] bool entryExists(std::string const& path)
 {
-    return ::GetFileAttributesW(core::pathFromUtf8(path).c_str()) != INVALID_FILE_ATTRIBUTES;
+    return ::GetFileAttributesW(core::pathFromTrustedUtf8(path).c_str()) != INVALID_FILE_ATTRIBUTES;
 }
 
 /// Leaves a STALE socket file at @p path: a socket bound there and closed, as a crashed server's.
@@ -175,7 +175,7 @@ class TempDirectory
     /// @return Its path inside this directory, in UTF-8 as `sun_path` is.
     [[nodiscard]] std::string file(std::string_view name) const
     {
-        return core::pathToUtf8(_path / core::pathFromUtf8(name));
+        return core::pathToUtf8(_path / core::pathFromTrustedUtf8(name));
     }
 
   private:
@@ -262,11 +262,42 @@ TEST_CASE("A unix socket path beyond ASCII is bound, deleted and reclaimed by it
 
             // And a file that is not a socket is never touched.
             auto const notes = directory.file("J\xC3\xBCrgen-\xCE\xA9/notes.txt");
-            std::ofstream { core::pathFromUtf8(notes) } << "keep";
+            std::ofstream { core::pathFromTrustedUtf8(notes) } << "keep";
             auto refused = core::net::listenUnix(loop, notes);
             REQUIRE_FALSE(refused.has_value());
             CHECK(refused.error().code == core::net::NetErrorCode::AddressInUse);
             CHECK(entryExists(notes));
+        }
+    }
+}
+
+TEST_CASE("A unix socket path that is not UTF-8 is refused as a value", "[net][afunix][iocp]")
+{
+    // A path that is not UTF-8 names no file AF_UNIX could bind, nor one the listener could make,
+    // probe or delete. A caller's path is text from outside the program, so it is a NetError, as a
+    // path too long for `sun_path` is; it threw std::system_error out of listenUnix() before.
+    for (auto const& backend: BackendMatrix)
+    {
+        auto source = core::net::makeBackend(backend.kind);
+        if (!source)
+            continue;
+        DYNAMIC_SECTION("backend=" << backend.name)
+        {
+            auto loop = EventLoop { *source };
+            auto const directory = TempDirectory {};
+            // "Jürgen" in CP-1252: 0xFC starts no UTF-8 sequence. The parent is not there yet, and
+            // a listener that went ahead would make it.
+            auto const parent = directory.file("sockets");
+            auto const path = parent + "\\J\xFCrgen.sock";
+
+            auto const listener = core::net::listenUnix(loop, path);
+            REQUIRE_FALSE(listener.has_value());
+            CHECK(listener.error().code == core::net::NetErrorCode::AddressError);
+            CHECK_FALSE(entryExists(parent));
+
+            auto const bound = core::net::IocpListener::bindUnix(loop, path);
+            REQUIRE_FALSE(bound.has_value());
+            CHECK(bound.error().code == core::net::NetErrorCode::AddressError);
         }
     }
 }

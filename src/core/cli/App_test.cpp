@@ -135,6 +135,55 @@ TEST_CASE("cli::App::localStateDir reads its environment variable as UTF-8", "[c
 #endif
 }
 
+// A variable is text from outside the program, so one that is not UTF-8 is a value to step past,
+// which on Windows names no directory; it threw out of the constructor there.
+TEST_CASE("cli::App::localStateDir passes over a variable that is not UTF-8", "[cli][app]")
+{
+    // "jürgen" in CP-1252: 0xFC starts no UTF-8 sequence.
+    auto const env = core::testing::FakeEnvironment { {
+        { "XDG_STATE_HOME", "/home/j\xFCrgen/.state" },
+        { "LOCALAPPDATA", "C:\\Users\\J\xC3\xBCrgen\\AppData\\Local" },
+    } };
+#ifdef _WIN32
+    CHECK(TestApp { env }.localStateDir()
+          == std::filesystem::path { u8"C:\\Users\\Jürgen\\AppData\\Local" } / "a9app");
+#else
+    // A POSIX path is bytes, so they are kept as they are.
+    CHECK(TestApp { env }.localStateDir().native() == "/home/j\xFCrgen/.state/a9app");
+#endif
+}
+
+// A --log-file value is text from outside the program, and installLogging() reports a refusal as a
+// value; on Windows a value that is not UTF-8 threw out of it instead.
+TEST_CASE("cli::App::installLogging reports a --log-file that is not UTF-8", "[cli][app]")
+{
+    auto const tmp = core::testing::ScopedTempDir { "core-cpp-app" };
+    auto const env = core::testing::FakeEnvironment {};
+    auto app = TestApp { env };
+
+    auto const install = [&](string const& path) {
+        char const* argv[] = { "a9app", "log-file", path.c_str() };
+        REQUIRE(app.parseParametersForTesting(3, argv));
+        return app.installLogging("a9app");
+    };
+
+    REQUIRE(install(core::pathToUtf8(tmp / "first.log")).has_value());
+    [[maybe_unused]] auto* const installed = &core::log::errorLog.sink();
+
+    // "Jürgen" in CP-1252: 0xFC starts no UTF-8 sequence.
+    auto const refused = install(core::pathToUtf8(tmp.path()) + "/J\xFCrgen.log");
+#ifdef _WIN32
+    REQUIRE_FALSE(refused.has_value());
+    CHECK(refused.error().contains("cannot use log file"));
+    CHECK(refused.error().contains("J\\xfcrgen.log"));
+    // Refused before the first output was released, so logging carries on where it went.
+    CHECK(&core::log::errorLog.sink() == installed);
+#else
+    // A POSIX path is bytes, so the file is named by them.
+    CHECK(refused.has_value());
+#endif
+}
+
 // `contour daemon --background` under C:\Users\Jürgen: the --log-file value is UTF-8, and a daemon
 // whose log does not open exits. On Windows it was read through the ANSI code page, so on a CP-1252
 // host the log went to a directory with two characters where the `ü` should have been.

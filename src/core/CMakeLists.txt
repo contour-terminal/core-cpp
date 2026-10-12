@@ -36,9 +36,11 @@ core_cpp_add_module(base KIND STATIC
     SOURCES
         Environment.cpp
         UserInfo.cpp
+        Utf8Path.cpp
         Utils.cpp
-    # The UTF-16 to UTF-8 conversion behind every wide Win32 read, base's and core::platform's. Its
-    # header is private, so in no file set; WideString.hpp says why it is not in a windows/ directory.
+    # The conversions between UTF-16 and UTF-8 behind every wide Win32 call, base's and
+    # core::platform's. Its header is private, so in no file set; WideString.hpp says why it is not in
+    # a windows/ directory.
     SOURCES_WINDOWS
         WideString.cpp
         WideString.hpp
