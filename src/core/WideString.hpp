@@ -3,7 +3,7 @@
 
 // Private to core-cpp, and Windows only. This header is in no file set, so it is neither installed
 // nor public API, and WideString.cpp, which defines what it declares, is in base's SOURCES_WINDOWS.
-// Sources of core::base and core::platform include it; no public header may.
+// Sources of core::base, core::platform and core::testing include it; no public header may.
 // It sits directly in src/core/ rather than in a windows/ directory because base can have no
 // directory of its own: the vendoring tool reads every directory under src/core/ as a module
 // (cmake/CoreCppVendor.cmake), so a copy would leave one out.

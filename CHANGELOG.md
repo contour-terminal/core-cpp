@@ -134,6 +134,12 @@ workflow refuses one without a section here.
   names the file in UTF-8, through `core::pathFromUtf8()` and the wide API. `listenUnix()` and `connectUnix()`
   take the path in UTF-8 on every platform, so a Windows caller passes `core::pathToUtf8()`, not
   `path::string()`.
+- **`core::testing::setTestEnv()`, `unsetTestEnv()` and `ScopedEnv` write a name or value beyond ASCII as written
+  on Windows.** They wrote through `_putenv_s()`, which reads both in the ANSI code page, so a UTF-8 value reached
+  neither the Win32 block that `core::LiveEnvironment` reads and a child process inherits, nor the CRT's copy, as
+  written: on a CP-1252 host the `ü` of `Jürgen` read back as two characters. They write through the wide
+  `_wputenv_s()` now, in UTF-16, and so are defined out of line in `core::testing`, which a user of the header
+  already links. An empty value still sets the variable in the Win32 block, and POSIX is unchanged.
 
 ## [0.7.0] - 2026-10-05
 

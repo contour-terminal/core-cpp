@@ -94,7 +94,9 @@ state that the whole test binary shares.
 | `<core/testing/EnvHelper.hpp>` | `setTestEnv()`, `unsetTestEnv()`, and `ScopedEnv`, which sets a variable and restores the value it replaced, or removes it |
 
 A fixture that cannot be set up throws, and Catch2 reports the test as failed: an empty temporary
-path, for one, would quietly put the fixture in the working directory. On POSIX `EnvHelper`
-writes through `core::setProcessEnvironmentVariable()` rather than `setenv()`. On Windows it uses
-`_putenv_s()`, which updates both the CRT's copy of the environment and the operating system's;
-there an empty value removes the variable.
+path, for one, would quietly put the fixture in the working directory. `EnvHelper` takes a name
+and a value in UTF-8. On POSIX it writes through `core::setProcessEnvironmentVariable()` rather
+than `setenv()`. On Windows it uses the wide `_wputenv_s()`, which updates both the CRT's copy of
+the environment and the operating system's, so each holds a value beyond ASCII as written; the
+narrow `_putenv_s()` read it in the ANSI code page. An empty value, which `_wputenv_s()` takes for a
+removal, is written to the operating system's copy again, so the variable is set there, as on POSIX.
