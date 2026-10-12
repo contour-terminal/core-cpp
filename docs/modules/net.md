@@ -136,7 +136,9 @@ itself with an `#ifdef` of its platform. contour's `PollEventSource.cpp` was spl
 `#ifdef` into `posix/PollBackend.cpp` and a Windows half, the WFMO backend, which 0.5.0 removed
 with its readiness sockets; `makeSocketPair()` is split into `testing/posix/` and
 `testing/windows/`. A Windows socket factory refuses a loop whose backend lends no completion port
-with `NetErrorCode::Unsupported`.
+with `NetErrorCode::Unsupported`. A unix socket path is UTF-8 on every platform: Windows' AF_UNIX
+reads `sun_path` as UTF-8, so `listenUnix()` makes the parent directory, and the listener probes,
+reclaims and deletes its socket file, by that name through the wide API.
 `DefaultBackend.cpp` sits in each of those and in `emscripten/` (the browser's own host, over
 `emscripten_async_call`), and the `CMakeLists.txt` names exactly one of the five, because that is
 what "no `#ifdef` chooses a backend" means: the platform is asked once, where the source lists are. One exception remains: `BackendParity_test.cpp` keeps three POSIX-only cases (a

@@ -25,9 +25,10 @@ namespace core::net::detail
 /// Builds the AF_UNIX address for @p path and makes the path bindable: nothing is there, or a
 /// stale socket file is, which is deleted. A live server keeps its path (@c NetErrorCode::AddressInUse),
 /// and a file that is not a socket is never touched.
-/// @param path The socket file path.
+/// @param path The socket file path, in UTF-8, as AF_UNIX reads `sun_path` on Windows.
 /// @return The address to bind, or why the path cannot be claimed; @c NetErrorCode::AddressError
 ///         for a path too long for `sun_path`.
+/// @throws std::system_error if @p path is not UTF-8 (core::pathFromUtf8()).
 [[nodiscard]] std::expected<sockaddr_un, NetError> claimUnixSocketPath(std::string_view path);
 
 } // namespace core::net::detail

@@ -108,6 +108,15 @@ workflow refuses one without a section here.
   `fopen()` read it in the ANSI code page. `FileSystem::listDirectoryRecursive()`'s refusal,
   `ScopedTempDir::string()` and `FilesystemImageProvider::prepare()`'s refusals spell a path in UTF-8
   (`core::pathToUtf8()`), where `path::string()` threw for a name outside the code page. POSIX is unchanged.
+- **A unix socket path beyond ASCII is bound, reclaimed and deleted on Windows.** Windows' AF_UNIX reads
+  `sun_path` as UTF-8 (measured on Windows 11 under CP-1252: the bytes `C3 BC` bind a file named U+00FC), but
+  `core::net::listenUnix()` made the parent directory through the narrow constructor, and the listener probed for
+  a stale socket file and deleted its own with `FindFirstFileA()` and `DeleteFileA()`, all of which read the ANSI
+  code page. Under `C:\Users\Jürgen` the socket was bound into a directory nothing had made; a listener that did
+  bind left its file behind when it closed, and the next bind could not find that file to reclaim it. Each now
+  names the file in UTF-8, through `core::pathFromUtf8()` and the wide API. `listenUnix()` and `connectUnix()`
+  take the path in UTF-8 on every platform, so a Windows caller passes `core::pathToUtf8()`, not
+  `path::string()`.
 
 ## [0.7.0] - 2026-10-05
 
