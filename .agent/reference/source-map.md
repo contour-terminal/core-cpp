@@ -36,8 +36,9 @@ src/core/
   Config.hpp.in             generates <core/Config.hpp>: version, skip exit code, WITH_* flags
   *.hpp, *.cpp              core::base (crispy, fastcached Core): Assert, Defines, Environment,
                             Escape, FNV, Flags, Times, UserInfo, Utils, Overloaded, Deferred,
-                            Base64, Generator (endo), Profiling, Ranges, Sha256; WideString is
-                            private and Windows only (UTF-16 to UTF-8, for base and core::platform)
+                            Base64, Generator (endo), Profiling, Ranges, Sha256, Utf8Path;
+                            WideString is private and Windows only (UTF-16 to UTF-8, for base and
+                            core::platform)
   log/                      core::log (crispy): LogStore, LogSink; Assert (fatal, SoftRequire)
   cli/                      core::cli (crispy): CLI, App
   platform/                 core::platform (endo platform, one merged Clock): Clock, Types,

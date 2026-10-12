@@ -26,6 +26,7 @@ fastcached's `src/FastCache/Core` at `ee71f868` (and `Sha256.hpp` at `8c27b162`)
 | `<core/Sha256.hpp>` | `core::Sha256`, SHA-256 incremental (`update()`, `finish()`) and one-shot (`hash()`), and `core::hmacSha256()`; see [SHA-256 and HMAC](#sha-256-and-hmac) below |
 | `<core/Times.hpp>` | `core::times()`, a counted range to iterate or to pipe a callable into |
 | `<core/UserInfo.hpp>` | the calling user's password-database entry (`getpwuid_r()`); none on Windows or under Emscripten |
+| `<core/Utf8Path.hpp>` | `core::pathFromUtf8()` and `pathToUtf8()`, between a UTF-8 string and a `std::filesystem::path`; see [Paths and UTF-8](#paths-and-utf-8) below |
 | `<core/Utils.hpp>` | string splitting, trimming, joining and case mapping, `toInteger()`, hex strings (`toLowerHexString()` for bytes), `${VAR}` substitution, `nextPowerOfTwo()`, `views::enumerate()`, `threadName()` |
 
 ## Generator
@@ -79,6 +80,28 @@ auto const text = core::toLowerHexString(digest);       // 64 hex digits, <core/
   stops at the first byte that differs.
 - Verified against the FIPS 180-4 examples, including one million `a`s, and RFC 4231's test cases
   1 to 7.
+
+## Paths and UTF-8
+
+A `char` is UTF-8 in core-cpp, but `std::filesystem::path` reads and writes narrow strings in the
+platform's native narrow encoding, which on Windows is the process's ANSI code page. A path built
+from a UTF-8 string with the narrow constructor names a different file there as soon as the string
+leaves ASCII -- on a CP-1252 host the two bytes of the `ü` in `C:\Users\Jürgen` are read as two
+characters -- and `path::string()` throws for a name the code page cannot spell. `<core/Utf8Path.hpp>` has the
+conversion in both directions, which agrees with UTF-8 whatever the process code page is:
+
+```cpp
+auto const log = core::pathFromUtf8(argument);          // a std::filesystem::path
+auto const text = core::pathToUtf8(log);                // UTF-8 again, native separators
+```
+
+- **On POSIX both are the identity on bytes**: a path there is the bytes it is given.
+- **On Windows, text that is not UTF-8 throws** `std::system_error` from `pathFromUtf8()`: the
+  path is UTF-16, so the bytes must be converted, and the standard library refuses them, as the
+  narrow constructor does in a process whose code page is UTF-8.
+- A path core-cpp builds from a string it was handed -- an option value, an environment value, a
+  configuration value -- goes through `pathFromUtf8()`, and a path it spells in a message goes
+  through `pathToUtf8()`.
 
 ## Assertions that log
 

@@ -42,6 +42,11 @@ workflow refuses one without a section here.
   FIPS 180-4 examples and RFC 4231's seven test cases.
 - **`core::toLowerHexString()`** (`<core/Utils.hpp>`): bytes as lower-case hexadecimal, two digits each, in a
   constant expression too. `toHexString()` spells characters, in upper case.
+- **`core::pathFromUtf8()` and `core::pathToUtf8()`** (`<core/Utf8Path.hpp>`): a `std::filesystem::path` from a
+  UTF-8 string, and the path back as UTF-8, whatever the process code page. `std::filesystem::path`'s narrow
+  constructor and `path::string()` use the ANSI code page on Windows, so a path beyond ASCII named another file
+  there, or threw. On POSIX both are the identity on bytes; on Windows `pathFromUtf8()` throws
+  `std::system_error` for text that is not UTF-8.
 
 ### Changed
 
@@ -72,6 +77,13 @@ workflow refuses one without a section here.
   `${x /home/user`, where `replace()` used to be asked for `x ${HOME`. Malformed markers pass through as
   written and a well-formed variable beside one still expands, as the function's documentation now says;
   well-formed input and the `$${` escape are unchanged. It is now `[[nodiscard]]`.
+- **A `--log-file` beyond ASCII opens on Windows.** `core::log::parseLogFileSpec()`, which
+  `core::cli::App::installLogging()` reads `--log-file` through, built its path with the narrow constructor, so
+  on Windows the UTF-8 value was read in the ANSI code page: under `C:\Users\Jürgen` on a CP-1252 host the log
+  went to a directory with two characters where the `ü` was, and a daemon that exits when its log does not open
+  exited. It reads the value as UTF-8 now (`core::pathFromUtf8()`). `ScopedOutput::create()` names a log file it
+  cannot open in UTF-8 too: it spelled the name through `path::string()`, which threw for a name outside the code
+  page, so the refusal became an exception. POSIX is unchanged.
 
 ## [0.7.0] - 2026-10-05
 

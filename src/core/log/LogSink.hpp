@@ -52,8 +52,9 @@ struct OutputConfig
 };
 
 /// Maps a `--log-file` option value onto a destination.
-/// @param spec The raw value; both "" and "-" mean standard error.
+/// @param spec The raw value, in UTF-8 (core::pathFromUtf8()); both "" and "-" mean standard error.
 /// @return The file to append to, or nullopt for standard error.
+/// @throws std::system_error on Windows if @p spec is not UTF-8.
 [[nodiscard]] std::optional<std::filesystem::path> parseLogFileSpec(std::string_view spec);
 
 /// Builds the standard log line formatter:

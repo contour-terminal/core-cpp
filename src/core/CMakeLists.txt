@@ -30,6 +30,7 @@ core_cpp_add_module(base KIND STATIC
         Sha256.hpp
         Times.hpp
         UserInfo.hpp
+        Utf8Path.hpp
         Utils.hpp
         "${CORE_CPP_GENERATED_INCLUDE_DIR}/core/Config.hpp"
     SOURCES
@@ -55,6 +56,7 @@ core_cpp_add_test(base
         Ranges_test.cpp
         Sha256_test.cpp
         Times_test.cpp
+        Utf8Path_test.cpp
         Utils_test.cpp
     SOURCES_WINDOWS
         WideString_test.cpp)

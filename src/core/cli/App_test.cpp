@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/Utf8Path.hpp>
 #include <core/Utils.hpp>
 #include <core/cli/App.hpp>
 #include <core/log/LogStore.hpp>
@@ -7,6 +8,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <filesystem>
 #include <format>
 #include <string>
 
@@ -91,7 +93,8 @@ TEST_CASE("cli::App::installLogging: a second call leaves the second output inst
         auto app = TestApp { env };
 
         auto const install = [&](string const& file) {
-            auto const path = (tmp / file).generic_string();
+            // In UTF-8, as --log-file reads it: generic_string() narrows through the ANSI code page.
+            auto const path = core::pathToUtf8(tmp / file);
             char const* argv[] = { "a9app", "log-file", path.c_str() };
             REQUIRE(app.parseParametersForTesting(3, argv));
             REQUIRE(app.installLogging("a9app").has_value());
@@ -113,4 +116,30 @@ TEST_CASE("cli::App::installLogging: a second call leaves the second output inst
     // And the line went where the second call said, not back to the console.
     CHECK(core::readFileAsString(tmp / "second.log").contains(Marker));
     CHECK(!core::readFileAsString(tmp / "first.log").contains(Marker));
+}
+
+// `contour daemon --background` under C:\Users\Jürgen: the --log-file value is UTF-8, and a daemon
+// whose log does not open exits. On Windows it was read through the ANSI code page, so on a CP-1252
+// host the log went to a directory with two characters where the `ü` should have been.
+TEST_CASE("cli::App::installLogging opens a --log-file beyond ASCII", "[cli][app]")
+{
+    auto const tmp = core::testing::ScopedTempDir { "core-cpp-app" };
+    auto const env = core::testing::FakeEnvironment {};
+    auto const path = core::pathToUtf8(tmp.path()) + "/J\xC3\xBCrgen/\xCE\xA9-daemon.log";
+
+    constexpr auto Marker = "a9-marker-beyond-ascii"sv;
+
+    {
+        auto app = TestApp { env };
+        char const* argv[] = { "a9app", "log-file", path.c_str() };
+        REQUIRE(app.parseParametersForTesting(3, argv));
+        REQUIRE(app.installLogging("a9app").has_value());
+
+        // Unqualified on purpose: core::log spells this one as a macro.
+        errorLog()("{}", Marker);
+    }
+
+    CHECK(core::readFileAsString(tmp.path() / std::filesystem::path { u8"Jürgen" }
+                                 / std::filesystem::path { u8"Ω-daemon.log" })
+              .contains(Marker));
 }
