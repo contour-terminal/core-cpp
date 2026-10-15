@@ -178,7 +178,7 @@ TEST_CASE("cli::App::installLogging reports a --log-file that is not UTF-8", "[c
     CHECK(refused.error().contains("J\\xfcrgen.log"));
     // Refused before the first output was released, so logging carries on where it went.
     CHECK(&core::log::errorLog.sink() == installed);
-#elif defined(__APPLE__)
+#elifdef __APPLE__
     // APFS and HFS+ keep every name in UTF-8 and refuse other bytes (EILSEQ), so the file cannot be
     // created there, and the failed open is reported as a value too.
     CHECK_FALSE(refused.has_value());
