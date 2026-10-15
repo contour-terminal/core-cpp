@@ -109,7 +109,8 @@ and on stb when `CORE_CPP_WITH_IMAGES` is on. Native only: there is no terminal 
   `SyntaxHighlighterRegistry` for the languages core::tui does not ship (below).
 - **Images.** With `CORE_CPP_WITH_IMAGES`: `loadImage()`, `resizeImage()` and `readClipboardImage()`
   over stb, `encodeSixel()`, and `FilesystemImageProvider`, which implements the always-present
-  `ImageProvider` interface `MarkdownRenderer` takes.
+  `ImageProvider` interface `MarkdownRenderer` takes. A file name is UTF-8 on every platform: stb is
+  built with `STBI_WINDOWS_UTF8`, so on Windows it opens the name through the wide API.
 - **Runtime.** `core::tui::runtime`: `TuiRuntime` gives the TUI its input vocabulary --
   `co_await runtime.nextEvent()`, `nextEventFor()`, `nextActivity()`, `nextAgentReady()` -- and
   forwards everything else to the [event loop](net.md) it is constructed on: `blockOn()`,

@@ -200,5 +200,6 @@ packagers get no new dependency. The contract is in
 - **[core-cpp#55](https://github.com/contour-terminal/core-cpp/issues/55)** — a vcpkg port, now
   that a release exports its targets.
 - **[core-cpp#8](https://github.com/contour-terminal/core-cpp/issues/8)** — graduate
-  fastcached's Logger, Base64/Sha256, Cli Options and EnumTable when a second consumer needs
-  them.
+  fastcached's Logger, Base64, Cli Options and EnumTable when a second consumer needs them.
+  Sha256 has graduated as far as contour needed it: its scalar engine and HMAC are
+  `<core/Sha256.hpp>`, and its hardware engines stay in fastcached.

@@ -113,7 +113,9 @@ Logic that schedules against a deadline takes an `IClock&` rather than calling
 - **`UserPaths` reads through a `core::Environment`**, so a test passes a
   `core::testing::FakeEnvironment`. Its default argument is a `core::LiveEnvironment`, so
   `homeDirectory()`, `userName()` and `configHome()` called without one read the process environment (on
-  Windows the operating system's block) through the same body the tests run.
+  Windows the operating system's block) through the same body the tests run. A directory variable
+  that is not UTF-8 names no directory on Windows, so it counts as unset there
+  (`core::pathFromUtf8()`, in [base](base.md#paths-and-utf-8)).
 - **`Wakeup`'s constructor throws** `std::runtime_error` when the operating system refuses the
   eventfd, self-pipe or event, which it does only when descriptors, handles or kernel memory are
   exhausted. That is unrecoverable, since no event loop can run without its wakeup channel, so it

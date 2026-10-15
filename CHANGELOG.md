@@ -9,6 +9,31 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Breaking
+
+- **On Windows, a path handed to core-cpp as a string is read as UTF-8, not in the ANSI code page**: by
+  `core::log::parseLogFileSpec()` (so `--log-file`), `core::homeResolvedPath()`, `core::platform::absolutePath()`,
+  `FileInfoProvider::listDirectory()`, `core::tui::loadImage()`, `FilesystemImageProvider::prepare()`,
+  `ScopedTempDir`'s prefix and `operator/`, and `TestWorkingDirectory`. Each fixed a defect (see Fixed), and ASCII
+  reads as before. Text that is not UTF-8 names no file there, and is reported rather than read as another name:
+  `core::pathFromUtf8()` answers `std::errc::illegal_byte_sequence`; `homeDirectory()`, `configHome()` and
+  `App::localStateDir()` pass over such a variable as unset; `listDirectory()` lists nothing;
+  `FilesystemImageProvider::prepare()`, `NativeFileSystem::createTempFile()` and `App::installLogging()` refuse it;
+  and `core::net::listenUnix()` answers `NetErrorCode::AddressError`. A test fixture or double handed such text
+  throws `std::system_error` (`core::pathFromTrustedUtf8()`).
+  - *Migration*: a caller that passes one of these `path::string()` or `generic_string()`, which are in the ANSI
+    code page on Windows, passes `core::pathToUtf8()` instead, or `core::platform::normalizePath()` for the
+    generic form. Nothing changes on POSIX.
+- **`core::homeResolvedPath()`, `core::platform::absolutePath()` and `core::log::parseLogFileSpec()` return a
+  `std::expected`**, whose error is `std::errc::illegal_byte_sequence` on Windows where their text is not UTF-8.
+  Each reads text from outside the program -- a configuration value, a path to resolve, an option value -- where
+  such text is an input to report, not a defect to throw for. `homeResolvedPath()` takes a `std::string_view`.
+  - *Migration*: `homeResolvedPath()` is `std::expected<std::filesystem::path, std::error_code>`: test it, or
+    chain it with `transform()` and `and_then()`; comparing it with a path still compiles, and is false for an
+    error. `absolutePath()` is `std::expected<std::string, std::error_code>`. `parseLogFileSpec()` is
+    `std::expected<std::optional<std::filesystem::path>, std::error_code>`, so what it answered before is `*result`.
+    None of them fails on POSIX, where a path is the bytes it is given.
+
 ### Added
 
 - **Copying to the clipboard through the terminal: `core::tui::ClipboardWriter`** (`<core/tui/ClipboardWriter.hpp>`).
@@ -32,6 +57,38 @@ workflow refuses one without a section here.
   an interactive prompt is unaffected. `isProtocolReport()` counts `OscResponse` as a report.
 - **`core::tui::testing::ScriptedTerminal`** (`<core/tui/testing/ScriptedTerminalChannel.hpp>`): a scripted
   terminal on a `ManualClock` for tests of code built on `TerminalChannel`.
+- **SHA-256 and HMAC-SHA256 in `core::base`: `core::Sha256` and `core::hmacSha256()`** (`<core/Sha256.hpp>`),
+  needing nothing but the standard library, so code that must not depend on TLS can hash; until now core-cpp
+  had SHA-256 only through OpenSSL in `core::net_tls`. `Sha256` is incremental -- `update()`, then `finish()`,
+  which leaves the hasher usable -- with a one-shot `hash()`, over `std::span<std::byte const>` or
+  `std::string_view`; a digest is `Sha256::Digest`, a `std::array<std::byte, 32>`. All of it is `constexpr`.
+  It is fastcached's scalar engine (`Core/Sha256`) without the hardware engines, so it suits identifiers and
+  keys rather than bulk data, and HMAC does not erase its stack copies of the key. Checked against the
+  FIPS 180-4 examples and RFC 4231's seven test cases.
+- **`core::toLowerHexString()`** (`<core/Utils.hpp>`): bytes as lower-case hexadecimal, two digits each, in a
+  constant expression too. `toHexString()` spells characters, in upper case.
+- **`core::pathFromUtf8()`, `core::pathFromTrustedUtf8()` and `core::pathToUtf8()`** (`<core/Utf8Path.hpp>`): a
+  `std::filesystem::path` from a UTF-8 string, and the path back as UTF-8, whatever the process code page.
+  `std::filesystem::path`'s narrow constructor and `path::string()` use the ANSI code page on Windows, so a path
+  beyond ASCII named another file there, or threw. On POSIX each is the identity on bytes. On Windows the text is
+  converted strictly, so text that is not UTF-8 -- a stray continuation byte, a truncated sequence, an overlong
+  form, an encoded surrogate -- names no file. `pathFromUtf8()`, for text from outside the program, answers
+  `std::expected<std::filesystem::path, std::error_code>`, with `std::errc::illegal_byte_sequence` for such text,
+  and never throws for it. `pathFromTrustedUtf8()`, for text the program spelled itself -- a literal, a string
+  built from a path -- throws `std::system_error` instead. `pathToUtf8()` never throws: on Windows a lone
+  surrogate, which an NTFS name may hold and UTF-8 cannot spell, comes out as U+FFFD, where
+  `path::u8string()` throws.
+- **`core::toUtf16()` and `core::toUtf8()`, on Windows** (`<core/WideString.hpp>`): the conversions between UTF-8
+  and the UTF-16 of the wide Win32 API. Every wide call in core-cpp already went through them, privately; a
+  consumer's own wide calls can now convert the same way rather than through a copy. `toUtf16(std::string_view)`
+  is strict, answering `std::expected<std::wstring, std::error_code>` with `std::errc::illegal_byte_sequence` for
+  text that is not UTF-8, as `pathFromUtf8()` does; `toUtf8(std::wstring_view)` reads a lone surrogate as U+FFFD
+  and converts the rest. The header declares nothing on other platforms, where a `wchar_t` is not UTF-16.
+- **`core::systemErrorMessage()`, on Windows** (`<core/WideString.hpp>`): the system's message for a Win32 error, in
+  UTF-8 -- `FormatMessageW()` converted by `toUtf8()`, in the thread's UI language where the system has it, without
+  the line break the system ends it with, and `unknown error <n>` where it has none. `FormatMessageA()` spells a
+  message in the ANSI code page, so a localized one beyond ASCII was not UTF-8. It takes the `DWORD` that
+  `GetLastError()` answers, spelled `unsigned long`.
 
 ### Changed
 
@@ -40,6 +97,62 @@ workflow refuses one without a section here.
   one unless constructed with `OscRecognition::Response`.
 - `TerminalOutput::copyToClipboard()` composes its sequence with `appendOsc52()`, encoding straight into the output
   buffer; the bytes are unchanged.
+
+### Fixed
+
+- **`core::platform::hostName()` answers the DNS host name on Windows, not the NetBIOS name.** It called
+  `GetComputerNameA`, whose name is upper-cased and cut to 15 characters, while POSIX `gethostname()`, Qt's
+  `QHostInfo::localHostName()` and the host of a shell's OSC 7 `file://host/path` URL all give the DNS host name.
+  A consumer comparing the two called a directory on its own machine remote whenever the machine's name was
+  longer than 15 characters or had a lower-case letter. It now asks `GetComputerNameExW` for
+  `ComputerNameDnsHostname`, as Qt does, and converts the answer to UTF-8 rather than reading it through the ANSI
+  code page. `cachedHostName()` answers the same name; POSIX is unchanged.
+- **`core::toHexString()` spells a character from 0x80 up as two digits.** It widened each `char` to
+  `unsigned` with its sign where `char` is signed, as on x86 and with MSVC, so 0x80 came out as `FFFFFF80`
+  and 0xFF as `FFFFFFFF`: longer than two digits a byte, and not what `fromHexString()` reads back. ASCII input, the only kind its callers in core-cpp's consumers pass, is spelled as before. It shares
+  one implementation with `toLowerHexString()`, and is now `constexpr` and `[[nodiscard]]`; its template
+  accepts only `char`, the one type it ever compiled for.
+- **`core::replaceVariables()` no longer repeats the text before an unterminated `${`.** Finding no `}`, it
+  appended the text before the marker and then, leaving its loop, everything from the same offset again, so
+  `ab${x` came out as `abab${x` and `${HOME}/a${b` as `/home/user/a/a${b`. A `${` with no `}` before the next
+  `${` is now unterminated as well, instead of reading that variable into its name: `${x ${HOME}` gives
+  `${x /home/user`, where `replace()` used to be asked for `x ${HOME`. Malformed markers pass through as
+  written and a well-formed variable beside one still expands, as the function's documentation now says;
+  well-formed input and the `$${` escape are unchanged. It is now `[[nodiscard]]`.
+- **A `--log-file` beyond ASCII opens on Windows.** `core::log::parseLogFileSpec()`, which
+  `core::cli::App::installLogging()` reads `--log-file` through, built its path with the narrow constructor, so
+  on Windows the UTF-8 value was read in the ANSI code page: under `C:\Users\Jürgen` on a CP-1252 host the log
+  went to a directory with two characters where the `ü` was, and a daemon that exits when its log does not open
+  exited. It reads the value as UTF-8 now (`core::pathFromUtf8()`). `ScopedOutput::create()` names a log file it
+  cannot open in UTF-8 too: it spelled the name through `path::string()`, which threw for a name outside the code
+  page, so the refusal became an exception. POSIX is unchanged.
+- **Every other path core-cpp builds from a string reads it as UTF-8 on Windows** (`core::pathFromUtf8()`), so a
+  name beyond ASCII names the file it spells rather than another one. Each used the narrow constructor, which
+  reads the ANSI code page: `core::cli::App::localStateDir()` from `XDG_STATE_HOME` or `LOCALAPPDATA`;
+  `core::platform::homeDirectory()` and `configHome()` from `HOME`, `USERPROFILE`, `XDG_CONFIG_HOME` and
+  `APPDATA`; `core::homeResolvedPath()`; `core::platform::absolutePath()`, which spells its result in UTF-8 and so
+  changed a name between reading and writing it; the Windows `FileInfoProvider::listDirectory()`, which answered
+  nothing for a directory beyond ASCII; `core::tui::FilesystemImageProvider::prepare()`; and the test helpers
+  `core::testing::ScopedTempDir` (its prefix and `operator/`) and `core::platform::testing::TestWorkingDirectory`.
+  `core::tui::loadImage()` opens its path as UTF-8 on Windows too, through stb_image's `STBI_WINDOWS_UTF8`, where
+  `fopen()` read it in the ANSI code page. `FileSystem::listDirectoryRecursive()`'s refusal,
+  `ScopedTempDir::string()` and `FilesystemImageProvider::prepare()`'s refusals spell a path in UTF-8
+  (`core::pathToUtf8()`), where `path::string()` threw for a name outside the code page. POSIX is unchanged.
+- **A unix socket path beyond ASCII is bound, reclaimed and deleted on Windows.** Windows' AF_UNIX reads
+  `sun_path` as UTF-8 (measured on Windows 11 under CP-1252: the bytes `C3 BC` bind a file named U+00FC), but
+  `core::net::listenUnix()` made the parent directory through the narrow constructor, and the listener probed for
+  a stale socket file and deleted its own with `FindFirstFileA()` and `DeleteFileA()`, all of which read the ANSI
+  code page. Under `C:\Users\Jürgen` the socket was bound into a directory nothing had made; a listener that did
+  bind left its file behind when it closed, and the next bind could not find that file to reclaim it. Each now
+  names the file in UTF-8, through `core::pathFromUtf8()` and the wide API. `listenUnix()` and `connectUnix()`
+  take the path in UTF-8 on every platform, so a Windows caller passes `core::pathToUtf8()`, not
+  `path::string()`.
+- **`core::testing::setTestEnv()`, `unsetTestEnv()` and `ScopedEnv` write a name or value beyond ASCII as written
+  on Windows.** They wrote through `_putenv_s()`, which reads both in the ANSI code page, so a UTF-8 value reached
+  neither the Win32 block that `core::LiveEnvironment` reads and a child process inherits, nor the CRT's copy, as
+  written: on a CP-1252 host the `ü` of `Jürgen` read back as two characters. They write through the wide
+  `_wputenv_s()` now, in UTF-16, and so are defined out of line in `core::testing`, which a user of the header
+  already links. An empty value still sets the variable in the Win32 block, and POSIX is unchanged.
 
 ## [0.7.0] - 2026-10-05
 

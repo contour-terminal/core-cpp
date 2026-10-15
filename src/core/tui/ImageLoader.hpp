@@ -25,7 +25,7 @@ struct OwnedImage
 ///
 /// Supports PNG, JPEG, GIF, BMP, TGA, PSD, HDR, PNM, PGM, PPM formats.
 ///
-/// @param filePath Path to the image file.
+/// @param filePath Path to the image file, in UTF-8 (core::pathToUtf8()), on Windows too.
 /// @return Owned image data on success, or an error string.
 [[nodiscard]] auto loadImage(std::string_view filePath) -> Result<OwnedImage>;
 

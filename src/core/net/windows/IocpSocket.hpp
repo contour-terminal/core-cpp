@@ -58,6 +58,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <span>
@@ -328,10 +329,13 @@ class IocpListener final: public IListener
     /// **AcceptEx accepts AF_UNIX connections**, measured on Windows 11 (26200) and asserted by
     /// `windows/UnixListener_test.cpp` on every CI run, so an IOCP loop serves a unix socket
     /// through its completion port like any other listener, and hands out @c IocpSocket.
+    /// **`sun_path` is UTF-8**, measured on Windows 11 (26200) under CP-1252: the bytes C3 BC bind a
+    /// file named U+00FC. The file is probed, and deleted, through the wide API by that name.
     /// @param loop The loop whose backend's port completes the accepts (not owned).
-    /// @param path The socket file path.
+    /// @param path The socket file path, in UTF-8.
     /// @param backlog The listen backlog.
-    /// @return The listener, or why the path could not be bound.
+    /// @return The listener, or why the path could not be bound; @c NetErrorCode::AddressError where
+    ///         @p path is not UTF-8 (detail::unixSocketFile()).
     [[nodiscard]] static std::expected<std::unique_ptr<IocpListener>, NetError> bindUnix(
         EventLoop& loop, std::string_view path, int backlog = 128);
 
@@ -381,7 +385,7 @@ class IocpListener final: public IListener
     std::uint16_t _boundPort;
     void* _acceptEx;
     void* _acceptAddresses;
-    std::string _path; ///< The socket file of an AF_UNIX listener, deleted on close; "" for TCP.
+    std::filesystem::path _path; ///< The socket file of an AF_UNIX listener, deleted on close; empty for TCP.
     bool _closed = false;
 };
 

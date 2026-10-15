@@ -5,8 +5,8 @@ The generic utilities every other module may use. Namespace `core`, headers dire
 WebAssembly included, and links `Threads::Threads` except there.
 
 Imported from contour's `src/crispy` at `6777ff05`, with crispy's namespace renamed `core`, from
-fastcached's `src/FastCache/Core` at `ee71f868`, and `Generator.hpp` from endo's
-`src/platform/Generator.hpp` at `f774a210`.
+fastcached's `src/FastCache/Core` at `ee71f868` (and `Sha256.hpp` at `8c27b162`), and
+`Generator.hpp` from endo's `src/platform/Generator.hpp` at `f774a210`.
 
 | Header | What it has |
 |---|---|
@@ -23,9 +23,12 @@ fastcached's `src/FastCache/Core` at `ee71f868`, and `Generator.hpp` from endo's
 | `<core/Overloaded.hpp>` | `core::Overloaded`, lambdas combined into one visitor |
 | `<core/Profiling.hpp>` | the `CORE_ZONE_*`, `CORE_FRAME_MARK*`, `CORE_THREAD_NAME` and `CORE_PLOT` macros; see [Profiling](../design/profiling.md) |
 | `<core/Ranges.hpp>` | `core::findOrNull()` and `findIfOrNull()`, which answer a pointer; `core::ranges::Iota` and `FoldLeft`, the standard facility where the library has it and a fallback where it does not |
+| `<core/Sha256.hpp>` | `core::Sha256`, SHA-256 incremental (`update()`, `finish()`) and one-shot (`hash()`), and `core::hmacSha256()`; see [SHA-256 and HMAC](#sha-256-and-hmac) below |
 | `<core/Times.hpp>` | `core::times()`, a counted range to iterate or to pipe a callable into |
 | `<core/UserInfo.hpp>` | the calling user's password-database entry (`getpwuid_r()`); none on Windows or under Emscripten |
-| `<core/Utils.hpp>` | string splitting, trimming, joining and case mapping, `toInteger()`, hex strings, `${VAR}` substitution, `nextPowerOfTwo()`, `views::enumerate()`, `threadName()` |
+| `<core/Utf8Path.hpp>` | `core::pathFromUtf8()`, `pathFromTrustedUtf8()` and `pathToUtf8()`, between a UTF-8 string and a `std::filesystem::path`; see [Paths and UTF-8](#paths-and-utf-8) below |
+| `<core/Utils.hpp>` | string splitting, trimming, joining and case mapping, `toInteger()`, hex strings (`toLowerHexString()` for bytes), `${VAR}` substitution, `nextPowerOfTwo()`, `views::enumerate()`, `threadName()` |
+| `<core/WideString.hpp>` | Windows only: `core::toUtf16()` and `toUtf8()`, between UTF-8 and the UTF-16 of the wide Win32 API, and `systemErrorMessage()`, a Win32 error's message in UTF-8; see [UTF-16 on Windows](#utf-16-on-windows) below |
 
 ## Generator
 
@@ -50,6 +53,103 @@ the compiler's coroutine language support — the one header here that does.
 - The fallback is always defined and is tested on every platform. Each yielded value lives in the
   coroutine frame until the next increment, so yield owning values. Breaking out of the loop
   destroys the suspended frame.
+
+## SHA-256 and HMAC
+
+`<core/Sha256.hpp>` has SHA-256 (FIPS 180-4) and HMAC-SHA256 (RFC 2104) with nothing but the
+standard library, so code that must not depend on TLS can hash: core-cpp links OpenSSL only for
+`core::net_tls`, behind `CORE_CPP_WITH_TLS`. It is the scalar engine of fastcached's
+`Core/Sha256` (`8c27b162`); fastcached's x86 SHA-NI and ARMv8 engines stayed there.
+
+```cpp
+auto hasher = core::Sha256 {};
+hasher.update(header);      // std::span<std::byte const>, or std::string_view
+hasher.update(payload);
+auto const digest = hasher.finish();                    // core::Sha256::Digest, 32 bytes
+auto const tag = core::hmacSha256(key, message);        // the same, keyed
+auto const text = core::toLowerHexString(digest);       // 64 hex digits, <core/Utils.hpp>
+```
+
+- **How the message is split never changes the digest.** `finish()` is `const`: it digests what has
+  been absorbed so far and leaves the hasher as it was, so more input may follow.
+- **Everything is `constexpr`**, so a digest or a tag can be computed at compile time.
+- **A key longer than the 64-byte block is hashed first**, as RFC 2104 says; any key length is
+  accepted.
+- **Limits.** It uses no SHA instructions, so it is meant for identifiers, keys and other short
+  inputs rather than bulk data. HMAC does not erase the copies of the key it makes on its stack,
+  and there is no constant-time comparison: comparing a tag an untrusted peer supplied with `==`
+  stops at the first byte that differs.
+- Verified against the FIPS 180-4 examples, including one million `a`s, and RFC 4231's test cases
+  1 to 7.
+
+## Paths and UTF-8
+
+A `char` is UTF-8 in core-cpp, but `std::filesystem::path` reads and writes narrow strings in the
+platform's native narrow encoding, which on Windows is the process's ANSI code page. A path built
+from a UTF-8 string with the narrow constructor names a different file there as soon as the string
+leaves ASCII -- on a CP-1252 host the two bytes of the `ü` in `C:\Users\Jürgen` are read as two
+characters -- and `path::string()` throws for a name the code page cannot spell. `<core/Utf8Path.hpp>` has the
+conversion in both directions, which agrees with UTF-8 whatever the process code page is:
+
+```cpp
+auto const log = core::pathFromUtf8(argument);          // std::expected<std::filesystem::path, std::error_code>
+auto const text = core::pathToUtf8(*log);               // UTF-8 again, native separators
+auto const state = dir / core::pathFromTrustedUtf8("state"); // a std::filesystem::path, or a throw
+```
+
+- **On POSIX each is the identity on bytes**: a path there is the bytes it is given, and
+  `pathFromUtf8()` never fails.
+- **On Windows the path is UTF-16**, so the text is converted, strictly: a stray continuation
+  byte, a truncated sequence, an overlong form, an encoded surrogate or a code point past
+  U+10FFFF names no file, rather than a U+FFFD that would name another one.
+- **Text from outside the program goes through `pathFromUtf8()`**, which answers
+  `std::errc::illegal_byte_sequence` for text that is not UTF-8 and never throws: an option value, an
+  environment value, a configuration value or a name a peer sent is often not, and that is an input
+  to handle. Each caller in core-cpp says what such text means for it: `homeResolvedPath()`,
+  `absolutePath()` and `parseLogFileSpec()` return the error, `homeDirectory()`, `configHome()` and
+  `App::localStateDir()` pass over the variable as unset, `listenUnix()` answers
+  `NetErrorCode::AddressError`, a listing is empty, and a refusal says so.
+- **Text the program spelled itself goes through `pathFromTrustedUtf8()`**: a literal, a test's
+  name, a string built from a path through `pathToUtf8()` or `normalizePath()`. Such text that is
+  not UTF-8 is a defect at the call site, so it throws `std::system_error` instead of handing every
+  caller a result it could only unwrap. In core-cpp these are the application's own name
+  (`App`), the working directory's canonical spelling, and the test doubles and fixtures
+  (`InMemoryFileSystem`'s keys, `TestWorkingDirectory`, `ScopedTempDir`).
+- A path core-cpp spells in a message goes through `pathToUtf8()`, which never throws. On Windows a
+  name is UTF-16 code units, not code points, and NTFS takes one with a lone surrogate, which UTF-8
+  cannot spell: it comes out as U+FFFD, with the rest of the name spelled, where
+  `path::u8string()` throws `std::system_error`. That is the one name that does not survive the
+  round trip: `pathFromUtf8()` reads the U+FFFD back as itself, which names another file.
+
+## UTF-16 on Windows
+
+The wide Win32 API takes and answers UTF-16, and its narrow ("A") API reads and writes the ANSI code
+page, which spells most of Unicode not at all. `<core/WideString.hpp>` has the two conversions every
+wide call in core-cpp goes through, for a consumer's own wide calls too. It is Windows only: a
+`wchar_t` is UTF-16 there and UTF-32 elsewhere, so on any other platform the header declares
+nothing.
+
+```cpp
+auto const commandLine = core::toUtf16(text); // std::expected<std::wstring, std::error_code>
+auto const value = core::toUtf8(buffer);      // std::string
+```
+
+- **`toUtf16()` is strict.** Text that is not UTF-8 -- a stray continuation byte, a truncated
+  sequence, an overlong form, an encoded surrogate, a code point past U+10FFFF -- answers
+  `std::errc::illegal_byte_sequence`, the error `pathFromUtf8()` answers, rather than a U+FFFD that
+  would name another file, variable or program.
+- **`toUtf8()` is lenient.** What it reads comes from the system, where a name or value is UTF-16
+  code units and may hold a lone surrogate, which UTF-8 cannot spell: that becomes U+FFFD, and the
+  rest is still converted. A surrogate pair becomes one four-byte sequence.
+- Both take a view and convert all of it, an embedded NUL included, so a buffer a wide call filled
+  converts without a copy, and a name needs no terminating NUL.
+- **`systemErrorMessage(GetLastError())` is the system's message for an error, in UTF-8**: what
+  `FormatMessageW()` answers, in the thread's UI language where the system has it, and without the
+  line break the system ends a message with; `unknown error <n>` where it has none. The narrow
+  `FormatMessageA()` spells a message in the ANSI code page -- the German one for
+  `ERROR_INVALID_HANDLE` has a `ü`, a byte UTF-8 cannot read -- and `std::system_category().message()`
+  in MSVC's library is that call, asking for US English first. Its parameter is a `DWORD`, spelled
+  `unsigned long` so the header needs no `<windows.h>`.
 
 ## Assertions that log
 
