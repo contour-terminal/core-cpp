@@ -30,7 +30,7 @@ jobs:
     env:
       UPSTREAM: LASTRADA-Software/fastcached
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Compare with fastcached master
         env:
@@ -63,26 +63,26 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: core-cpp
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: contour-terminal/contour
           path: contour
           fetch-depth: 0
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: contour-terminal/endo
           path: endo
           fetch-depth: 0
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: LASTRADA-Software/fastcached
           path: fastcached
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
