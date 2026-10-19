@@ -11,8 +11,11 @@
 #include <algorithm>
 #include <chrono>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <ranges>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <variant>
 #include <vector>
@@ -2164,4 +2167,192 @@ TEST_CASE("Screen.pointerCapture_deliversToACapturedOverlayInItsOwnCoordinates")
     CHECK(overlay.received[2].y == -1); // 0 - 2 + 1
     CHECK(tree.received.empty());
     CHECK(screen.pointerCapture() == nullptr);
+}
+
+// ============================================================================
+// Row marks: zero-width sequences anchored to canvas cells
+// ============================================================================
+
+namespace
+{
+
+/// @brief A mark a test asks @c MarkedRowsComponent to attach.
+struct TestMark
+{
+    int row;
+    int column;
+    std::string sequence;
+};
+
+/// @brief Renders one line of text per entry of @c lines and attaches every mark in @c marks.
+struct MarkedRowsComponent: Component
+{
+    std::vector<std::string> lines;
+    std::vector<TestMark> marks;
+
+    void render(Canvas& canvas) override
+    {
+        for (auto const row: std::views::iota(0, static_cast<int>(lines.size())))
+            canvas.putString(row, 0, lines[static_cast<std::size_t>(row)], {});
+        for (auto const& mark: marks)
+            canvas.mark(mark.row, mark.column, mark.sequence);
+        canvas.hideCursor();
+    }
+
+    [[nodiscard]] Size preferredSize() const override
+    {
+        return { .width = 80, .height = static_cast<int>(lines.size()) };
+    }
+};
+
+/// @brief Returns the raw writes of @p mock whose text is @p text.
+std::vector<MockTerminalOutput::RawWrite> rawWritesOf(MockTerminalOutput const& mock, std::string_view text)
+{
+    auto result = std::vector<MockTerminalOutput::RawWrite> {};
+    std::ranges::copy_if(
+        mock.rawWrites(), std::back_inserter(result), [&](auto const& write) { return write.text == text; });
+    return result;
+}
+
+/// @brief An inline screen over an 80x24 mock, holding one @c MarkedRowsComponent.
+struct InlineMarkFixture
+{
+    MockTerminalOutput* mock;
+    Terminal terminal;
+    Screen screen;
+    MarkedRowsComponent comp;
+
+    explicit InlineMarkFixture(std::unique_ptr<MockTerminalOutput> output):
+        mock(output.get()),
+        terminal(std::move(output)),
+        screen(terminal, ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 })
+    {
+    }
+
+    void attach(int height)
+    {
+        screen.root().addChild(comp,
+                               LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = height } });
+    }
+};
+
+} // namespace
+
+TEST_CASE("Screen.rowMarks_firstFrameEmitsAtColumn")
+{
+    auto fixture = InlineMarkFixture { std::make_unique<MockTerminalOutput>(80, 24) };
+    fixture.comp.lines = { "first line", "second line", "third line" };
+    fixture.comp.marks = { TestMark { .row = 1, .column = 0, .sequence = "<A>" } };
+    fixture.attach(3);
+
+    fixture.screen.draw();
+
+    // The cursor starts at the top of an empty 24-row terminal, so content row 1 is terminal row 1.
+    auto const marks = rawWritesOf(*fixture.mock, "<A>");
+    REQUIRE(marks.size() == 1);
+    CHECK(marks[0].row == 1);
+    CHECK(marks[0].column == 0);
+}
+
+TEST_CASE("Screen.rowMarks_unchangedRowEmitsNothing")
+{
+    auto fixture = InlineMarkFixture { std::make_unique<MockTerminalOutput>(80, 24) };
+    fixture.comp.lines = { "first line", "second line" };
+    fixture.comp.marks = { TestMark { .row = 0, .column = 0, .sequence = "<A>" },
+                           TestMark { .row = 1, .column = 4, .sequence = "<B>" } };
+    fixture.attach(2);
+
+    fixture.screen.draw();
+    auto const writesAfterFirstFrame = fixture.mock->rawWrites().size();
+    REQUIRE(rawWritesOf(*fixture.mock, "<A>").size() == 1);
+    REQUIRE(rawWritesOf(*fixture.mock, "<B>").size() == 1);
+
+    fixture.screen.draw();
+
+    CHECK(fixture.mock->rawWrites().size() == writesAfterFirstFrame);
+}
+
+TEST_CASE("Screen.rowMarks_segmentReestablishedOnRepaint")
+{
+    auto fixture = InlineMarkFixture { std::make_unique<MockTerminalOutput>(80, 24) };
+    fixture.comp.lines = { "prompt>   abcdefghij" };
+    fixture.comp.marks = { TestMark { .row = 0, .column = 0, .sequence = "<P>" },
+                           TestMark { .row = 0, .column = 10, .sequence = "<B>" } };
+    fixture.attach(1);
+    fixture.screen.draw();
+    auto const pBefore = rawWritesOf(*fixture.mock, "<P>").size();
+    auto const bBefore = rawWritesOf(*fixture.mock, "<B>").size();
+
+    fixture.comp.lines = { "prompt>   abXdefghij" }; // column 12 changes
+    fixture.screen.draw();
+
+    auto const bWrites = rawWritesOf(*fixture.mock, "<B>");
+    REQUIRE(bWrites.size() == bBefore + 1);
+    CHECK(bWrites.back().column == 10);
+    CHECK(bWrites.back().row == 0);
+    CHECK(rawWritesOf(*fixture.mock, "<P>").size() == pBefore);
+}
+
+TEST_CASE("Screen.rowMarks_leftSegmentRepaint")
+{
+    auto fixture = InlineMarkFixture { std::make_unique<MockTerminalOutput>(80, 24) };
+    fixture.comp.lines = { "prompt>   abcdefghij" };
+    fixture.comp.marks = { TestMark { .row = 0, .column = 0, .sequence = "<P>" },
+                           TestMark { .row = 0, .column = 10, .sequence = "<B>" } };
+    fixture.attach(1);
+    fixture.screen.draw();
+    auto const pBefore = rawWritesOf(*fixture.mock, "<P>").size();
+    auto const bBefore = rawWritesOf(*fixture.mock, "<B>").size();
+
+    fixture.comp.lines = { "proXpt>   abcdefghij" }; // column 3 changes
+    fixture.screen.draw();
+
+    auto const pWrites = rawWritesOf(*fixture.mock, "<P>");
+    REQUIRE(pWrites.size() == pBefore + 1);
+    CHECK(pWrites.back().column == 0);
+    CHECK(rawWritesOf(*fixture.mock, "<B>").size() == bBefore);
+}
+
+TEST_CASE("Screen.rowMarks_reservationScroll")
+{
+    auto output = std::make_unique<MockTerminalOutput>(80, 24);
+    output->moveTo(24, 1); // the cursor sits on the last row, so reserving room scrolls
+    auto fixture = InlineMarkFixture { std::move(output) };
+    fixture.comp.lines = { "one", "two", "three", "four" };
+    fixture.comp.marks = { TestMark { .row = 1, .column = 0, .sequence = "<A>" } };
+    fixture.attach(4);
+
+    fixture.screen.draw();
+
+    // Reserving four rows from the bottom row scrolls three times: content row 0 lands on terminal
+    // row 20 (0-based), so content row 1 is row 21.
+    auto const marks = rawWritesOf(*fixture.mock, "<A>");
+    REQUIRE(marks.size() == 1);
+    CHECK(fixture.mock->scrollCount() == 3);
+    CHECK(marks[0].row == 21);
+    CHECK(marks[0].column == 0);
+}
+
+TEST_CASE("Screen.rowMarks_fullRedrawEmitsEveryMark")
+{
+    auto fixture = InlineMarkFixture { std::make_unique<MockTerminalOutput>(80, 24) };
+    fixture.comp.lines = { "prompt>   abcdefghij" };
+    fixture.comp.marks = { TestMark { .row = 0, .column = 0, .sequence = "<P>" },
+                           TestMark { .row = 0, .column = 10, .sequence = "<B>" } };
+    fixture.attach(1);
+    fixture.screen.draw();
+
+    fixture.screen.invalidate();
+    fixture.screen.draw();
+
+    CHECK(rawWritesOf(*fixture.mock, "<P>").size() == 2);
+    CHECK(rawWritesOf(*fixture.mock, "<B>").size() == 2);
+}
+
+TEST_CASE("TerminalOutput.deleteLines_writesDL")
+{
+    auto mock = MockTerminalOutput { 80, 24 };
+    CHECK(mock.deletedLines() == 0);
+    mock.deleteLines(1);
+    CHECK(mock.deletedLines() == 1);
 }

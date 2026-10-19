@@ -214,6 +214,10 @@ class TerminalOutput
     /// @brief Clears from cursor to start of line.
     virtual void clearToStartOfLine();
 
+    /// @brief Deletes @p n lines at the cursor row, pulling the lines below up (DL, `CSI n M`).
+    /// @param n Number of lines to delete; nothing is written when it is not positive.
+    virtual void deleteLines(int n);
+
     /// @brief Clears the entire screen.
     virtual void clearScreen();
 

@@ -114,6 +114,12 @@ void TerminalOutput::clearToStartOfLine()
     _buffer += "\033[1K";
 }
 
+void TerminalOutput::deleteLines(int n)
+{
+    if (n > 0)
+        _buffer += std::format("\033[{}M", n);
+}
+
 void TerminalOutput::clearScreen()
 {
     _buffer += "\033[2J\033[H";

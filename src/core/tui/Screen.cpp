@@ -7,8 +7,13 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
+#include <iterator>
+#include <optional>
 #include <ranges>
+#include <span>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace core::tui
@@ -637,6 +642,72 @@ void Screen::flushFullscreen()
     flushArea(Rect { .x = 0, .y = 0, .width = _current.cols(), .height = _current.rows() });
 }
 
+namespace
+{
+
+    /// @brief Emits a frame's row marks ahead of the inline cells they govern.
+    ///
+    /// A row's marks, sorted by column, split it into segments `[mark.column, next.column)`.
+    /// Before a repainted cell is written, the mark of the segment holding it is written at the
+    /// mark's own column, unless that segment's mark was already the last one written on this
+    /// row. Marks are zero-width, so the cursor is moved to the mark's column and back.
+    class RowMarkEmitter
+    {
+      public:
+        /// @param out Sink receiving the marks. Must outlive this object.
+        /// @param buffer The frame being flushed. Must outlive this object.
+        RowMarkEmitter(TerminalOutput& out, Buffer const& buffer): _out(out)
+        {
+            _sorted.reserve(buffer.marks().size());
+            for (auto const& mark: buffer.marks())
+                _sorted.push_back(&mark);
+            std::ranges::stable_sort(_sorted, [](RowMark const* a, RowMark const* b) {
+                return std::pair { a->row, a->column } < std::pair { b->row, b->column };
+            });
+        }
+
+        /// @brief Selects @p row's marks and forgets the last segment written.
+        void beginRow(int row)
+        {
+            auto const range = std::ranges::equal_range(_sorted, row, {}, &RowMark::row);
+            _row = std::span<RowMark const* const> { range.begin(), range.end() };
+            _lastSegment.reset();
+        }
+
+        /// @brief Writes the mark governing column @p col if it is not already in force.
+        /// @param col The column of the cell about to be written; the cursor is there.
+        void beforeWrite(int col)
+        {
+            if (_row.empty())
+                return;
+
+            auto const next = std::ranges::upper_bound(_row, col, {}, &RowMark::column);
+            if (next == _row.begin())
+                return; // Left of the row's first mark: no segment, nothing to establish.
+
+            auto const segment = static_cast<std::size_t>(std::distance(_row.begin(), next) - 1);
+            if (_lastSegment == segment)
+                return;
+
+            auto const& mark = *_row[segment];
+            auto const distance = col - mark.column;
+            if (distance > 0)
+                _out.moveLeft(distance);
+            _out.writeRaw(mark.sequence);
+            if (distance > 0)
+                _out.moveRight(distance);
+            _lastSegment = segment;
+        }
+
+      private:
+        TerminalOutput& _out;
+        std::vector<RowMark const*> _sorted;
+        std::span<RowMark const* const> _row;
+        std::optional<std::size_t> _lastSegment;
+    };
+
+} // namespace
+
 void Screen::flushInline()
 {
     auto& out = _terminal.output();
@@ -773,6 +844,7 @@ void Screen::flushInline()
     bool const useDiff = (_renderMode == RenderMode::Diff) && !_needsFullRedraw;
 
     auto links = FlushLinks { out, _current, useDiff ? &_previous : nullptr };
+    auto marks = RowMarkEmitter { out, _current };
 
     out.hideCursor();
 
@@ -840,6 +912,7 @@ void Screen::flushInline()
         if (_config.inhibitReflow)
             out.disableReflow();
 
+        marks.beginRow(row);
         auto col = 0;
         while (col < _current.cols())
         {
@@ -861,6 +934,7 @@ void Screen::flushInline()
             if (needsUpdate)
             {
                 // For inline mode, we render sequentially
+                marks.beforeWrite(col);
                 links.emitter.beforeWrite(row, col);
                 out.writeText(cell.grapheme, cell.style);
             }

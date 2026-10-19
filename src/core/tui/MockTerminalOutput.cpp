@@ -2,6 +2,7 @@
 #include <core/tui/MockTerminalOutput.hpp>
 
 #include <algorithm>
+#include <string>
 
 namespace core::tui
 {
@@ -37,6 +38,8 @@ void MockTerminalOutput::writeText(std::string_view text, [[maybe_unused]] Style
 
 void MockTerminalOutput::writeRaw(std::string_view text)
 {
+    _rawWrites.push_back(RawWrite { .row = _cursorRow, .column = _cursorCol, .text = std::string { text } });
+
     for (auto const ch: text)
     {
         if (ch == '\n')
@@ -149,6 +152,13 @@ void MockTerminalOutput::clearToEndOfLine()
 void MockTerminalOutput::clearToStartOfLine()
 {
     // No-op on mock canvas.
+}
+
+void MockTerminalOutput::deleteLines(int n)
+{
+    // The mock holds no cell content, so only the count is tracked; the cursor does not move.
+    if (n > 0)
+        _deletedLines += n;
 }
 
 void MockTerminalOutput::clearScreen()
@@ -356,6 +366,16 @@ bool MockTerminalOutput::hyperlinkOpen() const noexcept
 int MockTerminalOutput::unbalancedHyperlinkCloses() const noexcept
 {
     return _unbalancedHyperlinkCloses;
+}
+
+auto MockTerminalOutput::rawWrites() const noexcept -> std::span<RawWrite const>
+{
+    return _rawWrites;
+}
+
+int MockTerminalOutput::deletedLines() const noexcept
+{
+    return _deletedLines;
 }
 
 } // namespace core::tui

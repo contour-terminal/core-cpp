@@ -9,6 +9,17 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Added
+
+- **Row marks: zero-width raw sequences anchored to canvas cells.** `Canvas::mark(row, column, sequence)` stores
+  a `RowMark` in the `Buffer` (`addMark()`, `marks()`, `clearMarks()`, cleared with the frame like images). The
+  inline screen writes a mark through `writeRaw` at its own column before repainting any cell of its segment --
+  from its column up to the next mark's on that row -- so a terminal that tags each written cell with the zone in
+  force (OSC 133 in Ghostty and WezTerm) stays correct across partial repaints. An unchanged row emits nothing;
+  the fullscreen and fixed viewports ignore marks.
+- **`TerminalOutput::deleteLines(n)`** writes DL (`CSI n M`). `MockTerminalOutput` records it (`deletedLines()`)
+  and every `writeRaw` with the cursor position it was made at (`rawWrites()`).
+
 ## [0.8.0] - 2026-10-15
 
 ### Breaking

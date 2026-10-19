@@ -42,6 +42,20 @@ struct HyperlinkRegion
     std::string linkId; ///< Stable OSC 8 `id=` derived from uri (empty = emit no id).
 };
 
+/// @brief A zero-width raw sequence anchored to a buffer cell.
+///
+/// Out-of-band like ImageRegion and HyperlinkRegion: the sequence occupies no cell and costs
+/// no cursor column. The inline screen re-emits it whenever it repaints a cell between this
+/// mark's column and the next mark's on the same row, which is what keeps a terminal that tags
+/// each written cell with the state in force (such as an OSC 133 semantic zone) correct across
+/// partial repaints.
+struct RowMark
+{
+    int row;              ///< Buffer row (0-based).
+    int column;           ///< Buffer column (0-based) the mark's segment starts at.
+    std::string sequence; ///< Raw bytes written through TerminalOutput::writeRaw.
+};
+
 /// A 2D grid of terminal cells representing a virtual screen buffer.
 ///
 /// The buffer stores cells in row-major order and provides operations
@@ -183,6 +197,20 @@ class Buffer
     /// @brief Clears all hyperlink regions.
     void clearHyperlinks() noexcept;
 
+    // --- Row Marks ---
+
+    /// @brief Anchors a zero-width raw sequence to the cell at (@p row, @p column).
+    /// @param row Buffer row (0-based).
+    /// @param column Buffer column (0-based).
+    /// @param sequence Raw bytes to emit; they must not move the cursor.
+    void addMark(int row, int column, std::string sequence);
+
+    /// @brief Returns all row marks, in registration order.
+    [[nodiscard]] std::span<RowMark const> marks() const noexcept;
+
+    /// @brief Clears all row marks.
+    void clearMarks() noexcept;
+
     /// Writes buffer content to a terminal output stream.
     ///
     /// Iterates rows/cells and emits text with styling, handling wide characters
@@ -198,6 +226,7 @@ class Buffer
     bool _cursorVisible = true;
     std::vector<ImageRegion> _images;
     std::vector<HyperlinkRegion> _hyperlinks;
+    std::vector<RowMark> _marks;
 
     /// Converts (row, col) to a linear index.
     [[nodiscard]] std::size_t index(int row, int col) const noexcept
