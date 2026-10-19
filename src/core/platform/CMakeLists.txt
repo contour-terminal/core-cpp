@@ -40,6 +40,7 @@ core_cpp_add_module(platform KIND STATIC
         FileSystem.hpp
         FileUri.hpp
         GlobMatch.hpp
+        MachineId.hpp
         MessageQueue.hpp
         NativeFileSystem.hpp
         PathUtils.hpp
@@ -60,6 +61,7 @@ core_cpp_add_module(platform KIND STATIC
         testing/TestWorkingDirectory.hpp
     SOURCES
         ${_coreCppPlatformSubset}
+        MachineId.cpp
         NativeFileSystem.cpp
         SignalHandler.cpp
         SystemInfo.cpp
@@ -92,6 +94,7 @@ core_cpp_add_test(platform
     SOURCES
         ${_coreCppPlatformSubsetTests}
         FileSystem_test.cpp
+        MachineId_test.cpp
         MessageQueue_test.cpp
         SignalHandler_test.cpp
         SystemInfo_test.cpp

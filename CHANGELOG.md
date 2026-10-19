@@ -11,6 +11,10 @@ workflow refuses one without a section here.
 
 ### Added
 
+- **`core::platform::readMachineId()`** (`<core/platform/MachineId.hpp>`): the machine id from `/etc/machine-id`,
+  read through an injected `FileSystem`. It is returned lowercased, and only if it is exactly 32 hexadecimal
+  digits; a missing file, `uninitialized` or any other content gives `std::nullopt`. Not part of the
+  WebAssembly subset.
 - **Row marks: zero-width raw sequences anchored to canvas cells.** `Canvas::mark(row, column, sequence)` stores
   a `RowMark` in the `Buffer` (`addMark()`, `marks()`, `clearMarks()`, cleared with the frame like images). The
   inline screen writes a mark through `writeRaw` at its own column before repainting any cell of its segment --

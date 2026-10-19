@@ -31,6 +31,7 @@ the interrupt throttle.
 | `<core/platform/GlobMatch.hpp>` | `globMatchFilename()` (`*`, `?`, `[...]`) and `containsGlobChars()` |
 | `<core/platform/FileUri.hpp>` | RFC 3986 percent-encoding and RFC 8089 `file://` URIs |
 | `<core/platform/SystemInfo.hpp>` | `hostName()` and `cachedHostName()` |
+| `<core/platform/MachineId.hpp>` | `readMachineId()`: the 32-digit id in `/etc/machine-id`, read through an injected `FileSystem` |
 | `<core/platform/StringUtils.hpp>` | `trimInPlace()` |
 
 The test doubles are in `testing/` and in `core::platform::testing`:
