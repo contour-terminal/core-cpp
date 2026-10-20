@@ -40,17 +40,17 @@ untouched. Without pthreads, Threads is not linked.
 
 ## Compiler-cache options (top-level builds only)
 
-These belong to the compiler-cache module that core-cpp shares, verbatim, with fastcached, endo
-and tuidu, so they are deliberately unprefixed: one spelling works in every one of those
+These belong to the compiler-cache module that core-cpp shares, verbatim, with Pace (formerly
+fastcached), endo and tuidu, so they are deliberately unprefixed: one spelling works in every one of those
 projects. They take effect only when core-cpp is the top-level project.
 
 | Option | Default | Effect |
 |---|---|---|
 | `USE_COMPILER_CACHE` | ON | Use a compiler cache at all |
-| `ALLOW_SCCACHE_FALLBACK` | OFF | Let sccache be selected when fastcache-cc is not usable |
-| `FASTCACHE_ADDR` | `127.0.0.1:6674`, or the environment's | Where the fastcached daemon answers; empty opts out of fastcache-cc |
-| `FASTCACHE_AUTO_INSTALL` | OFF | Download fastcache-cc from fastcached's releases when no launcher is installed |
-| `FASTCACHE_AUTO_START` | OFF | Start a fastcached daemon in the background when none answers |
+| `ALLOW_SCCACHE_FALLBACK` | OFF | Let sccache be selected when pace-cc is not usable |
+| `PACE_ADDR` | `127.0.0.1:6674`, or the environment's | Where the pace-kv daemon answers; empty opts out of pace-cc |
+| `PACE_AUTO_INSTALL` | OFF | Download pace-cc from Pace's releases when no launcher is installed |
+| `PACE_AUTO_START` | OFF | Start a pace-kv daemon in the background when none answers |
 
 ## What the presets set
 

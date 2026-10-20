@@ -25,6 +25,16 @@ workflow refuses one without a section here.
 - **`TerminalOutput::deleteLines(n)`** writes DL (`CSI n M`). `MockTerminalOutput` records it (`deletedLines()`)
   and every `writeRaw` with the cursor position it was made at (`rawWrites()`).
 
+### Changed
+
+- **The compiler cache follows fastcached's rename to Pace** (v0.6.0): a top-level build now looks for `pace-cc`
+  and a `pace-kv` daemon, and the compiler-cache options are `PACE_ADDR`, `PACE_AUTO_INSTALL` and
+  `PACE_AUTO_START` (formerly `FASTCACHE_*`); `FetchTransferBound.cmake`'s bounds are `PACE_FETCH_*`. Both
+  verbatim modules are re-synced from Pace (`CompileCache.cmake` at `46b563b0`, `FetchTransferBound.cmake` at
+  `892df2b1`). As a subproject, core-cpp's CPM bootstrap still honours a parent's
+  `FASTCACHED_FETCH_SILENCE_SECONDS`. Since Pace 0.6.0 publishes no `fastcached-*` archives, auto-install with
+  the old module fetched nothing.
+
 ## [0.8.0] - 2026-10-15
 
 ### Breaking
@@ -3324,7 +3334,8 @@ that names an upstream falls under exactly one row below; that table has the per
 
 | From | Commit | What |
 |---|---|---|
-| [fastcached](https://github.com/LASTRADA-Software/fastcached) | `f6ec49f3446b8bc121eba82c64cde2de759e774a` | `cmake/portable/CompileCache.cmake` and `cmake/FetchTransferBound.cmake`, verbatim |
+| [Pace](https://github.com/LASTRADA-Software/pace) (formerly fastcached) | `46b563b064fcdc1650f547b52f083bdb5089f871` | `cmake/portable/CompileCache.cmake`, verbatim |
+| [Pace](https://github.com/LASTRADA-Software/pace) (formerly fastcached) | `892df2b1b79134a02bf3925cb7a2cc251eb35822` | `cmake/FetchTransferBound.cmake`, verbatim |
 | [fastcached](https://github.com/LASTRADA-Software/fastcached) | `eb9c9c68da8fadfd43b0b36366919cb462689f48` | the bounded bootstrap download in `cmake/CPM.cmake`; the Windows error-popup suppression, merged into `SuppressWindowsDialogs`; the hook-name `IgnoredRegexp` of `.clang-tidy` |
 | [contour](https://github.com/contour-terminal/contour) | `6777ff05014f8ff163b071e8b0e942830119db80` | `.clang-format` and `.clang-tidy`, adapted; two copies of `SuppressWindowsDialogs`, merged; `LICENSE` |
 | [endo](https://github.com/contour-terminal/endo) | `f774a210ce989e5947b8f61d715068b1dc96088c` | `SuppressWindowsDialogsAtStartup.cpp`, `WindowsDialogCanary.cpp`, the CPM 0.40.8 pin; a copy of `SuppressWindowsDialogs`, merged; `.github/clang-tidy-matcher.json` |

@@ -109,16 +109,16 @@ with emsdk 3.1.56 and with the latest release.
 
 A top-level build goes through the first compiler cache that works:
 
-1. fastcache-cc, when a fastcached daemon answers at `FASTCACHE_ADDR` (default `127.0.0.1:6674`);
+1. pace-cc, when a pace-kv daemon answers at `PACE_ADDR` (default `127.0.0.1:6674`);
 2. sccache, only with `-DALLOW_SCCACHE_FALLBACK=ON`;
 3. ccache;
 4. none.
 
-`-DFASTCACHE_AUTO_INSTALL=ON` downloads fastcache-cc from fastcached's releases, and
-`-DFASTCACHE_AUTO_START=ON` starts a daemon in the background. `-DUSE_COMPILER_CACHE=OFF` turns
+`-DPACE_AUTO_INSTALL=ON` downloads pace-cc from Pace's releases, and
+`-DPACE_AUTO_START=ON` starts a pace-kv daemon in the background. `-DUSE_COMPILER_CACHE=OFF` turns
 caching off; only the `clang-coverage` preset does that. The choice is recorded in
 `CMakeCache.txt` as `CORE_CPP_CXX_COMPILER_LAUNCHER`, and `build.ninja`'s `LAUNCHER =` lines show
-it in effect. The module is a verbatim copy from fastcached; see
+it in effect. The module is a verbatim copy from Pace (formerly fastcached); see
 [`cmake/portable/README.md`](https://github.com/contour-terminal/core-cpp/blob/master/cmake/portable/README.md).
 
 ## Tests

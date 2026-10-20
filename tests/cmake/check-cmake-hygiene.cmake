@@ -151,15 +151,15 @@ set(CORE_CPP_HYGIENE_PROVENANCE_TABLE ".agent/reference/provenance.md")
 # --- the allowlist -----------------------------------------------------------------------------------
 
 set(_compileCacheReason
-    "a verbatim copy of fastcached's module (cmake/portable/README.md), whose unprefixed options and launcher are shared across the organisation's projects, and which only CoreCppTopLevel.cmake includes")
+    "a verbatim copy of Pace's (formerly fastcached's) module (cmake/portable/README.md), whose unprefixed options and launcher are shared across the organisation's projects, and which only CoreCppTopLevel.cmake includes")
 core_cpp_hygiene_allow(unprefixed-option cmake/portable/CompileCache.cmake "${_compileCacheReason}")
 core_cpp_hygiene_allow(unprefixed-cache-variable cmake/portable/CompileCache.cmake "${_compileCacheReason}")
 core_cpp_hygiene_allow(unprefixed-function cmake/portable/CompileCache.cmake "${_compileCacheReason}")
 core_cpp_hygiene_allow(global-cmake-variable cmake/portable/CompileCache.cmake "${_compileCacheReason}")
 core_cpp_hygiene_allow(unprefixed-cache-variable cmake/FetchTransferBound.cmake
-    "a verbatim copy of fastcached's module, whose FASTCACHED_FETCH_* bounds the organisation's projects share")
+    "a verbatim copy of Pace's (formerly fastcached's) module, whose PACE_FETCH_* bounds the organisation's projects share")
 core_cpp_hygiene_allow(process-environment cmake/FetchTransferBound.cmake
-    "a verbatim copy of fastcached's module, which only CoreCppTopLevel.cmake includes (rule top-level-only-include)")
+    "a verbatim copy of Pace's (formerly fastcached's) module, which only CoreCppTopLevel.cmake includes (rule top-level-only-include)")
 core_cpp_hygiene_allow(global-cmake-variable cmake/CoreCppTopLevel.cmake
     "the one file that may touch global state, included only when core-cpp is the top-level project")
 core_cpp_hygiene_allow(top-level-only-include cmake/CoreCppTopLevel.cmake

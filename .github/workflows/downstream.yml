@@ -21,31 +21,31 @@ defaults:
 
 jobs:
   # cmake/portable/CompileCache.cmake and cmake/FetchTransferBound.cmake are verbatim copies of
-  # fastcached's (cmake/portable/README.md). A difference from fastcached's master means core-cpp
-  # has drifted: re-sync the whole file as a git blob and record the new commit there.
+  # Pace's, formerly fastcached (cmake/portable/README.md). A difference from Pace's master means
+  # core-cpp has drifted: re-sync the whole file as a git blob and record the new commit there.
   fastcached-drift:
-    name: verbatim files match fastcached master
+    name: verbatim files match Pace master
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
-      UPSTREAM: LASTRADA-Software/fastcached
+      UPSTREAM: LASTRADA-Software/pace
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compare with fastcached master
+      - name: Compare with Pace master
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           commit="$(gh api "repos/$UPSTREAM/commits/master" --jq .sha)"
-          echo "fastcached master is $commit"
+          echo "Pace master is $commit"
           drift=0
           for path in cmake/portable/CompileCache.cmake cmake/FetchTransferBound.cmake; do
             curl -fsSL "https://raw.githubusercontent.com/$UPSTREAM/$commit/$path" -o "$RUNNER_TEMP/upstream"
             if diff -u "$path" "$RUNNER_TEMP/upstream" > "$RUNNER_TEMP/diff"; then
-              echo "$path: identical to fastcached $commit"
+              echo "$path: identical to Pace $commit"
             else
               drift=1
-              echo "::error file=$path::differs from fastcached $commit; re-sync it verbatim (cmake/portable/README.md)"
+              echo "::error file=$path::differs from Pace $commit; re-sync it verbatim (cmake/portable/README.md)"
               cat "$RUNNER_TEMP/diff"
             fi
           done

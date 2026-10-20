@@ -24,9 +24,9 @@ cmake/
                             core-cpp (CORE_CPP_INSTALL), leaving out what links a fetched dependency
   core-cppConfig.cmake.in   the package config: find_dependency() per table row in use, then targets
   CPM.cmake                 CPM 0.40.8, bounded and hash-checked download
-  FetchTransferBound.cmake  verbatim from fastcached: bounds every dependency transfer
+  FetchTransferBound.cmake  verbatim from Pace: bounds every dependency transfer
   portable/
-    CompileCache.cmake      verbatim from fastcached: fastcache-cc > sccache (opt-in) > ccache
+    CompileCache.cmake      verbatim from Pace (formerly fastcached): pace-cc > sccache (opt-in) > ccache
     README.md               provenance of the verbatim files, and how to re-sync them
   CoreCppVendor.cmake       the vendoring contract: MODE=sync copies a ref's file set out of git's
                             blobs and writes MANIFEST; MODE=check re-hashes a copy, needing no git

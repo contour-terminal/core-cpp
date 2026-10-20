@@ -91,7 +91,7 @@ cmake --workflow --preset ci-gcc-release      # configure, build and test in one
 | Windows (from a Visual Studio developer shell) | `cl-debug`, `cl-release`, `clangcl-debug`, `clangcl-release`, `cl-release-tls`; `cl-release-arm64` from an arm64 one |
 | Any, with emsdk (`EMSDK` set) | `emscripten`: single-threaded WebAssembly, tests run under node |
 
-The build goes through fastcache-cc when a fastcached daemon answers, otherwise ccache; see
+The build goes through pace-cc when a pace-kv daemon answers, otherwise ccache; see
 [`cmake/portable/README.md`](cmake/portable/README.md).
 
 ## Requirements
