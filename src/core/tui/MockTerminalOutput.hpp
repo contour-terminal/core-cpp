@@ -25,6 +25,14 @@ struct HyperlinkRun
 class MockTerminalOutput: public TerminalOutput
 {
   public:
+    /// @brief One writeRaw() call, with the cursor position it was made at.
+    struct RawWrite
+    {
+        int row;          ///< Cursor row (0-based) when the write began.
+        int column;       ///< Cursor column (0-based) when the write began.
+        std::string text; ///< The bytes passed to writeRaw().
+    };
+
     /// @brief Constructs a mock terminal output with the given dimensions.
     /// @param cols Number of columns.
     /// @param rows Number of rows.
@@ -50,6 +58,7 @@ class MockTerminalOutput: public TerminalOutput
     void clearLine() override;
     void clearToEndOfLine() override;
     void clearToStartOfLine() override;
+    void deleteLines(int n) override;
     void clearScreen() override;
     void clearScrollback() override;
     void enterAltScreen() override;
@@ -109,6 +118,12 @@ class MockTerminalOutput: public TerminalOutput
     /// @brief Number of endHyperlink() calls with no matching open (framing imbalance).
     [[nodiscard]] int unbalancedHyperlinkCloses() const noexcept;
 
+    /// @brief Returns every writeRaw() call since construction, in order, with its position.
+    [[nodiscard]] std::span<RawWrite const> rawWrites() const noexcept;
+
+    /// @brief Returns the total number of lines deleted through deleteLines() since construction.
+    [[nodiscard]] int deletedLines() const noexcept;
+
   private:
     int _cols;
     int _rows;
@@ -123,6 +138,8 @@ class MockTerminalOutput: public TerminalOutput
     std::vector<HyperlinkRun> _hyperlinkRuns;
     bool _hyperlinkOpen = false;
     int _unbalancedHyperlinkCloses = 0;
+    std::vector<RawWrite> _rawWrites;
+    int _deletedLines = 0;
 };
 
 } // namespace core::tui

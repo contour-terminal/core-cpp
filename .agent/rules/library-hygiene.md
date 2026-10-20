@@ -41,8 +41,8 @@ because its event loop could not wait on a console handle.
   `core_cpp_`-prefixed.** A consumer's cache is shared with every subproject it adds; an
   unprefixed `TESTING` or `WITH_TLS` collides.
 - **The one exemption is by path:** `cmake/portable/CompileCache.cmake` and
-  `cmake/FetchTransferBound.cmake` are verbatim copies from fastcached whose unprefixed options
-  (`USE_COMPILER_CACHE`, `FASTCACHE_*`, `FASTCACHED_FETCH_*`) are shared on purpose across the
+  `cmake/FetchTransferBound.cmake` are verbatim copies from Pace (formerly fastcached) whose unprefixed
+  options (`USE_COMPILER_CACHE`, `PACE_*`, `PACE_FETCH_*`) are shared on purpose across the
   organisation's projects, so one `-DUSE_COMPILER_CACHE=OFF` means the same thing everywhere.
 - **Targets are `core-cpp-<name>`, aliased `core::<name>`, and their type is always explicit.**
   Consumers link the alias.

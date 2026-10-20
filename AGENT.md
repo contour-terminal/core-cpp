@@ -58,8 +58,8 @@ core-cpp lives inside other people's builds. Details: [`.agent/rules/library-hyg
 - **No consumer-specific concept enters core-cpp.**
 - **The WebAssembly subset stays single-thread safe**: no `std::thread`, no blocking wait, no
   `Threads::Threads`, nothing newer than libc++ 17 (emsdk 3.1.56) without a feature-test macro.
-- **The compiler cache is fastcache-cc when it answers** (`cmake/portable/CompileCache.cmake`,
-  verbatim from fastcached, never edited here). Never set `USE_COMPILER_CACHE=OFF` locally except
+- **The compiler cache is pace-cc when it answers** (`cmake/portable/CompileCache.cmake`,
+  verbatim from Pace, formerly fastcached, never edited here). Never set `USE_COMPILER_CACHE=OFF` locally except
   for coverage.
 
 ## The rulebook

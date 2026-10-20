@@ -49,8 +49,8 @@ others in notes.
 
 | core-cpp path | upstream repo | upstream path | synced SHA | notes |
 |---|---|---|---|---|
-| `cmake/FetchTransferBound.cmake` | LASTRADA-Software/fastcached | `cmake/FetchTransferBound.cmake` | `f6ec49f3446b8bc121eba82c64cde2de759e774a` | verbatim; re-synced together with `CompileCache.cmake` (`cmake/portable/README.md`) |
-| `cmake/portable/CompileCache.cmake` | LASTRADA-Software/fastcached | `cmake/portable/CompileCache.cmake` | `f6ec49f3446b8bc121eba82c64cde2de759e774a` | verbatim |
+| `cmake/FetchTransferBound.cmake` | LASTRADA-Software/fastcached | `cmake/FetchTransferBound.cmake` | `892df2b1b79134a02bf3925cb7a2cc251eb35822` | verbatim; re-synced together with `CompileCache.cmake` (`cmake/portable/README.md`) |
+| `cmake/portable/CompileCache.cmake` | LASTRADA-Software/fastcached | `cmake/portable/CompileCache.cmake` | `46b563b064fcdc1650f547b52f083bdb5089f871` | verbatim; the repository is now LASTRADA-Software/pace (renamed in v0.6.0), which GitHub redirects to |
 | `cmake/portable/README.md` | origin: core-cpp | - | - | documents the two verbatim files above |
 | `src/core/Assert.hpp` | contour-terminal/contour | `src/crispy/Assert.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | `Require`/`Guarantee`/`todo`/`unreachable`/`setFailHandler`; `fatal`/`SoftRequire` split out to `src/core/log/Assert.hpp` to close a base→log layering cycle |
 | `src/core/Base64.hpp` | contour-terminal/contour | `src/crispy/Base64.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | post-import fix (Task A9): `decodeLength()` stops at the table's 64 sentinel rather than at its size, so it measures the base64 prefix; `decode()`'s index lambda no longer copies the 256-byte table per call |
@@ -408,6 +408,9 @@ others in notes.
 | `src/core/platform/GlobMatch.cpp` | contour-terminal/endo | `src/platform/GlobMatch.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `namespace endo` renamed `core::platform`; the bracket expression is matched by a helper (readability-function-cognitive-complexity); the `[` arm is reached before the literal one, and only for a bracket expression a `]` closes (A10) |
 | `src/core/platform/GlobMatch.hpp` | contour-terminal/endo | `src/platform/GlobMatch.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `namespace endo` renamed `core::platform` |
 | `src/core/platform/GlobMatch_test.cpp` | origin: core-cpp | - | - | the upstream file has no test |
+| `src/core/platform/MachineId.cpp` | origin: core-cpp | - | - | - |
+| `src/core/platform/MachineId.hpp` | origin: core-cpp | - | - | - |
+| `src/core/platform/MachineId_test.cpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/MessageQueue.hpp` | contour-terminal/endo | `src/platform/MessageQueue.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `setWakeup()` and the signalling in `push()`/`shutdown()` run under the queue's mutex (A10) |
 | `src/core/platform/MessageQueue_test.cpp` | contour-terminal/endo | `src/platform/MessageQueue_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `std::thread` rather than `std::jthread`; the producer loop is a range-for; plus a core-cpp case that registers a wakeup against a live producer (A10) |
 | `src/core/platform/NativeFileSystem.cpp` | contour-terminal/endo | `src/platform/NativeFileSystem.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the `increment(ec)` loops are `while` loops; `strerror()` became `std::error_code::message()`; the recase temporary is `<name>.recase-<n>`; `isExecutableFile()` classifies through the followed status; `createDirectory()` names an existing directory; `rename()` reports the recase's own error and where a failed rollback left the entry; `createTempFile()` is wchar_t end to end on Windows (A10); `rename()` and the two-hop recase go through the injected primitive (A10, ruling R53); its messages spell a path through `core::pathToUtf8()`, and `createTempFile()` builds its template through `core::pathFromUtf8()`, in place of a cast of its own; `createTempFile()` refuses a prefix that is not UTF-8 |

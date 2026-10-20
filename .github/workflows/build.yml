@@ -970,9 +970,9 @@ jobs:
         run: ctest --preset emscripten -LE tree-level
 
   # ---------------------------------------------------------------------------------------------
-  # Proves core-cpp builds through fastcache-cc when it is available: the launcher is fetched and
-  # a daemon started by the verbatim module itself, and the second build must be served from the
-  # cache. No other launcher is installed here, so nothing else can win the selection.
+  # Proves core-cpp builds through pace-cc when it is available: the launcher is fetched and a
+  # pace-kv daemon started by the verbatim module itself, and the second build must be served from
+  # the cache. No other launcher is installed here, so nothing else can win the selection.
   compile-cache:
     name: compile-cache
     runs-on: ubuntu-24.04
@@ -992,47 +992,47 @@ jobs:
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
           restore-keys: cpm-${{ runner.os }}-
 
-      # The fastcached 0.2.0 release links libyaml-cpp.so.0.8, which the runner image lacks: without
-      # it the daemon exits 127 at start-up, and the module (correctly) disables caching. OpenSSL is
-      # for core::net_tls, which the unix presets build (CORE_CPP_WITH_TLS).
-      - name: Install Ninja, GCC ${{ env.GCC_VERSION }}, OpenSSL and the daemon's runtime library
-        run: scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build "g++-$GCC_VERSION" libssl-dev libyaml-cpp0.8
+      # OpenSSL is for core::net_tls, which the unix presets build (CORE_CPP_WITH_TLS). The Pace
+      # 0.6.0 binaries need nothing beyond glibc and libstdc++ (the fastcached 0.2.0 release also
+      # needed libyaml-cpp.so.0.8).
+      - name: Install Ninja, GCC ${{ env.GCC_VERSION }} and OpenSSL
+        run: scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build "g++-$GCC_VERSION" libssl-dev
 
       - name: No other compiler cache is installed
         run: |
-          for launcher in fastcache-cc sccache ccache; do
+          for launcher in pace-cc sccache ccache; do
             if command -v "$launcher"; then echo "::error::$launcher is on PATH and could win the selection"; exit 1; fi
           done
 
       # The token lifts GitHub's unauthenticated API limit for the release lookup.
-      - name: Configure (auto-install fastcache-cc, auto-start a daemon)
+      - name: Configure (auto-install pace-cc, auto-start pace-kv)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cmake --preset "$PRESET" -DCMAKE_CXX_COMPILER="g++-$GCC_VERSION" \
-            -DFASTCACHE_AUTO_INSTALL=ON -DFASTCACHE_AUTO_START=ON | tee "$RUNNER_TEMP/configure.log"
+            -DPACE_AUTO_INSTALL=ON -DPACE_AUTO_START=ON | tee "$RUNNER_TEMP/configure.log"
           grep '\[cache\]' "$RUNNER_TEMP/configure.log"
 
       # The module sets CMAKE_CXX_COMPILER_LAUNCHER as a normal variable, so CMakeCache.txt never
       # shows it. CoreCppTopLevel.cmake records it as CORE_CPP_CXX_COMPILER_LAUNCHER, and the
       # generated build.ninja is the artefact itself.
-      - name: Assert fastcache-cc is the launcher
+      - name: Assert pace-cc is the launcher
         run: |
-          grep -E '^CORE_CPP_CXX_COMPILER_LAUNCHER:INTERNAL=.*fastcache-cc' "$BUILD_DIR/CMakeCache.txt" \
-            || { echo "::error::CORE_CPP_CXX_COMPILER_LAUNCHER does not name fastcache-cc"; exit 1; }
-          n=$(grep -cE '^ *LAUNCHER = .*fastcache-cc' "$BUILD_DIR/build.ninja" || true)
-          echo "$n launcher binding(s) in build.ninja name fastcache-cc"
-          [ "$n" -gt 0 ] || { echo "::error::build.ninja compiles nothing through fastcache-cc"; exit 1; }
-          fc="$(sed -n 's/^FASTCACHE_CC:FILEPATH=//p' "$BUILD_DIR/CMakeCache.txt")"
-          test -x "$fc" || { echo "::error::FASTCACHE_CC ('$fc') is not an executable"; exit 1; }
-          echo "FASTCACHE_CC=$fc" >> "$GITHUB_ENV"
+          grep -E '^CORE_CPP_CXX_COMPILER_LAUNCHER:INTERNAL=.*pace-cc' "$BUILD_DIR/CMakeCache.txt" \
+            || { echo "::error::CORE_CPP_CXX_COMPILER_LAUNCHER does not name pace-cc"; exit 1; }
+          n=$(grep -cE '^ *LAUNCHER = .*pace-cc' "$BUILD_DIR/build.ninja" || true)
+          echo "$n launcher binding(s) in build.ninja name pace-cc"
+          [ "$n" -gt 0 ] || { echo "::error::build.ninja compiles nothing through pace-cc"; exit 1; }
+          fc="$(sed -n 's/^PACE_CC:FILEPATH=//p' "$BUILD_DIR/CMakeCache.txt")"
+          test -x "$fc" || { echo "::error::PACE_CC ('$fc') is not an executable"; exit 1; }
+          echo "PACE_CC=$fc" >> "$GITHUB_ENV"
 
       - name: Build (cold)
         run: cmake --build --preset "$PRESET"
 
       - name: Delete the objects and zero the statistics
         run: |
-          "$FASTCACHE_CC" --zero-stats
+          "$PACE_CC" --zero-stats
           n=$(find "$BUILD_DIR" -name '*.o' | wc -l)
           find "$BUILD_DIR" -name '*.o' -delete
           echo "deleted $n object(s)"
@@ -1040,20 +1040,20 @@ jobs:
 
       - name: Rebuild (from the cache)
         env:
-          FASTCACHE_VERBOSE: "1"
+          PACE_VERBOSE: "1"
         run: |
           cmake --build --preset "$PRESET" 2>&1 | tee "$RUNNER_TEMP/rebuild.log"
-          hits=$(grep -c 'fastcache-cc: HIT' "$RUNNER_TEMP/rebuild.log" || true)
-          misses=$(grep -c 'fastcache-cc: MISS' "$RUNNER_TEMP/rebuild.log" || true)
+          hits=$(grep -c 'pace-cc: HIT' "$RUNNER_TEMP/rebuild.log" || true)
+          misses=$(grep -c 'pace-cc: MISS' "$RUNNER_TEMP/rebuild.log" || true)
           echo "rebuild: $hits HIT, $misses MISS"
-          [ "$hits" -ge 1 ] || { echo "::error::no compile was served from fastcache-cc"; exit 1; }
+          [ "$hits" -ge 1 ] || { echo "::error::no compile was served from pace-cc"; exit 1; }
 
-      - name: fastcache-cc --show-stats reports hits
+      - name: pace-cc --show-stats reports hits
         run: |
-          "$FASTCACHE_CC" --show-stats | tee "$RUNNER_TEMP/stats.log"
+          "$PACE_CC" --show-stats | tee "$RUNNER_TEMP/stats.log"
           hits=$(sed -nE 's/^[[:space:]]*hits[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p' "$RUNNER_TEMP/stats.log" | head -n 1)
           echo "show-stats: ${hits:-no} hits"
-          [ "${hits:-0}" -ge 1 ] || { echo "::error::fastcache-cc --show-stats shows no hits"; exit 1; }
+          [ "${hits:-0}" -ge 1 ] || { echo "::error::pace-cc --show-stats shows no hits"; exit 1; }
 
       # A replayed object is only as good as what it runs: the tests run on the cache's objects.
       - name: Test the replayed build

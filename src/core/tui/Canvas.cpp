@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <ranges>
+#include <utility>
 
 namespace core::tui
 {
@@ -178,6 +179,13 @@ void Canvas::addHyperlink(int row, int col, int columnSpan, std::string_view uri
         .height = 1,
     };
     _buffer.addHyperlink(cellArea, std::string(uri));
+}
+
+void Canvas::mark(int row, int column, std::string sequence)
+{
+    if (!inBounds(row, column))
+        return;
+    _buffer.addMark(toBufferRow(row), toBufferCol(column), std::move(sequence));
 }
 
 void Canvas::setCursor(int row, int col)

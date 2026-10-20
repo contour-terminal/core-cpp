@@ -13,25 +13,26 @@ presets, scripts and paths.
 
 ## The compiler cache
 
-- **core-cpp builds through fastcache-cc whenever it is available.**
-  `cmake/portable/CompileCache.cmake` selects, in order: fastcache-cc when a fastcached daemon
-  accepts its probe compile at `FASTCACHE_ADDR` (default `127.0.0.1:6674`); sccache, only with
+- **core-cpp builds through pace-cc whenever it is available.**
+  `cmake/portable/CompileCache.cmake` selects, in order: pace-cc when a pace-kv daemon
+  accepts its probe compile at `PACE_ADDR` (default `127.0.0.1:6674`); sccache, only with
   `-DALLOW_SCCACHE_FALLBACK=ON`; ccache; none. It leaves a launcher that is already set (on the
   command line, in a preset, or by a toolchain file) untouched, and it never fails a
   configure. `cmake/CoreCppTopLevel.cmake` includes it first, before any dependency is
   resolved, so CPM-fetched dependencies are compiled through the cache too.
-- **The module is a verbatim copy of fastcached's and is never edited here.** A fix goes to
-  fastcached first; then the whole file is re-synced as a git blob and
+- **The module is a verbatim copy of Pace's and is never edited here.** Pace is fastcached
+  renamed (v0.6.0, 2026-10-18: `fastcache-cc` became `pace-cc`, the daemon `pace-kv`, the options
+  `PACE_*`). A fix goes to Pace first; then the whole file is re-synced as a git blob and
   `cmake/portable/README.md` records the new commit. The nightly `downstream.yml` fails when
-  fastcached's `master` has moved on. Its unprefixed options (`USE_COMPILER_CACHE`,
-  `FASTCACHE_*`) are exempt by path from the prefix rule.
+  Pace's `master` has moved on. Its unprefixed options (`USE_COMPILER_CACHE`,
+  `PACE_*`) are exempt by path from the prefix rule.
 - **Never set `-DUSE_COMPILER_CACHE=OFF` locally, except for coverage.** The `clang-coverage`
   preset turns the cache off because a replayed object carries the coverage mapping of the
   checkout that produced it, so the report would describe another tree. Every other preset
   keeps it on.
 - **`CMakeCache.txt` does not show the launcher; `build.ninja` does.** The module sets
   `CMAKE_CXX_COMPILER_LAUNCHER` as a normal variable, never in the cache, so grepping the
-  cache for it answers "none" on a tree that uses fastcache-cc. `CoreCppTopLevel.cmake`
+  cache for it answers "none" on a tree that uses pace-cc. `CoreCppTopLevel.cmake`
   records the choice as the internal cache entry `CORE_CPP_CXX_COMPILER_LAUNCHER`, which is
   what the `compile-cache` CI job reads, and the generated `LAUNCHER =` bindings in
   `build.ninja` are the artefact itself. A configure's output is the module's *claim*; the
@@ -39,10 +40,10 @@ presets, scripts and paths.
   OUTPUT is the module's claim".
 - **A cache that reads like success is worse than none.** The `compile-cache` job therefore
   asserts the whole chain rather than a status line: configure with
-  `-DFASTCACHE_AUTO_INSTALL=ON -DFASTCACHE_AUTO_START=ON`, find fastcache-cc in the launcher
+  `-DPACE_AUTO_INSTALL=ON -DPACE_AUTO_START=ON`, find pace-cc in the launcher
   record and in `build.ninja`, build, zero the statistics, delete the objects, rebuild with
-  `FASTCACHE_VERBOSE=1`, and require `HIT` lines and a non-zero hit count from
-  `fastcache-cc --show-stats`. Every other job uses ccache, which the module picks when no
+  `PACE_VERBOSE=1`, and require `HIT` lines and a non-zero hit count from
+  `pace-cc --show-stats`. Every other job uses ccache, which the module picks when no
   daemon answers. Origin: fastcached build-and-toolchain, "Running the launcher is not testing
   it".
 - **With a fastcache-cc older than fastcached ca8dfc32, rebuild a `clangcl-*` tree with

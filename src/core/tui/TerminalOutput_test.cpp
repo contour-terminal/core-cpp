@@ -239,3 +239,12 @@ TEST_CASE("tui.TerminalOutput: a bare SGR reset is public, and is the one writeT
     reset.flush();
     CHECK(reset.captured() == core::tui::buildSgrReset());
 }
+
+TEST_CASE("tui.TerminalOutput: deleteLines writes DL with its count")
+{
+    auto output = CapturingOutput { Destination::Terminal };
+    output.deleteLines(3);
+    output.deleteLines(0); // nothing to delete, nothing written
+    output.flush();
+    CHECK(output.captured() == "\033[3M");
+}

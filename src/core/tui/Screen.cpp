@@ -7,8 +7,13 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
+#include <iterator>
+#include <optional>
 #include <ranges>
+#include <span>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace core::tui
@@ -637,6 +642,105 @@ void Screen::flushFullscreen()
     flushArea(Rect { .x = 0, .y = 0, .width = _current.cols(), .height = _current.rows() });
 }
 
+namespace
+{
+
+    /// @brief A frame's emittable row marks, grouped by row and sorted by column.
+    ///
+    /// Marks the inline flush can never reach are left out: those outside the buffer and those on
+    /// a wide character's continuation column, which no cell write starts at.
+    class RowMarkIndex
+    {
+      public:
+        /// @param buffer The frame whose marks to index. Must outlive this object.
+        explicit RowMarkIndex(Buffer const& buffer)
+        {
+            _sorted.reserve(buffer.marks().size());
+            for (auto const& mark: buffer.marks())
+            {
+                auto const* cell = buffer.tryAt(mark.row, mark.column);
+                if (cell != nullptr && !cell->isContinuation())
+                    _sorted.push_back(&mark);
+            }
+            std::ranges::stable_sort(_sorted, [](RowMark const* a, RowMark const* b) {
+                return std::pair { a->row, a->column } < std::pair { b->row, b->column };
+            });
+        }
+
+        /// @brief Returns @p row's marks, sorted by column (registration order among equals).
+        [[nodiscard]] std::span<RowMark const* const> row(int row) const
+        {
+            auto const range = std::ranges::equal_range(_sorted, row, {}, &RowMark::row);
+            return { range.begin(), range.end() };
+        }
+
+        /// @brief Whether @p row's marks (column and sequence, in order) differ from @p other's.
+        [[nodiscard]] bool rowDiffers(int row, RowMarkIndex const& other) const
+        {
+            return !std::ranges::equal(
+                this->row(row), other.row(row), [](RowMark const* a, RowMark const* b) {
+                    return a->column == b->column && a->sequence == b->sequence;
+                });
+        }
+
+      private:
+        std::vector<RowMark const*> _sorted;
+    };
+
+    /// @brief Emits a frame's row marks ahead of the inline cells they govern.
+    ///
+    /// A row's marks, sorted by column, split it into segments `[mark.column, next.column)`.
+    /// Before a repainted cell is written, the mark of the segment holding it is written at the
+    /// mark's own column, unless that segment's mark was already the last one written on this
+    /// row. Marks are zero-width, so the cursor is moved to the mark's column and back.
+    class RowMarkEmitter
+    {
+      public:
+        /// @param out Sink receiving the marks. Must outlive this object.
+        /// @param index The marks of the frame being flushed. Must outlive this object.
+        RowMarkEmitter(TerminalOutput& out, RowMarkIndex const& index): _out(out), _index(index) {}
+
+        /// @brief Selects @p row's marks and forgets the last segment written.
+        void beginRow(int row)
+        {
+            _row = _index.row(row);
+            _lastSegment.reset();
+        }
+
+        /// @brief Writes the mark governing column @p col if it is not already in force.
+        /// @param col The column of the cell about to be written; the cursor is there.
+        void beforeWrite(int col)
+        {
+            if (_row.empty())
+                return;
+
+            auto const next = std::ranges::upper_bound(_row, col, {}, &RowMark::column);
+            if (next == _row.begin())
+                return; // Left of the row's first mark: no segment, nothing to establish.
+
+            auto const segment = static_cast<std::size_t>(std::distance(_row.begin(), next) - 1);
+            if (_lastSegment == segment)
+                return;
+
+            auto const& mark = *_row[segment];
+            auto const distance = col - mark.column;
+            if (distance > 0)
+                _out.moveLeft(distance);
+            _out.writeRaw(mark.sequence);
+            if (distance > 0)
+                _out.moveRight(distance);
+            _lastSegment = segment;
+        }
+
+      private:
+        TerminalOutput& _out;
+        RowMarkIndex const& _index;
+        std::span<RowMark const* const> _row;
+        std::optional<std::size_t> _lastSegment;
+    };
+
+} // namespace
+
 void Screen::flushInline()
 {
     auto& out = _terminal.output();
@@ -773,6 +877,9 @@ void Screen::flushInline()
     bool const useDiff = (_renderMode == RenderMode::Diff) && !_needsFullRedraw;
 
     auto links = FlushLinks { out, _current, useDiff ? &_previous : nullptr };
+    auto const currentMarks = RowMarkIndex { _current };
+    auto const previousMarks = RowMarkIndex { _previous };
+    auto marks = RowMarkEmitter { out, currentMarks };
 
     out.hideCursor();
 
@@ -840,6 +947,10 @@ void Screen::flushInline()
         if (_config.inhibitReflow)
             out.disableReflow();
 
+        marks.beginRow(row);
+        // Marks are diffed the way hyperlinks are: they live beside the cells, so Cell equality
+        // cannot see a changed one. A row whose marks changed repaints whole, which re-emits each.
+        bool const rowMarksChanged = useDiff && currentMarks.rowDiffers(row, previousMarks);
         auto col = 0;
         while (col < _current.cols())
         {
@@ -851,8 +962,8 @@ void Screen::flushInline()
                 continue;
             }
 
-            bool needsUpdate = !useDiff;
-            if (useDiff && _previous.inBounds(row, col))
+            bool needsUpdate = !useDiff || rowMarksChanged;
+            if (!needsUpdate && _previous.inBounds(row, col))
             {
                 Cell const& prevCell = _previous.at(row, col);
                 needsUpdate = (cell != prevCell) || links.retargeted(row, col);
@@ -861,6 +972,7 @@ void Screen::flushInline()
             if (needsUpdate)
             {
                 // For inline mode, we render sequentially
+                marks.beforeWrite(col);
                 links.emitter.beforeWrite(row, col);
                 out.writeText(cell.grapheme, cell.style);
             }

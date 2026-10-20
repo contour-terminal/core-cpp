@@ -13,6 +13,7 @@
 #include <format>
 #include <ranges>
 #include <stdexcept>
+#include <utility>
 
 namespace core::tui
 {
@@ -66,6 +67,7 @@ void Buffer::resize(int rows, int cols)
     _cols = cols;
     clearImages();
     clearHyperlinks();
+    clearMarks();
 
     // Clamp cursor to new bounds
     _cursor.x = std::min(_cursor.x, _cols - 1);
@@ -108,6 +110,7 @@ void Buffer::clear(Style const& style)
         cell.reset(style);
     clearImages();
     clearHyperlinks();
+    clearMarks();
 }
 
 void Buffer::clearRect(Rect area, Style const& style)
@@ -274,6 +277,21 @@ std::span<HyperlinkRegion const> Buffer::hyperlinks() const noexcept
 void Buffer::clearHyperlinks() noexcept
 {
     _hyperlinks.clear();
+}
+
+void Buffer::addMark(int row, int column, std::string sequence)
+{
+    _marks.push_back(RowMark { .row = row, .column = column, .sequence = std::move(sequence) });
+}
+
+std::span<RowMark const> Buffer::marks() const noexcept
+{
+    return _marks;
+}
+
+void Buffer::clearMarks() noexcept
+{
+    _marks.clear();
 }
 
 void Buffer::writeTo(TerminalOutput& out) const

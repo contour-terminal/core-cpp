@@ -58,7 +58,7 @@ endif()
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF)
 
-# A compiler launcher of the consumer's own. core-cpp builds through fastcache-cc when it is the
+# A compiler launcher of the consumer's own. core-cpp builds through pace-cc when it is the
 # top-level project and through nothing at all when it is not, and this is what says so: `cmake -E
 # env` is a launcher that does nothing but run the compiler, so the value is real without the build
 # depending on a tool being installed.

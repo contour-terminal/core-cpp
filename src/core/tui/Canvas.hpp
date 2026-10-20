@@ -6,6 +6,7 @@
 #include <core/tui/Rect.hpp>
 
 #include <cstddef>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -125,6 +126,33 @@ class Canvas
     /// @param columnSpan Number of columns the link covers.
     /// @param uri Absolute URI, e.g. `file://host/home/me/src`.
     void addHyperlink(int row, int col, int columnSpan, std::string_view uri);
+
+    // --- Row Marks ---
+
+    /// @brief Anchors a zero-width raw sequence to the cell at (@p row, @p column).
+    ///
+    /// The inline screen writes @p sequence through TerminalOutput::writeRaw, at this cell's
+    /// column, whenever it repaints a cell of this row from @p column up to (not including) the
+    /// next mark's column: on the first frame, on a full redraw, and on every partial repaint
+    /// that touches that segment. A row whose marks (column and sequence, in order) differ from
+    /// the previous frame's repaints whole, so each of its marks is written again. Cells left of
+    /// a row's first mark carry none. The fullscreen and fixed viewports ignore marks.
+    ///
+    /// Terminals carry zone state across rows: a repaint of a row with no mark of its own leaves
+    /// that row's cells in whatever zone the terminal last saw. A component that needs per-cell
+    /// zone correctness must therefore place a mark at column 0 of every row it can repaint.
+    ///
+    /// Marks sharing a column on one row: the later-registered one wins, and the earlier is never
+    /// written. Never written either: marks on rows covered by an image, on rows beyond the
+    /// content height, at a column at or beyond the width, or on a wide character's continuation
+    /// column.
+    ///
+    /// Coordinates are translated like put(); a mark outside this canvas is dropped.
+    ///
+    /// @param row Row (canvas-local, 0-based).
+    /// @param column Column (canvas-local, 0-based).
+    /// @param sequence Raw bytes to emit; they must not move the cursor.
+    void mark(int row, int column, std::string sequence);
 
     // --- Cursor ---
 
