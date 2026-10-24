@@ -78,7 +78,7 @@ renaming a temporary over it can leave an empty or partial file behind after a p
 
 | Call | POSIX | macOS | Windows |
 |---|---|---|---|
-| `createNewFile(path)` | `open(O_CREAT \| O_EXCL \| O_NOFOLLOW)`, mode 0600 | as POSIX | `CreateFileW(CREATE_NEW)` |
+| `createNewFile(path)` | `open(O_CREAT \| O_EXCL \| O_NOFOLLOW)`, mode 0600 | as POSIX | `CreateFileW(CREATE_NEW)`, opening a reparse point rather than following it |
 | `syncFile(path)` | `fsync()` | `fcntl(F_FULLFSYNC)`, else `fsync()` | `FlushFileBuffers()` |
 | `replaceFile(from, to)` | `rename()` | as POSIX | `MoveFileExW(MOVEFILE_REPLACE_EXISTING \| MOVEFILE_WRITE_THROUGH)` |
 | `syncDirectory(path)` | `fsync()` on the directory | as POSIX | nothing to flush; answers whether it is a directory |

@@ -27,7 +27,7 @@ workflow refuses one without a section here.
 - **Durable file replacement on `core::platform::FileSystem`**: `createNewFile(path)`, `syncFile(path)`,
   `replaceFile(from, to)` and `syncDirectory(directory)`, each `std::expected<void, std::string>`, are what replacing
   a file so that it survives a crash or a power loss takes. `NativeFileSystem` creates with `O_CREAT | O_EXCL |
-  O_NOFOLLOW` and mode 0600 (`CREATE_NEW` on Windows), so a symbolic link planted where the file goes is refused
+  O_NOFOLLOW` and mode 0600 (`CREATE_NEW` with `FILE_FLAG_OPEN_REPARSE_POINT` on Windows), so a symbolic link planted where the file goes is refused
   rather than followed; syncs with `fsync()` (`F_FULLFSYNC` on macOS, `FlushFileBuffers()` on Windows); replaces in
   one step with `rename()` (`MoveFileExW()` with `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH` on Windows),
   never through `rename()`'s two-hop lettercase retry; and syncs a directory with `fsync()` on it, which Windows has

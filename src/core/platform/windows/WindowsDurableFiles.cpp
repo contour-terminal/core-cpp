@@ -23,9 +23,16 @@ namespace
 
 std::expected<void, std::error_code> createNewFile(std::filesystem::path const& path)
 {
-    // CREATE_NEW fails on anything already there, a reparse point included, and follows none.
-    auto* const raw =
-        CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    // CREATE_NEW fails on anything already there -- but follows a symbolic link to see what is
+    // there, so on its own it creates a dangling link's target. FILE_FLAG_OPEN_REPARSE_POINT makes
+    // the link itself what is there.
+    auto* const raw = CreateFileW(path.c_str(),
+                                  GENERIC_WRITE,
+                                  0,
+                                  nullptr,
+                                  CREATE_NEW,
+                                  FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+                                  nullptr);
     if (raw == INVALID_HANDLE_VALUE)
         return std::unexpected(lastError());
     CloseHandle(raw);
