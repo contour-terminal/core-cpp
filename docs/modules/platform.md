@@ -22,7 +22,7 @@ the interrupt throttle.
 | `<core/platform/WinsockInit.hpp>` | `ensureWinsockInitialized()`, once per process; a no-op off Windows |
 | `<core/platform/SignalHandler.hpp>` | `SignalHandler`: SIGCHLD, SIGTSTP, SIGCONT and SIGINT through signalfd on Linux and handlers elsewhere, Ctrl+C and Ctrl+Break on Windows, and an optional `Wakeup` to raise on an interrupt |
 | `<core/platform/MessageQueue.hpp>` | `MessageQueue<T>`, a thread-safe queue that can raise a `Wakeup` on every push |
-| `<core/platform/FileSystem.hpp>`, `<core/platform/NativeFileSystem.hpp>` | the `FileSystem` interface, errors as `std::expected`, a lazy recursive walk as a `core::Generator`; `NativeFileSystem` over `std::filesystem` |
+| `<core/platform/FileSystem.hpp>`, `<core/platform/NativeFileSystem.hpp>` | the `FileSystem` interface, errors as `std::expected`, a lazy recursive walk as a `core::Generator`, and the durability calls a crash-safe replace needs; `NativeFileSystem` over `std::filesystem` and the operating system's own sync calls |
 | `<core/platform/FileInfoProvider.hpp>` | `FileInfoProvider`, a directory listing with `stat(2)` metadata (`FileEntry`), a single file or a glob pattern |
 | `<core/platform/ProcessEnvironment.hpp>` | `ProcessEnvironment`, a `core::Environment` a shell writes: variables with a set-then-export model, each write a `std::expected`; `isValidEnvironmentName()` |
 | `<core/platform/WorkingDirectory.hpp>` | `WorkingDirectory`: `changeDirectory()` and `currentDirectory()`, both over `std::filesystem::path`, so the answer round-trips on Windows whatever it spells |
@@ -69,6 +69,28 @@ interface:
 The POSIX file-info provider was endo's `LinuxFileInfoProvider`, which used nothing Linux-specific;
 it is one implementation, `PosixFileInfoProvider`, for every POSIX system. Each call makes a new
 provider.
+
+## Replacing a file durably
+
+A rename alone can reach the disk before the data it names, so a writer that replaces a file by
+renaming a temporary over it can leave an empty or partial file behind after a power loss.
+`FileSystem` carries the four calls that close that gap, in the order a writer makes them:
+
+| Call | POSIX | macOS | Windows |
+|---|---|---|---|
+| `createNewFile(path)` | `open(O_CREAT \| O_EXCL \| O_NOFOLLOW)`, mode 0600 | as POSIX | `CreateFileW(CREATE_NEW)` |
+| `syncFile(path)` | `fsync()` | `fcntl(F_FULLFSYNC)`, else `fsync()` | `FlushFileBuffers()` |
+| `replaceFile(from, to)` | `rename()` | as POSIX | `MoveFileExW(MOVEFILE_REPLACE_EXISTING \| MOVEFILE_WRITE_THROUGH)` |
+| `syncDirectory(path)` | `fsync()` on the directory | as POSIX | nothing to flush; answers whether it is a directory |
+
+`createNewFile()` refuses anything already at the path, a symbolic link included, so a link
+planted where the temporary goes cannot redirect the write. `replaceFile()` never takes the
+two-hop lettercase retry `rename()` does, which would leave a moment with neither name. The four
+are virtual with defaults rather than pure, so an implementation written before them still
+compiles: the defaults have nothing to flush, replace through `rename()`, and create after a
+check rather than atomically. That is right for `InMemoryFileSystem` and for a test double; a
+backend that forwards to another `FileSystem` overrides all four, or it answers from the defaults
+rather than from the backend it wraps.
 
 ## Clocks
 

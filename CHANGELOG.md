@@ -11,6 +11,17 @@ workflow refuses one without a section here.
 
 ### Added
 
+- **Durable file replacement on `core::platform::FileSystem`**: `createNewFile(path)`, `syncFile(path)`,
+  `replaceFile(from, to)` and `syncDirectory(directory)`, each `std::expected<void, std::string>`, are what replacing
+  a file so that it survives a crash or a power loss takes. `NativeFileSystem` creates with `O_CREAT | O_EXCL |
+  O_NOFOLLOW` and mode 0600 (`CREATE_NEW` on Windows), so a symbolic link planted where the file goes is refused
+  rather than followed; syncs with `fsync()` (`F_FULLFSYNC` on macOS, `FlushFileBuffers()` on Windows); replaces in
+  one step with `rename()` (`MoveFileExW()` with `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH` on Windows),
+  never through `rename()`'s two-hop lettercase retry; and syncs a directory with `fsync()` on it, which Windows has
+  no need of. The four are virtual with defaults, so an existing implementation still compiles: the defaults have
+  nothing to flush, replace through `rename()` and create after a check, which is what `InMemoryFileSystem` uses. A
+  `FileSystem` that forwards to another must override all four, or it answers from the defaults rather than from the
+  backend it forwards to.
 - **`core::platform::readMachineId()`** (`<core/platform/MachineId.hpp>`): the machine id from `/etc/machine-id`,
   read through an injected `FileSystem`. It is returned lowercased, and only if it is exactly 32 hexadecimal
   digits; a missing file, `uninitialized` or any other content gives `std::nullopt`. Not part of the
