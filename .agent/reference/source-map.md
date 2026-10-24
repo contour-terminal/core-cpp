@@ -44,7 +44,7 @@ src/core/
                             PlatformError, Wakeup, SignalHandler, SystemPipe, WinsockInit,
                             MessageQueue, FileSystem, FileInfoProvider, ProcessEnvironment,
                             UserPaths, PathUtils, GlobMatch, FileUri, SystemInfo, StringUtils;
-                            posix/ linux/ windows/ are private; testing/ holds the fakes
+                            detail/ posix/ linux/ windows/ are private; testing/ holds the fakes
                             (InMemoryFileSystem, MockFileInfoProvider, TestProcessEnvironment,
                             TestWorkingDirectory)
   async/                    core::async, header-only: StopToken (std:: or the fallback); Task,

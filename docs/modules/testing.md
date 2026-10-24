@@ -63,7 +63,7 @@ Before it runs the tests, `core::testing_main`'s `main()` reads `LOG` from the e
 applies it to [`core::log`](log.md) with `core::log::configure()`: `LOG=net` enables the `net`
 category and disables every other one but `error`, and `LOG=all` or `LOG=net.*` work as
 `configure()` says. It also gives the categories the standard formatter and enables the console
-sink, so what they log appears on standard output, interleaved with Catch2's. An unset or empty
+sink, so what they log appears on standard error, beside Catch2's report on standard output. An unset or empty
 `LOG` changes nothing. This is endo's `test_main` convention.
 
 ```sh
