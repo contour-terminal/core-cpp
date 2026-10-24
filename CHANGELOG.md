@@ -9,8 +9,21 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Breaking
+
+- **`core::log::Sink::console()` writes to standard error, not standard output.** Standard output is the program's
+  own and may carry data -- a program that speaks a binary protocol over its standard I/O had its frames corrupted
+  by a log line -- and every other destination core-cpp installs already wrote to standard error (`ScopedOutput`'s default,
+  `Sink::errorConsole()`). `core::cli::App`'s console formatter now colourises when standard error is a terminal,
+  and the test binaries' `LOG` output goes to standard error, beside Catch2's report on standard output.
+  - *Migration*: a program or script that read log lines from standard output reads them from standard error
+    (`2>&1` keeps them in one stream). A program that wants them on standard output installs a sink of its own:
+    `core::log::setSink(sink)` with `Sink { true, std::cout }`.
+
 ### Added
 
+- **`core::log::installedSink()` and `installedFormatter()`**: the sink and formatter a category constructed now
+  starts out with, which `setSink()` and `setFormatter()` set. And **`Sink::isEnabled()`**.
 - **Durable file replacement on `core::platform::FileSystem`**: `createNewFile(path)`, `syncFile(path)`,
   `replaceFile(from, to)` and `syncDirectory(directory)`, each `std::expected<void, std::string>`, are what replacing
   a file so that it survives a crash or a power loss takes. `NativeFileSystem` creates with `O_CREAT | O_EXCL |
@@ -45,6 +58,16 @@ workflow refuses one without a section here.
   `892df2b1`). As a subproject, core-cpp's CPM bootstrap still honours a parent's
   `FASTCACHED_FETCH_SILENCE_SECONDS`. Since Pace 0.6.0 publishes no `fastcached-*` archives, auto-install with
   the old module fetched nothing.
+
+### Fixed
+
+- **A log category constructed after logging was installed wrote to the console, not to the installed sink.**
+  `core::log::setSink()` and `setFormatter()`, and so `ScopedOutput` and `core::cli::App`'s console setup, reached
+  only the categories that existed when they ran; a category constructed later -- created lazily, or in a
+  translation unit initialised late -- started out with `Sink::console()` and no formatter. Both are now the
+  store's: a later category starts out with what was installed last. `ScopedOutput` restores the store's previous
+  sink and formatter as well, and gives them to a category constructed while it was installed, so none is left
+  holding its destroyed sink; it also no longer writes through a category destroyed while it was installed.
 
 ## [0.8.0] - 2026-10-15
 

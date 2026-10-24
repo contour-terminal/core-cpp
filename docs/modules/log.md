@@ -8,7 +8,7 @@ Imported from contour's crispy `LogStore` and `LogSink` at `6777ff05`, where the
 
 | Header | What it has |
 |---|---|
-| `<core/log/LogStore.hpp>` | `Category`, `Sink`, `MessageBuilder`; the registry (`get()`), `configure()`, `enable()`, `setSink()`, `setFormatter()`; `errorLog` and the `errorLog()` macro |
+| `<core/log/LogStore.hpp>` | `Category`, `Sink`, `MessageBuilder`; the registry (`get()`), `configure()`, `enable()`, `setSink()`, `setFormatter()`, `installedSink()`, `installedFormatter()`; `errorLog` and the `errorLog()` macro |
 | `<core/log/LogSink.hpp>` | the standard and error formatters, `unmatchedFilters()`, `ScopedOutput` (a process-wide destination, to standard error or appended to a file) and `ScopedCapture` (for tests) |
 | `<core/log/Assert.hpp>` | `core::log::fatal()`, which logs to the always-enabled `fatal` category and aborts, and `SoftRequire()`, which logs to `error`, asserts in a debug build, and answers `false` |
 
@@ -35,7 +35,12 @@ Every core-cpp test binary applies `LOG` this way before it runs; see
 ## Sinks
 
 A category writes a finished line to its `Sink`. The default, `Sink::console()`, writes to
-standard output and is disabled until a program enables it. `ScopedOutput` installs one
-destination for every category, serialises writers from several threads under a mutex, and puts
-the previous sinks and formatters back when it is destroyed. A category refers to its sink
+standard error and is disabled until a program enables it; standard output is the program's own,
+and may carry data a log line would corrupt. `setSink()` and `setFormatter()` install a sink and a
+formatter for the store, not only for the categories that exist when they are called: a category
+constructed later starts out with what was installed last (`installedSink()`,
+`installedFormatter()`), so a category a library creates lazily writes where the program said
+logging goes. `ScopedOutput` installs one destination that way, serialises writers from several
+threads under a mutex, and puts the previous sinks and formatters back when it is destroyed,
+including for the categories constructed while it was installed. A category refers to its sink
 without owning it, so a sink must outlive every category that uses it, or be replaced first.
