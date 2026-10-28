@@ -101,7 +101,10 @@ void applyStreamSocketOptions(platform::NativeHandle socket, KeepAlive keepAlive
         ::setsockopt(winSocket, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<char const*>(&one), sizeof(one));
 
     if (keepAlive == KeepAlive::Yes)
-        std::ignore = armKeepAlive(socket, KeepAliveSettings {}); // best-effort: a dial does not fail over it
+        // Best-effort: a dial does not fail over it. A failure builds a `NetError` (an allocated string)
+        // inside this `noexcept` function, so `bad_alloc` here terminates -- accepted: an allocation
+        // failure that small is the process's end on every other path too.
+        std::ignore = armKeepAlive(socket, KeepAliveSettings {});
 }
 
 void applySocketBufferSizes(platform::NativeHandle socket, SocketBufferSizes const& sizes) noexcept

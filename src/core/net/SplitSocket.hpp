@@ -73,7 +73,8 @@ class SplitSocket final: public ISocket
         _readHalf->setReceiveDeadline(deadline);
     }
 
-    /// Arms the READ half, the one a peer's silence is observed on, as @c setReceiveDeadline bounds it.
+    /// Arms ONLY the read half: that is where the peer's silence is observed (as @c setReceiveDeadline
+    /// bounds it), and the write half is left unarmed.
     /// @param settings The probe intervals.
     /// @return What the read half answers.
     [[nodiscard]] std::expected<void, NetError> armKeepAlive(KeepAliveSettings const& settings) override

@@ -337,3 +337,37 @@ TEST_CASE("The in-memory fake records keepalive requests and refuses once closed
     CHECK(refused.error().code == core::net::NetErrorCode::BadHandle);
     CHECK(pair.server->keepAliveRequests().size() == 2);
 }
+
+TEST_CASE("A dial with KeepAlive::Yes arms keepalive on the dialled socket, with the default intervals",
+          "[net][socket-options][keepalive]")
+{
+    for (auto const& backend: BackendMatrix)
+    {
+        auto source = core::net::makeBackend(backend.kind);
+        if (!source)
+            continue; // not available on this platform
+
+        DYNAMIC_SECTION("backend=" << backend.name)
+        {
+            auto loop = EventLoop { *source };
+            auto const connection = connectOnce(
+                loop, ListenOptions { .host = "127.0.0.1" }, DialOptions { .keepAlive = KeepAlive::Yes });
+            auto const dialled = nativeHandleOf(*connection.dialled);
+            REQUIRE(dialled != core::platform::InvalidHandle);
+
+            auto const report = reportStreamSocketOptions(dialled);
+            CHECK(report.keepAlive);
+#ifndef _WIN32
+            auto const defaults = core::net::KeepAliveSettings {};
+            CHECK(report.keepAliveIdleSeconds
+                  == std::chrono::ceil<std::chrono::seconds>(defaults.idle).count());
+            CHECK(report.keepAliveIntervalSeconds
+                  == std::chrono::ceil<std::chrono::seconds>(defaults.interval).count());
+            CHECK(report.keepAliveCount == static_cast<int>(defaults.count));
+#endif
+
+            // The accepted end of the same dial was not asked.
+            CHECK_FALSE(reportStreamSocketOptions(nativeHandleOf(*connection.accepted)).keepAlive);
+        }
+    }
+}

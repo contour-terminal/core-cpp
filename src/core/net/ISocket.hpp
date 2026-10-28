@@ -313,6 +313,11 @@ class ISocket
     /// a transport with no TCP connection under it (an in-process pipe, a decorator that forgot to
     /// forward) cannot probe anything, and a server that asked deserves to hear so. Every decorator
     /// in this library forwards it.
+    ///
+    /// **Threading: call it on the socket's loop thread, like every other member.** It reads
+    /// `_closed` and the handle that @c close writes, and takes no lock to do it -- so a call from
+    /// another thread races @c close, and may arm a descriptor that has just been closed (and
+    /// possibly reused).
     /// @param settings The probe intervals; @c KeepAliveSettings::count is ignored on Windows.
     /// @return Nothing on success; @c NetErrorCode::BadHandle on a closed socket; otherwise the
     ///         classified OS error of the option the platform refused (an AF_UNIX socket has none

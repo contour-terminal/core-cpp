@@ -26,8 +26,10 @@ namespace
     /// macOS spells the idle time `TCP_KEEPALIVE`; it is `TCP_KEEPIDLE` everywhere else.
 #ifdef __APPLE__
     constexpr int KeepAliveIdleOption = TCP_KEEPALIVE;
+    constexpr char const* KeepAliveIdleName = "setsockopt(TCP_KEEPALIVE)";
 #else
     constexpr int KeepAliveIdleOption = TCP_KEEPIDLE;
+    constexpr char const* KeepAliveIdleName = "setsockopt(TCP_KEEPIDLE)";
 #endif
 
     /// Whole seconds, and never zero.
@@ -63,7 +65,7 @@ std::expected<void, NetError> armKeepAlive(platform::NativeHandle fd, KeepAliveS
             return std::unexpected(socketError(lastSocketError(), what));
         return {};
     };
-    return apply(IPPROTO_TCP, KeepAliveIdleOption, idle, "setsockopt(TCP_KEEPIDLE)")
+    return apply(IPPROTO_TCP, KeepAliveIdleOption, idle, KeepAliveIdleName)
         .and_then([&] { return apply(IPPROTO_TCP, TCP_KEEPINTVL, interval, "setsockopt(TCP_KEEPINTVL)"); })
         .and_then([&] { return apply(IPPROTO_TCP, TCP_KEEPCNT, count, "setsockopt(TCP_KEEPCNT)"); })
         .and_then([&] { return apply(SOL_SOCKET, SO_KEEPALIVE, 1, "setsockopt(SO_KEEPALIVE)"); });
@@ -111,7 +113,10 @@ void applyStreamSocketOptions(platform::NativeHandle socket, KeepAlive keepAlive
     std::ignore = ::setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 
     if (keepAlive == KeepAlive::Yes)
-        std::ignore = armKeepAlive(socket, KeepAliveSettings {}); // best-effort: a dial does not fail over it
+        // Best-effort: a dial does not fail over it. A failure builds a `NetError` (an allocated string)
+        // inside this `noexcept` function, so `bad_alloc` here terminates -- accepted: an allocation
+        // failure that small is the process's end on every other path too.
+        std::ignore = armKeepAlive(socket, KeepAliveSettings {});
 }
 
 void applySocketBufferSizes(platform::NativeHandle socket, SocketBufferSizes const& sizes) noexcept

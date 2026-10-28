@@ -21,8 +21,8 @@ workflow refuses one without a section here.
   `SocketDecorator`, `SplitSocket` (its read half) and the TLS socket (its inner transport) implement or forward it;
   a closed socket answers `BadHandle`, and the interface default answers `Unsupported`. `testing::InMemorySocket`
   records each request (`keepAliveRequests()`) and succeeds, so a consumer can assert its server armed it. An expiry
-  surfaces as the OS's error on the next read, classified like any broken socket; the dial side records no cause of
-  its own, so neither does this.
+  surfaces as the OS's error on the next read (`ConnReset` or `Timeout`, with the OS code in `systemCode`), classified like any
+  broken socket; no separate "keepalive expired" cause is recorded, on an accepted socket or a dialled one.
 
 ## [0.10.0] - 2026-10-28
 
