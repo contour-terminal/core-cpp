@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 #include <version>
 
@@ -279,8 +280,10 @@ namespace
 template <typename Range>
 std::vector<int> collect(Range&& range)
 {
+    // Forwarded into a named reference: a filter view is not const-iterable, so `const&` will not do.
+    auto&& source = std::forward<Range>(range);
     auto out = std::vector<int> {};
-    for (auto const value: range)
+    for (auto const value: source)
         out.push_back(value);
     return out;
 }

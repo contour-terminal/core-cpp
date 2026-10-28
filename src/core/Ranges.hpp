@@ -374,22 +374,22 @@ namespace detail
         [[nodiscard]] constexpr auto size()
             requires std::ranges::sized_range<Base>
         {
-            return Count(std::ranges::size(_base));
+            return count(std::ranges::size(_base));
         }
 
         /// @return The number of yielded elements, `ceil(size / stride)`.
         [[nodiscard]] constexpr auto size() const
             requires std::ranges::sized_range<Base const>
         {
-            return Count(std::ranges::size(_base));
+            return count(std::ranges::size(_base));
         }
 
       private:
-        constexpr auto Count(auto baseSize) const
+        [[nodiscard]] constexpr auto count(auto baseSize) const
         {
             using Size = decltype(baseSize);
             auto const step = static_cast<Size>(_stride);
-            return static_cast<Size>(baseSize / step + (baseSize % step != 0 ? 1 : 0));
+            return static_cast<Size>((baseSize / step) + (baseSize % step != 0 ? 1 : 0));
         }
 
         Base _base = Base();
