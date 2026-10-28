@@ -9,6 +9,14 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Added
+
+- **`core::ranges::Stride`**: `std::views::stride` where the standard library ships it
+  (`__cpp_lib_ranges_stride`), a forward-range fallback view elsewhere, usable as `Stride(range, n)` and
+  `range | Stride(n)`. No libc++ has `std::views::stride` -- `clang++ -std=c++23 -stdlib=libc++` answers
+  `no member named 'stride' in namespace 'std::ranges::views'`, Apple's included -- so a consumer building on
+  macOS needs the seam. `CORE_RANGES_FORCE_FALLBACK` selects the fallback everywhere, as for `Iota` and `FoldLeft`.
+
 ## [0.9.0] - 2026-10-24
 
 ### Breaking
