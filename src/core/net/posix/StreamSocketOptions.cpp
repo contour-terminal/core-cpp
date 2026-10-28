@@ -49,7 +49,7 @@ namespace
 
 } // namespace
 
-std::expected<void, NetError> armKeepAlive(platform::NativeHandle fd, KeepAliveSettings const& settings)
+std::expected<void, NetError> armKeepAlive(platform::NativeHandle socket, KeepAliveSettings const& settings)
 {
     auto const idle = wholeSeconds(settings.idle);
     auto const interval = wholeSeconds(settings.interval);
@@ -60,8 +60,8 @@ std::expected<void, NetError> armKeepAlive(platform::NativeHandle fd, KeepAliveS
     // which is indistinguishable from no keepalive at all for every deadline this protects,
     // while reading back as armed to anything that checks the flag.
     auto const apply =
-        [fd](int level, int option, int value, char const* what) -> std::expected<void, NetError> {
-        if (::setsockopt(fd, level, option, &value, sizeof(value)) != 0)
+        [socket](int level, int option, int value, char const* what) -> std::expected<void, NetError> {
+        if (::setsockopt(socket, level, option, &value, sizeof(value)) != 0)
             return std::unexpected(socketError(lastSocketError(), what));
         return {};
     };

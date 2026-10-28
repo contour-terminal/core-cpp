@@ -580,8 +580,8 @@ TEST_CASE("A read beside a parked write never puts a second write into the inner
 
 TEST_CASE("A TLS socket forwards armKeepAlive to its inner transport", "[net][tls][keepalive]")
 {
-    auto loop_backend = core::net::makeDefaultBackend();
-    auto loop = EventLoop { *loop_backend };
+    auto loopBackend = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *loopBackend };
     auto context = core::net::makeSelfSignedServerContext();
     REQUIRE(context.has_value());
 

@@ -36,6 +36,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 using core::async::Task;
 using core::net::DialOptions;
@@ -363,7 +364,7 @@ TEST_CASE("A dial with KeepAlive::Yes arms keepalive on the dialled socket, with
                   == std::chrono::ceil<std::chrono::seconds>(defaults.idle).count());
             CHECK(report.keepAliveIntervalSeconds
                   == std::chrono::ceil<std::chrono::seconds>(defaults.interval).count());
-            CHECK(report.keepAliveCount == static_cast<int>(defaults.count));
+            CHECK(std::cmp_equal(report.keepAliveCount, defaults.count));
 #endif
 
             // The accepted end of the same dial was not asked.
