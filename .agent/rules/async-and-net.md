@@ -178,6 +178,12 @@ what follows is what a change to it must not break.
   is DISARMED rather than released: releasing the last claim would free the very frame the caller
   has just been handed. It searches the ready queue, the park table and the inbound queue, because
   an answer that depended on which thread submitted is not a transfer anybody can rely on.
+- **A spawned flow reads its stop token before it reaches a resource its spawner owns.** A flow
+  `spawn`ed in a turn runs later in that turn's drain, and on a stopping loop the spawner's next
+  wait throws, so the spawner can unwind -- dropping the resource -- ahead of it. `WriteQueue`'s
+  drain wrote into a socket freed that way (#83); it now checks
+  `co_await async::thisCoroStopToken()` before each write.
+  `WriteQueue_test.cpp`'s *A WriteQueue drain on a stopping loop starts no write* holds it.
 - **`spawn` releases a finished flow in the turn that ran it**, in O(1), through a list node the
   turn unlinks. contour swept every spawned flow at the top of each turn, which reclaimed a frame
   one turn late and cost O(n) per turn to do it; a server spawning one flow per connection pays

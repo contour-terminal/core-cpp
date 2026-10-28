@@ -9,6 +9,16 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A `WriteQueue` drain on a stopping loop starts no write** (#83). The drain is spawned onto the loop, so on a
+  loop whose stop was requested the queue's owner could unwind -- its every wait throwing -- and destroy the socket
+  in the turn that also held the drain its last `enqueue` spawned; the drain then called `write()` on the freed
+  socket. Over TLS that write drove the handshake on the freed `TlsSocket`, which is how it surfaced, as a crash in
+  `TlsSocket::handshake` when a client was stopped while it connected. The owner cannot let the loop settle first,
+  as the queue's lifetime note asks, once the loop is stopping, so the drain now reads its own stop token and ends
+  without touching the socket once it is requested. Frames still queued at that point are not written.
+
 ## [0.11.0] - 2026-10-28
 
 ### Added
