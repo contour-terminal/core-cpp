@@ -108,7 +108,9 @@ template <std::ranges::forward_range Range, typename Predicate>
 // seam for it. Its fallback is a forward-range view (forward iterators, never bidirectional or
 // random access, even over a random-access base) with `size()` where the base is sized, and it
 // does not use `std::ranges::range_adaptor_closure`, which older libc++ lacks too -- the pipe
-// operator is spelled out.
+// operator is spelled out. The fallback is a `common_range` when its base is one. It composes
+// with a range only: two closures joined without one (`views::filter(p) | Stride(3)`) are NOT
+// supported, since `StrideClosure` is not a range adaptor closure.
 //
 // ## Why a seam, and not the older spelling
 //
@@ -321,7 +323,9 @@ namespace detail
         class Sentinel;
 
       public:
-        StrideView() = default;
+        StrideView()
+            requires std::default_initializable<Base>
+        = default;
 
         /// @param base The viewed range.
         /// @param stride The step between yielded elements. Must be positive.
@@ -361,13 +365,25 @@ namespace detail
         }
 
         /// @return The end sentinel.
-        [[nodiscard]] constexpr auto end() { return Sentinel<false> { std::ranges::end(_base) }; }
+        [[nodiscard]] constexpr auto end()
+        {
+            // A common base gives a common view, as `stride_view` does: code that needs one (a
+            // `std::vector` built from `begin()` and `end()`) must compile here as it does on
+            // libstdc++ and the MSVC STL.
+            if constexpr (std::ranges::common_range<Base>)
+                return Iterator<false> { std::ranges::end(_base), std::ranges::end(_base), _stride };
+            else
+                return Sentinel<false> { std::ranges::end(_base) };
+        }
 
         /// @return The end sentinel.
         [[nodiscard]] constexpr auto end() const
             requires std::ranges::forward_range<Base const>
         {
-            return Sentinel<true> { std::ranges::end(_base) };
+            if constexpr (std::ranges::common_range<Base const>)
+                return Iterator<true> { std::ranges::end(_base), std::ranges::end(_base), _stride };
+            else
+                return Sentinel<true> { std::ranges::end(_base) };
         }
 
         /// @return The number of yielded elements, `ceil(size / stride)`.

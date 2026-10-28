@@ -303,6 +303,14 @@ void checkStrideSemantics(Stride const& stride)
     CHECK(collect(values | stride(3)) == Ints { 5, 8, 11 });
     CHECK(collect(values | std::views::reverse | stride(3)) == Ints { 11, 8, 5 });
     CHECK(std::ranges::size(stride(values, 3)) == 3);
+    CHECK(std::ranges::size(stride(std::views::iota(0, 9), 3)) == 3);
+    CHECK(std::ranges::size(stride(std::views::iota(0, 10), 3)) == 4);
+
+    // A common base gives a common view, so an iterator pair constructs a container.
+    using Strided = decltype(stride(values, 3));
+    STATIC_REQUIRE(std::ranges::common_range<Strided>);
+    auto strided = stride(values, 3);
+    CHECK(Ints(strided.begin(), strided.end()) == Ints { 5, 8, 11 });
 
     auto list = std::forward_list<int> { 0, 1, 2, 3, 4, 5, 6 };
     CHECK(collect(stride(list, 3)) == Ints { 0, 3, 6 });
@@ -331,12 +339,23 @@ TEST_CASE("Stride fallback: is a forward view and is usable in a constant expres
     using View = decltype(StrideFallback(std::views::all(Numbers), 3));
     STATIC_REQUIRE(std::ranges::view<View>);
     STATIC_REQUIRE(std::ranges::forward_range<View>);
+    STATIC_REQUIRE(!std::ranges::bidirectional_range<View>);
     STATIC_REQUIRE([&] {
         auto sum = 0;
         for (auto const value: StrideFallback(Numbers, 3))
             sum += value;
         return sum;
     }() == 18);
+}
+
+TEST_CASE("Stride fallback: is common over a common base and default constructible", "[base][ranges]")
+{
+    using View = decltype(StrideFallback(std::declval<std::vector<int>&>(), 3));
+    STATIC_REQUIRE(std::ranges::common_range<View>);
+    // As the standard's: default constructible only where the base is. A `ref_view` is not.
+    STATIC_REQUIRE(!std::default_initializable<View>);
+    STATIC_REQUIRE(std::default_initializable<decltype(StrideFallback(std::views::iota(0, 4), 3))>);
+    STATIC_REQUIRE(!std::ranges::common_range<decltype(StrideFallback(std::views::iota(0), 3))>);
 }
 
 #ifdef __cpp_lib_ranges_stride
