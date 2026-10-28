@@ -533,6 +533,13 @@ namespace
             _inner->setReceiveDeadline(deadline);
         }
 
+        /// @param settings The probe intervals; applied to the INNER transport, which is where the
+        ///        TCP connection is -- TLS records ride on it and notice nothing of the probes.
+        [[nodiscard]] std::expected<void, NetError> armKeepAlive(KeepAliveSettings const& settings) override
+        {
+            return _inner->armKeepAlive(settings);
+        }
+
         [[nodiscard]] std::string peerAddress() const override { return _inner->peerAddress(); }
 
         /// Closes the inner transport, WITHOUT a `close_notify`: a synchronous `noexcept` close

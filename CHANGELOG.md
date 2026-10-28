@@ -7,6 +7,23 @@ release may break the API; every break is listed under **Breaking** with a migra
 release tag `vX.Y.Z` equals the version in `project(core-cpp VERSION X.Y.Z)`, and the release
 workflow refuses one without a section here.
 
+## [Unreleased]
+
+### Added
+
+- **`ISocket::armKeepAlive(KeepAliveSettings const&)`**: a server arms TCP keepalive, with explicit intervals, on a
+  socket its listener accepted, once it decides the connection is long-lived. Until now keepalive could be armed
+  only on a socket core-cpp DIALLED (`DialOptions::keepAlive`), so a server holding a connection for the length of
+  a long job could not notice that the peer's host had vanished (no FIN, no RST) until TCP retransmission gave up.
+  It is a per-socket call rather than a listener option because most accepted connections are short. The dial and
+  the accept share one helper (`detail::armKeepAlive`), so the intervals-first order and the Windows note on
+  `KeepAliveSettings::count` (fixed at 10 by the OS) hold on both. `PosixSocket`, `IocpSocket`, `BlockingSocket`,
+  `SocketDecorator`, `SplitSocket` (its read half) and the TLS socket (its inner transport) implement or forward it;
+  a closed socket answers `BadHandle`, and the interface default answers `Unsupported`. `testing::InMemorySocket`
+  records each request (`keepAliveRequests()`) and succeeds, so a consumer can assert its server armed it. An expiry
+  surfaces as the OS's error on the next read, classified like any broken socket; the dial side records no cause of
+  its own, so neither does this.
+
 ## [0.10.0] - 2026-10-28
 
 ### Added
