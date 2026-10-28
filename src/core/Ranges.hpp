@@ -425,7 +425,7 @@ namespace detail
       public:
         Sentinel() = default;
 
-        constexpr explicit Sentinel(std::ranges::sentinel_t<Parent> end): _end(std::move(end)) {}
+        constexpr explicit Sentinel(std::ranges::sentinel_t<Parent> const& end): _end(end) {}
 
         /// @return Whether @p it has run off the end of the viewed range.
         friend constexpr bool operator==(Iterator<Const> const& it, Sentinel const& sentinel)
@@ -456,8 +456,13 @@ namespace detail
 
         Iterator() = default;
 
-        constexpr Iterator(BaseIterator current, std::ranges::sentinel_t<Parent> end, difference_type stride):
-            _current(std::move(current)), _end(std::move(end)), _stride(stride)
+        // By const reference, copied: a forward iterator is copyable by definition, and one whose move is
+        // no cheaper than its copy (libstdc++'s `reverse_iterator`) makes a by-value parameter that
+        // is moved a `performance-unnecessary-value-param` finding.
+        constexpr Iterator(BaseIterator const& current,
+                           std::ranges::sentinel_t<Parent> const& end,
+                           difference_type stride):
+            _current(current), _end(end), _stride(stride)
         {
         }
 
