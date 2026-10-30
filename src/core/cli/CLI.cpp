@@ -1009,78 +1009,111 @@ HelpDisplayStyle::ColorMap HelpDisplayStyle::defaultColors()
  * @param colored Boolean indicating whether or not to colorize the output via VT sequences.
  * @param margin  Number of characters to write at most per line.
  */
+namespace
+{
+    /// Builds the usage lines of @p com, printed after @p cmdPrefix.
+    /// @param wrapIndent The column a parent verb's wrapped options continue at, if that parent
+    ///                   printed options: this command's wrapped name and options continue there
+    ///                   too, so one usage entry keeps one left edge. Without one, this command's
+    ///                   continuation lines start one column past its own name.
+    string usageText(Command const& com,
+                     HelpDisplayStyle const& style,
+                     unsigned margin,
+                     string_view cmdPrefix,
+                     optional<unsigned> wrapIndent);
+} // namespace
+
 string usageText(Command const& com, HelpDisplayStyle const& style, unsigned margin, string const& cmdPrefix)
 {
-    auto const colorize = colorizer(style.colors);
+    return usageText(com, style, margin, cmdPrefix, nullopt);
+}
 
-    // The prefix holds the parent verbs and their options, already wrapped and maybe colored, so
-    // only its last line's visible width says where this command's name starts.
-    auto cursor = lastLineWidth(cmdPrefix);
-
-    // Continuation lines start under the first option, one column past the command's name.
-    auto const printOptionList = [&](ostream& os, OptionList const& options) {
-        auto const indent = cursor + 1;
-        for (Option const& opt: options)
-            os << printOption(opt, style.colors, style.optionStyle, indent, margin, &cursor);
-    };
-
-    if (com.children.empty())
+namespace
+{
+    string usageText(Command const& com,
+                     HelpDisplayStyle const& style,
+                     unsigned margin,
+                     string_view cmdPrefix,
+                     optional<unsigned> wrapIndent)
     {
-        stringstream sstr;
-        sstr << cmdPrefix;
+        auto const colorize = colorizer(style.colors);
 
-        if (com.select == CommandSelect::Explicit)
+        // The prefix holds the parent verbs and their options, already wrapped and maybe colored, so
+        // only its last line's visible width says where this command's name starts.
+        auto cursor = lastLineWidth(cmdPrefix);
+
+        auto const printOptionList = [&](ostream& os, OptionList const& options, unsigned indent) {
+            for (Option const& opt: options)
+                os << printOption(opt, style.colors, style.optionStyle, indent, margin, &cursor);
+        };
+
+        // A subcommand's name follows its parent's separating space, unless it no longer fits there.
+        auto const nameWidth = static_cast<unsigned>(com.name.size())
+                               + (com.select == CommandSelect::Explicit || !com.children.empty() ? 0u : 2u);
+        stringstream sstr;
+        if (wrapIndent.has_value() && cursor + nameWidth > margin && cmdPrefix.ends_with(' '))
         {
-            cursor += static_cast<unsigned>(com.name.size());
-            sstr << com.name;
+            sstr << cmdPrefix.substr(0, cmdPrefix.size() - 1) << '\n' << spaces(*wrapIndent);
+            cursor = *wrapIndent;
+        }
+        else
+            sstr << cmdPrefix;
+
+        if (com.children.empty())
+        {
+            if (com.select == CommandSelect::Explicit)
+                sstr << com.name;
+            else
+            {
+                sstr << colorize("[", HelpElement::Braces);
+                sstr << colorize(com.name, HelpElement::ImplicitCommand);
+                sstr << colorize("]", HelpElement::Braces);
+            }
+            cursor += nameWidth;
+
+            // Continuation lines start under the first option: the parent's, or one column past this name.
+            auto const indent = wrapIndent.value_or(cursor + 1);
+            printOptionList(sstr, com.options, indent);
+
+            if (com.verbatim.has_value())
+            {
+                auto const verbatimWidth = static_cast<unsigned>(com.verbatim.value().placeholder.size()) + 2;
+                if (cursor + 1 + verbatimWidth > margin)
+                {
+                    sstr << "\n";
+                    sstr << spaces(indent);
+                }
+                else
+                    sstr << ' ';
+
+                sstr << colorize("[", HelpElement::Braces);
+                sstr << colorize(com.verbatim.value().placeholder, HelpElement::Verbatim);
+                sstr << colorize("]", HelpElement::Braces);
+            }
+
+            sstr << '\n';
+            return sstr.str();
         }
         else
         {
-            cursor += static_cast<unsigned>(com.name.size()) + 2;
-            sstr << colorize("[", HelpElement::Braces);
-            sstr << colorize(com.name, HelpElement::ImplicitCommand);
-            sstr << colorize("]", HelpElement::Braces);
+            sstr << com.name;
+            cursor += nameWidth;
+            auto const indent = wrapIndent.value_or(cursor + 1);
+            printOptionList(sstr, com.options, indent);
+            sstr << ' ';
+
+            // Once a verb has printed options, its subcommands continue under them.
+            auto const childWrapIndent = com.options.empty() ? wrapIndent : optional { indent };
+            auto const prefixStr = sstr.str();
+            stringstream output;
+            for (Command const& subcmd: com.children)
+                output << usageText(subcmd, style, margin, prefixStr, childWrapIndent);
+            // (This is the `else` of `if (com.children.empty())`, so there is no empty case to
+            // terminate with a line feed here.)
+            return output.str();
         }
-
-        auto const indent = cursor + 1;
-        printOptionList(sstr, com.options);
-
-        if (com.verbatim.has_value())
-        {
-            auto const verbatimWidth = static_cast<unsigned>(com.verbatim.value().placeholder.size()) + 2;
-            if (cursor + 1 + verbatimWidth > margin)
-            {
-                sstr << "\n";
-                sstr << spaces(indent);
-            }
-            else
-                sstr << ' ';
-
-            sstr << colorize("[", HelpElement::Braces);
-            sstr << colorize(com.verbatim.value().placeholder, HelpElement::Verbatim);
-            sstr << colorize("]", HelpElement::Braces);
-        }
-
-        sstr << '\n';
-        return sstr.str();
     }
-    else
-    {
-        stringstream prefix;
-        prefix << cmdPrefix << com.name;
-        cursor += static_cast<unsigned>(com.name.size());
-        printOptionList(prefix, com.options);
-        prefix << ' ';
-
-        string const prefixStr = prefix.str();
-        stringstream sstr;
-        for (Command const& subcmd: com.children)
-            sstr << usageText(subcmd, style, margin, prefixStr);
-        // (This is the `else` of `if (com.children.empty())`, so there is no empty case to
-        // terminate with a line feed here.)
-        return sstr.str();
-    }
-}
+} // namespace
 
 string helpText(Command const& command, HelpDisplayStyle const& style, unsigned margin)
 {

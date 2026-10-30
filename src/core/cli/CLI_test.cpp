@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <format>
+#include <initializer_list>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -241,27 +242,41 @@ std::vector<std::string_view> linesOf(std::string_view text)
 /// contour's `daemon` verb, whose usage lines broke all three rules checked below.
 cli::Command verbWithOptionsAndSubcommands()
 {
-    auto options = cli::OptionList {};
-    for (auto const* name:
-         { "socket", "label", "config", "profile", "lifecycle", "size-policy", "token-file" })
-        options.emplace_back(
-            cli::Option { .name = name, .v = cli::Value { ""s }, .helpText = "An option."sv });
+    auto const stringOptions = [](std::initializer_list<char const*> names) {
+        auto options = cli::OptionList {};
+        for (auto const* name: names)
+            options.emplace_back(
+                cli::Option { .name = name, .v = cli::Value { ""s }, .helpText = "An option."sv });
+        return options;
+    };
+    auto options =
+        stringOptions({ "socket", "label", "config", "profile", "lifecycle", "size-policy", "token-file" });
     return cli::Command {
         .name = "contour",
         .helpText = "Terminal emulator."sv,
-        .children = cli::CommandList { cli::Command {
-            .name = "daemon",
-            .helpText = "Runs the daemon."sv,
-            .options = std::move(options),
-            .children =
-                cli::CommandList {
-                    cli::Command { .name = "status",
-                                   .helpText = "Reports the daemon's state."sv,
-                                   .options = cli::OptionList { cli::Option { .name = "json"sv,
-                                                                              .v = cli::Value { false },
-                                                                              .helpText = "As JSON."sv } } },
-                    cli::Command { .name = "stop", .helpText = "Stops the daemon."sv },
-                } } },
+        .children =
+            cli::CommandList {
+                cli::Command {
+                    .name = "daemon",
+                    .helpText = "Runs the daemon."sv,
+                    .options = std::move(options),
+                    .children =
+                        cli::CommandList {
+                            cli::Command { .name = "status",
+                                           .helpText = "Reports the daemon's state."sv,
+                                           .options =
+                                               cli::OptionList { cli::Option { .name = "json"sv,
+                                                                               .v = cli::Value { false },
+                                                                               .helpText = "As JSON."sv } } },
+                            cli::Command { .name = "stop", .helpText = "Stops the daemon."sv },
+                            // Its name no longer fits after the parent's last option line, and its own
+                            // options wrap: both continue under the parent verb's first option.
+                            cli::Command {
+                                .name = "write-diagnostics-bundle",
+                                .helpText = "Writes a diagnostics bundle."sv,
+                                .options =
+                                    stringOptions({ "output", "since", "include-logs", "max-size" }) },
+                        } } },
     };
 }
 } // namespace
