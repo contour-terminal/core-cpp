@@ -781,6 +781,9 @@ namespace // {{{ helpers
                 colors, optionStyle, option.name, placeholder(option, "STRING"), option.presence);
     }
 
+    /// Prints @p option preceded by its separator: a space while it still fits on the current line,
+    /// else a line feed and @p indent spaces.
+    /// @param cursor The number of columns the current line already occupies; advanced past the option.
     string printOption(Option const& option,
                        optional<HelpDisplayStyle::ColorMap> const& colors,
                        OptionStyle displayStyle,
@@ -789,16 +792,42 @@ namespace // {{{ helpers
                        unsigned* cursor)
     {
         auto const plainTextLength = static_cast<unsigned>(printOption(option, nullopt, displayStyle).size());
-        if (*cursor + plainTextLength < margin)
+        if (*cursor + 1 + plainTextLength <= margin)
         {
-            *cursor += plainTextLength;
-            return printOption(option, colors, displayStyle);
+            *cursor += 1 + plainTextLength;
+            return " " + printOption(option, colors, displayStyle);
         }
         else
         {
-            *cursor = static_cast<unsigned>(indent + 1 + plainTextLength);
+            *cursor = indent + plainTextLength;
             return "\n" + spaces(indent) + printOption(option, colors, displayStyle);
         }
+    }
+
+    /// The number of columns the last line of @p text occupies on a terminal: SGR and other CSI
+    /// sequences take none, and neither does a UTF-8 continuation byte.
+    unsigned lastLineWidth(string_view text)
+    {
+        if (auto const linefeed = text.rfind('\n'); linefeed != string_view::npos)
+            text.remove_prefix(linefeed + 1);
+
+        auto width = 0u;
+        auto inEscape = false;
+        for (auto const ch: text)
+        {
+            auto const byte = static_cast<unsigned char>(ch);
+            if (inEscape)
+            {
+                // The CSI introducer '[' lies in the final-byte range, but opens the sequence.
+                auto const isFinalByte = byte >= 0x40 && byte <= 0x7E && byte != '[';
+                inEscape = !isFinalByte;
+            }
+            else if (byte == 0x1B)
+                inEscape = true;
+            else if ((byte & 0b1100'0000) != 0b1000'0000)
+                ++width;
+        }
+        return width;
     }
 
     size_t longestOptionText(OptionList const& options, OptionStyle displayStyle)
@@ -983,20 +1012,18 @@ HelpDisplayStyle::ColorMap HelpDisplayStyle::defaultColors()
 string usageText(Command const& com, HelpDisplayStyle const& style, unsigned margin, string const& cmdPrefix)
 {
     auto const colorize = colorizer(style.colors);
-    auto const indentationWidth = static_cast<unsigned>(cmdPrefix.size());
 
-    auto const printOptionList = [&](ostream& os, OptionList const& options, unsigned* cursor) {
-        auto const indent = *cursor;
+    // The prefix holds the parent verbs and their options, already wrapped and maybe colored, so
+    // only its last line's visible width says where this command's name starts.
+    auto cursor = lastLineWidth(cmdPrefix);
+
+    // Continuation lines start under the first option, one column past the command's name.
+    auto const printOptionList = [&](ostream& os, OptionList const& options) {
+        auto const indent = cursor + 1;
         for (Option const& opt: options)
-        {
-            // if (option.deprecated)
-            //     continue;
-
-            os << ' ' << printOption(opt, style.colors, style.optionStyle, indent, margin, cursor);
-        }
+            os << printOption(opt, style.colors, style.optionStyle, indent, margin, &cursor);
     };
 
-    auto cursor = indentationWidth + 1;
     if (com.children.empty())
     {
         stringstream sstr;
@@ -1015,12 +1042,13 @@ string usageText(Command const& com, HelpDisplayStyle const& style, unsigned mar
             sstr << colorize("]", HelpElement::Braces);
         }
 
-        auto const indent = cursor;
-        printOptionList(sstr, com.options, &cursor);
+        auto const indent = cursor + 1;
+        printOptionList(sstr, com.options);
 
         if (com.verbatim.has_value())
         {
-            if (cursor + 3 + com.verbatim.value().placeholder.size() > size_t(margin))
+            auto const verbatimWidth = static_cast<unsigned>(com.verbatim.value().placeholder.size()) + 2;
+            if (cursor + 1 + verbatimWidth > margin)
             {
                 sstr << "\n";
                 sstr << spaces(indent);
@@ -1040,7 +1068,8 @@ string usageText(Command const& com, HelpDisplayStyle const& style, unsigned mar
     {
         stringstream prefix;
         prefix << cmdPrefix << com.name;
-        printOptionList(prefix, com.options, &cursor);
+        cursor += static_cast<unsigned>(com.name.size());
+        printOptionList(prefix, com.options);
         prefix << ' ';
 
         string const prefixStr = prefix.str();
