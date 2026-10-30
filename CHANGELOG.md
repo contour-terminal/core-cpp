@@ -7,6 +7,15 @@ release may break the API; every break is listed under **Breaking** with a migra
 release tag `vX.Y.Z` equals the version in `project(core-cpp VERSION X.Y.Z)`, and the release
 workflow refuses one without a section here.
 
+## [Unreleased]
+
+### Fixed
+
+- **`core::net_tls` builds against OpenSSL 4.** OpenSSL 4 returns a certificate's subject name as const, so the
+  self-signed certificate's common name could no longer be written through `X509_get_subject_name()` (Homebrew's
+  `openssl@4` 4.1.0 broke every macOS build). The name is built as its own `X509_NAME` and copied in as both
+  subject and issuer, which every supported OpenSSL allows.
+
 ## [0.11.1] - 2026-10-29
 
 ### Fixed
