@@ -5,7 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <limits>
+#include <optional>
 #include <ranges>
 
 using core::platform::AllCpuCounters;
@@ -30,15 +30,17 @@ void spin(std::uint64_t iterations)
 }
 
 /// The least work a measure counted over several runs of the loop; the least is the run least disturbed.
+/// A run in which a supported measure is absent (Linux drops one the kernel multiplexed away meanwhile) does
+/// not take part; when no run reports it, the source broke its promise and the case fails here.
 std::uint64_t bestOf(ICpuCounterSource& source, CpuCounter counter, std::uint64_t iterations)
 {
-    auto best = std::numeric_limits<std::uint64_t>::max();
+    auto best = std::optional<std::uint64_t> {};
     for ([[maybe_unused]] auto const run: std::views::iota(0, Runs))
-    {
-        auto const delta = measure(source, [&] { spin(iterations); });
-        best = std::min(best, delta.get(counter).value_or(0));
-    }
-    return best;
+        if (auto const count = measure(source, [&] { spin(iterations); }).get(counter))
+            best = best ? std::min(*best, *count) : *count;
+    INFO(toString(counter) << " is supported, yet none of " << Runs << " runs reported it");
+    REQUIRE(best.has_value());
+    return *best;
 }
 
 /// The smallest growth a measure must show when the work doubles.

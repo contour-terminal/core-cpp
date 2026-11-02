@@ -2,6 +2,8 @@
 #include <core/platform/CpuCounters.hpp>
 #include <core/platform/detail/UnavailableCpuCounterSource.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string_view>
@@ -14,10 +16,14 @@ namespace core::platform
 
 namespace
 {
-    /// The reason Instructions and Cycles are not reported.
+    /// The measures this backend reports; any other is not provided.
+    constexpr auto Supported = std::array { CpuCounter::ReferenceCycles };
+
+    /// The reason any other measure is not reported.
     constexpr std::string_view NoRetiredCounters = "not available to unprivileged processes on Windows";
 
-    /// Reads the cycles this process's threads have consumed, from the CPU's reference clock.
+    /// Reads the cycles this process's threads have consumed, as ticks of a constant-rate clock (not core
+    /// cycles), in user and kernel mode together.
     /// @param cycles Receives the count.
     /// @return 0 on success, otherwise the GetLastError() of the failed call.
     [[nodiscard]] DWORD readProcessCycles(std::uint64_t& cycles) noexcept
@@ -29,7 +35,7 @@ namespace
         return 0;
     }
 
-    /// Counts the reference cycles of every thread of this process.
+    /// Counts the constant-rate ticks of CPU time of every thread of this process.
     class WindowsCpuCounterSource final: public ICpuCounterSource
     {
       public:
@@ -44,7 +50,7 @@ namespace
 
         [[nodiscard]] std::string_view unavailableReason(CpuCounter counter) const noexcept override
         {
-            return counter == CpuCounter::ReferenceCycles ? std::string_view {} : NoRetiredCounters;
+            return std::ranges::contains(Supported, counter) ? std::string_view {} : NoRetiredCounters;
         }
 
         [[nodiscard]] std::string_view note() const noexcept override { return {}; }

@@ -2,7 +2,6 @@
 #pragma once
 
 #include <array>
-#include <compare>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -16,11 +15,24 @@ namespace core::platform
 {
 
 /// A CPU work measure a counter source may be able to report.
+///
+/// What each platform reports (user space, this process, every thread of it):
+///
+/// | Platform | Instructions | Cycles | ReferenceCycles | Scope                         |
+/// |----------|--------------|--------|-----------------|-------------------------------|
+/// | Linux    | yes          | yes    | no              | user mode only (perf_event)   |
+/// | macOS    | yes          | yes    | no              | user and kernel (proc_pid_rusage) |
+/// | Windows  | no           | no     | yes             | user and kernel (QueryProcessCycleTime) |
+/// | other    | no           | no     | no              | -                             |
+///
+/// Linux needs a permissive perf_event_paranoid and a hardware PMU, so it too may report nothing; macOS
+/// reports nothing under virtualization. Every unsupported measure says why.
 enum class CpuCounter : std::uint8_t
 {
-    Instructions,
-    Cycles,
-    ReferenceCycles,
+    Instructions,    ///< Retired instructions.
+    Cycles,          ///< Core clock cycles, which follow frequency scaling.
+    ReferenceCycles, ///< Ticks of a constant-rate clock accounted to the CPU time of the process; not core
+                     ///< cycles.
     Last, ///< Not a measure: the count of them, which sets the extent of every table indexed by CpuCounter.
 };
 
@@ -71,23 +83,26 @@ struct CpuCounterSample
 {
     /// Returns the value of a measure, or nothing when it was not reported.
     /// @param counter The measure.
-    [[nodiscard]] std::optional<std::uint64_t> get(CpuCounter counter) const noexcept
+    /// @return The value; nothing for a measure not reported or for CpuCounter::Last.
+    [[nodiscard]] constexpr std::optional<std::uint64_t> get(CpuCounter counter) const noexcept
     {
-        return values[std::to_underlying(counter)];
+        auto const index = std::to_underlying(counter);
+        return index < CpuCounterCount ? values[index] : std::nullopt;
     }
 
     /// Records the value of a measure.
     /// @param counter The measure.
-    /// @param value Its value.
-    void set(CpuCounter counter, std::uint64_t value) noexcept
+    /// @param value Its value. Ignored for CpuCounter::Last, which is not a measure.
+    constexpr void set(CpuCounter counter, std::uint64_t value) noexcept
     {
-        values[std::to_underlying(counter)] = value;
+        if (auto const index = std::to_underlying(counter); index < CpuCounterCount)
+            values[index] = value;
     }
 
     /// The measures, indexed by CpuCounter.
     std::array<std::optional<std::uint64_t>, CpuCounterCount> values {};
 
-    auto operator<=>(CpuCounterSample const&) const = default;
+    [[nodiscard]] bool operator==(CpuCounterSample const&) const = default;
 };
 
 /// The work done between two samples.
@@ -119,7 +134,9 @@ class ICpuCounterSource
     ICpuCounterSource& operator=(ICpuCounterSource&&) = delete;
     virtual ~ICpuCounterSource() = default;
 
-    /// Reads the counters now; unsupported measures are absent.
+    /// Reads the counters now; unsupported measures are absent. A measure that is supported can still be
+    /// absent from one sample (on Linux when the kernel multiplexed it away over the interval since the
+    /// previous read), and then so is its delta. Calls must not overlap: a source keeps state between reads.
     [[nodiscard]] virtual CpuCounterSample read() = 0;
 
     /// Why a measure is not reported.
@@ -127,7 +144,8 @@ class ICpuCounterSource
     /// @return Empty when the measure is supported. The view lives as long as the source.
     [[nodiscard]] virtual std::string_view unavailableReason(CpuCounter counter) const noexcept = 0;
 
-    /// Notes about what is counted (e.g. "child processes are counted (kernel < 5.13)"); may be empty.
+    /// A runtime-detected deviation from the scope documented on CpuCounter (e.g. "child processes are
+    /// counted (kernel < 5.13)"); empty when the source counts what is documented, which is the usual case.
     [[nodiscard]] virtual std::string_view note() const noexcept = 0;
 
     /// Whether a measure is reported; derived from unavailableReason(), so they cannot disagree.
@@ -139,6 +157,9 @@ class ICpuCounterSource
 };
 
 /// Creates the platform's counter source.
+/// The platform support table is on CpuCounter. In short: Linux counts instructions and cycles in user mode
+/// only, macOS the same two in user and kernel mode together, Windows reference cycles in user and kernel
+/// mode together; so figures from different platforms are not comparable.
 /// Create it before starting worker threads: on Linux the counters follow threads started after the source
 /// was opened, and miss the ones that were already running.
 /// @return A source; never null, never throws. Where the platform cannot count, every measure is

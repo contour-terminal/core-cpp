@@ -103,10 +103,56 @@ TEST_CASE("toString() names every measure", "[platform][cpucounters]")
     CHECK(toString(CpuCounter::ReferenceCycles) == "reference cycles");
 }
 
+TEST_CASE("CpuCounterSample ignores CpuCounter::Last instead of indexing past its table",
+          "[platform][cpucounters]")
+{
+    auto sample = CpuCounterSample {};
+    sample.set(CpuCounter::Last, 5);
+    CHECK_FALSE(sample.get(CpuCounter::Last).has_value());
+    CHECK(sample == CpuCounterSample {});
+}
+
+TEST_CASE("CpuCounterSample get(), set() and the delta work at compile time", "[platform][cpucounters]")
+{
+    constexpr auto Delta = [] {
+        auto start = CpuCounterSample {};
+        start.set(CpuCounter::Instructions, 10);
+        auto end = CpuCounterSample {};
+        end.set(CpuCounter::Instructions, 25);
+        return end - start;
+    }();
+    static_assert(Delta.get(CpuCounter::Instructions) == 15);
+    static_assert(!Delta.get(CpuCounter::Cycles).has_value());
+    static_assert(!Delta.get(CpuCounter::Last).has_value());
+    CHECK(Delta.get(CpuCounter::Instructions) == 15);
+}
+
+TEST_CASE("the fake source does not support CpuCounter::Last", "[platform][cpucounters]")
+{
+    auto const source = FakeCpuCounterSource { {}, { CpuCounter::Cycles } };
+    CHECK_FALSE(source.supports(CpuCounter::Last));
+}
+
 TEST_CASE("the default source is never null", "[platform][cpucounters]")
 {
+    CHECK(core::platform::makeDefaultCpuCounterSource() != nullptr);
+}
+
+TEST_CASE("the default source reports nothing for a measure it does not support", "[platform][cpucounters]")
+{
     auto const source = core::platform::makeDefaultCpuCounterSource();
-    CHECK(source != nullptr);
+    auto const sample = source->read();
+    for (auto const counter:
+         { CpuCounter::Instructions, CpuCounter::Cycles, CpuCounter::ReferenceCycles, CpuCounter::Last })
+    {
+        CAPTURE(toString(counter));
+        if (!source->supports(counter))
+        {
+            CHECK_FALSE(sample.get(counter).has_value());
+            CHECK_FALSE(source->unavailableReason(counter).empty());
+        }
+    }
+    CHECK_FALSE(source->supports(CpuCounter::Last));
 }
 
 TEST_CASE("the probe calls a zero instruction delta unpopulated", "[cpucounters]")

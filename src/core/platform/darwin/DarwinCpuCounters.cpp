@@ -5,6 +5,8 @@
 
 #include <sys/resource.h>
 
+#include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstdint>
 #include <memory>
@@ -24,8 +26,11 @@ namespace
     /// Iterations of busy work that costs a few milliseconds of CPU time.
     constexpr std::uint64_t ProbeIterations = 2'000'000;
 
-    /// The reason ReferenceCycles is not reported.
-    constexpr std::string_view NoReferenceCycles = "not provided on macOS";
+    /// The measures this backend reports; any other is not provided.
+    constexpr auto Supported = std::array { CpuCounter::Instructions, CpuCounter::Cycles };
+
+    /// The reason any other measure is not reported.
+    constexpr std::string_view NotProvided = "not provided on macOS";
 
     /// Reads the process's resource usage, the counters among it.
     /// @param usage Receives the usage.
@@ -38,7 +43,7 @@ namespace
         return 0;
     }
 
-    /// Counts the instructions and cycles retired by this process, kernel-side bookkeeping included.
+    /// Counts the instructions and cycles retired by this process, in user and kernel mode together.
     class DarwinCpuCounterSource final: public ICpuCounterSource
     {
       public:
@@ -55,13 +60,10 @@ namespace
 
         [[nodiscard]] std::string_view unavailableReason(CpuCounter counter) const noexcept override
         {
-            return counter == CpuCounter::ReferenceCycles ? NoReferenceCycles : std::string_view {};
+            return std::ranges::contains(Supported, counter) ? std::string_view {} : NotProvided;
         }
 
-        [[nodiscard]] std::string_view note() const noexcept override
-        {
-            return "counts the whole process, every thread of it";
-        }
+        [[nodiscard]] std::string_view note() const noexcept override { return {}; }
     };
 
     /// Runs busy work whose instructions the optimizer cannot remove.
