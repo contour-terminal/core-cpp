@@ -170,8 +170,11 @@ Verified facts and settled details (from the builder check; macOS measured on an
    (`/sys/bus/event_source/devices/cpu_core`, `cpu_atom`, or arm64 per-cluster PMUs, each with its
    `type`), open one event per PMU with `config | (type << 32)` (`PERF_TYPE_HARDWARE` extended
    type), and sum. On a non-hybrid machine this is one event. Read `TOTAL_TIME_ENABLED` /
-   `TOTAL_TIME_RUNNING`; if any event was multiplexed (running < enabled), report that measure as
-   unavailable for the sample rather than scaling it.
+   `TOTAL_TIME_RUNNING`. On a hybrid machine each per-PMU event is enabled the whole time but runs
+   only while the thread is on its core type, so running < enabled per event is normal; the
+   measure counts as multiplexed only when the *sum* of running times falls short of the smallest
+   enabled time (with a small tolerance for skew between the separate reads). A multiplexed
+   measure is reported absent for the sample rather than scaled.
 
 ## Left to the builder
 
