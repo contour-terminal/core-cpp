@@ -139,6 +139,8 @@ class ICpuCounterSource
 };
 
 /// Creates the platform's counter source.
+/// Create it before starting worker threads: on Linux the counters follow threads started after the source
+/// was opened, and miss the ones that were already running.
 /// @return A source; never null, never throws. Where the platform cannot count, every measure is
 ///         unsupported and says why.
 [[nodiscard]] std::unique_ptr<ICpuCounterSource> makeDefaultCpuCounterSource();

@@ -34,7 +34,7 @@ set(_coreCppPlatformPosixProviders
 if(APPLE)
     set(_coreCppPlatformCpuCounterSource darwin/DarwinCpuCounters.cpp)
 elseif(LINUX)
-    set(_coreCppPlatformCpuCounterSource UnavailableCpuCounters.cpp)
+    set(_coreCppPlatformCpuCounterSource linux/LinuxCpuCounters.cpp)
 elseif(WIN32)
     set(_coreCppPlatformCpuCounterSource UnavailableCpuCounters.cpp)
 else()
@@ -71,6 +71,7 @@ core_cpp_add_module(platform KIND STATIC
         WinsockInit.hpp
         WorkingDirectory.hpp
         detail/CpuCounterProbe.hpp
+        detail/LinuxPerfPlan.hpp
         detail/UnavailableCpuCounterSource.hpp
         testing/FakeCpuCounterSource.hpp
         testing/InMemoryFileSystem.hpp
@@ -83,6 +84,7 @@ core_cpp_add_module(platform KIND STATIC
         MachineId.cpp
         NativeFileSystem.cpp
         detail/DurableFiles.hpp
+        detail/LinuxPerfPlan.cpp
         SignalHandler.cpp
         SystemInfo.cpp
         SystemPipe.cpp
@@ -118,6 +120,7 @@ core_cpp_add_test(platform
         ${_coreCppPlatformSubsetTests}
         CpuCountersNative_test.cpp
         FileSystem_test.cpp
+        LinuxPerfPlan_test.cpp
         MachineId_test.cpp
         MessageQueue_test.cpp
         SignalHandler_test.cpp
