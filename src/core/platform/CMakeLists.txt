@@ -29,14 +29,14 @@ set(_coreCppPlatformPosixProviders
     posix/PosixWorkingDirectory.cpp)
 
 # Exactly one makeDefaultCpuCounterSource() is compiled, and the platform is asked once, here, rather
-# than by an `#ifdef` in logic (Ruling R40, as in src/core/net/CMakeLists.txt). Every branch names the
-# "unavailable" source until its platform's real one lands.
+# than by an `#ifdef` in logic (Ruling R40, as in src/core/net/CMakeLists.txt). A platform without a
+# backend names the "unavailable" source.
 if(APPLE)
     set(_coreCppPlatformCpuCounterSource darwin/DarwinCpuCounters.cpp)
 elseif(LINUX)
     set(_coreCppPlatformCpuCounterSource linux/LinuxCpuCounters.cpp)
 elseif(WIN32)
-    set(_coreCppPlatformCpuCounterSource UnavailableCpuCounters.cpp)
+    set(_coreCppPlatformCpuCounterSource windows/WindowsCpuCounters.cpp)
 else()
     set(_coreCppPlatformCpuCounterSource UnavailableCpuCounters.cpp)
 endif()
@@ -130,6 +130,7 @@ core_cpp_add_test(platform
         Wakeup_test.cpp
     # The Windows half of a POSIX guarantee: FD_CLOEXEC there, no inheritable handle here.
     SOURCES_WINDOWS
+        windows/CpuCounters_test.cpp
         windows/DnsHostName_test.cpp
         windows/SystemPipeInheritance_test.cpp
         windows/WideEnvironment_test.cpp
