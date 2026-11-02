@@ -32,7 +32,7 @@ set(_coreCppPlatformPosixProviders
 # than by an `#ifdef` in logic (Ruling R40, as in src/core/net/CMakeLists.txt). Every branch names the
 # "unavailable" source until its platform's real one lands.
 if(APPLE)
-    set(_coreCppPlatformCpuCounterSource UnavailableCpuCounters.cpp)
+    set(_coreCppPlatformCpuCounterSource darwin/DarwinCpuCounters.cpp)
 elseif(LINUX)
     set(_coreCppPlatformCpuCounterSource UnavailableCpuCounters.cpp)
 elseif(WIN32)
@@ -70,6 +70,7 @@ core_cpp_add_module(platform KIND STATIC
         Wakeup.hpp
         WinsockInit.hpp
         WorkingDirectory.hpp
+        detail/CpuCounterProbe.hpp
         detail/UnavailableCpuCounterSource.hpp
         testing/FakeCpuCounterSource.hpp
         testing/InMemoryFileSystem.hpp
@@ -115,6 +116,7 @@ core_cpp_add_module(platform KIND STATIC
 core_cpp_add_test(platform
     SOURCES
         ${_coreCppPlatformSubsetTests}
+        CpuCountersNative_test.cpp
         FileSystem_test.cpp
         MachineId_test.cpp
         MessageQueue_test.cpp

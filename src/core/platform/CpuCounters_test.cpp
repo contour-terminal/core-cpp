@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/platform/CpuCounters.hpp>
+#include <core/platform/detail/CpuCounterProbe.hpp>
 #include <core/platform/detail/UnavailableCpuCounterSource.hpp>
 #include <core/platform/testing/FakeCpuCounterSource.hpp>
 
@@ -12,6 +13,8 @@ using core::platform::CpuCounter;
 using core::platform::CpuCounterSample;
 using core::platform::measure;
 using core::platform::toString;
+using core::platform::detail::CounterProbe;
+using core::platform::detail::probeCounters;
 using core::platform::detail::UnavailableCpuCounterSource;
 using core::platform::testing::FakeCpuCounterSource;
 
@@ -104,4 +107,10 @@ TEST_CASE("the default source is never null", "[platform][cpucounters]")
 {
     auto const source = core::platform::makeDefaultCpuCounterSource();
     CHECK(source != nullptr);
+}
+
+TEST_CASE("the probe calls a zero instruction delta unpopulated", "[cpucounters]")
+{
+    CHECK(probeCounters(0) == CounterProbe::NotPopulated);
+    CHECK(probeCounters(12'000'000) == CounterProbe::Populated);
 }
