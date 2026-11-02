@@ -400,8 +400,8 @@ others in notes.
 | `src/core/platform/Clock_test.cpp` | contour-terminal/endo | `src/platform/Clock_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | merged with fastcached `src/FastCache/Core/Clock_test.cpp` and `src/FastCache/Core/WallClockRef_test.cpp` (`b461e8b6d367ed22e4bf2935717fa59360a64b7d`), duplicates dropped; the concurrent `CachedClock` case uses `std::thread` and a bounded start gate instead of fastcached's `tests/BoundedWait.hpp`, and is compiled only where threads exist; the `WallClockRef` asserts over fastcached's own retainer types are dropped; the retainer and forwarder rows are test-local stand-ins for fastcached's retainer types |
 | `src/core/platform/CpuCounters.cpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/CpuCounters.hpp` | origin: core-cpp | - | - | - |
-| `src/core/platform/CpuCounters_test.cpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/CpuCountersNative_test.cpp` | origin: core-cpp | - | - | - |
+| `src/core/platform/CpuCounters_test.cpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/FileInfoProvider.hpp` | contour-terminal/endo | `src/platform/FileInfoProvider.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `FileEntry`'s string members have `{}` initializers, so designated initializers may omit them; declares `nativeFileInfoProvider()` (core-cpp); `listDirectory()` documents its path as UTF-8 |
 | `src/core/platform/FileInfoProvider_test.cpp` | contour-terminal/endo | `src/platform/FileInfoProvider_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the fixture directory is a `ScopedTempDir`, not a fixed path; plus a core-cpp case for `nativeFileInfoProvider()`; the lstat(2) cases test `PosixFileInfoProvider` and run under Emscripten too, where a symlink's target reads resolved against its directory; the native provider listing a directory beyond ASCII by its UTF-8 name; the first case passes its path through `core::pathToUtf8()`; the not-UTF-8 native listing case |
 | `src/core/platform/FileSystem.hpp` | contour-terminal/endo | `src/platform/FileSystem.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `Generator` is `core::Generator`; `openWrite()` and `copyFile()` take `WriteMode`/`OverwritePolicy` rather than a bool, and `openReadWrite()` documents its one position (A10); `listDirectoryRecursive()`'s refusal spells the path through `core::pathToUtf8()`; the durability members `createNewFile()`, `syncFile()`, `replaceFile()` and `syncDirectory()`, virtual with defaults, from contour's `vthost::IDurableFiles` (core-cpp) |
@@ -412,9 +412,9 @@ others in notes.
 | `src/core/platform/GlobMatch.cpp` | contour-terminal/endo | `src/platform/GlobMatch.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `namespace endo` renamed `core::platform`; the bracket expression is matched by a helper (readability-function-cognitive-complexity); the `[` arm is reached before the literal one, and only for a bracket expression a `]` closes (A10) |
 | `src/core/platform/GlobMatch.hpp` | contour-terminal/endo | `src/platform/GlobMatch.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `namespace endo` renamed `core::platform` |
 | `src/core/platform/GlobMatch_test.cpp` | origin: core-cpp | - | - | the upstream file has no test |
+| `src/core/platform/LinuxPerfPlan_test.cpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/MachineId.cpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/MachineId.hpp` | origin: core-cpp | - | - | - |
-| `src/core/platform/LinuxPerfPlan_test.cpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/MachineId_test.cpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/MessageQueue.hpp` | contour-terminal/endo | `src/platform/MessageQueue.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `setWakeup()` and the signalling in `push()`/`shutdown()` run under the queue's mutex (A10) |
 | `src/core/platform/MessageQueue_test.cpp` | contour-terminal/endo | `src/platform/MessageQueue_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `std::thread` rather than `std::jthread`; the producer loop is a range-for; plus a core-cpp case that registers a wakeup against a live producer (A10) |
@@ -452,9 +452,9 @@ others in notes.
 | `src/core/platform/darwin/DarwinCpuCounters.cpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/detail/CpuCounterProbe.hpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/detail/DurableFiles.hpp` | contour-terminal/contour | `src/vthost/DurableFiles.hpp` | `d563beeed554104e4b82adb3b2268a968d3280dd` | `vthost::IDurableFiles`' four operations as free functions in `core::platform::detail`, answering the operating system's `std::error_code` for `NativeFileSystem` to phrase; `createExclusive()` renamed `createNewFile()` and `replace()` `replaceFile()`; private |
-| `src/core/platform/detail/UnavailableCpuCounterSource.hpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/detail/LinuxPerfPlan.cpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/detail/LinuxPerfPlan.hpp` | origin: core-cpp | - | - | - |
+| `src/core/platform/detail/UnavailableCpuCounterSource.hpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/linux/LinuxCpuCounters.cpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/linux/LinuxWakeup.cpp` | contour-terminal/endo | `src/platform/linux/LinuxWakeup.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the eventfd is created in the member initializer |
 | `src/core/platform/posix/PosixDurableFiles.cpp` | contour-terminal/contour | `src/vthost/DurableFiles.cpp` | `d563beeed554104e4b82adb3b2268a968d3280dd` | the free functions of `detail/DurableFiles.hpp`; no file-wide `#ifndef _WIN32` guard: `SOURCES_POSIX` selects the file (Ruling R42); `F_FULLFSYNC` is chosen by its own macro rather than `__APPLE__`; the rename is `std::rename()`, so it never takes the two-hop recase |

@@ -13,9 +13,20 @@ workflow refuses one without a section here.
 
 - **`core::platform::ICpuCounterSource`, a portable seam for CPU work counts.** `CpuCounters.hpp` names the
   measures (`CpuCounter`: instructions, cycles, reference cycles), a `CpuCounterSample` and its delta, `measure()`
-  around a piece of work, and `makeDefaultCpuCounterSource()`, which never returns null. Every platform reports
-  the measures as unavailable, with a reason, until its backend lands. `testing::FakeCpuCounterSource` is the
-  scripted test double.
+  around a piece of work, and `makeDefaultCpuCounterSource()`, which never returns null and says per measure
+  why it is unsupported. What each platform reports, for the calling process and every thread of it:
+  - **Linux** counts instructions and cycles in user mode only, through `perf_event_open`, summed over the
+    core PMUs of a hybrid machine. It needs a hardware PMU and a permissive `perf_event_paranoid`; a measure the
+    kernel multiplexed away during a read interval is absent from that sample rather than wrong. Kernels before
+    5.13 cannot tell threads from child processes, which `note()` says.
+  - **macOS** counts instructions and cycles in user and kernel mode together, through `proc_pid_rusage`; a
+    virtualized machine that exposes no counters reports them unsupported.
+  - **Windows** reports reference cycles only: the ticks of a constant-rate clock that
+    `QueryProcessCycleTime` accounts to the process's CPU time, not core cycles.
+  - Every other platform reports nothing.
+
+  Figures from different platforms are therefore not comparable. `testing::FakeCpuCounterSource` is the scripted
+  test double.
 
 ## [0.11.4] - 2026-10-30
 
