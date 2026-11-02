@@ -15,6 +15,7 @@ the interrupt throttle.
 | Header | What it has |
 |---|---|
 | `<core/platform/Clock.hpp>` | the clock seams, see [below](#clocks) |
+| `<core/platform/CpuCounters.hpp>` | `ICpuCounterSource`, a portable seam for CPU work counts (`CpuCounter`: instructions, cycles, reference cycles); `CpuCounterSample` and its delta; `measure()`; `makeDefaultCpuCounterSource()`, which never returns null and, where the platform cannot count, reports why per measure. `testing::FakeCpuCounterSource` is the test double |
 | `<core/platform/Types.hpp>` | `NativeHandle`, `InvalidHandle`, `ProcessId`, the standard handles, `platformRead()`/`platformWrite()`/`platformClose()`, `isTerminal()`, `nativeHandleToNumber()` |
 | `<core/platform/PlatformError.hpp>` | `PlatformError`, the error of this module's fallible operations, and `toString()` |
 | `<core/platform/Wakeup.hpp>` | `Wakeup`, a signal one thread raises to wake another out of `poll()` or `WaitForMultipleObjects()`: an eventfd on Linux, a self-pipe on macOS and the BSDs, an event on Windows |
@@ -149,8 +150,8 @@ Logic that schedules against a deadline takes an `IClock&` rather than calling
 ## Under Emscripten
 
 The row in the module table says `PLATFORMS wasm-subset`. Under single-threaded Emscripten only
-Types, PlatformError, Clock, StringUtils, PathUtils, GlobMatch, FileUri and the POSIX
-`ProcessEnvironment`, `FileInfoProvider` and `WorkingDirectory` (behind
+Types, PlatformError, Clock, CpuCounters, StringUtils, PathUtils, GlobMatch, FileUri and the
+POSIX `ProcessEnvironment`, `FileInfoProvider` and `WorkingDirectory` (behind
 `nativeProcessEnvironment()`, `nativeFileInfoProvider()` and `nativeWorkingDirectory()`) build (the `SOURCES_EMSCRIPTEN` list), and their tests run under
 node. Clock needs no threads; its test of
 concurrent `CachedClock` refreshes is compiled only where threads exist. There is no separate

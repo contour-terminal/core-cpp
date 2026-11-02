@@ -7,6 +7,16 @@ release may break the API; every break is listed under **Breaking** with a migra
 release tag `vX.Y.Z` equals the version in `project(core-cpp VERSION X.Y.Z)`, and the release
 workflow refuses one without a section here.
 
+## [Unreleased]
+
+### Added
+
+- **`core::platform::ICpuCounterSource`, a portable seam for CPU work counts.** `CpuCounters.hpp` names the
+  measures (`CpuCounter`: instructions, cycles, reference cycles), a `CpuCounterSample` and its delta, `measure()`
+  around a piece of work, and `makeDefaultCpuCounterSource()`, which never returns null. Every platform reports
+  the measures as unavailable, with a reason, until its backend lands. `testing::FakeCpuCounterSource` is the
+  scripted test double.
+
 ## [0.11.4] - 2026-10-30
 
 ### Fixed
