@@ -53,14 +53,18 @@ struct PmuReading
     std::uint64_t timeRunning; ///< Nanoseconds it was counting on a PMU.
 };
 
-/// Adds the per-PMU readings of one measure.
-/// A hybrid machine's PMUs each run only while the thread is on their cores, so the running times add up to
-/// the enabled time; a total short of that means the counter was multiplexed away and the sum is not a
-/// count.
-/// @param readings One reading per core PMU.
-/// @return The sum of the values; nothing if there are no readings or the running times fall short of the
-///         smallest enabled time by more than 1 %.
-[[nodiscard]] std::optional<std::uint64_t> combinePmuReadings(std::span<PmuReading const> readings) noexcept;
+/// Adds the per-PMU readings of one measure, judged over the interval since the previous read.
+/// A hybrid machine's PMUs each run only while the thread is on their cores, so over an interval their
+/// running times add up to the enabled time; a total short of that by more than 1 % means the counter was
+/// multiplexed away during the interval, and the count is not trustworthy. Only the interval counts: a
+/// counter that ran cleanly for a long time before a multiplexed window must not pass for clean.
+/// @param previous One reading per core PMU, from the previous read (or from opening the events).
+/// @param current One reading per core PMU, from this read.
+/// @return The sum of the current values (cumulative, so deltas of consecutive results are counts); nothing
+///         if there are no readings, the sizes differ, a reading went backwards, or the interval's running
+///         times fall short of its smallest enabled time by more than 1 %.
+[[nodiscard]] std::optional<std::uint64_t> combinePmuReadings(std::span<PmuReading const> previous,
+                                                              std::span<PmuReading const> current) noexcept;
 
 /// The result of opening one measure on one PMU.
 struct OpenOutcome

@@ -7,6 +7,7 @@
 #include <cerrno>
 #include <charconv>
 #include <format>
+#include <limits>
 #include <ranges>
 #include <string_view>
 #include <system_error>
@@ -51,7 +52,8 @@ namespace
     };
 
     constexpr auto FailureRows = std::array {
-        FailureRow { { EACCES, EPERM, 0 }, "perf_event_open: permission denied ({})" },
+        FailureRow { { EACCES, 0, 0 }, "perf_event_open: permission denied ({})" },
+        FailureRow { { EPERM, 0, 0 }, "perf_event_open: operation not permitted (container seccomp? {})" },
         FailureRow { { ENOENT, ENODEV, EOPNOTSUPP }, "no hardware PMU exposed (virtual machine?)" },
         FailureRow { { ENOSYS, 0, 0 }, "perf_event_open blocked (seccomp?)" },
     };
@@ -90,18 +92,23 @@ std::uint64_t hardwareConfig(std::uint64_t event, CorePmu const& pmu, std::size_
     return event | (static_cast<std::uint64_t>(pmu.type) << PmuTypeShift);
 }
 
-std::optional<std::uint64_t> combinePmuReadings(std::span<PmuReading const> readings) noexcept
+std::optional<std::uint64_t> combinePmuReadings(std::span<PmuReading const> previous,
+                                                std::span<PmuReading const> current) noexcept
 {
-    if (readings.empty())
+    if (current.empty() || previous.size() != current.size())
         return std::nullopt;
     auto sum = std::uint64_t {};
     auto running = std::uint64_t {};
-    auto enabled = readings.front().timeEnabled;
-    for (auto const& reading: readings)
+    auto enabled = std::numeric_limits<std::uint64_t>::max();
+    for (auto const index: std::views::iota(std::size_t { 0 }, current.size()))
     {
-        sum += reading.value;
-        running += reading.timeRunning;
-        enabled = std::min(enabled, reading.timeEnabled);
+        auto const& from = previous[index];
+        auto const& to = current[index];
+        if (to.value < from.value || to.timeEnabled < from.timeEnabled || to.timeRunning < from.timeRunning)
+            return std::nullopt;
+        sum += to.value;
+        running += to.timeRunning - from.timeRunning;
+        enabled = std::min(enabled, to.timeEnabled - from.timeEnabled);
     }
     if (static_cast<double>(running) < static_cast<double>(enabled) * RunningTimeTolerance)
         return std::nullopt;

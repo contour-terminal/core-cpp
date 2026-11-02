@@ -88,20 +88,23 @@ TEST_CASE("hardwareConfig adds the PMU type only with several PMUs", "[cpucounte
     CHECK(hardwareConfig(1, CorePmu { "armv8_pmuv3_0", 8 }, 1) == 1);
 }
 
-TEST_CASE("combinePmuReadings adds readings that ran for the whole time", "[cpucounters]")
+TEST_CASE("combinePmuReadings adds readings that ran for the whole interval", "[cpucounters]")
 {
+    auto const start = std::array { PmuReading { 0, 0, 0 }, PmuReading { 0, 0, 0 } };
     auto const whole = std::array { PmuReading { 100, 10, 10 }, PmuReading { 50, 10, 10 } };
-    CHECK(combinePmuReadings(whole) == 150);
+    CHECK(combinePmuReadings(start, whole) == 150);
 
     auto const hybrid = std::array { PmuReading { 100, 10, 6 }, PmuReading { 50, 10, 4 } };
-    CHECK(combinePmuReadings(hybrid) == 150);
+    CHECK(combinePmuReadings(start, hybrid) == 150);
 }
 
 TEST_CASE("combinePmuReadings rejects multiplexed or missing readings", "[cpucounters]")
 {
+    auto const start = std::array { PmuReading { 0, 0, 0 }, PmuReading { 0, 0, 0 } };
     auto const multiplexed = std::array { PmuReading { 100, 10, 3 }, PmuReading { 50, 10, 4 } };
-    CHECK(!combinePmuReadings(multiplexed).has_value());
-    CHECK(!combinePmuReadings({}).has_value());
+    CHECK(!combinePmuReadings(start, multiplexed).has_value());
+    CHECK(!combinePmuReadings({}, {}).has_value());
+    CHECK(!combinePmuReadings(start, std::array { PmuReading { 1, 1, 1 } }).has_value());
 }
 
 TEST_CASE("decideMeasure reports the first failure", "[cpucounters]")
@@ -117,7 +120,10 @@ TEST_CASE("perfOpenFailureReason phrases the usual failures", "[cpucounters]")
 {
     CHECK_THAT(perfOpenFailureReason(ENOENT, std::nullopt), ContainsSubstring("no hardware PMU"));
     CHECK_THAT(perfOpenFailureReason(ENOSYS, std::nullopt), ContainsSubstring("seccomp"));
-    CHECK_THAT(perfOpenFailureReason(EPERM, 2), ContainsSubstring("permission denied"));
+    CHECK_THAT(perfOpenFailureReason(EACCES, 2), ContainsSubstring("permission denied"));
+    CHECK_THAT(perfOpenFailureReason(EPERM, 2),
+               ContainsSubstring("operation not permitted (container seccomp?"));
+    CHECK_THAT(perfOpenFailureReason(EPERM, 2), ContainsSubstring("perf_event_paranoid=2"));
     CHECK_THAT(perfOpenFailureReason(EMFILE, std::nullopt), ContainsSubstring("perf_event_open: "));
 }
 
@@ -143,8 +149,33 @@ TEST_CASE("perfOpenFailureReason copes with an unreadable paranoid level and err
 
 TEST_CASE("combinePmuReadings accepts a running time within 1 % of the enabled time", "[cpucounters]")
 {
-    CHECK(combinePmuReadings(std::array { PmuReading { 7, 100, 99 } }) == 7);
-    CHECK(!combinePmuReadings(std::array { PmuReading { 7, 100, 98 } }).has_value());
+    auto const start = std::array { PmuReading { 0, 0, 0 } };
+    CHECK(combinePmuReadings(start, std::array { PmuReading { 7, 100, 99 } }) == 7);
+    CHECK(!combinePmuReadings(start, std::array { PmuReading { 7, 100, 98 } }).has_value());
+}
+
+TEST_CASE("combinePmuReadings judges the interval since the previous read, not the lifetime", "[cpucounters]")
+{
+    // Open for 30 s at full speed, then a 200 ms window in which the event ran half the time: the
+    // cumulative ratio is still above 99 %, the interval's is 50 %.
+    constexpr auto Second = std::uint64_t { 1'000'000'000 };
+    constexpr auto Window = Second / 5;
+    constexpr auto Long = 30 * Second;
+    auto const before = std::array { PmuReading { 3000, Long, Long } };
+    auto const after = std::array { PmuReading { 3010, Long + Window, Long + (Window / 2) } };
+    CHECK(!combinePmuReadings(before, after).has_value());
+
+    // The reverse: a multiplexed history does not poison a clean window.
+    auto const flaky = std::array { PmuReading { 10, Long, Long / 2 } };
+    auto const clean = std::array { PmuReading { 20, Long + Window, (Long / 2) + Window } };
+    CHECK(combinePmuReadings(flaky, clean) == 20);
+}
+
+TEST_CASE("combinePmuReadings rejects readings that went backwards", "[cpucounters]")
+{
+    auto const before = std::array { PmuReading { 50, 10, 10 } };
+    CHECK(!combinePmuReadings(before, std::array { PmuReading { 40, 12, 12 } }).has_value());
+    CHECK(!combinePmuReadings(before, std::array { PmuReading { 60, 9, 9 } }).has_value());
 }
 
 TEST_CASE("discoverCorePmus prefers cpu over PMUs that have a cpus file", "[cpucounters]")

@@ -6,6 +6,7 @@
 
 #include <sys/syscall.h>
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <cstdint>
@@ -29,8 +30,8 @@ namespace
     constexpr auto SysRoot = std::string_view { "/sys" };
     constexpr auto ParanoidPath = std::string_view { "/proc/sys/kernel/perf_event_paranoid" };
 
-    /// The reason ReferenceCycles is not reported.
-    constexpr auto NoReferenceCycles = std::string_view { "not provided on Linux" };
+    /// The reason a measure outside HardwareEvents is not reported.
+    constexpr auto NotProvided = std::string_view { "not provided on Linux" };
 
     /// The note recorded when the kernel cannot restrict inheritance to threads.
     constexpr auto ChildrenCountedNote = std::string_view { "child processes are counted (kernel < 5.13)" };
@@ -114,7 +115,8 @@ namespace
     struct OpenMeasure
     {
         std::vector<UniqueFd> fds;
-        std::string reason; ///< Empty when every event is open.
+        std::string reason;                   ///< Empty when every event is open.
+        std::vector<detail::PmuReading> last; ///< What each event reported at the previous read.
     };
 
     /// Counts the instructions and cycles of this process with perf_event_open(2).
@@ -142,6 +144,12 @@ namespace
             }
             if (mode == detail::InheritMode::Everything)
                 _note = ChildrenCountedNote;
+
+            // The baseline of the first interval: the events as they stand now, not as of an open() that
+            // may long since have been multiplexed or idle.
+            for (auto& measure: _measures)
+                if (auto readings = readEvents(measure))
+                    measure.last = std::move(*readings);
         }
 
         [[nodiscard]] CpuCounterSample read() override
@@ -149,7 +157,7 @@ namespace
             auto sample = CpuCounterSample {};
             for (auto const& [counter, event]: HardwareEvents)
             {
-                auto const& measure = _measures[std::to_underlying(counter)];
+                auto& measure = _measures[std::to_underlying(counter)];
                 if (!measure.reason.empty())
                     continue;
                 if (auto const total = readTotal(measure))
@@ -160,16 +168,22 @@ namespace
 
         [[nodiscard]] std::string_view unavailableReason(CpuCounter counter) const noexcept override
         {
-            if (counter == CpuCounter::ReferenceCycles || counter == CpuCounter::Last)
-                return NoReferenceCycles;
+            auto const reported =
+                std::ranges::any_of(HardwareEvents, [counter](MeasureEvent const& measured) {
+                    return measured.counter == counter;
+                });
+            if (!reported)
+                return NotProvided;
             return _measures[std::to_underlying(counter)].reason;
         }
 
         [[nodiscard]] std::string_view note() const noexcept override { return _note; }
 
       private:
-        /// Sums a measure over its PMUs.
-        [[nodiscard]] static std::optional<std::uint64_t> readTotal(OpenMeasure const& measure)
+        /// Reads every event of a measure.
+        /// @return One reading per event, or nothing if any read failed.
+        [[nodiscard]] static std::optional<std::vector<detail::PmuReading>> readEvents(
+            OpenMeasure const& measure)
         {
             auto readings = std::vector<detail::PmuReading> {};
             for (auto const& fd: measure.fds)
@@ -180,7 +194,19 @@ namespace
                 readings.push_back(detail::PmuReading {
                     .value = raw.value, .timeEnabled = raw.timeEnabled, .timeRunning = raw.timeRunning });
             }
-            return detail::combinePmuReadings(readings);
+            return readings;
+        }
+
+        /// Sums a measure over its PMUs, if it was not multiplexed since the previous read; the readings
+        /// become the baseline of the next interval either way.
+        [[nodiscard]] static std::optional<std::uint64_t> readTotal(OpenMeasure& measure)
+        {
+            auto readings = readEvents(measure);
+            if (!readings)
+                return std::nullopt;
+            auto const total = detail::combinePmuReadings(measure.last, *readings);
+            measure.last = std::move(*readings);
+            return total;
         }
 
         std::array<OpenMeasure, CpuCounterCount> _measures {};
