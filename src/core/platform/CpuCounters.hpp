@@ -16,7 +16,7 @@ namespace core::platform
 
 /// A CPU work measure a counter source may be able to report.
 ///
-/// What each platform reports (user space, this process, every thread of it):
+/// What each platform reports (this process, every thread of it; privilege mode per row):
 ///
 /// | Platform | Instructions | Cycles | ReferenceCycles | Scope                         |
 /// |----------|--------------|--------|-----------------|-------------------------------|
@@ -136,7 +136,11 @@ class ICpuCounterSource
 
     /// Reads the counters now; unsupported measures are absent. A measure that is supported can still be
     /// absent from one sample (on Linux when the kernel multiplexed it away over the interval since the
-    /// previous read), and then so is its delta. Calls must not overlap: a source keeps state between reads.
+    /// previous read), and then so is its delta. That check covers only the interval between two consecutive
+    /// read() calls of one source; a delta between non-consecutive samples (an outer measure() around a
+    /// nested one on the same source) is not checked and may undercount, so use one source per measured
+    /// region and do not nest measure() on one source. Calls must not overlap: a source keeps state between
+    /// reads.
     [[nodiscard]] virtual CpuCounterSample read() = 0;
 
     /// Why a measure is not reported.

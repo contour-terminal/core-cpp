@@ -166,7 +166,10 @@ every thread of it.
 - Linux needs a hardware PMU and a permissive `perf_event_paranoid`. Create the source before
   starting worker threads: its events follow only threads started afterwards. Each `read()` is
   judged over the interval since the previous one, and a measure the kernel multiplexed away in that
-  interval is absent from the sample (and so from the delta), not wrong.
+  interval is absent from that sample, not wrong. Only consecutive reads of one source are checked: a
+  delta between non-consecutive samples (an outer `measure()` around a nested one on the same source)
+  is not, and may undercount. Use one source per measured region and do not nest `measure()` on one
+  source.
 - `note()` reports a deviation detected at run time from the scope above (Linux before 5.13 also
   counts child processes); it is empty otherwise, on macOS and Windows always.
 

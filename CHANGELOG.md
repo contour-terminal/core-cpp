@@ -17,7 +17,9 @@ workflow refuses one without a section here.
   why it is unsupported. What each platform reports, for the calling process and every thread of it:
   - **Linux** counts instructions and cycles in user mode only, through `perf_event_open`, summed over the
     core PMUs of a hybrid machine. It needs a hardware PMU and a permissive `perf_event_paranoid`; a measure the
-    kernel multiplexed away during a read interval is absent from that sample rather than wrong. Kernels before
+    kernel multiplexed away between two consecutive reads is absent from that sample rather than wrong; a delta
+    between non-consecutive samples is not checked and may undercount, so use one source per measured region and
+    do not nest `measure()` on one source. Kernels before
     5.13 cannot tell threads from child processes, which `note()` says.
   - **macOS** counts instructions and cycles in user and kernel mode together, through `proc_pid_rusage`; a
     virtualized machine that exposes no counters reports them unsupported.
