@@ -60,7 +60,8 @@ namespace
 
         [[nodiscard]] std::string_view unavailableReason(CpuCounter counter) const noexcept override
         {
-            return std::ranges::contains(Supported, counter) ? std::string_view {} : NotProvided;
+            return std::ranges::find(Supported, counter) != std::ranges::end(Supported) ? std::string_view {}
+                                                                                        : NotProvided;
         }
 
         [[nodiscard]] std::string_view note() const noexcept override { return {}; }

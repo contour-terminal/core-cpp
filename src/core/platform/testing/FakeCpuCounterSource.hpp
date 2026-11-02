@@ -35,7 +35,8 @@ class FakeCpuCounterSource final: public ICpuCounterSource
 
     [[nodiscard]] std::string_view unavailableReason(CpuCounter counter) const noexcept override
     {
-        return std::ranges::contains(_supported, counter) ? std::string_view {} : "fake: unsupported";
+        return std::ranges::find(_supported, counter) != std::ranges::end(_supported) ? std::string_view {}
+                                                                                      : "fake: unsupported";
     }
 
     [[nodiscard]] std::string_view note() const noexcept override { return {}; }

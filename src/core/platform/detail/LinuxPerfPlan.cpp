@@ -122,7 +122,7 @@ std::string perfOpenFailureReason(int error, std::optional<int> paranoidLevel)
     auto const level = paranoidLevel ? std::format("perf_event_paranoid={}", *paranoidLevel)
                                      : std::string { "perf_event_paranoid unreadable" };
     for (auto const& row: FailureRows)
-        if (std::ranges::contains(row.errors, error))
+        if (std::ranges::find(row.errors, error) != std::ranges::end(row.errors))
             return std::vformat(row.text, std::make_format_args(level));
     return "perf_event_open: " + std::generic_category().message(error);
 }
