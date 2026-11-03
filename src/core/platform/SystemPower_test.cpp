@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/platform/SystemPower.hpp>
 #include <core/platform/detail/LogindPlan.hpp>
+#include <core/platform/detail/PowerBroadcastPlan.hpp>
 #include <core/platform/detail/PowerMessagePlan.hpp>
 #include <core/platform/testing/FakeSystemPowerMonitor.hpp>
 
@@ -117,6 +118,9 @@ TEST_CASE("the native monitor constructs or says why not", "[platform][power]")
 #ifdef __APPLE__
     REQUIRE(monitor.has_value());
 #endif
+#ifdef _WIN32
+    REQUIRE(monitor.has_value());
+#endif
 #ifdef CORE_CPP_HAS_SYSTEMD
     // A container without a system bus cannot register, and says so.
     if (!monitor.has_value())
@@ -127,7 +131,7 @@ TEST_CASE("the native monitor constructs or says why not", "[platform][power]")
         auto const subscription = (*monitor)->subscribe([](SystemPowerEvent) {});
         SUCCEED();
     }
-#if !defined(__APPLE__) && !defined(CORE_CPP_HAS_SYSTEMD)
+#if !defined(__APPLE__) && !defined(_WIN32) && !defined(CORE_CPP_HAS_SYSTEMD)
     else
         CHECK(monitor.error() == PlatformError::NotImplemented);
 #endif
@@ -208,4 +212,18 @@ TEST_CASE("power messages map to events and acknowledgements", "[platform][power
     CHECK(planPowerMessage(PowerMessage::HasPoweredOn)
           == PowerMessageAction { SystemPowerEvent::DidWake, PowerAcknowledgement::No });
     CHECK(planPowerMessage(PowerMessage::Other) == PowerMessageAction {});
+}
+
+TEST_CASE("Windows power broadcasts map to events", "[platform][power]")
+{
+    using core::platform::detail::eventForPowerBroadcast;
+    using core::platform::detail::PowerBroadcastResumeAutomatic;
+    using core::platform::detail::PowerBroadcastResumeSuspend;
+    using core::platform::detail::PowerBroadcastSuspend;
+
+    CHECK(eventForPowerBroadcast(PowerBroadcastSuspend) == SystemPowerEvent::WillSleep);
+    CHECK(eventForPowerBroadcast(PowerBroadcastResumeAutomatic) == SystemPowerEvent::DidWake);
+    CHECK_FALSE(eventForPowerBroadcast(PowerBroadcastResumeSuspend).has_value()); // follows the automatic one
+    CHECK_FALSE(eventForPowerBroadcast(0).has_value());
+    CHECK_FALSE(eventForPowerBroadcast(0x000A).has_value()); // PBT_APMPOWERSTATUSCHANGE
 }

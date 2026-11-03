@@ -42,7 +42,8 @@ else()
 endif()
 
 # The same choice for makeNativeSystemPowerMonitor(); a platform is "unavailable" until its backend lands.
-# Linux reads logind's PrepareForSleep over sd-bus, behind CORE_CPP_WITH_SYSTEMD.
+# Linux reads logind's PrepareForSleep over sd-bus, behind CORE_CPP_WITH_SYSTEMD; Windows registers a
+# suspend/resume callback with the power manager.
 set(_coreCppPlatformPowerDefinitions "")
 set(_coreCppPlatformPowerIncludes "")
 if(APPLE)
@@ -61,6 +62,8 @@ elseif(LINUX AND CORE_CPP_WITH_SYSTEMD)
     endif()
     set(_coreCppPlatformPowerDefinitions CORE_CPP_HAS_SYSTEMD=1)
     set(_coreCppPlatformPowerIncludes ${LIBSYSTEMD_INCLUDE_DIRS})
+elseif(WIN32)
+    set(_coreCppPlatformSystemPowerSource windows/WindowsSystemPower.cpp)
 else()
     set(_coreCppPlatformSystemPowerSource UnavailableSystemPower.cpp)
 endif()
@@ -74,7 +77,7 @@ if(LINUX AND CORE_CPP_WITH_SYSTEMD)
     list(APPEND _coreCppPlatformLibs ${LIBSYSTEMD_LINK_LIBRARIES})
 endif()
 if(WIN32)
-    list(APPEND _coreCppPlatformLibs ws2_32)
+    list(APPEND _coreCppPlatformLibs ws2_32 powrprof)
 endif()
 
 core_cpp_add_module(platform KIND STATIC
@@ -104,6 +107,7 @@ core_cpp_add_module(platform KIND STATIC
         detail/CpuCounterProbe.hpp
         detail/LogindPlan.hpp
         detail/LinuxPerfPlan.hpp
+        detail/PowerBroadcastPlan.hpp
         detail/PowerMessagePlan.hpp
         detail/UnavailableCpuCounterSource.hpp
         testing/FakeCpuCounterSource.hpp

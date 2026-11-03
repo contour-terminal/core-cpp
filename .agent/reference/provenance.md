@@ -460,6 +460,7 @@ others in notes.
 | `src/core/platform/detail/LinuxPerfPlan.cpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/detail/LinuxPerfPlan.hpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/detail/LogindPlan.hpp` | origin: core-cpp | - | - | - |
+| `src/core/platform/detail/PowerBroadcastPlan.hpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/detail/PowerMessagePlan.hpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/detail/UnavailableCpuCounterSource.hpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/linux/LinuxCpuCounters.cpp` | origin: core-cpp | - | - | - |
@@ -491,6 +492,7 @@ others in notes.
 | `src/core/platform/windows/WindowsProcessEnvironment.cpp` | contour-terminal/endo | `src/platform/windows/WindowsEnvironmentProvider.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | defines `nativeProcessEnvironment()` (core-cpp); `get()`, `unset()` and `exportVariable()` delegate to `core::LiveEnvironment` and the process-environment writer, as the POSIX one does (A10); 0.5.0 (core-cpp#7): renamed, reports errors, `keys()` converts UTF-16 names to UTF-8, the working directory moved to `windows/WindowsWorkingDirectory.cpp`, no file-wide `_WIN32` guard; `keys()` converts through `core::toUtf8()` (`src/core/WideString.cpp`); `compareNames()` keeps a lenient conversion of its own, since an ordering must place a name that is not UTF-8 too |
 | `src/core/platform/windows/WindowsProcessEnvironment.hpp` | contour-terminal/endo | `src/platform/windows/WindowsEnvironmentProvider.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | 0.5.0 (core-cpp#7): renamed with the interface |
 | `src/core/platform/windows/WindowsSystemInfo.cpp` | contour-terminal/endo | `src/platform/SystemInfo.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the Windows `hostName()` of `SystemInfo.cpp`, split out per platform; post-import fix: it answers the DNS host name through `GetComputerNameExW`, in UTF-8, not `GetComputerNameA`'s NetBIOS name |
+| `src/core/platform/windows/WindowsSystemPower.cpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/windows/WindowsTypes.cpp` | contour-terminal/endo | `src/platform/Types.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the Windows definitions of `Types.hpp`, moved out of line so the header needs no `<windows.h>` |
 | `src/core/platform/windows/WindowsWakeup.cpp` | contour-terminal/endo | `src/platform/windows/WindowsWakeup.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/platform/windows/WindowsWorkingDirectory.cpp` | origin: core-cpp | - | - | 0.5.0, core-cpp#7: endo's `WindowsEnvironmentProvider` working directory, as its own seam; `currentDirectory()` goes through `core::pathFromUtf8()` rather than a copy of its own; through `core::pathFromTrustedUtf8()` |
