@@ -37,6 +37,7 @@ given, never through a concrete type, a singleton, or a free function with hidde
 | Files | `core::platform::FileSystem`, `FileInfoProvider` | `testing::InMemoryFileSystem`, `testing::MockFileInfoProvider` |
 | The environment | `core::Environment` to read, `core::platform::ProcessEnvironment` to write | `core::testing::FakeEnvironment`, `testing::TestProcessEnvironment` (both seams) |
 | The working directory | `core::platform::WorkingDirectory` | `testing::TestWorkingDirectory` |
+| CPU work counters | `core::platform::ICpuCounterSource` | `testing::FakeCpuCounterSource` |
 | Terminal output | `core::tui::TerminalOutput` | `MockTerminalOutput` |
 
 - **Define the interface first, then inject it**, by constructor, as a reference or a

@@ -15,6 +15,7 @@ the interrupt throttle.
 | Header | What it has |
 |---|---|
 | `<core/platform/Clock.hpp>` | the clock seams, see [below](#clocks) |
+| `<core/platform/CpuCounters.hpp>` | `ICpuCounterSource`, a portable seam for CPU work counts (`CpuCounter`: instructions, cycles, reference cycles); `CpuCounterSample` and its delta; `measure()`; `makeDefaultCpuCounterSource()`, which never returns null and, where the platform cannot count, reports why per measure. `testing::FakeCpuCounterSource` is the test double |
 | `<core/platform/Types.hpp>` | `NativeHandle`, `InvalidHandle`, `ProcessId`, the standard handles, `platformRead()`/`platformWrite()`/`platformClose()`, `isTerminal()`, `nativeHandleToNumber()` |
 | `<core/platform/PlatformError.hpp>` | `PlatformError`, the error of this module's fallible operations, and `toString()` |
 | `<core/platform/Wakeup.hpp>` | `Wakeup`, a signal one thread raises to wake another out of `poll()` or `WaitForMultipleObjects()`: an eventfd on Linux, a self-pipe on macOS and the BSDs, an event on Windows |
@@ -146,11 +147,37 @@ Logic that schedules against a deadline takes an `IClock&` rather than calling
   [exceptions rule](https://github.com/contour-terminal/core-cpp/blob/master/.agent/rules/cpp-guidelines.md)
   allows.
 
+## CPU counters
+
+`makeDefaultCpuCounterSource()` returns the platform's `ICpuCounterSource`; it never returns null.
+Each measure is either supported or carries a reason (`unavailableReason()`), and `supports()` is
+derived from that reason, so the two cannot disagree. All counts are for the calling process and
+every thread of it.
+
+| Platform | Instructions | Cycles | ReferenceCycles | Scope |
+| --- | --- | --- | --- | --- |
+| Linux | yes | yes | no | user mode only (`perf_event_open`) |
+| macOS | yes | yes | no | user and kernel together (`proc_pid_rusage`) |
+| Windows | no | no | yes | user and kernel together (`QueryProcessCycleTime`) |
+| other | no | no | no | - |
+
+- `ReferenceCycles` is a count of constant-rate ticks of CPU time, not core cycles; do not divide
+  it into `Instructions` for an IPC.
+- Linux needs a hardware PMU and a permissive `perf_event_paranoid`. Create the source before
+  starting worker threads: its events follow only threads started afterwards. Each `read()` is
+  judged over the interval since the previous one, and a measure the kernel multiplexed away in that
+  interval is absent from that sample, not wrong. Only consecutive reads of one source are checked: a
+  delta between non-consecutive samples (an outer `measure()` around a nested one on the same source)
+  is not, and may undercount. Use one source per measured region and do not nest `measure()` on one
+  source.
+- `note()` reports a deviation detected at run time from the scope above (Linux before 5.13 also
+  counts child processes); it is empty otherwise, on macOS and Windows always.
+
 ## Under Emscripten
 
 The row in the module table says `PLATFORMS wasm-subset`. Under single-threaded Emscripten only
-Types, PlatformError, Clock, StringUtils, PathUtils, GlobMatch, FileUri and the POSIX
-`ProcessEnvironment`, `FileInfoProvider` and `WorkingDirectory` (behind
+Types, PlatformError, Clock, CpuCounters, StringUtils, PathUtils, GlobMatch, FileUri and the
+POSIX `ProcessEnvironment`, `FileInfoProvider` and `WorkingDirectory` (behind
 `nativeProcessEnvironment()`, `nativeFileInfoProvider()` and `nativeWorkingDirectory()`) build (the `SOURCES_EMSCRIPTEN` list), and their tests run under
 node. Clock needs no threads; its test of
 concurrent `CachedClock` refreshes is compiled only where threads exist. There is no separate
