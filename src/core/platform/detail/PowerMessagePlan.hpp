@@ -16,7 +16,7 @@ enum class PowerMessage : std::uint8_t
     Other = 0,      ///< A message the backend does not act on.
     CanSystemSleep, ///< The system asks whether it may idle-sleep.
     WillSleep,      ///< The system is going to sleep.
-    WillNotSleep,   ///< A sleep that was asked about was cancelled.
+    WillNotSleep,   ///< An idle sleep that was asked about (CanSystemSleep) will not happen.
     HasPoweredOn,   ///< The system has woken up.
 };
 
@@ -37,7 +37,9 @@ struct PowerMessageAction
 };
 
 /// Decides what to do for a power message. The event is dispatched before the acknowledgement, so the
-/// subscribers see WillSleep while the machine is still awake.
+/// subscribers see WillSleep while the machine is still awake. WillNotSleep reports nothing: per
+/// <IOKit/IOMessage.h> it only ever follows CanSystemSleep, which reported nothing either, so there is no
+/// WillSleep for it to take back.
 /// @param message The message received.
 /// @return The event to dispatch and whether to acknowledge.
 [[nodiscard]] constexpr PowerMessageAction planPowerMessage(PowerMessage message) noexcept
@@ -46,7 +48,7 @@ struct PowerMessageAction
     {
         case PowerMessage::CanSystemSleep: return { std::nullopt, PowerAcknowledgement::Yes };
         case PowerMessage::WillSleep: return { SystemPowerEvent::WillSleep, PowerAcknowledgement::Yes };
-        case PowerMessage::WillNotSleep: return { SystemPowerEvent::DidWake, PowerAcknowledgement::No };
+        case PowerMessage::WillNotSleep: return {};
         case PowerMessage::HasPoweredOn: return { SystemPowerEvent::DidWake, PowerAcknowledgement::No };
         case PowerMessage::Other: break;
     }

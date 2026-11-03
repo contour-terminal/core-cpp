@@ -39,11 +39,15 @@ namespace
 
     [[nodiscard]] LiveMonitors& liveMonitors()
     {
-        static auto monitors = LiveMonitors {};
-        return monitors;
+        // Leaked on purpose: the power manager may still call back on its own thread while the process
+        // exits, after the static destructors have run, and must then find a live mutex and map, not
+        // destroyed ones.
+        static auto* const monitors = new LiveMonitors {};
+        return *monitors;
     }
 
-    /// System sleep/wake notifications from the Windows power manager, delivered on a thread it owns.
+    /// System sleep/wake notifications from the Windows power manager, delivered on a thread the power
+    /// manager owns.
     ///
     /// A handler runs while a process-wide lock is held, so it must not destroy a monitor (this one or
     /// another): the destructor takes that lock.
@@ -112,15 +116,9 @@ namespace
             auto const found = live.byId.find(reinterpret_cast<std::uintptr_t>(context));
             if (found == live.byId.end())
                 return ERROR_SUCCESS;
-            // An exception must not unwind into the power manager; a failing handler is dropped.
-            try
-            {
-                found->second->_registry.dispatch(*event);
-            }
-            catch (...)
-            {
-                return ERROR_SUCCESS;
-            }
+            // dispatch() is noexcept: a throwing handler terminates rather than unwinding into the power
+            // manager.
+            found->second->_registry.dispatch(*event);
             return ERROR_SUCCESS;
         }
 

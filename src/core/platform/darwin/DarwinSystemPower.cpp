@@ -39,23 +39,23 @@ namespace
         DarwinSystemPowerMonitor& operator=(DarwinSystemPowerMonitor const&) = delete;
         DarwinSystemPowerMonitor& operator=(DarwinSystemPowerMonitor&&) = delete;
 
-        /// Stops IOKit delivery, then waits for a callback still running on the queue, so nothing
-        /// touches the registry once it is destroyed.
+        /// Tears the IOKit registration down on the queue itself, so it cannot overlap a callback: one
+        /// that was running has returned, and no later one can reach IOAllowPowerChange on a closed
+        /// connection or the registry once it is destroyed. Must not run on the queue (a handler must not
+        /// destroy its monitor), as dispatch_sync() onto the current queue deadlocks.
         ~DarwinSystemPowerMonitor() override
         {
-            if (_notifier != IO_OBJECT_NULL)
-                IODeregisterForSystemPower(&_notifier);
-            if (_rootPort != MACH_PORT_NULL)
-                IOServiceClose(_rootPort);
-            if (_port != nullptr)
-                IONotificationPortDestroy(_port);
-            if (_queue != nullptr)
-            {
-                dispatch_sync(_queue,
-                              ^ {
-                              });
-                dispatch_release(_queue);
-            }
+            if (_queue == nullptr)
+                return;
+            dispatch_sync(_queue, ^{
+              if (_notifier != IO_OBJECT_NULL)
+                  IODeregisterForSystemPower(&_notifier);
+              if (_rootPort != MACH_PORT_NULL)
+                  IOServiceClose(_rootPort);
+              if (_port != nullptr)
+                  IONotificationPortDestroy(_port);
+            });
+            dispatch_release(_queue);
         }
 
         /// Registers with IOKit.

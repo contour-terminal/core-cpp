@@ -6,9 +6,11 @@
 
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <ctime>
 #include <expected>
+#include <limits>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -31,8 +33,41 @@ namespace
                + (static_cast<std::uint64_t>(now.tv_nsec) / 1'000U);
     }
 
+    /// Closes a bus connection without flushing it: a hung bus must not hold up a reconnect or the
+    /// destructor, and nothing queued on it (the AddMatch call) is worth waiting for.
+    struct BusCloser
+    {
+        void operator()(sd_bus* bus) const noexcept { sd_bus_close_unref(bus); }
+    };
+
+    using BusPtr = std::unique_ptr<sd_bus, BusCloser>;
+
+    /// What the worker found while waiting.
+    enum class Wait : std::uint8_t
+    {
+        TimedOut = 0,      ///< Nothing but the timeout: go on.
+        ShutdownRequested, ///< The monitor is being destroyed.
+    };
+
+    /// What became of the match on PrepareForSleep, as logind's bus answered the asynchronous AddMatch.
+    enum class MatchState : std::uint8_t
+    {
+        Pending = 0, ///< AddMatch has not been answered yet.
+        Installed,   ///< The bus accepted the match.
+        Refused,     ///< The bus refused it: treated as a lost bus.
+    };
+
+    /// What one turn of serving the bus ended with.
+    enum class Served : std::uint8_t
+    {
+        Continue = 0,      ///< Keep serving.
+        BusFailed,         ///< The connection is gone (or the match refused): reconnect.
+        ShutdownRequested, ///< The monitor is being destroyed.
+    };
+
     /// System sleep/wake notifications from logind's PrepareForSleep signal, read over sd-bus on a
-    /// private thread.
+    /// private thread. A lost system bus is reconnected with a capped exponential backoff
+    /// (detail::reconnectDelay), so delivery pauses while the bus is unavailable rather than stopping.
     class LinuxSystemPowerMonitor final: public ISystemPowerMonitor
     {
       public:
@@ -53,30 +88,23 @@ namespace
                     ;
                 _thread.join();
             }
-            if (_bus != nullptr)
-                sd_bus_flush_close_unref(_bus);
+            _bus.reset();
             if (_shutdown != -1)
                 ::close(_shutdown);
         }
 
-        /// Connects to the system bus, matches PrepareForSleep and starts the reading thread.
-        /// @return Whether the registration succeeded.
+        /// Connects to the system bus, asks it to match PrepareForSleep and starts the reading thread.
+        /// Does not wait for the bus to answer, so a hung bus cannot hold up the caller.
+        /// @return Whether the connection could be opened.
         [[nodiscard]] std::expected<void, PlatformError> start()
         {
             _shutdown = ::eventfd(0, EFD_CLOEXEC);
-            if (_shutdown == -1 || sd_bus_open_system(&_bus) < 0)
+            if (_shutdown == -1)
                 return std::unexpected(PlatformError::NotificationRegistrationFailed);
-            auto const matched = sd_bus_match_signal(_bus,
-                                                     nullptr,
-                                                     "org.freedesktop.login1",
-                                                     "/org/freedesktop/login1",
-                                                     "org.freedesktop.login1.Manager",
-                                                     "PrepareForSleep",
-                                                     &onPrepareForSleep,
-                                                     this);
-            if (matched < 0)
+            connect();
+            if (_bus == nullptr)
                 return std::unexpected(PlatformError::NotificationRegistrationFailed);
-            _thread = std::jthread { [this] { run(); } };
+            _thread = std::thread { [this] { run(); } };
             return {};
         }
 
@@ -86,6 +114,41 @@ namespace
         }
 
       private:
+        /// Opens the system bus and queues the AddMatch for PrepareForSleep, without waiting for it.
+        /// Leaves _bus null when either fails.
+        void connect() noexcept
+        {
+            auto* bus = static_cast<sd_bus*>(nullptr);
+            if (sd_bus_open_system(&bus) < 0)
+                return;
+            auto owned = BusPtr { bus };
+            _match = MatchState::Pending;
+            auto const matched = sd_bus_match_signal_async(owned.get(),
+                                                           nullptr,
+                                                           "org.freedesktop.login1",
+                                                           "/org/freedesktop/login1",
+                                                           "org.freedesktop.login1.Manager",
+                                                           "PrepareForSleep",
+                                                           &onPrepareForSleep,
+                                                           &onMatchInstalled,
+                                                           this);
+            if (matched >= 0)
+                _bus = std::move(owned);
+        }
+
+        static int onMatchInstalled(sd_bus_message* reply, void* userdata, sd_bus_error* /*error*/)
+        {
+            auto& self = *static_cast<LinuxSystemPowerMonitor*>(userdata);
+            if (sd_bus_message_is_method_error(reply, nullptr) != 0)
+            {
+                self._match = MatchState::Refused;
+                return 0;
+            }
+            self._match = MatchState::Installed;
+            self._failedAttempts = 0; // the bus works again: the next loss starts the backoff over
+            return 0;
+        }
+
         static int onPrepareForSleep(sd_bus_message* message, void* userdata, sd_bus_error* /*error*/)
         {
             auto sleeping = 0;
@@ -98,37 +161,96 @@ namespace
             return 0;
         }
 
-        /// Serves the bus until the shutdown eventfd is signalled or the connection fails.
+        /// Serves the bus until the shutdown eventfd is signalled; reconnects a bus that failed.
         void run()
         {
-            auto serving = true;
-            while (serving)
+            while (true)
             {
-                auto processed = 0;
-                do
-                    processed = sd_bus_process(_bus, nullptr);
-                while (processed > 0);
-                auto deadline = std::uint64_t { 0 };
-                if (processed < 0 || sd_bus_get_timeout(_bus, &deadline) < 0)
-                    break;
-
-                auto fds = std::array {
-                    pollfd { .fd = sd_bus_get_fd(_bus),
-                             .events = static_cast<short>(sd_bus_get_events(_bus)),
-                             .revents = 0 },
-                    pollfd { .fd = _shutdown, .events = POLLIN, .revents = 0 },
-                };
-                auto const timeout = detail::pollTimeoutMilliseconds(deadline, monotonicMicroseconds());
-                auto const ready = ::poll(fds.data(), fds.size(), timeout);
-                serving = (ready >= 0 || errno == EINTR) && (fds[1].revents & POLLIN) == 0;
+                if (_bus == nullptr)
+                {
+                    if (reconnect() == Wait::ShutdownRequested)
+                        return;
+                    continue;
+                }
+                switch (serve())
+                {
+                    case Served::Continue: break;
+                    case Served::BusFailed: _bus.reset(); break;
+                    case Served::ShutdownRequested: return;
+                }
             }
+        }
+
+        /// Waits out the backoff, then tries once to connect again; on failure _bus stays null, and the
+        /// next turn backs off further.
+        /// @return ShutdownRequested if the monitor was destroyed while waiting.
+        [[nodiscard]] Wait reconnect()
+        {
+            auto const delay = detail::reconnectDelay(_failedAttempts);
+            if (_failedAttempts < std::numeric_limits<std::uint32_t>::max())
+                ++_failedAttempts;
+            if (waitForShutdown(delay) == Wait::ShutdownRequested)
+                return Wait::ShutdownRequested;
+            connect();
+            return Wait::TimedOut;
+        }
+
+        /// Sleeps for @p delay, or until the shutdown eventfd is signalled.
+        [[nodiscard]] Wait waitForShutdown(std::chrono::milliseconds delay) const
+        {
+            auto const deadline = monotonicMicroseconds()
+                                  + static_cast<std::uint64_t>(
+                                      std::chrono::duration_cast<std::chrono::microseconds>(delay).count());
+            while (true)
+            {
+                auto const timeout = detail::pollTimeoutMilliseconds(deadline, monotonicMicroseconds());
+                if (timeout == 0)
+                    return Wait::TimedOut;
+                auto fd = pollfd { .fd = _shutdown, .events = POLLIN, .revents = 0 };
+                auto const ready = ::poll(&fd, 1, timeout);
+                if (ready > 0 && (fd.revents & POLLIN) != 0)
+                    return Wait::ShutdownRequested;
+                if (ready < 0 && errno != EINTR)
+                    return Wait::TimedOut;
+            }
+        }
+
+        /// Processes what the bus has, then waits for it or for the shutdown eventfd.
+        [[nodiscard]] Served serve()
+        {
+            auto* const bus = _bus.get();
+            auto processed = 0;
+            do
+                processed = sd_bus_process(bus, nullptr);
+            while (processed > 0);
+            auto deadline = std::uint64_t { 0 };
+            if (processed < 0 || _match == MatchState::Refused || sd_bus_get_timeout(bus, &deadline) < 0)
+                return Served::BusFailed;
+            auto const events = sd_bus_get_events(bus);
+            if (events < 0)
+                return Served::BusFailed;
+
+            auto fds = std::array {
+                pollfd { .fd = sd_bus_get_fd(bus), .events = static_cast<short>(events), .revents = 0 },
+                pollfd { .fd = _shutdown, .events = POLLIN, .revents = 0 },
+            };
+            auto const timeout = detail::pollTimeoutMilliseconds(deadline, monotonicMicroseconds());
+            auto const ready = ::poll(fds.data(), fds.size(), timeout);
+            if ((fds[1].revents & POLLIN) != 0)
+                return Served::ShutdownRequested;
+            if (ready < 0 && errno != EINTR)
+                return Served::BusFailed;
+            return Served::Continue;
         }
 
         // Declared first, so it outlives the bus and the thread that dispatch into it.
         detail::PowerHandlerRegistry _registry;
         int _shutdown = -1;
-        sd_bus* _bus = nullptr;
-        std::jthread _thread;
+        BusPtr _bus;
+        // Touched by start() before the thread exists, then by the thread alone.
+        MatchState _match = MatchState::Pending;
+        std::uint32_t _failedAttempts = 0;
+        std::thread _thread;
     };
 } // namespace
 

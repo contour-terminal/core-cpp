@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/platform/SystemPower.hpp>
 
+#include <core/Assert.hpp>
+
 #include <algorithm>
 #include <condition_variable>
 #include <memory>
@@ -19,6 +21,7 @@ class PowerHandlerRegistryState: public std::enable_shared_from_this<PowerHandle
   public:
     [[nodiscard]] PowerSubscription subscribe(ISystemPowerMonitor::Handler handler)
     {
+        Require(handler != nullptr);
         auto const lock = std::scoped_lock { _mutex };
         auto const id = ++_lastId;
         _entries.push_back(Entry {
@@ -26,8 +29,11 @@ class PowerHandlerRegistryState: public std::enable_shared_from_this<PowerHandle
         return PowerSubscription { shared_from_this(), id };
     }
 
-    void dispatch(SystemPowerEvent event)
+    /// `noexcept` is the exception policy: a throwing handler terminates (see PowerHandlerRegistry).
+    void dispatch(SystemPowerEvent event) noexcept
     {
+        // A handler may destroy the registry's owner, and with it the registry's reference to this state.
+        auto const keepAlive = shared_from_this();
         // Copy-constructed rather than assigned into an empty vector, which GCC 15 flags at -O3.
         auto const snapshot = [this] {
             auto const lock = std::scoped_lock { _mutex };
@@ -37,14 +43,13 @@ class PowerHandlerRegistryState: public std::enable_shared_from_this<PowerHandle
         for (auto const& entry: snapshot)
         {
             {
-                auto lock = std::unique_lock { _mutex };
+                auto const lock = std::scoped_lock { _mutex };
                 if (!isSubscribed(entry.id))
                     continue;
                 _running.push_back(Running { .id = entry.id, .thread = self });
             }
-            // A handler that throws must still be unmarked, or unsubscribe would wait forever.
-            auto const unmark = Unmark { *this, entry.id, self };
             (*entry.handler)(event);
+            unmarkRunning(entry.id, self);
         }
     }
 
@@ -87,31 +92,18 @@ class PowerHandlerRegistryState: public std::enable_shared_from_this<PowerHandle
         std::thread::id thread;
     };
 
-    /// Marks a handler as no longer running when it returns or throws.
-    struct Unmark
+    /// Marks a handler as no longer running, and wakes an unsubscribe waiting for it.
+    void unmarkRunning(std::uint64_t id, std::thread::id thread) noexcept
     {
-        PowerHandlerRegistryState& state;
-        std::uint64_t id;
-        std::thread::id thread;
-
-        Unmark(PowerHandlerRegistryState& s, std::uint64_t i, std::thread::id t):
-            state { s }, id { i }, thread { t }
         {
+            auto const lock = std::scoped_lock { _mutex };
+            auto const it = std::ranges::find_if(
+                _running, [&](Running const& run) { return run.id == id && run.thread == thread; });
+            if (it != _running.end())
+                _running.erase(it);
         }
-        Unmark(Unmark const&) = delete;
-        Unmark& operator=(Unmark const&) = delete;
-        ~Unmark()
-        {
-            {
-                auto const lock = std::scoped_lock { state._mutex };
-                auto const it = std::ranges::find_if(
-                    state._running, [&](Running const& run) { return run.id == id && run.thread == thread; });
-                if (it != state._running.end())
-                    state._running.erase(it);
-            }
-            state._idle.notify_all();
-        }
-    };
+        _idle.notify_all();
+    }
 
     [[nodiscard]] bool isSubscribed(std::uint64_t id) const
     {
@@ -134,7 +126,7 @@ PowerSubscription PowerHandlerRegistry::subscribe(ISystemPowerMonitor::Handler h
     return _state->subscribe(std::move(handler));
 }
 
-void PowerHandlerRegistry::dispatch(SystemPowerEvent event)
+void PowerHandlerRegistry::dispatch(SystemPowerEvent event) noexcept
 {
     _state->dispatch(event);
 }
