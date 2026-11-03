@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <condition_variable>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <ranges>
@@ -56,8 +57,14 @@ class PowerHandlerRegistryState: public std::enable_shared_from_this<PowerHandle
 
     void unsubscribe(std::uint64_t id) noexcept
     {
+        // Declared before the lock, so the handler dies after it is released: destroying a handler can
+        // unsubscribe another token of this very registry.
+        auto erased = std::vector<Entry> {};
         auto lock = std::unique_lock { _mutex };
-        std::erase_if(_entries, [id](Entry const& entry) { return entry.id == id; });
+        auto const [first, last] =
+            std::ranges::remove_if(_entries, [id](Entry const& entry) { return entry.id == id; });
+        std::ranges::move(first, last, std::back_inserter(erased));
+        _entries.erase(first, last);
         auto const self = std::this_thread::get_id();
         _idle.wait(lock, [&] {
             return std::ranges::none_of(

@@ -27,8 +27,9 @@ namespace detail
 /// A live subscription to an ISystemPowerMonitor.
 ///
 /// Move-only. Destroying (or resetting) it unsubscribes, and waits out a handler that is running for it on
-/// another thread, so nothing the handler captured is used after the destructor returned. A handler may
-/// drop its own subscription: that does not wait.
+/// another thread, so the handler is no longer running once the destructor returned. Captures by reference
+/// are then safe to destroy; captures by value may be destroyed a moment later, on the monitor's thread, when
+/// a dispatch still holds the handler. A handler may drop its own subscription: that does not wait.
 class PowerSubscription
 {
   public:

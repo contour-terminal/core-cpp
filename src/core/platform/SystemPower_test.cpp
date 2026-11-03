@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <latch>
+#include <memory>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -115,4 +116,26 @@ TEST_CASE("the native monitor constructs or says why not", "[platform][power]")
     }
     else
         CHECK(monitor.error() == PlatformError::NotImplemented);
+}
+
+namespace
+{
+/// Owns a second subscription, as an object captured by another handler would.
+struct SubscriptionOwner
+{
+    PowerSubscription subscription;
+};
+} // namespace
+
+TEST_CASE("destroying a handler may unsubscribe another token", "[platform][power]")
+{
+    auto monitor = FakeSystemPowerMonitor {};
+    auto owner = std::make_shared<SubscriptionOwner>();
+    owner->subscription = monitor.subscribe([](SystemPowerEvent) {});
+    auto first = monitor.subscribe([captured = std::move(owner)](SystemPowerEvent) {});
+    REQUIRE(monitor.subscriberCount() == 2);
+
+    first = PowerSubscription {}; // destroys the handler, hence the owner, hence the second token
+
+    CHECK(monitor.subscriberCount() == 0);
 }
