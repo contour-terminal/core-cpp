@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/platform/SystemPower.hpp>
+#include <core/platform/detail/PowerMessagePlan.hpp>
 #include <core/platform/testing/FakeSystemPowerMonitor.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -8,6 +9,7 @@
 #include <chrono>
 #include <latch>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -109,6 +111,9 @@ TEST_CASE("a handler may drop its own subscription", "[platform][power]")
 TEST_CASE("the native monitor constructs or says why not", "[platform][power]")
 {
     auto monitor = core::platform::makeNativeSystemPowerMonitor();
+#if defined(__APPLE__)
+    REQUIRE(monitor.has_value());
+#endif
     if (monitor.has_value())
     {
         auto const subscription = (*monitor)->subscribe([](SystemPowerEvent) {});
@@ -152,4 +157,22 @@ TEST_CASE("destroying an earlier handler may unsubscribe a later token", "[platf
     first = PowerSubscription {}; // the owner dies with the handler; its token sits after the erased entry
 
     CHECK(monitor.subscriberCount() == 0);
+}
+
+TEST_CASE("power messages map to events and acknowledgements", "[platform][power]")
+{
+    using core::platform::detail::planPowerMessage;
+    using core::platform::detail::PowerAcknowledgement;
+    using core::platform::detail::PowerMessage;
+    using core::platform::detail::PowerMessageAction;
+
+    CHECK(planPowerMessage(PowerMessage::CanSystemSleep)
+          == PowerMessageAction { std::nullopt, PowerAcknowledgement::Yes });
+    CHECK(planPowerMessage(PowerMessage::WillSleep)
+          == PowerMessageAction { SystemPowerEvent::WillSleep, PowerAcknowledgement::Yes });
+    CHECK(planPowerMessage(PowerMessage::WillNotSleep)
+          == PowerMessageAction { SystemPowerEvent::DidWake, PowerAcknowledgement::No });
+    CHECK(planPowerMessage(PowerMessage::HasPoweredOn)
+          == PowerMessageAction { SystemPowerEvent::DidWake, PowerAcknowledgement::No });
+    CHECK(planPowerMessage(PowerMessage::Other) == PowerMessageAction {});
 }

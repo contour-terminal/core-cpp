@@ -41,11 +41,18 @@ else()
     set(_coreCppPlatformCpuCounterSource UnavailableCpuCounters.cpp)
 endif()
 
-# The same choice for makeNativeSystemPowerMonitor(); every platform is "unavailable" until its backend lands.
-set(_coreCppPlatformSystemPowerSource UnavailableSystemPower.cpp)
+# The same choice for makeNativeSystemPowerMonitor(); a platform is "unavailable" until its backend lands.
+if(APPLE)
+    set(_coreCppPlatformSystemPowerSource darwin/DarwinSystemPower.cpp)
+else()
+    set(_coreCppPlatformSystemPowerSource UnavailableSystemPower.cpp)
+endif()
 
 # Sockets back SystemPipe on Windows: a loopback pair mapped to a waitable event.
 set(_coreCppPlatformLibs "")
+if(APPLE)
+    list(APPEND _coreCppPlatformLibs "-framework IOKit" "-framework CoreFoundation")
+endif()
 if(WIN32)
     list(APPEND _coreCppPlatformLibs ws2_32)
 endif()
@@ -76,6 +83,7 @@ core_cpp_add_module(platform KIND STATIC
         WorkingDirectory.hpp
         detail/CpuCounterProbe.hpp
         detail/LinuxPerfPlan.hpp
+        detail/PowerMessagePlan.hpp
         detail/UnavailableCpuCounterSource.hpp
         testing/FakeCpuCounterSource.hpp
         testing/FakeSystemPowerMonitor.hpp

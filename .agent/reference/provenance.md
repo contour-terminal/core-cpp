@@ -454,10 +454,12 @@ others in notes.
 | `src/core/platform/WorkingDirectory.hpp` | origin: core-cpp | - | - | 0.5.0, core-cpp#7: the working directory's own seam, out of endo's `EnvironmentProvider` |
 | `src/core/platform/WorkingDirectory_test.cpp` | origin: core-cpp | - | - | 0.5.0, core-cpp#7: the double's cases, from endo's `EnvironmentProvider_test.cpp`, and the native one's; the UTF-8 `TestWorkingDirectory` case |
 | `src/core/platform/darwin/DarwinCpuCounters.cpp` | origin: core-cpp | - | - | - |
+| `src/core/platform/darwin/DarwinSystemPower.cpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/detail/CpuCounterProbe.hpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/detail/DurableFiles.hpp` | contour-terminal/contour | `src/vthost/DurableFiles.hpp` | `d563beeed554104e4b82adb3b2268a968d3280dd` | `vthost::IDurableFiles`' four operations as free functions in `core::platform::detail`, answering the operating system's `std::error_code` for `NativeFileSystem` to phrase; `createExclusive()` renamed `createNewFile()` and `replace()` `replaceFile()`; private |
 | `src/core/platform/detail/LinuxPerfPlan.cpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/detail/LinuxPerfPlan.hpp` | origin: core-cpp | - | - | - |
+| `src/core/platform/detail/PowerMessagePlan.hpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/detail/UnavailableCpuCounterSource.hpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/linux/LinuxCpuCounters.cpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/linux/LinuxWakeup.cpp` | contour-terminal/endo | `src/platform/linux/LinuxWakeup.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the eventfd is created in the member initializer |
