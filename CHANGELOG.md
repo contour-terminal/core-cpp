@@ -30,6 +30,11 @@ workflow refuses one without a section here.
   Linux. It now skips there, as `Task_test.cpp`'s deep-chain case already did, and a 1000-iteration case keeps
   the loop covered on every build. The detection moved from `src/core/async/CMakeLists.txt` to
   `cmake/CoreCppToolchain.cmake` (`CORE_CPP_SYMMETRIC_TRANSFER_DEFINITIONS`), so every module's tests can ask.
+- **`core-cpp.platform`'s CPU counter scaling case no longer fails on a busy machine.** It measured all its
+  small runs, then all its large ones, and compared the least of each, so a slowdown that covered the small
+  stretch alone pushed the ratio under its bound: Windows' reference cycles counted 1.26x for twice the work on
+  a shared CI runner. It now compares each small run with the large run measured right after it and takes the
+  median of the pairs; a counter that does not scale still fails.
 
 ## [0.12.0] - 2026-11-03
 
