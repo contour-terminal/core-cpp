@@ -7,6 +7,21 @@ release may break the API; every break is listed under **Breaking** with a migra
 release tag `vX.Y.Z` equals the version in `project(core-cpp VERSION X.Y.Z)`, and the release
 workflow refuses one without a section here.
 
+## [Unreleased]
+
+### Added
+
+- **`core::platform::ISystemPowerMonitor`, system sleep and wake notifications.** `makeNativeSystemPowerMonitor()`
+  returns the platform's monitor, whose `subscribe()` hands out a move-only `PowerSubscription` that delivers
+  `SystemPowerEvent::WillSleep` and `DidWake` to a handler until it is destroyed. Handlers run on a thread the
+  monitor owns; destroying a subscription waits out a handler that is running, except from that handler itself.
+  macOS uses IOKit, Linux uses logind's `PrepareForSleep` over sd-bus, and Windows uses
+  `PowerRegisterSuspendResumeNotification`; elsewhere the factory reports `NotImplemented`, and a refused
+  registration reports `NotificationRegistrationFailed`. `testing::FakeSystemPowerMonitor` is the test double.
+  - **New build option `CORE_CPP_WITH_SYSTEMD`** (Linux, ON by default) links `libsystemd` for the Linux
+    backend. A configure without its development files stops, naming the option; `-DCORE_CPP_WITH_SYSTEMD=OFF`
+    builds without it and the factory reports `NotImplemented`.
+
 ## [0.12.0] - 2026-11-03
 
 ### Added

@@ -115,6 +115,65 @@ Logic that schedules against a deadline takes an `IClock&` rather than calling
   constructor, which a deleted `T(IWallClock const&&)` overload does not
   ([fastcached#1028](https://github.com/LASTRADA-Software/fastcached/issues/1028)).
 
+## System sleep and wake
+
+`ISystemPowerMonitor` tells a program that the machine is about to sleep or has woken up. It is a
+hint, not a lock: a liveness check can use it to tell "the peer went silent" from "this machine was
+asleep", and so avoid declaring a healthy connection dead on the first tick after a wake.
+
+- **`SystemPowerEvent`** is `WillSleep` or `DidWake`.
+- **`ISystemPowerMonitor::subscribe(handler)`** registers a `std::function<void(SystemPowerEvent)>`
+  and returns a `PowerSubscription`. The handler is called for every event until the token is
+  destroyed.
+- **`PowerSubscription`** is move-only and RAII: destroying it (or assigning over it) unsubscribes,
+  and a default-constructed one subscribes to nothing. The token keeps the monitor's handler table
+  alive, so it may safely outlive the monitor.
+- **`makeNativeSystemPowerMonitor()`** returns the platform's monitor as a
+  `std::expected<std::unique_ptr<ISystemPowerMonitor>, PlatformError>`. `NotImplemented` means this
+  platform (or a build without the backend) has none; `NotificationRegistrationFailed` means the
+  platform has one but the operating system or session refused the registration (no system bus, for
+  one).
+
+| Platform | Source | Notes |
+| --- | --- | --- |
+| macOS | IOKit `IORegisterForSystemPower`, on a private serial dispatch queue | `DidWake` also reports a sleep that was asked about and then cancelled |
+| Linux | logind's `PrepareForSleep` signal over sd-bus, on a private thread | needs `CORE_CPP_WITH_SYSTEMD` (on by default); without it the monitor is `NotImplemented` |
+| Windows | `PowerRegisterSuspendResumeNotification` | suspend is `WillSleep`, an automatic resume is `DidWake` |
+| other | - | `NotImplemented` |
+
+Threading contract:
+
+- **Handlers run on a thread the monitor owns**, never on yours. Marshal to your own loop (post to
+  it, or set an atomic) rather than doing the work in the handler.
+- **Unsubscribing waits out a running handler.** When the `PowerSubscription` is destroyed or reset on
+  another thread, the handler is no longer running once that returns, so a capture by reference may
+  then be destroyed. A handler that drops its own subscription does not wait.
+- **A capture by value may be destroyed later**, on the monitor's thread, if a dispatch still holds
+  the handler when the token goes.
+- **A handler must not create or destroy a monitor.** On Windows a handler runs under a process-wide
+  lock that a monitor's destructor takes.
+
+The monitor never inhibits sleep. On macOS it answers IOKit's can-sleep and will-sleep messages so the
+system goes on, but only after the `WillSleep` handlers have returned, so a slow handler delays sleep
+by its own running time; on Linux and Windows nothing is held back.
+
+```cpp
+auto monitor = core::platform::makeNativeSystemPowerMonitor();
+if (!monitor)
+    return; // no power events here: skip the wake grace period
+
+auto const subscription = (*monitor)->subscribe([&loop](core::platform::SystemPowerEvent event) {
+    if (event == core::platform::SystemPowerEvent::DidWake)
+        loop.post([&] { livenessCheck.forgiveNextMiss(); }); // marshal onto the loop
+});
+```
+
+Declare the subscription after whatever its handler captures, so it is destroyed first.
+
+`core::platform::testing::FakeSystemPowerMonitor` (`testing/FakeSystemPowerMonitor.hpp`) is the test
+double: `emit(event)` calls every subscriber on the calling thread and `subscriberCount()` reports
+the live subscriptions.
+
 ## Behaviour worth knowing
 
 - **`SystemPipe` never blocks.** On POSIX both ends are non-blocking and close-on-exec. A write
