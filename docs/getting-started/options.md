@@ -18,6 +18,7 @@ core-cpp never writes to the parent's cache.
 | `CORE_CPP_WITH_TUI_OUTPUT` | `CORE_CPP_WITH_TUI`, on a first configure | Build `core::tui_output`, the styled-output leaf that links `core::base` alone. On with `CORE_CPP_WITH_TUI` off builds the leaf by itself, and fetches no libunicode. The default is taken once, when the cache entry is created: turning `CORE_CPP_WITH_TUI` off in an existing build tree leaves this on |
 | `CORE_CPP_WITH_IMAGES` | ON, when `CORE_CPP_WITH_TUI` is | Decode images in `core::tui` (stb_image) |
 | `CORE_CPP_WITH_TLS` | OFF | Build `core::net_tls` (OpenSSL, from the system) |
+| `CORE_CPP_WITH_SYSTEMD` | ON | Linux only: notify of system sleep/wake through logind (`libsystemd`, found with pkg-config and linked by value). A configure without its development files stops, naming this option; OFF builds without it and `makeNativeSystemPowerMonitor()` reports `NotImplemented` |
 | `CORE_CPP_WITH_TRACY` | OFF | Instrument core-cpp for the Tracy profiler |
 | `CORE_CPP_PEDANTIC` | ON when top-level | Compile core-cpp's targets with the pedantic warning set |
 | `CORE_CPP_WERROR` | OFF (every preset sets ON) | Treat warnings in core-cpp's targets as errors |
