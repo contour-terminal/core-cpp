@@ -9,18 +9,33 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Breaking
+
+- **On Linux, core-cpp needs `libsystemd` and `pkg-config` by default.** The new build option
+  `CORE_CPP_WITH_SYSTEMD` (Linux only, ON by default) links `libsystemd` for the system power backend (see Added),
+  found through `pkg-config`, and a configure without either stops, naming the option. Migration: install
+  `pkg-config` and libsystemd's development package (`libsystemd-dev`, `systemd-devel`), or configure with
+  `-DCORE_CPP_WITH_SYSTEMD=OFF`, which builds without it and makes `makeNativeSystemPowerMonitor()` report
+  `NotImplemented`.
+- **`core::platform::PlatformError` has a new enumerator, `NotificationRegistrationFailed`**, appended last so the
+  others keep their values. A `switch` over `PlatformError` that names every enumerator and builds with `-Werror`
+  (`-Wswitch`) must handle it; `toString()` already does.
+
 ### Added
 
 - **`core::platform::ISystemPowerMonitor`, system sleep and wake notifications.** `makeNativeSystemPowerMonitor()`
   returns the platform's monitor, whose `subscribe()` hands out a move-only `PowerSubscription` that delivers
-  `SystemPowerEvent::WillSleep` and `DidWake` to a handler until it is destroyed. Handlers run on a thread the
-  monitor owns; destroying a subscription waits out a handler that is running, except from that handler itself.
-  macOS uses IOKit, Linux uses logind's `PrepareForSleep` over sd-bus, and Windows uses
+  `SystemPowerEvent::WillSleep` and `DidWake` to a handler until it is destroyed. Handlers run on a platform thread
+  that is not the caller's; destroying a subscription waits out a handler that is running, except from that
+  handler itself. A handler must not throw (one that does terminates the process, on every backend and in the
+  test double), must not create or destroy a monitor, must not block on a thread that may be destroying its
+  subscription or monitor, and should return promptly. Events are hints: a `DidWake` may come without a
+  `WillSleep`, and a monitor that was created does not guarantee that any event arrives.
+  macOS uses IOKit, Linux uses logind's `PrepareForSleep` over sd-bus (reconnecting a lost system bus with a
+  backoff of 1 s doubling up to 30 s, so delivery pauses while the bus is away), and Windows uses
   `PowerRegisterSuspendResumeNotification`; elsewhere the factory reports `NotImplemented`, and a refused
-  registration reports `NotificationRegistrationFailed`. `testing::FakeSystemPowerMonitor` is the test double.
-  - **New build option `CORE_CPP_WITH_SYSTEMD`** (Linux, ON by default) links `libsystemd` for the Linux
-    backend. A configure without its development files stops, naming the option; `-DCORE_CPP_WITH_SYSTEMD=OFF`
-    builds without it and the factory reports `NotImplemented`.
+  registration reports `NotificationRegistrationFailed`. `testing::FakeSystemPowerMonitor` is the test double, and
+  `detail::PowerHandlerRegistry` is the supported way to implement another monitor.
 
 ### Fixed
 

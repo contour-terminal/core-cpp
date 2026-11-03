@@ -132,26 +132,52 @@ asleep", and so avoid declaring a healthy connection dead on the first tick afte
   `std::expected<std::unique_ptr<ISystemPowerMonitor>, PlatformError>`. `NotImplemented` means this
   platform (or a build without the backend) has none; `NotificationRegistrationFailed` means the
   platform has one but the operating system or session refused the registration (no system bus, for
-  one).
+  one). The factory does not wait on the operating system's answer where it can avoid it: on Linux
+  it opens the bus and queues the match without waiting for the reply, so a hung bus does not hold
+  up the caller.
 
 | Platform | Source | Notes |
 | --- | --- | --- |
-| macOS | IOKit `IORegisterForSystemPower`, on a private serial dispatch queue | `DidWake` also reports a sleep that was asked about and then cancelled |
-| Linux | logind's `PrepareForSleep` signal over sd-bus, on a private thread | needs `CORE_CPP_WITH_SYSTEMD` (on by default); without it the monitor is `NotImplemented` |
-| Windows | `PowerRegisterSuspendResumeNotification` | suspend is `WillSleep`, an automatic resume is `DidWake` |
+| macOS | IOKit `IORegisterForSystemPower`, on a private serial dispatch queue | an idle sleep that is asked about and then not taken reports nothing |
+| Linux | logind's `PrepareForSleep` signal over sd-bus, on a private thread | needs `CORE_CPP_WITH_SYSTEMD` (on by default) and `pkg-config`; without it the monitor is `NotImplemented`. A lost system bus is reconnected (below) |
+| Windows | `PowerRegisterSuspendResumeNotification`, on the power manager's thread | suspend is `WillSleep`, an automatic resume is `DidWake` |
 | other | - | `NotImplemented` |
 
-Threading contract:
+Events are hints, not a protocol:
 
-- **Handlers run on a thread the monitor owns**, never on yours. Marshal to your own loop (post to
-  it, or set an atomic) rather than doing the work in the handler.
+- **A `DidWake` may arrive without a `WillSleep` before it**, and a monitor that was created
+  successfully does not guarantee that any event ever arrives.
+- **On Linux a `WillSleep` may arrive late**, after suspend has begun: the monitor takes no
+  inhibitor lock.
+- **On Linux delivery may pause while the system bus is unavailable.** The monitor's thread notices
+  the lost connection, closes it and reconnects: it waits 1 s before the first attempt and doubles
+  the wait after each failed one, up to 30 s, and starts over at 1 s once the bus has accepted the
+  match again. Events sent while it was away are lost. Destroying the monitor interrupts the wait.
+
+The handler contract:
+
+- **Handlers run on a platform thread that is not the caller's**: the monitor's own on macOS and
+  Linux, the power manager's on Windows. Marshal to your own loop (post to it, or set an atomic)
+  rather than doing the work in the handler.
+- **A handler must not throw.** One that does terminates the process, on every backend and in the
+  test double: `PowerHandlerRegistry::dispatch()` is `noexcept`, the same trade
+  `core::async::DetachedTask` and `EventLoop::onHostPump` make, since there is no caller to hand
+  the exception to.
+- **A handler must not create or destroy a monitor.** Destroying one from its handler deadlocks on
+  macOS (it waits for its own queue) and on Windows (it takes a process-wide lock the handler
+  already holds), and joins its own thread on Linux; creating one on Windows takes that lock again.
+- **A handler must never block waiting on a thread that may be destroying its subscription or its
+  monitor**: both wait for a running handler to return, on every backend.
+- **A handler should return promptly.** On macOS the system does not sleep until every `WillSleep`
+  handler has returned, up to IOKit's 30 s timeout.
 - **Unsubscribing waits out a running handler.** When the `PowerSubscription` is destroyed or reset on
   another thread, the handler is no longer running once that returns, so a capture by reference may
   then be destroyed. A handler that drops its own subscription does not wait.
-- **A capture by value may be destroyed later**, on the monitor's thread, if a dispatch still holds
+- **A capture by value may be destroyed later**, on the dispatching thread, if a dispatch still holds
   the handler when the token goes.
-- **A handler must not create or destroy a monitor.** On Windows a handler runs under a process-wide
-  lock that a monitor's destructor takes.
+- **A handler subscribed from inside another handler** first sees the event after the one being
+  dispatched.
+- **The handler must not be empty**; `subscribe()` checks it with `Require()`.
 
 The monitor never inhibits sleep. On macOS it answers IOKit's can-sleep and will-sleep messages so the
 system goes on, but only after the `WillSleep` handlers have returned, so a slow handler delays sleep
@@ -172,7 +198,12 @@ Declare the subscription after whatever its handler captures, so it is destroyed
 
 `core::platform::testing::FakeSystemPowerMonitor` (`testing/FakeSystemPowerMonitor.hpp`) is the test
 double: `emit(event)` calls every subscriber on the calling thread and `subscriberCount()` reports
-the live subscriptions.
+the live subscriptions. Unlike a native monitor, it may be destroyed by one of its handlers.
+
+To implement another monitor, dispatch through `core::platform::detail::PowerHandlerRegistry`, as
+every backend and the fake do: it is the supported way, since `PowerSubscription` can be constructed
+only through it. It is thread-safe, keeps the handler table alive for as long as a token or a
+dispatch needs it, and its `dispatch()` is the `noexcept` boundary of the exception policy above.
 
 ## Behaviour worth knowing
 
