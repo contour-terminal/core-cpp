@@ -33,8 +33,10 @@ workflow refuses one without a section here.
   `WillSleep`, and a monitor that was created does not guarantee that any event arrives.
   macOS uses IOKit, Linux uses logind's `PrepareForSleep` over sd-bus (reconnecting a lost system bus with a
   backoff of 1 s doubling up to 30 s, so delivery pauses while the bus is away), and Windows uses
-  `PowerRegisterSuspendResumeNotification`; elsewhere the factory reports `NotImplemented`, and a refused
-  registration reports `NotificationRegistrationFailed`. `testing::FakeSystemPowerMonitor` is the test double, and
+  `PowerRegisterSuspendResumeNotification`; elsewhere the factory reports `NotImplemented`.
+  `NotificationRegistrationFailed` means the registration could not be made: on macOS and Windows when the operating
+  system refuses it, on Linux only when the system bus cannot be opened (a match the bus refuses later is retried
+  like a lost bus). `testing::FakeSystemPowerMonitor` is the test double, and
   `detail::PowerHandlerRegistry` is the supported way to implement another monitor.
 
 ### Fixed

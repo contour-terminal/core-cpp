@@ -185,16 +185,19 @@ TEST_CASE("a handler may destroy the fake", "[platform][power]")
 {
     auto monitor = std::make_unique<FakeSystemPowerMonitor>();
     auto calls = 0;
-    auto const first = monitor->subscribe([&](SystemPowerEvent) {
+    auto subscription = PowerSubscription {};
+    subscription = monitor->subscribe([&](SystemPowerEvent) {
         ++calls;
+        // With its own token gone too, the dispatch's keep-alive is the last reference to the registry's
+        // state: without it, the dispatch would go on over freed memory once this returns.
+        subscription = PowerSubscription {};
         monitor.reset();
     });
-    auto const second = monitor->subscribe([&](SystemPowerEvent) { ++calls; });
 
     monitor->emit(SystemPowerEvent::DidWake);
 
     CHECK(monitor == nullptr);
-    CHECK(calls == 2); // the dispatch finished over the state it kept alive
+    CHECK(calls == 1);
 }
 
 TEST_CASE("the native monitor constructs or says why not", "[platform][power]")

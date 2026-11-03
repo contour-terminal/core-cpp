@@ -134,7 +134,7 @@ asleep", and so avoid declaring a healthy connection dead on the first tick afte
   platform has one but the operating system or session refused the registration (no system bus, for
   one). The factory does not wait on the operating system's answer where it can avoid it: on Linux
   it opens the bus and queues the match without waiting for the reply, so a hung bus does not hold
-  up the caller.
+  up the caller, and a match the bus refuses later is retried like a lost bus rather than reported.
 
 | Platform | Source | Notes |
 | --- | --- | --- |

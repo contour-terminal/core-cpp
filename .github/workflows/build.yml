@@ -1119,7 +1119,7 @@ jobs:
 
       - name: Install Ninja
         if: matrix.leg != 'vendored'
-        run: scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libsystemd-dev
+        run: scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libsystemd-dev pkg-config
 
       # --- cpm ---------------------------------------------------------------------------------
       - name: Install clang ${{ env.LLVM_VERSION }}

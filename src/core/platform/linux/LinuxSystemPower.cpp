@@ -4,6 +4,7 @@
 
 #include <sys/eventfd.h>
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <chrono>
@@ -32,6 +33,9 @@ namespace
         return (static_cast<std::uint64_t>(now.tv_sec) * 1'000'000U)
                + (static_cast<std::uint64_t>(now.tv_nsec) / 1'000U);
     }
+
+    /// How long the reconnect wait sleeps between two tries of a poll() that failed outright.
+    constexpr auto PollRetrySlice = std::chrono::milliseconds { 100 };
 
     /// Closes a bus connection without flushing it: a hung bus must not hold up a reconnect or the
     /// destructor, and nothing queued on it (the AddMatch call) is worth waiting for.
@@ -98,7 +102,7 @@ namespace
         /// @return Whether the connection could be opened.
         [[nodiscard]] std::expected<void, PlatformError> start()
         {
-            _shutdown = ::eventfd(0, EFD_CLOEXEC);
+            _shutdown = ::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
             if (_shutdown == -1)
                 return std::unexpected(PlatformError::NotificationRegistrationFailed);
             connect();
@@ -211,8 +215,24 @@ namespace
                 if (ready > 0 && (fd.revents & POLLIN) != 0)
                     return Wait::ShutdownRequested;
                 if (ready < 0 && errno != EINTR)
-                    return Wait::TimedOut;
+                {
+                    // poll() itself failed: neither give up on the delay, which would turn a persistent
+                    // failure into reconnects back to back, nor stop watching for shutdown. Read the
+                    // non-blocking eventfd directly, then sleep a slice and try again.
+                    if (shutdownSignalled())
+                        return Wait::ShutdownRequested;
+                    std::this_thread::sleep_for(
+                        std::min(std::chrono::milliseconds { timeout }, PollRetrySlice));
+                }
             }
+        }
+
+        /// Whether the destructor has written the shutdown eventfd, read without poll(). Consumes the
+        /// count, which is harmless: the thread returns as soon as it sees it.
+        [[nodiscard]] bool shutdownSignalled() const noexcept
+        {
+            auto count = std::uint64_t { 0 };
+            return ::read(_shutdown, &count, sizeof(count)) == static_cast<ssize_t>(sizeof(count));
         }
 
         /// Processes what the bus has, then waits for it or for the shutdown eventfd.
