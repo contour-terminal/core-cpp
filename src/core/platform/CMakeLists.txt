@@ -41,6 +41,9 @@ else()
     set(_coreCppPlatformCpuCounterSource UnavailableCpuCounters.cpp)
 endif()
 
+# The same choice for makeNativeSystemPowerMonitor(); every platform is "unavailable" until its backend lands.
+set(_coreCppPlatformSystemPowerSource UnavailableSystemPower.cpp)
+
 # Sockets back SystemPipe on Windows: a loopback pair mapped to a waitable event.
 set(_coreCppPlatformLibs "")
 if(WIN32)
@@ -65,6 +68,7 @@ core_cpp_add_module(platform KIND STATIC
         StringUtils.hpp
         SystemInfo.hpp
         SystemPipe.hpp
+        SystemPower.hpp
         Types.hpp
         UserPaths.hpp
         Wakeup.hpp
@@ -74,6 +78,7 @@ core_cpp_add_module(platform KIND STATIC
         detail/LinuxPerfPlan.hpp
         detail/UnavailableCpuCounterSource.hpp
         testing/FakeCpuCounterSource.hpp
+        testing/FakeSystemPowerMonitor.hpp
         testing/InMemoryFileSystem.hpp
         testing/MockFileInfoProvider.hpp
         testing/TestProcessEnvironment.hpp
@@ -88,6 +93,8 @@ core_cpp_add_module(platform KIND STATIC
         SignalHandler.cpp
         SystemInfo.cpp
         SystemPipe.cpp
+        SystemPower.cpp
+        ${_coreCppPlatformSystemPowerSource}
         WinsockInit.cpp
         testing/InMemoryFileSystem.cpp
     SOURCES_POSIX
@@ -112,6 +119,8 @@ core_cpp_add_module(platform KIND STATIC
         ${_coreCppPlatformSubset}
         ${_coreCppPlatformPosixProviders}
         ${_coreCppPlatformCpuCounterSource}
+        SystemPower.cpp
+        ${_coreCppPlatformSystemPowerSource}
     PUBLIC_LIBS core::base
     PRIVATE_LIBS ${_coreCppPlatformLibs})
 
@@ -126,6 +135,7 @@ core_cpp_add_test(platform
         SignalHandler_test.cpp
         SystemInfo_test.cpp
         SystemPipe_test.cpp
+        SystemPower_test.cpp
         UserPaths_test.cpp
         Wakeup_test.cpp
     # The Windows half of a POSIX guarantee: FD_CLOEXEC there, no inheritable handle here.
