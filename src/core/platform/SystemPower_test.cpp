@@ -28,7 +28,7 @@ using core::platform::testing::FakeSystemPowerMonitor;
 // the dispatch it runs in is the noexcept boundary.
 static_assert(noexcept(std::declval<PowerHandlerRegistry&>().dispatch(SystemPowerEvent::DidWake)),
               "a throwing handler must terminate, not unwind into the operating system's callback");
-static_assert(noexcept(std::declval<FakeSystemPowerMonitor&>().emit(SystemPowerEvent::DidWake)),
+static_assert(noexcept(std::declval<FakeSystemPowerMonitor&>().deliver(SystemPowerEvent::DidWake)),
               "the fake must apply the same exception policy as the native monitors");
 
 namespace
@@ -53,8 +53,8 @@ TEST_CASE("a subscriber receives each power event", "[platform][power]")
     auto received = std::vector<SystemPowerEvent> {};
     auto const subscription = monitor.subscribe([&](SystemPowerEvent event) { received.push_back(event); });
 
-    monitor.emit(SystemPowerEvent::WillSleep);
-    monitor.emit(SystemPowerEvent::DidWake);
+    monitor.deliver(SystemPowerEvent::WillSleep);
+    monitor.deliver(SystemPowerEvent::DidWake);
 
     CHECK(received == std::vector { SystemPowerEvent::WillSleep, SystemPowerEvent::DidWake });
 }
@@ -67,7 +67,7 @@ TEST_CASE("a destroyed subscription receives nothing", "[platform][power]")
     REQUIRE(monitor.subscriberCount() == 1);
 
     subscription = PowerSubscription {};
-    monitor.emit(SystemPowerEvent::DidWake);
+    monitor.deliver(SystemPowerEvent::DidWake);
 
     CHECK(received.empty());
     CHECK(monitor.subscriberCount() == 0);
@@ -80,7 +80,7 @@ TEST_CASE("a moved subscription stays subscribed", "[platform][power]")
     auto first = monitor.subscribe([&](SystemPowerEvent event) { received.push_back(event); });
     auto const second = PowerSubscription { std::move(first) };
 
-    monitor.emit(SystemPowerEvent::DidWake);
+    monitor.deliver(SystemPowerEvent::DidWake);
 
     CHECK(received.size() == 1);
     CHECK(monitor.subscriberCount() == 1);
@@ -128,8 +128,8 @@ TEST_CASE("a handler may drop its own subscription", "[platform][power]")
         subscription = PowerSubscription {};
     });
 
-    monitor.emit(SystemPowerEvent::DidWake);
-    monitor.emit(SystemPowerEvent::DidWake);
+    monitor.deliver(SystemPowerEvent::DidWake);
+    monitor.deliver(SystemPowerEvent::DidWake);
 
     CHECK(calls == 1);
     CHECK(monitor.subscriberCount() == 0);
@@ -142,7 +142,7 @@ TEST_CASE("a subscription may outlive its monitor", "[platform][power]")
     {
         auto monitor = FakeSystemPowerMonitor {};
         subscription = monitor.subscribe([&](SystemPowerEvent) { ++calls; });
-        monitor.emit(SystemPowerEvent::DidWake);
+        monitor.deliver(SystemPowerEvent::DidWake);
     }
     subscription = PowerSubscription {}; // unsubscribes from the state the token kept alive
 
@@ -173,11 +173,11 @@ TEST_CASE("a handler subscribed during a dispatch sees the next event only", "[p
             lateSubscription = monitor.subscribe([&](SystemPowerEvent event) { late.push_back(event); });
     });
 
-    monitor.emit(SystemPowerEvent::WillSleep);
+    monitor.deliver(SystemPowerEvent::WillSleep);
     CHECK(late.empty());
     CHECK(monitor.subscriberCount() == 2);
 
-    monitor.emit(SystemPowerEvent::DidWake);
+    monitor.deliver(SystemPowerEvent::DidWake);
     CHECK(late == std::vector { SystemPowerEvent::DidWake });
 }
 
@@ -194,7 +194,7 @@ TEST_CASE("a handler may destroy the fake", "[platform][power]")
         monitor.reset();
     });
 
-    monitor->emit(SystemPowerEvent::DidWake);
+    monitor->deliver(SystemPowerEvent::DidWake);
 
     CHECK(monitor == nullptr);
     CHECK(calls == 1);

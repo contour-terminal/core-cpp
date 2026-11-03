@@ -197,7 +197,7 @@ auto const subscription = (*monitor)->subscribe([&loop](core::platform::SystemPo
 Declare the subscription after whatever its handler captures, so it is destroyed first.
 
 `core::platform::testing::FakeSystemPowerMonitor` (`testing/FakeSystemPowerMonitor.hpp`) is the test
-double: `emit(event)` calls every subscriber on the calling thread and `subscriberCount()` reports
+double: `deliver(event)` calls every subscriber on the calling thread and `subscriberCount()` reports
 the live subscriptions. Unlike a native monitor, it may be destroyed by one of its handlers.
 
 To implement another monitor, dispatch through `core::platform::detail::PowerHandlerRegistry`, as

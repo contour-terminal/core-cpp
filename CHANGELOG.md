@@ -7,6 +7,13 @@ release may break the API; every break is listed under **Breaking** with a migra
 release tag `vX.Y.Z` equals the version in `project(core-cpp VERSION X.Y.Z)`, and the release
 workflow refuses one without a section here.
 
+## [Unreleased]
+
+### Breaking
+
+- **`core::platform::testing::FakeSystemPowerMonitor::emit()` is now `deliver()`**, because `emit` is a macro in Qt
+  translation units and the header could not be included there. Migration: rename the call.
+
 ## [0.13.0] - 2026-11-03
 
 ### Breaking

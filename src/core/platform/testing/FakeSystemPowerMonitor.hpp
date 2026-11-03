@@ -20,8 +20,9 @@ class FakeSystemPowerMonitor final: public ISystemPowerMonitor
 
     /// Delivers an event to every subscriber, on the calling thread. A handler that throws terminates, as
     /// it does under every native monitor; unlike those, a handler may destroy the fake.
+    /// Not named `emit`: that is a macro in every Qt translation unit.
     /// @param event What happened.
-    void emit(SystemPowerEvent event) noexcept { _registry.dispatch(event); }
+    void deliver(SystemPowerEvent event) noexcept { _registry.dispatch(event); }
 
     /// The number of live subscriptions.
     [[nodiscard]] std::size_t subscriberCount() const { return _registry.size(); }
