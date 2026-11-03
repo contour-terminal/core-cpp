@@ -139,3 +139,17 @@ TEST_CASE("destroying a handler may unsubscribe another token", "[platform][powe
 
     CHECK(monitor.subscriberCount() == 0);
 }
+
+TEST_CASE("destroying an earlier handler may unsubscribe a later token", "[platform][power]")
+{
+    auto monitor = FakeSystemPowerMonitor {};
+    auto owner = std::make_shared<SubscriptionOwner>();
+    auto first = monitor.subscribe([captured = owner](SystemPowerEvent) {});
+    owner->subscription = monitor.subscribe([](SystemPowerEvent) {});
+    owner.reset();
+    REQUIRE(monitor.subscriberCount() == 2);
+
+    first = PowerSubscription {}; // the owner dies with the handler; its token sits after the erased entry
+
+    CHECK(monitor.subscriberCount() == 0);
+}
