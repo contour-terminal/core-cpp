@@ -111,7 +111,7 @@ TEST_CASE("a handler may drop its own subscription", "[platform][power]")
 TEST_CASE("the native monitor constructs or says why not", "[platform][power]")
 {
     auto monitor = core::platform::makeNativeSystemPowerMonitor();
-#if defined(__APPLE__)
+#ifdef __APPLE__
     REQUIRE(monitor.has_value());
 #endif
     if (monitor.has_value())
