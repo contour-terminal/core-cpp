@@ -28,11 +28,11 @@ class PowerHandlerRegistryState: public std::enable_shared_from_this<PowerHandle
 
     void dispatch(SystemPowerEvent event)
     {
-        auto snapshot = std::vector<Entry> {};
-        {
+        // Copy-constructed rather than assigned into an empty vector, which GCC 15 flags at -O3.
+        auto const snapshot = [this] {
             auto const lock = std::scoped_lock { _mutex };
-            snapshot = _entries;
-        }
+            return _entries;
+        }();
         auto const self = std::this_thread::get_id();
         for (auto const& entry: snapshot)
         {

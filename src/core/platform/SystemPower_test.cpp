@@ -10,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <latch>
 #include <limits>
 #include <memory>
@@ -23,6 +24,22 @@ using core::platform::PowerSubscription;
 using core::platform::SystemPowerEvent;
 using core::platform::detail::PowerHandlerRegistry;
 using core::platform::testing::FakeSystemPowerMonitor;
+
+namespace
+{
+/// Joins its thread on every path out of the scope (std::jthread is missing from older AppleClang).
+class ScopedThread
+{
+  public:
+    explicit ScopedThread(std::function<void()> body): _thread { std::move(body) } {}
+    ScopedThread(ScopedThread const&) = delete;
+    ScopedThread& operator=(ScopedThread const&) = delete;
+    ~ScopedThread() { _thread.join(); }
+
+  private:
+    std::thread _thread;
+};
+} // namespace
 
 TEST_CASE("a subscriber receives each power event", "[platform][power]")
 {
@@ -79,9 +96,9 @@ TEST_CASE("unsubscribing waits out a running handler", "[platform][power]")
     });
 
     {
-        auto dispatcher = std::jthread { [&] { registry.dispatch(SystemPowerEvent::DidWake); } };
+        auto dispatcher = ScopedThread { [&] { registry.dispatch(SystemPowerEvent::DidWake); } };
         entered.wait();
-        auto destroyer = std::jthread { [&] {
+        auto destroyer = ScopedThread { [&] {
             subscription = PowerSubscription {};
             destructorDone = ++sequence;
         } };
