@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/platform/SystemPower.hpp>
+#include <core/platform/detail/LogindPlan.hpp>
 #include <core/platform/detail/PowerMessagePlan.hpp>
 #include <core/platform/testing/FakeSystemPowerMonitor.hpp>
 
@@ -7,7 +8,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <latch>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <thread>
@@ -114,13 +117,43 @@ TEST_CASE("the native monitor constructs or says why not", "[platform][power]")
 #ifdef __APPLE__
     REQUIRE(monitor.has_value());
 #endif
+#ifdef CORE_CPP_HAS_SYSTEMD
+    // A container without a system bus cannot register, and says so.
+    if (!monitor.has_value())
+        REQUIRE(monitor.error() == PlatformError::NotificationRegistrationFailed);
+#endif
     if (monitor.has_value())
     {
         auto const subscription = (*monitor)->subscribe([](SystemPowerEvent) {});
         SUCCEED();
     }
+#if !defined(__APPLE__) && !defined(CORE_CPP_HAS_SYSTEMD)
     else
         CHECK(monitor.error() == PlatformError::NotImplemented);
+#endif
+}
+
+TEST_CASE("logind's PrepareForSleep argument names the event", "[platform][power]")
+{
+    using core::platform::detail::eventForPrepareForSleep;
+    using core::platform::detail::LogindSleepState;
+
+    CHECK(eventForPrepareForSleep(LogindSleepState::Sleeping) == SystemPowerEvent::WillSleep);
+    CHECK(eventForPrepareForSleep(LogindSleepState::Waking) == SystemPowerEvent::DidWake);
+}
+
+TEST_CASE("an absolute sd-bus deadline becomes a poll timeout", "[platform][power]")
+{
+    using core::platform::detail::pollTimeoutMilliseconds;
+    constexpr auto Never = std::numeric_limits<std::uint64_t>::max();
+
+    CHECK(pollTimeoutMilliseconds(Never, 1'000) == -1);
+    CHECK(pollTimeoutMilliseconds(1'000, 1'000) == 0);
+    CHECK(pollTimeoutMilliseconds(500, 1'000) == 0);
+    CHECK(pollTimeoutMilliseconds(1'001, 1'000) == 1); // rounds up, never spins short
+    CHECK(pollTimeoutMilliseconds(3'500, 1'000) == 3);
+    CHECK(pollTimeoutMilliseconds(1'000 + 2'000'000, 1'000) == 2'000);
+    CHECK(pollTimeoutMilliseconds(Never - 1, 0) == std::numeric_limits<int>::max());
 }
 
 namespace

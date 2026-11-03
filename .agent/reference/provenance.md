@@ -459,9 +459,11 @@ others in notes.
 | `src/core/platform/detail/DurableFiles.hpp` | contour-terminal/contour | `src/vthost/DurableFiles.hpp` | `d563beeed554104e4b82adb3b2268a968d3280dd` | `vthost::IDurableFiles`' four operations as free functions in `core::platform::detail`, answering the operating system's `std::error_code` for `NativeFileSystem` to phrase; `createExclusive()` renamed `createNewFile()` and `replace()` `replaceFile()`; private |
 | `src/core/platform/detail/LinuxPerfPlan.cpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/detail/LinuxPerfPlan.hpp` | origin: core-cpp | - | - | - |
+| `src/core/platform/detail/LogindPlan.hpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/detail/PowerMessagePlan.hpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/detail/UnavailableCpuCounterSource.hpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/linux/LinuxCpuCounters.cpp` | origin: core-cpp | - | - | - |
+| `src/core/platform/linux/LinuxSystemPower.cpp` | origin: core-cpp | - | - | - |
 | `src/core/platform/linux/LinuxWakeup.cpp` | contour-terminal/endo | `src/platform/linux/LinuxWakeup.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the eventfd is created in the member initializer |
 | `src/core/platform/posix/PosixDurableFiles.cpp` | contour-terminal/contour | `src/vthost/DurableFiles.cpp` | `d563beeed554104e4b82adb3b2268a968d3280dd` | the free functions of `detail/DurableFiles.hpp`; no file-wide `#ifndef _WIN32` guard: `SOURCES_POSIX` selects the file (Ruling R42); `F_FULLFSYNC` is chosen by its own macro rather than `__APPLE__`; the rename is `std::rename()`, so it never takes the two-hop recase |
 | `src/core/platform/posix/PosixFileInfoProvider.cpp` | contour-terminal/endo | `src/platform/linux/LinuxFileInfoProvider.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `LinuxFileInfoProvider`, renamed `PosixFileInfoProvider` and moved to `posix/`: it uses nothing Linux-specific, and is the provider on Linux, macOS, the BSDs and Emscripten; defines `nativeFileInfoProvider()` (core-cpp) |

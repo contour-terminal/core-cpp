@@ -23,6 +23,8 @@ cmake --workflow --preset ci-clang-debug     # the same three steps in one comma
   Homebrew's `openssl@3` on macOS with `OPENSSL_ROOT_DIR` set to `$(brew --prefix openssl@3)`. On
   Windows only `cl-release-tls` needs it (CI takes it from vcpkg). core-cpp never fetches
   OpenSSL; `-DCORE_CPP_WITH_TLS=OFF` builds without it.
+- On Linux, libsystemd's development files for `CORE_CPP_WITH_SYSTEMD` (on by default): `libsystemd-dev`
+  on Debian and Ubuntu, `systemd-devel` on Fedora; `-DCORE_CPP_WITH_SYSTEMD=OFF` builds without it.
 - Network access for the first configure. With the defaults it fetches Catch2, libunicode (for
   `CORE_CPP_WITH_TUI`) and stb (for `CORE_CPP_WITH_IMAGES`) from `github.com` and
   `codeload.github.com` with CPM, unless each is already installed or supplied by the parent

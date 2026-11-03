@@ -367,6 +367,8 @@ jobs:
           - { name: clang-22-cxx26, os: ubuntu-24.04, preset: clang-debug, compiler: clang, cxx_standard: "26" }
           # CORE_CPP_WITH_TRACY: the fetched Tracy client, and the profiling macros' enabled branch.
           - { name: clang-22-tracy, os: ubuntu-24.04, preset: clang-tracy, compiler: clang }
+          # CORE_CPP_WITH_SYSTEMD=OFF: no libsystemd link, and the unavailable power-monitor backend.
+          - { name: clang-22-no-systemd, os: ubuntu-24.04, preset: clang-debug, compiler: clang, systemd: "OFF" }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -389,7 +391,7 @@ jobs:
       # OpenSSL's headers and libraries: every unix preset turns CORE_CPP_WITH_TLS on, and
       # core::net_tls takes OpenSSL from the system.
       - name: Install Ninja and OpenSSL
-        run: scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libssl-dev
+        run: scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libsystemd-dev libssl-dev
 
       - name: Install clang ${{ env.LLVM_VERSION }}
         if: matrix.compiler == 'clang'
@@ -418,6 +420,7 @@ jobs:
         run: >-
           cmake --preset ${{ matrix.preset }} -DCMAKE_CXX_COMPILER="$CXX_COMPILER"
           ${{ matrix.cxx_standard && format('-DCMAKE_CXX_STANDARD={0}', matrix.cxx_standard) || '' }}
+          ${{ matrix.systemd && format('-DCORE_CPP_WITH_SYSTEMD={0}', matrix.systemd) || '' }}
 
       # A leg named C++26 that compiles C++23 would report green for a question it never asked:
       # a normal variable once shadowed -DCMAKE_CXX_STANDARD. So every compile of core-cpp's own
@@ -726,7 +729,7 @@ jobs:
       # OpenSSL for core::net_tls, which the unix presets build (CORE_CPP_WITH_TLS).
       - name: Install Ninja, OpenSSL and clang ${{ env.LLVM_VERSION }}
         run: |
-          scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libssl-dev
+          scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libsystemd-dev libssl-dev
           scripts/ci-retry.sh wget -q https://apt.llvm.org/llvm.sh
           scripts/ci-retry.sh sudo bash llvm.sh "$LLVM_VERSION"
 
@@ -780,7 +783,7 @@ jobs:
       # OpenSSL, so that core::net_tls (CORE_CPP_WITH_TLS, on in the unix presets) is analysed too.
       - name: Install Ninja, OpenSSL and clang ${{ env.LLVM_VERSION }}
         run: |
-          scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libssl-dev
+          scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libsystemd-dev libssl-dev
           scripts/ci-retry.sh wget -q https://apt.llvm.org/llvm.sh
           scripts/ci-retry.sh sudo bash llvm.sh "$LLVM_VERSION"
 
@@ -996,7 +999,7 @@ jobs:
       # 0.6.0 binaries need nothing beyond glibc and libstdc++ (the fastcached 0.2.0 release also
       # needed libyaml-cpp.so.0.8).
       - name: Install Ninja, GCC ${{ env.GCC_VERSION }} and OpenSSL
-        run: scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build "g++-$GCC_VERSION" libssl-dev
+        run: scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libsystemd-dev "g++-$GCC_VERSION" libssl-dev
 
       - name: No other compiler cache is installed
         run: |
@@ -1099,7 +1102,7 @@ jobs:
 
       - name: Install Ninja
         if: matrix.leg != 'vendored'
-        run: scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build
+        run: scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libsystemd-dev
 
       # --- cpm ---------------------------------------------------------------------------------
       - name: Install clang ${{ env.LLVM_VERSION }}
@@ -1146,7 +1149,7 @@ jobs:
           docker build -t core-cpp-vendored-smoke - <<'DOCKERFILE'
           FROM ubuntu:24.04
           RUN apt-get update -q \
-           && apt-get install -y -q --no-install-recommends g++-14 cmake ninja-build libssl-dev \
+           && apt-get install -y -q --no-install-recommends g++-14 cmake ninja-build libssl-dev libsystemd-dev pkg-config \
            && rm -rf /var/lib/apt/lists/*
           DOCKERFILE
 
@@ -1184,7 +1187,7 @@ jobs:
         if: matrix.leg == 'vendored'
         run: |
           scripts/ci-retry.sh sudo apt-get update -q
-          scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libssl-dev g++-14
+          scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libsystemd-dev libssl-dev g++-14
           cmake -S "$RUNNER_TEMP/vendor/core-cpp" -B "$RUNNER_TEMP/vendored-testing" -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++-14 \
             -DCORE_CPP_TESTING=ON -DCORE_CPP_WITH_TUI=OFF -DCORE_CPP_WITH_TLS=ON \
@@ -1239,7 +1242,7 @@ jobs:
       # is for core::net_tls, which the unix presets build (CORE_CPP_WITH_TLS).
       - name: Install Ninja, OpenSSL, clang ${{ env.LLVM_VERSION }} and its coverage tools
         run: |
-          scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libssl-dev
+          scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libsystemd-dev libssl-dev
           scripts/ci-retry.sh wget -q https://apt.llvm.org/llvm.sh
           scripts/ci-retry.sh sudo bash llvm.sh "$LLVM_VERSION"
           scripts/ci-retry.sh sudo apt-get install -y -q "llvm-$LLVM_VERSION"
