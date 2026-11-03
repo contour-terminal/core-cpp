@@ -19,7 +19,6 @@
 #include <utility>
 #include <vector>
 
-using core::platform::PlatformError;
 using core::platform::PowerSubscription;
 using core::platform::SystemPowerEvent;
 using core::platform::detail::PowerHandlerRegistry;
@@ -141,7 +140,7 @@ TEST_CASE("the native monitor constructs or says why not", "[platform][power]")
 #ifdef CORE_CPP_HAS_SYSTEMD
     // A container without a system bus cannot register, and says so.
     if (!monitor.has_value())
-        REQUIRE(monitor.error() == PlatformError::NotificationRegistrationFailed);
+        REQUIRE(monitor.error() == core::platform::PlatformError::NotificationRegistrationFailed);
 #endif
     if (monitor.has_value())
     {
@@ -150,7 +149,7 @@ TEST_CASE("the native monitor constructs or says why not", "[platform][power]")
     }
 #if !defined(__APPLE__) && !defined(_WIN32) && !defined(CORE_CPP_HAS_SYSTEMD)
     else
-        CHECK(monitor.error() == PlatformError::NotImplemented);
+        CHECK(monitor.error() == core::platform::PlatformError::NotImplemented);
 #endif
 }
 

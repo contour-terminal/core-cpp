@@ -27,8 +27,8 @@ namespace
     {
         auto now = timespec {};
         ::clock_gettime(CLOCK_MONOTONIC, &now);
-        return static_cast<std::uint64_t>(now.tv_sec) * 1'000'000U
-               + static_cast<std::uint64_t>(now.tv_nsec) / 1'000U;
+        return (static_cast<std::uint64_t>(now.tv_sec) * 1'000'000U)
+               + (static_cast<std::uint64_t>(now.tv_nsec) / 1'000U);
     }
 
     /// System sleep/wake notifications from logind's PrepareForSleep signal, read over sd-bus on a
@@ -88,7 +88,7 @@ namespace
       private:
         static int onPrepareForSleep(sd_bus_message* message, void* userdata, sd_bus_error* /*error*/)
         {
-            auto sleeping = int { 0 };
+            auto sleeping = 0;
             if (sd_bus_message_read(message, "b", &sleeping) < 0)
                 return 0;
             auto& self = *static_cast<LinuxSystemPowerMonitor*>(userdata);
@@ -104,7 +104,7 @@ namespace
             auto serving = true;
             while (serving)
             {
-                auto processed = int { 0 };
+                auto processed = 0;
                 do
                     processed = sd_bus_process(_bus, nullptr);
                 while (processed > 0);

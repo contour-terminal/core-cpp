@@ -41,7 +41,7 @@ enum class LogindSleepState : std::uint8_t
     if (deadlineUsec <= nowUsec)
         return 0;
     auto const remaining = deadlineUsec - nowUsec;
-    auto const milliseconds = remaining / 1000 + (remaining % 1000 != 0 ? 1U : 0U);
+    auto const milliseconds = (remaining / 1000) + (remaining % 1000 != 0 ? 1U : 0U);
     constexpr auto Cap = static_cast<std::uint64_t>(std::numeric_limits<int>::max());
     return static_cast<int>(milliseconds < Cap ? milliseconds : Cap);
 }
