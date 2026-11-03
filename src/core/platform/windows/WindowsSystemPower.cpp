@@ -2,22 +2,51 @@
 #include <core/platform/SystemPower.hpp>
 #include <core/platform/detail/PowerBroadcastPlan.hpp>
 
-#include <condition_variable>
+#include <atomic>
 #include <cstdint>
 #include <expected>
 #include <memory>
 #include <mutex>
+#include <unordered_map>
 #include <utility>
 
-#include <powrprof.h>
+// powrprof.h needs the types of windows.h but does not include it, so the order is not alphabetical.
+// clang-format off
 #include <windows.h>
+#include <powrprof.h>
+// clang-format on
 
 namespace core::platform
 {
 
 namespace
 {
+    static_assert(detail::PowerBroadcastSuspend == PBT_APMSUSPEND);
+    static_assert(detail::PowerBroadcastResumeSuspend == PBT_APMRESUMESUSPEND);
+    static_assert(detail::PowerBroadcastResumeAutomatic == PBT_APMRESUMEAUTOMATIC);
+
+    class WindowsSystemPowerMonitor;
+
+    /// The monitors that can still be called back, by the opaque id given to the power manager as the
+    /// callback context. The callback never dereferences a pointer the power manager hands back; it looks
+    /// the id up here, so a callback that arrives after its monitor is gone finds nothing.
+    struct LiveMonitors
+    {
+        std::mutex mutex;
+        std::unordered_map<std::uintptr_t, WindowsSystemPowerMonitor*> byId;
+        std::atomic<std::uintptr_t> lastId = 0;
+    };
+
+    [[nodiscard]] LiveMonitors& liveMonitors()
+    {
+        static auto monitors = LiveMonitors {};
+        return monitors;
+    }
+
     /// System sleep/wake notifications from the Windows power manager, delivered on a thread it owns.
+    ///
+    /// A handler runs while a process-wide lock is held, so it must not destroy a monitor (this one or
+    /// another): the destructor takes that lock.
     class WindowsSystemPowerMonitor final: public ISystemPowerMonitor
     {
       public:
@@ -27,32 +56,41 @@ namespace
         WindowsSystemPowerMonitor& operator=(WindowsSystemPowerMonitor const&) = delete;
         WindowsSystemPowerMonitor& operator=(WindowsSystemPowerMonitor&&) = delete;
 
-        /// Cancels the registration, then waits for a callback still running, so nothing touches the
-        /// registry once it is destroyed.
+        /// Cancels the registration, then removes the monitor from the live set.
         ///
-        /// The documentation of PowerUnregisterSuspendResumeNotification does not say whether it waits
-        /// for a callback in flight. This relies on two things instead: that no callback *starts* once
-        /// the call has returned (what cancelling a registration means), and the in-flight count below,
-        /// which covers one that started earlier.
+        /// Microsoft does not document that PowerUnregisterSuspendResumeNotification waits for a callback
+        /// that is running, and this does not rely on it. A callback dispatches while holding the lock of
+        /// the live set, and the removal below takes the same lock, so it returns only after a dispatch in
+        /// progress has finished; a callback arriving later looks its id up, finds nothing and returns.
         ~WindowsSystemPowerMonitor() override
         {
             if (_registration != nullptr)
                 PowerUnregisterSuspendResumeNotification(_registration);
-            auto lock = std::unique_lock { _mutex };
-            _idle.wait(lock, [this] { return _inFlight == 0; });
+            if (_id != 0)
+            {
+                auto& live = liveMonitors();
+                auto const lock = std::scoped_lock { live.mutex };
+                live.byId.erase(_id);
+            }
         }
 
         /// Registers with the power manager.
         /// @return Whether the registration succeeded.
         [[nodiscard]] std::expected<void, PlatformError> start()
         {
+            auto& live = liveMonitors();
+            _id = ++live.lastId;
+            {
+                auto const lock = std::scoped_lock { live.mutex };
+                live.byId.emplace(_id, this);
+            }
             _parameters.Callback = &onBroadcast;
-            _parameters.Context = this;
+            _parameters.Context = reinterpret_cast<PVOID>(_id);
             if (PowerRegisterSuspendResumeNotification(
                     DEVICE_NOTIFY_CALLBACK, reinterpret_cast<HANDLE>(&_parameters), &_registration)
                 != ERROR_SUCCESS)
             {
-                _registration = nullptr;
+                _registration = nullptr; // the destructor removes the id
                 return std::unexpected(PlatformError::NotificationRegistrationFailed);
             }
             return {};
@@ -64,55 +102,31 @@ namespace
         }
 
       private:
-        /// Counts a running callback, so the destructor can wait for it.
-        struct InFlight
+        static ULONG CALLBACK onBroadcast(PVOID context, ULONG type, PVOID /*setting*/) noexcept
         {
-            explicit InFlight(WindowsSystemPowerMonitor& owner): _owner { owner }
+            auto const event = detail::eventForPowerBroadcast(type);
+            if (!event)
+                return ERROR_SUCCESS;
+            auto& live = liveMonitors();
+            auto const lock = std::scoped_lock { live.mutex };
+            auto const found = live.byId.find(reinterpret_cast<std::uintptr_t>(context));
+            if (found == live.byId.end())
+                return ERROR_SUCCESS;
+            // An exception must not unwind into the power manager; a failing handler is dropped.
+            try
             {
-                auto const lock = std::scoped_lock { _owner._mutex };
-                ++_owner._inFlight;
+                found->second->_registry.dispatch(*event);
             }
-            InFlight(InFlight const&) = delete;
-            InFlight(InFlight&&) = delete;
-            InFlight& operator=(InFlight const&) = delete;
-            InFlight& operator=(InFlight&&) = delete;
-            ~InFlight()
+            catch (...)
             {
-                // Notified under the lock, so the destructor cannot return, and free the condition
-                // variable, before this has finished with it.
-                auto const lock = std::scoped_lock { _owner._mutex };
-                if (--_owner._inFlight == 0)
-                    _owner._idle.notify_all();
-            }
-
-          private:
-            WindowsSystemPowerMonitor& _owner;
-        };
-
-        static ULONG CALLBACK onBroadcast(PVOID context, ULONG type, PVOID /*setting*/)
-        {
-            auto& self = *static_cast<WindowsSystemPowerMonitor*>(context);
-            auto const inFlight = InFlight { self };
-            if (auto const event = detail::eventForPowerBroadcast(type))
-            {
-                // An exception must not unwind into the power manager; a failing handler is dropped.
-                try
-                {
-                    self._registry.dispatch(*event);
-                }
-                catch (...)
-                {
-                    return ERROR_SUCCESS;
-                }
+                return ERROR_SUCCESS;
             }
             return ERROR_SUCCESS;
         }
 
         // Declared first, so it outlives the registration that dispatches into it.
         detail::PowerHandlerRegistry _registry;
-        std::mutex _mutex;
-        std::condition_variable _idle;
-        unsigned _inFlight = 0;
+        std::uintptr_t _id = 0;
         DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS _parameters {};
         HPOWERNOTIFY _registration = nullptr;
     };
