@@ -22,6 +22,15 @@ workflow refuses one without a section here.
     backend. A configure without its development files stops, naming the option; `-DCORE_CPP_WITH_SYSTEMD=OFF`
     builds without it and the factory reports `NotImplemented`.
 
+### Fixed
+
+- **`core-cpp.net` no longer crashes in a GCC build below `-O2`.** Its case looping over 200000 awaits that
+  complete inline assumed symmetric transfer is a tail call, which GCC makes it only from `-O2` up (core-cpp#15):
+  at GCC 14 `-O0` each iteration nests a 64-byte frame, and the loop overflowed an 8 MiB stack on aarch64
+  Linux. It now skips there, as `Task_test.cpp`'s deep-chain case already did, and a 1000-iteration case keeps
+  the loop covered on every build. The detection moved from `src/core/async/CMakeLists.txt` to
+  `cmake/CoreCppToolchain.cmake` (`CORE_CPP_SYMMETRIC_TRANSFER_DEFINITIONS`), so every module's tests can ask.
+
 ## [0.12.0] - 2026-11-03
 
 ### Added

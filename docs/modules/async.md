@@ -85,10 +85,11 @@ Imported from contour's `src/coro` at `6777ff05`, with `coro::` renamed `core::a
     the coroutine really suspends, which is what a read loop over buffered data does.
   - emsdk 3.1.56 under node, the nested chain: exceeds node's call stack.
 
-  `Task_test.cpp` skips its deep-chain case under Emscripten without `-mtail-call`, and on GCC
+  `Task_test.cpp` skips its deep-chain case, and `IoAwaitable_test.cpp` its loop of 200000 inline
+  completions, under Emscripten without `-mtail-call`, and on GCC
   unless the build says the level gives the tail call: GCC defines no macro for the level
   (`__OPTIMIZE__` is 1 at `-Og` and `-O1` too, where the chain overflows and takes the whole
-  binary with it), so `src/core/async/CMakeLists.txt` reads the last `-O` off the build's own
+  binary with it), so `cmake/CoreCppToolchain.cmake` reads the last `-O` off the build's own
   flags, defines `CORE_ASYNC_SYMMETRIC_TRANSFER_IS_TAIL_CALL` only at `-O2` or better, and says
   which it decided in the configure log. `gcc-release` keeps the case, `gcc-debug` and any build
   outside the presets skip it.
