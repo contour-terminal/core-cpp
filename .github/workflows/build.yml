@@ -389,9 +389,11 @@ jobs:
           save: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
 
       # OpenSSL's headers and libraries: every unix preset turns CORE_CPP_WITH_TLS on, and
-      # core::net_tls takes OpenSSL from the system.
+      # core::net_tls takes OpenSSL from the system. libsystemd's only where CORE_CPP_WITH_SYSTEMD is on.
       - name: Install Ninja and OpenSSL
-        run: scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build libsystemd-dev libssl-dev
+        run: >-
+          scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q
+          ninja-build libssl-dev ${{ matrix.systemd != 'OFF' && 'libsystemd-dev' || '' }}
 
       - name: Install clang ${{ env.LLVM_VERSION }}
         if: matrix.compiler == 'clang'
@@ -415,6 +417,21 @@ jobs:
           command -v "$gxx" || { echo "::error::$gxx was not installed"; exit 1; }
           "$gxx" --version | head -1
           echo "CXX_COMPILER=$gxx" >> "$GITHUB_ENV"
+
+      # The runner image ships pkg-config, and may ship libsystemd-dev: a leg that proves core-cpp builds
+      # and installs without them must not have them. Removed without their reverse dependencies
+      # (dpkg, not apt), after every apt install, so nothing else on the image goes with them.
+      - name: Remove libsystemd-dev and pkg-config
+        if: matrix.systemd == 'OFF'
+        run: |
+          for package in libsystemd-dev pkg-config pkgconf pkgconf-bin; do
+            if dpkg -s "$package" >/dev/null 2>&1; then
+              sudo dpkg --remove --force-depends "$package"
+            fi
+          done
+          if command -v pkg-config || test -e /usr/include/systemd/sd-bus.h; then
+            echo "::error::pkg-config or libsystemd's headers are still installed"; exit 1
+          fi
 
       - name: Configure
         run: >-

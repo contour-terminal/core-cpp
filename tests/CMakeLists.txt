@@ -262,6 +262,7 @@ add_test(NAME core-cpp.install
                  "-DBUILD_PREFIX_PATH=${_coreCppBuildPrefixPath}"
                  "-DINSTRUMENT_COMPILE_FLAGS=${_coreCppInstrumentCompile}"
                  "-DINSTRUMENT_LINK_FLAGS=${_coreCppInstrumentLink}"
+                 "-DWITH_SYSTEMD=${CORE_CPP_WITH_SYSTEMD}"
                  "-DSKIP_EXIT_CODE=${CORE_CPP_SKIP_EXIT_CODE}"
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-install.cmake")
 set_tests_properties(core-cpp.install PROPERTIES

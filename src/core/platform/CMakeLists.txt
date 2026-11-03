@@ -53,11 +53,15 @@ elseif(LINUX AND CORE_CPP_WITH_SYSTEMD)
     # Linked by value, as Contour's vtpty does: a PkgConfig::libsystemd imported target would be
     # classified by CoreCppInstall.cmake but never re-created by the installed package config, which
     # would break a consumer's link.
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(LIBSYSTEMD libsystemd)
-    if(NOT LIBSYSTEMD_FOUND)
-        message(FATAL_ERROR "[core-cpp] CORE_CPP_WITH_SYSTEMD is ON, but libsystemd was not found. "
-                            "Install its development package (libsystemd-dev, systemd-devel), "
+    # Not REQUIRED: a missing pkg-config must stop with the message below, which names the option.
+    find_package(PkgConfig)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(LIBSYSTEMD libsystemd)
+    endif()
+    if(NOT PKG_CONFIG_FOUND OR NOT LIBSYSTEMD_FOUND)
+        message(FATAL_ERROR "[core-cpp] CORE_CPP_WITH_SYSTEMD is ON, but libsystemd was not found "
+                            "through pkg-config. Install pkg-config and libsystemd's development "
+                            "package (libsystemd-dev, systemd-devel), "
                             "or configure with -DCORE_CPP_WITH_SYSTEMD=OFF.")
     endif()
     set(_coreCppPlatformPowerDefinitions CORE_CPP_HAS_SYSTEMD=1)
@@ -105,8 +109,8 @@ core_cpp_add_module(platform KIND STATIC
         WinsockInit.hpp
         WorkingDirectory.hpp
         detail/CpuCounterProbe.hpp
-        detail/LogindPlan.hpp
         detail/LinuxPerfPlan.hpp
+        detail/LogindPlan.hpp
         detail/PowerBroadcastPlan.hpp
         detail/PowerMessagePlan.hpp
         detail/UnavailableCpuCounterSource.hpp
@@ -175,11 +179,11 @@ core_cpp_add_test(platform
         SystemPower_test.cpp
         UserPaths_test.cpp
         Wakeup_test.cpp
-    # The Windows half of a POSIX guarantee: FD_CLOEXEC there, no inheritable handle here.
     DEFINITIONS ${_coreCppPlatformPowerDefinitions}
     SOURCES_WINDOWS
         windows/CpuCounters_test.cpp
         windows/DnsHostName_test.cpp
+        # The Windows half of a POSIX guarantee: FD_CLOEXEC there, no inheritable handle here.
         windows/SystemPipeInheritance_test.cpp
         windows/WideEnvironment_test.cpp
     SOURCES_EMSCRIPTEN

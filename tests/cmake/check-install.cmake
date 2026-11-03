@@ -9,7 +9,7 @@
 #         [-DCONFIG=<config>] [-DGENERATOR=<g>] [-DMAKE_PROGRAM=<p>] [-DCXX_COMPILER=<c>]
 #         [-DBUILD_TYPE=<t>] [-DTOOLCHAIN_FILE=<f>] [-DBUILD_PREFIX_PATH=<dirs, |-separated>]
 #         [-DINSTRUMENT_COMPILE_FLAGS=<flags, |-separated>] [-DINSTRUMENT_LINK_FLAGS=<flags, |-separated>]
-#         [-DSKIP_EXIT_CODE=<code>] -P tests/cmake/check-install.cmake
+#         [-DWITH_SYSTEMD=ON|OFF] [-DSKIP_EXIT_CODE=<code>] -P tests/cmake/check-install.cmake
 #
 # Three steps, each of which has failed on its own in some project:
 #   1. `cmake --install` of the build under test into an empty prefix, component core-cpp alone:
@@ -154,11 +154,19 @@ core_cpp_install_step("running tests/consumer-install"
 
 # --- 3. a parent that exports a target linking core-cpp's -----------------------------------------
 
+# The subproject configures core-cpp afresh, so an option whose default needs a package this machine
+# lacks (CORE_CPP_WITH_SYSTEMD) is forwarded as the build under test set it.
+set(nestedOptions "")
+if(NOT "${WITH_SYSTEMD}" STREQUAL "")
+    list(APPEND nestedOptions "-DNESTED_WITH_SYSTEMD=${WITH_SYSTEMD}")
+endif()
+
 foreach(nestedInstall IN ITEMS ON OFF)
     set(nested "${WORK_DIR}/nested-${nestedInstall}")
     execute_process(
         COMMAND "${CMAKE_COMMAND}" -S "${SOURCE_DIR}/tests/consumer-install-nested" -B "${nested}"
-                ${toolchainArgs} "-DCORE_CPP_SOURCE_DIR=${SOURCE_DIR}" "-DNESTED_INSTALL=${nestedInstall}"
+                ${toolchainArgs} ${nestedOptions} "-DCORE_CPP_SOURCE_DIR=${SOURCE_DIR}"
+                "-DNESTED_INSTALL=${nestedInstall}"
         RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
     if(nestedInstall AND NOT rc EQUAL 0)
         message(FATAL_ERROR

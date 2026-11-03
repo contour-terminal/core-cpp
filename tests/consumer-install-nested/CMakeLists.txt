@@ -6,6 +6,7 @@
 # is what CORE_CPP_INSTALL=ON asks for when core-cpp is not the top-level project.
 #
 #   cmake -S tests/consumer-install-nested -B <dir> -DCORE_CPP_SOURCE_DIR=<core-cpp> -DNESTED_INSTALL=ON|OFF
+#         [-DNESTED_WITH_SYSTEMD=ON|OFF]
 #
 # ON must generate; OFF must fail with CMake's "not in any export set", which is what proves the
 # option is what made the difference. tests/cmake/check-install.cmake runs both.
@@ -27,6 +28,10 @@ set(CORE_CPP_INSTALL ${NESTED_INSTALL})
 set(CORE_CPP_WITH_TUI OFF)
 set(CORE_CPP_WITH_TUI_OUTPUT OFF)
 set(CORE_CPP_FETCH_DEPS OFF)
+# What the build under test chose: its default needs libsystemd, which a machine may lack.
+if(DEFINED NESTED_WITH_SYSTEMD)
+    set(CORE_CPP_WITH_SYSTEMD ${NESTED_WITH_SYSTEMD})
+endif()
 add_subdirectory("${CORE_CPP_SOURCE_DIR}" core-cpp EXCLUDE_FROM_ALL SYSTEM)
 
 include(GNUInstallDirs)
