@@ -72,11 +72,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -370,12 +370,12 @@ jobs:
           # CORE_CPP_WITH_SYSTEMD=OFF: no libsystemd link, and the unavailable power-monitor backend.
           - { name: clang-22-no-systemd, os: ubuntu-24.04, preset: clang-debug, compiler: clang, systemd: "OFF" }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
 
       - name: Cache CPM sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
@@ -490,12 +490,12 @@ jobs:
           - { name: appleclang-debug, preset: appleclang-debug }
           - { name: llvm-22, preset: clang-release, homebrew_llvm: true }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
 
       - name: Cache CPM sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
@@ -578,7 +578,7 @@ jobs:
       VCPKG_COMMIT: e6f9e70a29a3e80a1fc510d8503304315447112f
       VCPKG_ARCHIVES: ${{ github.workspace }}/.cache/vcpkg-archives
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
 
@@ -587,7 +587,7 @@ jobs:
       # build.yml measured the workspace on drive C against drive D, and gzip against zstd), so
       # the two architectures could never share an entry whatever the key said.
       - name: Cache CPM sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
@@ -621,7 +621,7 @@ jobs:
       # OpenSSL instead of compiling it (about 8.5 minutes, on the path of ci-ok).
       - name: Cache vcpkg binary archives
         if: matrix.preset == 'cl-release-tls'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/vcpkg-archives
           key: vcpkg-archives-x64-windows-${{ env.VCPKG_COMMIT }}-${{ hashFiles('.github/vcpkg/vcpkg.json') }}
@@ -725,12 +725,12 @@ jobs:
       TSAN_OPTIONS: halt_on_error=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
 
       - name: Cache CPM sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
@@ -784,12 +784,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
 
       - name: Cache CPM sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
@@ -877,18 +877,18 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
 
       - name: Cache CPM sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
           restore-keys: cpm-${{ runner.os }}-${{ runner.arch }}-
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -940,12 +940,12 @@ jobs:
         # 3.1.56 is what Qt 6.8 for WebAssembly, and so morph, builds with.
         emsdk: ["3.1.56", "latest"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
 
       - name: Cache CPM sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
@@ -956,7 +956,7 @@ jobs:
 
       # A pinned version is cached; `latest` is not, or the cache would pin it.
       - name: emsdk ${{ matrix.emsdk }}
-        uses: mymindstorm/setup-emsdk@v14
+        uses: mymindstorm/setup-emsdk@v16
         with:
           version: ${{ matrix.emsdk }}
           actions-cache-folder: ${{ matrix.emsdk != 'latest' && format('emsdk-cache-{0}', matrix.emsdk) || '' }}
@@ -1001,12 +1001,12 @@ jobs:
       PRESET: gcc-release
       BUILD_DIR: out/build/gcc-release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
 
       - name: Cache CPM sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
@@ -1104,14 +1104,14 @@ jobs:
       matrix:
         leg: [cpm, vendored, wasm, tui-output]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
 
       # The vendored leg fetches nothing at all, by design.
       - name: Cache CPM sources
         if: matrix.leg != 'vendored'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
@@ -1220,7 +1220,7 @@ jobs:
       # --- wasm --------------------------------------------------------------------------------
       - name: emsdk 3.1.56
         if: matrix.leg == 'wasm'
-        uses: mymindstorm/setup-emsdk@v14
+        uses: mymindstorm/setup-emsdk@v16
         with:
           version: "3.1.56"
           actions-cache-folder: emsdk-cache-3.1.56
@@ -1244,12 +1244,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
 
       - name: Cache CPM sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
@@ -1290,7 +1290,7 @@ jobs:
             -instr-profile="$build/coverage.profdata" "${objects[@]}" -ignore-filename-regex="$ignore"
 
       - name: Upload the report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: |
