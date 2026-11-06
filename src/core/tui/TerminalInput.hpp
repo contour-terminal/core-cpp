@@ -2,6 +2,7 @@
 #pragma once
 
 #include <core/platform/Types.hpp>
+#include <core/tui/EndProbe.hpp>
 #include <core/tui/Error.hpp>
 #include <core/tui/InputEvent.hpp>
 #include <core/tui/MouseTracking.hpp>
@@ -108,6 +109,16 @@ class TerminalInput
     /// [core-cpp#49](https://github.com/contour-terminal/core-cpp/issues/49).
     /// @return true once the input handle has hung up, closed or been detached.
     [[nodiscard]] auto inputClosed() const noexcept -> bool { return _inputClosed; }
+
+    /// @brief Asks, without reading, whether the input has ended where no wait would report it.
+    ///
+    /// On POSIX a terminal that hangs up makes its descriptor readable, so the end is found by
+    /// @c readReadyInput and this answers @c EndProbe::NotNeeded. On Windows a console whose host
+    /// process died never signals its input handle again, so this asks the console for its pending
+    /// event count: a console that can no longer answer has ended, and @c inputClosed() answers
+    /// true from then on. Never blocks.
+    /// @return @c EndProbe::NotNeeded on POSIX; @c EndProbe::Open or @c EndProbe::Ended on Windows.
+    [[nodiscard]] auto probeEnd() -> EndProbe;
 
     /// @brief Drains a pending resize notification and queries the new size.
     /// @return The resize event if one was pending, else std::nullopt.

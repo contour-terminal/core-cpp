@@ -135,10 +135,27 @@ class ScriptedInputSource: public InputSource
         signal(_input);
     }
 
+    /// Appends one answer to @c probeEnd. Answers are given in order; once they run out, the source
+    /// answers @c EndProbe::NotNeeded, as one whose end arrives as readiness does. An
+    /// @c EndProbe::Ended answer also makes @c inputClosed answer true, as a real source's does.
+    /// @param answer What the next @c probeEnd returns.
+    void pushProbe(EndProbe answer)
+    {
+        auto const lock = std::scoped_lock { _mutex };
+        _probes.push_back(answer);
+    }
+
     /// @}
 
     /// @name Observation
     /// @{
+
+    /// @return How many times @c probeEnd was called.
+    [[nodiscard]] std::size_t probeCount() const
+    {
+        auto const lock = std::scoped_lock { _mutex };
+        return _probeCount;
+    }
 
     /// @return How many times @c readReady was called.
     [[nodiscard]] std::size_t readCount() const
@@ -193,6 +210,19 @@ class ScriptedInputSource: public InputSource
     [[nodiscard]] bool inputClosed() const noexcept override
     {
         return _closed.load(std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] EndProbe probeEnd() override
+    {
+        auto const lock = std::scoped_lock { _mutex };
+        ++_probeCount;
+        if (_probes.empty())
+            return EndProbe::NotNeeded;
+        auto const answer = _probes.front();
+        _probes.pop_front();
+        if (answer == EndProbe::Ended)
+            _closed.store(true, std::memory_order_relaxed);
+        return answer;
     }
 
     [[nodiscard]] std::optional<InputEvent> readResize() override
@@ -275,10 +305,12 @@ class ScriptedInputSource: public InputSource
     std::deque<std::vector<InputEvent>> _reads;   ///< One entry per scripted read.
     std::deque<std::vector<InputEvent>> _flushes; ///< One entry per scripted partial-escape flush.
     std::deque<ResizeEvent> _resizes;             ///< One entry per scripted resize.
+    std::deque<EndProbe> _probes;                 ///< One entry per scripted end probe.
     std::vector<InputEvent> _pending;             ///< What a terminal query handed back.
 
     std::size_t _readCount = 0;  ///< How many reads happened.
     std::size_t _flushCount = 0; ///< How many flushes happened.
+    std::size_t _probeCount = 0; ///< How many end probes happened.
 
     bool _closing = false;             ///< @c closeInput was called; the reads left are the last.
     std::atomic<bool> _closed = false; ///< A read found the end; atomic so the query can be noexcept.

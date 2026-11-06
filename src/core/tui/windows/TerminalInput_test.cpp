@@ -25,6 +25,7 @@
 #include <windows.h>
 
 using core::tui::DecModeStatus;
+using core::tui::EndProbe;
 using core::tui::InputEvent;
 using core::tui::KeyEvent;
 using core::tui::MockTerminalOutput;
@@ -444,4 +445,119 @@ TEST_CASE("On Windows a console input handle that went away ends the input", "[T
     REQUIRE(initialized);
     CHECK_FALSE(readBeforeEnd);
     CHECK(readAfterEnd);
+}
+
+TEST_CASE("On Windows a console that is there answers the end probe with Open", "[TerminalInput][hangup]")
+{
+    // The answer that keeps a runtime asking, and the one that must not end a live session: a
+    // console reports its end through no wait, so only this question can find it.
+    auto const console = ConsoleStandardHandles {};
+    REQUIRE(console.locked());
+    if (!console.available())
+        SKIP("this process is attached to no console, so CONIN$ cannot be opened");
+
+    auto input = TerminalInput {};
+    REQUIRE(input.initialize());
+    auto const answer = input.probeEnd();
+    auto const closed = input.inputClosed();
+    input.shutdown();
+
+    CHECK(answer == EndProbe::Open);
+    CHECK_FALSE(closed);
+}
+
+TEST_CASE("On Windows a console that can no longer be asked answers the end probe with Ended",
+          "[TerminalInput][hangup]")
+{
+    // A console whose host process died is never signalled again and answers every call with
+    // ERROR_PIPE_NOT_CONNECTED, so the probe -- not a read -- is what finds its end. A host cannot be
+    // killed under the test runner's own console, so the state is reached as the case above reaches
+    // it: a console call on the input's handle fails, here because the handle was closed under it.
+    auto const console = ConsoleStandardHandles {};
+    REQUIRE(console.locked());
+    if (!console.available())
+        SKIP("this process is attached to no console, so CONIN$ cannot be opened");
+
+    auto savedMode = DWORD { 0 };
+    REQUIRE(GetConsoleMode(console.input(), &savedMode) != 0);
+    auto doomed = HANDLE { nullptr };
+    REQUIRE(DuplicateHandle(GetCurrentProcess(),
+                            console.input(),
+                            GetCurrentProcess(),
+                            &doomed,
+                            0,
+                            FALSE,
+                            DUPLICATE_SAME_ACCESS)
+            != 0);
+    SetStdHandle(STD_INPUT_HANDLE, doomed);
+
+    auto input = TerminalInput {};
+    auto const initialized = input.initialize().has_value();
+    auto const whileOpen = input.probeEnd();
+    CloseHandle(doomed); // the handle the input holds is gone
+    auto const afterEnd = input.probeEnd();
+    auto const closed = input.inputClosed();
+    auto const askedAgain = input.probeEnd(); // sticky: a console does not come back
+    input.shutdown();
+    SetConsoleMode(console.input(), savedMode);
+
+    REQUIRE(initialized);
+    CHECK(whileOpen == EndProbe::Open);
+    CHECK(afterEnd == EndProbe::Ended);
+    CHECK(closed);
+    CHECK(askedAgain == EndProbe::Ended);
+}
+
+TEST_CASE(
+    "On Windows a poll on a console that can no longer be asked ends instead of waiting out its timeout",
+    "[TerminalInput][hangup]")
+{
+    // A console whose host died is never signalled again, so one wait on it lasts its whole timeout:
+    // for poll(-1), for ever. The state is reached as in the cases above, except that the handle the
+    // input holds must stay waitable and never be signalled. Once it is closed, the next handle this
+    // process creates takes its value, and an event nobody sets is both -- and a console call on it
+    // fails, as one on a dead console does.
+    auto const console = ConsoleStandardHandles {};
+    REQUIRE(console.locked());
+    if (!console.available())
+        SKIP("this process is attached to no console, so CONIN$ cannot be opened");
+
+    auto savedMode = DWORD { 0 };
+    REQUIRE(GetConsoleMode(console.input(), &savedMode) != 0);
+    auto doomed = HANDLE { nullptr };
+    REQUIRE(DuplicateHandle(GetCurrentProcess(),
+                            console.input(),
+                            GetCurrentProcess(),
+                            &doomed,
+                            0,
+                            FALSE,
+                            DUPLICATE_SAME_ACCESS)
+            != 0);
+    SetStdHandle(STD_INPUT_HANDLE, doomed);
+
+    auto input = TerminalInput {};
+    auto const initialized = input.initialize().has_value();
+    CloseHandle(doomed);
+    auto* const standIn = CreateEventW(nullptr, TRUE, FALSE, nullptr); // never set
+    if (standIn != doomed)
+    {
+        input.shutdown();
+        SetConsoleMode(console.input(), savedMode);
+        CloseHandle(standIn);
+        SKIP("the closed handle's value was not reused, so the input holds no never-signalled stand-in");
+    }
+
+    // Bounded: a poll that never asked lasts the full ten seconds and leaves the input open.
+    auto const started = std::chrono::steady_clock::now();
+    auto const events = input.poll(10'000);
+    auto const elapsed = std::chrono::steady_clock::now() - started;
+    auto const closed = input.inputClosed();
+    input.shutdown();
+    SetConsoleMode(console.input(), savedMode);
+    CloseHandle(standIn);
+
+    REQUIRE(initialized);
+    CHECK(events.empty());
+    CHECK(closed);
+    CHECK(elapsed < std::chrono::seconds(5));
 }

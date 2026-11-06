@@ -61,6 +61,8 @@ class TerminalInputSource: public InputSource
 
     [[nodiscard]] bool inputClosed() const noexcept override { return _terminal.input().inputClosed(); }
 
+    [[nodiscard]] EndProbe probeEnd() override { return _terminal.input().probeEnd(); }
+
     [[nodiscard]] std::optional<InputEvent> readResize() override
     {
         auto const resize = _terminal.input().drainResize();

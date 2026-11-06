@@ -41,6 +41,7 @@ using core::net::testing::HandlerId;
 using core::net::testing::ScriptedBackend;
 using core::platform::ManualClock;
 using core::platform::SystemPipe;
+using core::tui::EndProbe;
 using core::tui::InputEvent;
 using core::tui::KeyEvent;
 using core::tui::runtime::ActivityKind;
@@ -946,6 +947,201 @@ TEST_CASE("core-cpp#49: nextActivity reports a pending agent message before the 
     std::ignore = turnUntilDone(loop, after);
     CHECK(agent.value == static_cast<int>(ActivityKind::AgentReady));
     CHECK(after.value == EndedSentinel);
+}
+
+// ---------------------------------------------------------------------------------------------
+// An input whose end reaches no handle: a Windows console whose host process died. Its handle is
+// never signalled again, so the read that finds every other end never runs; only asking finds it.
+// ---------------------------------------------------------------------------------------------
+
+namespace
+{
+
+/// More waits than any case below needs, each standing for @c ProbeStep of clock time.
+constexpr auto ProbeScript = 16;
+constexpr auto ProbeStep = 250ms;
+
+} // namespace
+
+TEST_CASE("An input whose end no readiness reports is asked, and its end cancels nextEvent",
+          "[TuiRuntime][hangup][probe]")
+{
+    // No readiness is scripted at all: the handle is never signalled, as a dead console's is not.
+    auto clock = ManualClock {};
+    auto backend = ClockAdvancingBackend { clock, ProbeStep };
+    auto loop = EventLoop { backend, clock };
+    auto source = ScriptedInputSource { nullptr, nullptr, HandleFor::Input };
+    source.pushProbe(EndProbe::Open);  // asked at construction
+    source.pushProbe(EndProbe::Open);  // one interval later
+    source.pushProbe(EndProbe::Ended); // two intervals later: the host is gone
+    auto runtime = TuiRuntime { loop, source, TuiRuntimeOptions { .endProbe = 1000ms } };
+    for ([[maybe_unused]] auto const step: std::views::iota(0, ProbeScript))
+        backend.pushTimeout();
+
+    // Turns are bounded below the script, so a runtime that never asked fails here, not by a hang.
+    auto outcome = Outcome {};
+    loop.spawn(record(awaitKeyOrCancel(&runtime, EndedSentinel), &outcome));
+    for ([[maybe_unused]] auto const turn: std::views::iota(0, ProbeScript))
+    {
+        if (outcome.done)
+            break;
+        std::ignore = loop.runOnce(); // the loop's own timeout, so the probe's deadline bounds it
+    }
+
+    CHECK(outcome.done);
+    CHECK(outcome.value == EndedSentinel);
+    CHECK(runtime.inputClosed());
+    CHECK(source.probeCount() == 3);
+    CHECK(source.readCount() == 0); // the end was asked for, not read
+    // The ARGUMENT: the first wait was bounded by the probe, where it was indefinite before.
+    REQUIRE(backend.recordedTimeouts().front().has_value());
+    CHECK(std::chrono::duration_cast<std::chrono::milliseconds>(*backend.recordedTimeouts().front())
+          == 1000ms);
+    CHECK(loop.pendingTimerCount() == 0); // an ended input is asked no more
+}
+
+TEST_CASE("An input whose end arrives as readiness is asked once and costs no timer",
+          "[TuiRuntime][hangup][probe]")
+{
+    // Every POSIX terminal and pipe: its hangup makes the handle readable, so a timer that woke the
+    // loop to ask would be a wakeup per interval for the life of every TUI, bought for nothing.
+    auto clock = ManualClock {};
+    auto backend = ScriptedBackend {};
+    auto loop = EventLoop { backend, clock };
+    auto source = ScriptedInputSource { nullptr, nullptr, HandleFor::Input }; // answers NotNeeded
+    auto const runtime = TuiRuntime { loop, source };
+    REQUIRE(source.probeCount() == 0); // the constructor asks nothing: it may not be on the loop's thread
+    backend.pushTimeout();
+    std::ignore = loop.runOnce(); // the first turn, where the question is asked
+
+    CHECK(source.probeCount() == 1);
+    CHECK(loop.pendingTimerCount() == 0);
+    CHECK_FALSE(runtime.inputClosed());
+}
+
+TEST_CASE("An end probe of zero never asks", "[TuiRuntime][hangup][probe]")
+{
+    auto clock = ManualClock {};
+    auto backend = ScriptedBackend {};
+    auto loop = EventLoop { backend, clock };
+    auto source = ScriptedInputSource { nullptr, nullptr, HandleFor::Input };
+    source.pushProbe(EndProbe::Open);
+    auto const runtime = TuiRuntime { loop, source, TuiRuntimeOptions { .endProbe = 0ms } };
+    backend.pushTimeout();
+    std::ignore = loop.runOnce();
+
+    CHECK(source.probeCount() == 0);
+    CHECK(loop.pendingTimerCount() == 0);
+}
+
+TEST_CASE("An input found ended in the first turn declines the first wait", "[TuiRuntime][hangup][probe]")
+{
+    // A prompt drawn after a foreground job ran while the console died: the runtime is built over an
+    // input that is already gone, and the first wait has to learn it at once.
+    auto outcome = Outcome {};
+    auto clock = ManualClock {};
+    auto backend = ScriptedBackend {};
+    auto loop = EventLoop { backend, clock };
+    auto source = ScriptedInputSource { nullptr, nullptr, HandleFor::Input };
+    source.pushProbe(EndProbe::Ended);
+    auto runtime = TuiRuntime { loop, source };
+    for ([[maybe_unused]] auto const step: std::views::iota(std::size_t { 0 }, TurnBound))
+        backend.pushTimeout();
+
+    loop.spawn(record(awaitKeyOrCancel(&runtime, EndedSentinel), &outcome));
+    auto const turns = turnUntilDone(loop, outcome);
+    INFO("turns: " << turns);
+    CHECK(outcome.done);
+    CHECK(outcome.value == EndedSentinel);
+    CHECK(runtime.inputClosed());
+    CHECK(source.probeCount() == 1);
+    CHECK(loop.pendingTimerCount() == 0);
+}
+
+TEST_CASE("A partial sequence held when the probe finds the end is delivered before the end",
+          "[TuiRuntime][hangup][probe][escape]")
+{
+    // Bytes arrived and decoded to nothing -- a lone ESC -- and then the console died before the
+    // escape flush ran. No continuation is coming, so the ESC is delivered, and THEN the stream ends.
+    auto key = Outcome {};
+    auto after = Outcome {};
+    auto clock = ManualClock {};
+    auto backend = ClockAdvancingBackend { clock, ProbeStep };
+    auto loop = EventLoop { backend, clock };
+    auto source = ScriptedInputSource { nullptr, nullptr, HandleFor::Input };
+    source.pushFlush({ InputEvent { keyOf(U'\x1b') } });
+    source.pushProbe(EndProbe::Open);
+    source.pushProbe(EndProbe::Ended);
+    // An escape flush far beyond the probe, so it is the probe that has to deliver the ESC.
+    auto runtime =
+        TuiRuntime { loop, source, TuiRuntimeOptions { .escapeFlush = 60'000ms, .endProbe = 1000ms } };
+    backend.pushReadable(HandlerId { 1 }); // the bytes that decode to nothing
+    for ([[maybe_unused]] auto const step: std::views::iota(0, ProbeScript))
+        backend.pushTimeout();
+
+    loop.spawn(record(awaitKeyOrCancel(&runtime, EndedSentinel), &key));
+    for ([[maybe_unused]] auto const turn: std::views::iota(0, ProbeScript))
+    {
+        if (key.done)
+            break;
+        std::ignore = loop.runOnce();
+    }
+    REQUIRE(key.done);
+    loop.spawn(record(awaitKeyOrCancel(&runtime, EndedSentinel), &after));
+    std::ignore = turnUntilDone(loop, after);
+
+    CHECK(key.value == 0x1b);
+    CHECK(after.done);
+    CHECK(after.value == EndedSentinel);
+    CHECK(source.flushCount() == 1);
+    CHECK(loop.pendingTimerCount() == 0); // the escape flush was retired with the input
+}
+
+TEST_CASE("An input that ends by a read is asked no more", "[TuiRuntime][hangup][probe]")
+{
+    // The two ways an end is found must not both run: once a read has found it, the probe that is
+    // waiting out its interval asks nothing more when it wakes.
+    auto outcome = Outcome {};
+    auto clock = ManualClock {};
+    auto backend = ClockAdvancingBackend { clock, ProbeStep };
+    auto loop = EventLoop { backend, clock };
+    auto source = ScriptedInputSource { nullptr, nullptr, HandleFor::Input };
+    source.pushProbe(EndProbe::Open); // the first turn
+    source.pushProbe(EndProbe::Open); // what a probe that kept asking would get, one interval later
+    source.closeInput();
+    auto runtime = TuiRuntime { loop, source, TuiRuntimeOptions { .endProbe = 1000ms } };
+    scriptHangups(backend); // the first wait reports the end; the rest are 250ms that pass
+
+    loop.spawn(record(awaitKeyOrCancel(&runtime, EndedSentinel), &outcome));
+    for ([[maybe_unused]] auto const turn: std::views::iota(std::uint64_t { 0 }, HangupScript))
+    {
+        if (outcome.done && loop.pendingTimerCount() == 0)
+            break;
+        std::ignore = loop.runOnce(); // the loop's own timeout, so the probe's interval elapses
+    }
+
+    CHECK(outcome.value == EndedSentinel);
+    CHECK(source.readCount() == 1);
+    CHECK(source.probeCount() == 1);
+    CHECK(loop.pendingTimerCount() == 0); // the probe woke after its interval, and stopped
+}
+
+TEST_CASE("A runtime destroyed while it is still asking leaves nothing parked", "[TuiRuntime][hangup][probe]")
+{
+    auto clock = ManualClock {};
+    auto backend = ScriptedBackend {};
+    auto loop = EventLoop { backend, clock };
+    auto source = ScriptedInputSource { nullptr, nullptr, HandleFor::Input };
+    source.pushProbe(EndProbe::Open);
+    {
+        auto const runtime = TuiRuntime { loop, source };
+        backend.pushTimeout();
+        std::ignore = loop.runOnce();
+        REQUIRE(source.probeCount() == 1);
+        REQUIRE(loop.pendingTimerCount() == 1); // the probe, waiting out its interval
+    }
+    // The probe's frame names the runtime, so one left parked would resume into freed storage.
+    CHECK(loop.pendingTimerCount() == 0);
 }
 
 TEST_CASE("waitReadable resolves over a real SystemPipe", "[TuiRuntime][fd]")

@@ -20,6 +20,7 @@
 /// one is "the kernel says this handle is ready", the other is "those bytes are the letter k".
 
 #include <core/platform/Types.hpp>
+#include <core/tui/EndProbe.hpp>
 #include <core/tui/InputEvent.hpp>
 
 #include <optional>
@@ -80,6 +81,19 @@ class InputSource
     /// still spins on a hung-up handle until it answers.
     /// @return true once the input handle has reached its end.
     [[nodiscard]] virtual bool inputClosed() const noexcept { return false; }
+
+    /// Asks, without reading, whether the input has ended in a way its handle never reports as
+    /// readiness -- a Windows console whose host died (see @c EndProbe). Never blocks.
+    ///
+    /// The runtime asks in its first turn, and again every @c TuiRuntimeOptions::endProbe for as
+    /// long as the answer is @c EndProbe::Open. @c EndProbe::NotNeeded stops the asking, so a
+    /// source whose end does arrive as readiness costs no timer; @c EndProbe::Ended ends the input
+    /// stream exactly as an @c inputClosed read does.
+    ///
+    /// Not pure, and @c EndProbe::NotNeeded by default, for @c inputClosed's reason -- which means
+    /// a source that wraps another one must forward this too, or it turns the question off.
+    /// @return Whether the input is still there, has ended, or need not be asked.
+    [[nodiscard]] virtual EndProbe probeEnd() { return EndProbe::NotNeeded; }
 
     /// Drains a pending resize notification and reports the new size. Never blocks.
     /// @return The resize event, or nothing where none was pending.

@@ -123,8 +123,14 @@ and on stb when `CORE_CPP_WITH_IMAGES` is on. Native only: there is no terminal 
   or an end of file that `poll(2)` confirms as a hangup), a pipe whose writer closed, a Windows
   console that was closed or detached, or a handle the loop refuses to watch -- the source's
   `inputClosed()` answers true, the runtime stops watching the handle, and `runtime.inputClosed()`
-  answers true from then on. The input waits deliver what was read before the end (and a pending
-  agent message, for `nextActivity()`), and then throw `core::async::OperationCancelled` without
+  answers true from then on. One end reaches no handle: a Windows console whose host process died
+  is never signalled again. The runtime therefore asks the source, through `probeEnd()`, every
+  `TuiRuntimeOptions::endProbe` (one second by default), and ends the input the same way once the
+  console can no longer answer; a source whose end does arrive as readiness answers
+  `EndProbe::NotNeeded` the first time and is not asked again. `TerminalInput::poll()` asks the
+  same question between slices of at most a second of its wait, so a `poll(-1)` on such a console
+  returns. The input waits deliver what was read before the end (and a pending agent message, for
+  `nextActivity()`), and then throw `core::async::OperationCancelled` without
   parking. An application that catches that cancellation asks `inputClosed()` to tell "the
   terminal is gone, exit" from an interrupt. Before 0.2.1 the runtime re-parked on a handle at its
   end, which answers at once and yields nothing, so with `SIGHUP` ignored a hung-up terminal spun

@@ -5,6 +5,7 @@
 #include <core/tui/TerminalProtocols.hpp>
 #include <core/tui/detail/Utf16ToUtf8.hpp>
 
+#include <algorithm>
 #include <array>
 #include <span>
 #include <string>
@@ -100,16 +101,31 @@ auto TerminalInput::poll(int timeoutMs) -> std::vector<InputEvent>
     if (auto pending = takePending(); !pending.empty())
         return pending;
 
-    auto const timeout = (timeoutMs < 0) ? INFINITE : static_cast<DWORD>(timeoutMs);
-
     // Wait on both stdin and the resize event
     auto const handles = std::array<HANDLE, 2> { _native->stdinHandle, _native->resizeEvent };
     auto const handleCount = (_native->resizeEvent != nullptr) ? 2U : 1U;
 
-    auto const waitResult = WaitForMultipleObjects(handleCount, handles.data(), FALSE, timeout);
-
-    if (waitResult == WAIT_TIMEOUT)
-        return parserTimeout();
+    // A console whose host died is never signalled again, so one wait on it would last its whole
+    // timeout -- for ever, for poll(-1). The wait is cut into slices no longer than ProbeSliceMs
+    // instead, and the console asked between them whether it is still there (probeEnd).
+    constexpr auto ProbeSliceMs = DWORD { 1000 };
+    auto remaining = (timeoutMs < 0) ? INFINITE : static_cast<DWORD>(timeoutMs);
+    auto waitResult = DWORD { WAIT_TIMEOUT };
+    while (true)
+    {
+        auto const slice = (remaining == INFINITE) ? ProbeSliceMs : std::min(remaining, ProbeSliceMs);
+        waitResult = WaitForMultipleObjects(handleCount, handles.data(), FALSE, slice);
+        if (waitResult != WAIT_TIMEOUT)
+            break;
+        if (probeEnd() == EndProbe::Ended)
+            return {};
+        if (remaining != INFINITE)
+        {
+            remaining -= slice;
+            if (remaining == 0)
+                return parserTimeout();
+        }
+    }
 
     // The wait refused its handles: the console input handle is no longer valid (the console was
     // closed or this process detached from it). Every later wait would fail the same way at once.
@@ -156,6 +172,32 @@ auto TerminalInput::drainResize() -> std::optional<ResizeEvent>
         return ResizeEvent { .columns = static_cast<int>(cols), .rows = static_cast<int>(rows) };
     }
     return std::nullopt;
+}
+
+auto TerminalInput::probeEnd() -> EndProbe
+{
+    // A console whose host process died is never signalled again, so no wait on it returns and
+    // readReadyInput below is never reached to find the end. Every call on the handle fails at once
+    // instead -- ERROR_PIPE_NOT_CONNECTED, measured against the in-box conhost on Windows 11 --
+    // and asking for the pending event count is the cheapest of them: it reads nothing.
+    //
+    // Only the answers that say the console is gone end the input, because this is asked every
+    // second for the life of the session and the end is for good: any other failure is taken as
+    // passing, and asked again next time.
+    constexpr auto ConsoleGone = std::array<DWORD, 3> {
+        ERROR_PIPE_NOT_CONNECTED, // its host process died
+        ERROR_BROKEN_PIPE,        // its host is going away
+        ERROR_INVALID_HANDLE,     // the console was closed, or this process detached from it
+    };
+    if (_inputClosed)
+        return EndProbe::Ended;
+    auto pending = DWORD { 0 };
+    if (GetNumberOfConsoleInputEvents(_native->stdinHandle, &pending) != 0)
+        return EndProbe::Open;
+    if (std::ranges::find(ConsoleGone, GetLastError()) == ConsoleGone.end())
+        return EndProbe::Open;
+    _inputClosed = true;
+    return EndProbe::Ended;
 }
 
 auto TerminalInput::readReadyInput() -> std::vector<InputEvent>
