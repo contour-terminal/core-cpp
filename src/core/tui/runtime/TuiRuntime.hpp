@@ -118,6 +118,14 @@ struct TuiRuntimeOptions
     /// Escape" from "the rest is still in flight" without a clock. The runtime arms this after any
     /// read that decoded to nothing, and flushes when it elapses.
     std::chrono::milliseconds escapeFlush { 50 };
+
+    /// How often the input is asked whether it has ended where no readiness reports it -- a
+    /// Windows console whose host died (@c InputSource::probeEnd) -- or zero to never ask.
+    ///
+    /// Asked once in the runtime's first turn; a source answering @c EndProbe::NotNeeded is never
+    /// asked again and costs no timer, so only an input that needs the question pays for it. The
+    /// interval is how long a process may outlive such a console before its input ends.
+    std::chrono::milliseconds endProbe { 1000 };
 };
 
 /// Drives TUI coroutine flows on a @c core::net::EventLoop.
@@ -352,10 +360,10 @@ class TuiRuntime
     /// @}
 
   private:
-    /// How many source flows a runtime can have, which is how many handles it knows about:
-    /// terminal input, resize, the interrupt wakeup and the POSIX signal fd. A fifth handle is a
-    /// fifth flow and this number with it -- `startSourceFlow` asserts rather than overruns.
-    static constexpr std::size_t SourceFlowCount = 4;
+    /// How many source flows a runtime can have: one per handle it knows about -- terminal input,
+    /// resize, the interrupt wakeup and the POSIX signal fd -- and the end probe, which watches no
+    /// handle. Another flow is this number plus one -- `startSourceFlow` asserts rather than overruns.
+    static constexpr std::size_t SourceFlowCount = 5;
 
     /// Starts the source flows for whichever handles @c _input and @c _options name.
     void startSourceFlows();
@@ -376,6 +384,14 @@ class TuiRuntime
 
     /// The flow parked on the POSIX signal fd: a reaped job is non-input activity.
     [[nodiscard]] async::Task<void> signalFlow();
+
+    /// Asks the input whether it has ended where no readiness reports it (@c InputSource::probeEnd),
+    /// now and then every @c TuiRuntimeOptions::endProbe while it answers @c EndProbe::Open. Ends the
+    /// input stream once it answers @c EndProbe::Ended, and returns at once for a source that answers
+    /// @c EndProbe::NotNeeded. A flow rather than a timer, so the first question is asked on the loop's
+    /// thread in a turn, not by the constructor, and what the source throws propagates as any flow's
+    /// exception does.
+    [[nodiscard]] async::Task<void> endProbeFlow();
 
     /// Files @p events: dispatches the terminal's protocol responses out of them, buffers what is
     /// left as application input, and resumes whoever was waiting.

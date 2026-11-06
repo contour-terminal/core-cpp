@@ -133,7 +133,13 @@ void TuiRuntime::forgetHandedToLoop(std::coroutine_handle<> waiter) noexcept
 void TuiRuntime::startSourceFlows()
 {
     if (_inputHandle != platform::InvalidHandle)
+    {
         startSourceFlow(inputFlow());
+        // Beside the input flow rather than in it: that flow is parked on a handle that, for the
+        // input this asks about, is never signalled again, so it would never get to ask.
+        if (_options.endProbe > std::chrono::milliseconds::zero())
+            startSourceFlow(endProbeFlow());
+    }
     if (_resizeHandle != platform::InvalidHandle)
         startSourceFlow(resizeFlow());
     if (_options.interruptWakeup != nullptr)
@@ -179,7 +185,9 @@ async::Task<void> TuiRuntime::inputFlow()
             endInput();
             co_return;
         }
-        if (_stopping)
+        // An end the probe found while this flow was parked: nothing behind the handle is input
+        // any more, and the stream has already ended.
+        if (_stopping || _inputClosed)
             co_return;
 
         auto decoded = callOut([this] { return _input.readReady(); });
@@ -303,6 +311,35 @@ async::Task<void> TuiRuntime::signalFlow()
         // finished jobs promptly instead of at the next keypress.
         if (platform::SignalHandler::processSignalFd())
             notifyActivity();
+    }
+}
+
+async::Task<void> TuiRuntime::endProbeFlow()
+{
+    // `!_stopping` rather than `true`, checked BEFORE every `co_await`: a flow must never park on
+    // the loop once teardown has begun, whatever resumed it. See ~TuiRuntime.
+    while (!_stopping && !_inputClosed)
+    {
+        switch (callOut([this] { return _input.probeEnd(); }))
+        {
+            case EndProbe::NotNeeded: co_return; // its end arrives as readiness; asking adds nothing
+            case EndProbe::Ended:
+                // The input flow is parked on a handle that will never be signalled, so it is not the
+                // one to end the stream, as it is after an ended read: complete what a partial
+                // sequence was holding, since no continuation is coming, and end the stream here.
+                routeDecoded(callOut([this] { return _input.flushPartial(); }));
+                endInput();
+                co_return;
+            case EndProbe::Open: break;
+        }
+        try
+        {
+            co_await _loop.delay(_options.endProbe);
+        }
+        catch (async::OperationCancelled const&)
+        {
+            co_return;
+        }
     }
 }
 

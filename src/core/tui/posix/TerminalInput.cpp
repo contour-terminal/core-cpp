@@ -183,6 +183,13 @@ auto TerminalInput::resizeNativeHandle() const noexcept -> core::platform::Nativ
     return _native->resizePipe[0];
 }
 
+auto TerminalInput::probeEnd() -> EndProbe
+{
+    // A terminal that hangs up, and a pipe whose writer closed, make the descriptor readable, and
+    // readReadyInput finds the end behind that readiness.
+    return EndProbe::NotNeeded;
+}
+
 auto TerminalInput::readReadyInput() -> std::vector<InputEvent>
 {
     auto events = std::vector<InputEvent> {};

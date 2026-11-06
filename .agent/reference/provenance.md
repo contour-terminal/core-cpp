@@ -549,6 +549,7 @@ others in notes.
 | `src/core/tui/Dialog_test.cpp` | origin: core-cpp | - | - | endo's `src/tui/Dialog.cpp` has no test; added by A7 fix round 1 for the frame's position and the narrow-terminal case |
 | `src/core/tui/EditAction.hpp` | contour-terminal/endo | `src/tui/EditAction.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Element.hpp` | contour-terminal/endo | `src/tui/Element.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/EndProbe.hpp` | origin: core-cpp | - | - | what an input answers when asked whether it has ended where no readiness reports it |
 | `src/core/tui/Error.hpp` | contour-terminal/endo | `src/tui/Error.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/FilesystemImageProvider.cpp` | contour-terminal/endo | `src/tui/ImageProvider.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | renamed with the class it defines; see `FilesystemImageProvider.hpp`; post-import fix: `prepare()` reads its source as UTF-8 (`core::pathFromUtf8()`) and hands `loadImage()` and its messages UTF-8 (`core::pathToUtf8()`); `prepare()` refuses a source that is not UTF-8 |
 | `src/core/tui/FilesystemImageProvider.hpp` | contour-terminal/endo | `src/tui/ImageProvider.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `FilesystemImageProvider` and `isRemoteImageSource()` split out of `ImageProvider.hpp`, because they are the part that needs a decoder and so exist only with `CORE_CPP_WITH_IMAGES` |

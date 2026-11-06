@@ -98,6 +98,7 @@ core_cpp_add_module(tui KIND STATIC
         Dialog.hpp
         EditAction.hpp
         Element.hpp
+        EndProbe.hpp
         FuzzyPickerPopup.hpp
         GenericSyntaxHighlighter.hpp
         GhostTextHelper.hpp
