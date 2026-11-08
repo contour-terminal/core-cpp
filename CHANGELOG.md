@@ -7,6 +7,18 @@ release may break the API; every break is listed under **Breaking** with a migra
 release tag `vX.Y.Z` equals the version in `project(core-cpp VERSION X.Y.Z)`, and the release
 workflow refuses one without a section here.
 
+## [Unreleased]
+
+### Breaking
+
+- **`core::split` keeps an empty last field.** `split("a;", ';')` is now `a`, `` rather than `a` alone, as
+  `"a;;b"` and `";a"` already kept theirs -- the last field was the only one dropped when empty. A protocol
+  whose last parameter may be empty (`OSC 52 ; c ;`, which clears the clipboard; `OSC 777 ; notify ; title ;`)
+  could not be read with it. An empty text still has no fields. Migration: a caller to which an empty field
+  means nothing skips it (`if (field.empty()) continue;`); one splitting text into lines by `'\n'` drops a
+  trailing line break first, as the log formatter now does -- and, if that leaves the text empty, still has
+  the one empty line it was.
+
 ## [0.16.0] - 2026-11-06
 
 ### Added
