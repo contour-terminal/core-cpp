@@ -60,3 +60,17 @@ verbatim, a dash or not. A bare `-` is not spelled like an option: by convention
 input, and so it starts the verbatim input like any other operand. A command without verbatim
 input refuses an unknown option-like token with `UnknownOption` too, and any other token it cannot
 place with `UnexpectedToken`.
+
+### Verbatim input after an option's value
+
+xterm's `-e PROGRAM ARGS...` has the program's own options follow the program, so an option can
+declare `.verbatimStart = cli::VerbatimStart::AfterValue`: once it has consumed its value, every
+remaining token is verbatim input, as if a `--` followed, `-` tokens included. The value stays the
+option's value and is not repeated in `verbatim`; the caller combines the two. The marker is ignored
+on a command without a `Verbatim` section.
+
+| Command line | `execute` | `verbatim` |
+|---|---|---|
+| `tool -e sh -c "exit 0"` | `sh` | `-c`, `exit 0` |
+| `tool --execute=sh -c x` | `sh` | `-c`, `x` |
+

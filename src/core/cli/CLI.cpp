@@ -89,6 +89,7 @@ namespace // {{{ helper
 
         deque<Command const*> currentCommand = {};
         Option const* currentOption = nullptr;
+        bool verbatimStarted = false; ///< An option with VerbatimStart::AfterValue has consumed its value.
 
         FlagStore output = {};
     };
@@ -394,6 +395,13 @@ namespace // {{{ helper
             auto& [option, value] = parsed->value();
             auto const fqdn = optionPrefix + "." + Name(option->name.longName);
             setOption(context, fqdn, std::move(value));
+
+            if (option->verbatimStart == VerbatimStart::AfterValue
+                && context.currentCommand.back()->verbatim.has_value())
+            {
+                context.verbatimStarted = true;
+                return {};
+            }
         }
     }
 
@@ -455,6 +463,13 @@ namespace // {{{ helper
 
         if (auto options = parseOptionList(context); !options)
             return options;
+
+        if (context.verbatimStarted)
+        {
+            while (hasTokensAvailable(context))
+                context.output.verbatim.emplace_back(context.args.at(context.pos++));
+            return {};
+        }
 
         if (Command const* subcmd = tryLookupCommand(context))
         {
