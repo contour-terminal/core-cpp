@@ -105,6 +105,7 @@ enum class ParseErrorKind : std::uint8_t
     EmptyValue,            ///< `--name=` for an option whose type is not a string.
     UnexpectedToken,       ///< A token that is neither an option, a sub-command nor verbatim input.
     MissingRequiredOption, ///< An option marked @c Presence::Required was not given.
+    UnknownOption,         ///< A token spelled like an option (`-x`, `--name`, `--name=value`) names none.
 };
 
 /// What was wrong with a command line, and where.

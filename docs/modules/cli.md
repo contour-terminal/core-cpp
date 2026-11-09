@@ -36,5 +36,27 @@ verbose = flags->get<bool>("tool.verbose");
 A malformed command line is a value, never an exception: `parse()` returns
 `std::expected<FlagStore, ParseError>`, and a `ParseError` has a `kind` (`ParseErrorKind`: not
 enough arguments, an invalid value, an explicit empty value for a non-string option, an unexpected
-token, a missing required option), the index of the token at fault and a message for the user.
+token, a missing required option, an unknown option), the index of the token at fault and a message
+for the user.
 A number is read whole: `12abc` is refused rather than read as 12, and `-1` is not an unsigned.
+
+## Verbatim input
+
+A command with a `Verbatim` section and no subcommands takes the rest of the command line as
+`FlagStore::verbatim`, unparsed -- a program and its arguments, say. Its options come first, and
+the verbatim input starts at the first token that is not spelled like an option, or after a `--`,
+which is consumed:
+
+| Command line | Options | `verbatim` |
+|---|---|---|
+| `tool new --cwd /tmp htop -d 5` | `cwd` | `htop`, `-d`, `5` |
+| `tool new --cwd /tmp -- --window 1` | `cwd` | `--window`, `1` |
+| `tool new - -x` | | `-`, `-x` |
+| `tool new --window 1` | refused: `UnknownOption`, naming `--window` | |
+
+Before the verbatim input starts, a token spelled like an option (`-x`, `-name`, `--name`,
+`--name=value`) must name one of the command's options; once it has started, every token is
+verbatim, a dash or not. A bare `-` is not spelled like an option: by convention it names standard
+input, and so it starts the verbatim input like any other operand. A command without verbatim
+input refuses an unknown option-like token with `UnknownOption` too, and any other token it cannot
+place with `UnexpectedToken`.

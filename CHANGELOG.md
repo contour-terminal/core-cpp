@@ -7,6 +7,27 @@ release may break the API; every break is listed under **Breaking** with a migra
 release tag `vX.Y.Z` equals the version in `project(core-cpp VERSION X.Y.Z)`, and the release
 workflow refuses one without a section here.
 
+## [Unreleased]
+
+### Breaking
+
+- **`core::cli::parse` refuses an unknown option in front of a command's verbatim input.** A command with a
+  `Verbatim` section took the first token its options did not know as the start of that input, so
+  `contour new --window 1` -- `--window` being no option of `new` -- ran `--window 1` as the new tab's command
+  instead of failing, and `--window=1` and `-w` went the same way. Before the verbatim input starts, a token
+  spelled like an option (`-x`, `-name`, `--name`, `--name=value`) must now name one of the command's options,
+  or `parse()` returns `ParseErrorKind::UnknownOption` naming it. The verbatim input starts after a `--`, or at
+  the first token that is not spelled like an option -- so `cmd -- --window 1` and `cmd ls -la` read as before,
+  and every token after the first verbatim word, `-` or not, stays verbatim. A bare `-`, by convention standard
+  input, is an operand and starts the verbatim input. Migration: a caller that relied on a leading dash token
+  reaching the verbatim words passes `--` in front of it.
+
+### Added
+
+- **`core::cli::ParseErrorKind::UnknownOption`**: a token spelled like an option names none. A command without
+  verbatim input refused such a token as `UnexpectedToken` and now refuses it with this kind; `-`, `--` and any
+  other leftover token are still `UnexpectedToken`.
+
 ## [0.17.0] - 2026-11-08
 
 ### Breaking
