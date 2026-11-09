@@ -135,6 +135,14 @@ namespace // {{{ helper
         return text.starts_with(prefix);
     }
 
+    /// Tells whether @p token is spelled like an option name: `-x`, `-name`, `--name` or
+    /// `--name=value`. A bare `-` is not -- it names standard input by convention, an operand -- and
+    /// neither is `--`, which ends the options.
+    bool looksLikeOption(string_view token)
+    {
+        return token.size() > 1 && token.front() == '-' && token != "--";
+    }
+
     Option const* findOption(ParseContext const& context, string_view name)
     {
         for (auto const& option: context.currentCommand.back()->options)
@@ -154,6 +162,14 @@ namespace // {{{ helper
     {
         return std::unexpected { ParseError {
             .kind = kind, .tokenIndex = index, .message = std::move(message) } };
+    }
+
+    /// The refusal of the current token, which looks like an option but names none.
+    auto refuseUnknownOption(ParseContext const& context) -> std::unexpected<ParseError>
+    {
+        return refuse(ParseErrorKind::UnknownOption,
+                      context.pos,
+                      std::format("Unknown option \"{}\".", currentToken(context)));
     }
 
     auto consumeToken(ParseContext& context) -> std::expected<string_view, ParseError>
@@ -457,8 +473,12 @@ namespace // {{{ helper
         if (com.verbatim.has_value())
         {
             CLI_DEBUG(std::format("parseCommand: going verbatim."));
+            // The verbatim input starts after a "--", or else at the first token that does not look
+            // like an option: one that does, parseOptionList() did not know, and is refused.
             if (hasTokensAvailable(context) && currentToken(context) == "--")
                 ++context.pos; // consume "--"
+            else if (looksLikeOption(currentToken(context)))
+                return refuseUnknownOption(context);
             while (hasTokensAvailable(context))
                 context.output.verbatim.emplace_back(context.args.at(context.pos++));
         }
@@ -530,6 +550,8 @@ std::expected<FlagStore, ParseError> parse(Command const& command, StringViewLis
         .and_then([&](string_view) { return parseCommand(command, context); })
         .and_then([&]() -> std::expected<void, ParseError> {
             // A command must not leave any trailing tokens at the end of parsing.
+            if (looksLikeOption(currentToken(context)))
+                return refuseUnknownOption(context);
             if (hasTokensAvailable(context))
                 return refuse(ParseErrorKind::UnexpectedToken,
                               context.pos,
