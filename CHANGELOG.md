@@ -7,6 +7,21 @@ release may break the API; every break is listed under **Breaking** with a migra
 release tag `vX.Y.Z` equals the version in `project(core-cpp VERSION X.Y.Z)`, and the release
 workflow refuses one without a section here.
 
+## [Unreleased]
+
+### Fixed
+
+- **`core::cli::parse` no longer breaks xterm's `-e PROGRAM ARGS...` convention.** 0.18.0 refused the option-like
+  token after `-e`'s value, so `contour -e sh -c "exit 0"` failed with `Unknown option "-c"`. An option can now
+  declare that the verbatim input starts right after its value (see `Option::verbatimStart` below).
+
+### Added
+
+- **`core::cli::Option::verbatimStart`** (`core::cli::VerbatimStart::{Normal, AfterValue}`, default `Normal`):
+  with `AfterValue`, once the option has consumed its value every remaining token is verbatim input, as if a `--`
+  followed, `-` tokens included. The value stays the option's value and is not repeated in
+  `FlagStore::verbatim`; the caller combines the two. Ignored on a command without a `Verbatim` section.
+
 ## [0.18.0] - 2026-11-09
 
 ### Breaking
