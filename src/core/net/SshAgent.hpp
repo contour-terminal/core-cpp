@@ -19,6 +19,7 @@
 #include <core/net/EventLoop.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/NetError.hpp>
+#include <core/net/SshAgentEndpoint.hpp>
 #include <core/net/SshKeys.hpp>
 
 #include <cstddef>
@@ -83,10 +84,5 @@ using SshAgentConnector = std::function<async::Task<std::expected<std::unique_pt
 ///        `\\.\pipe\openssh-ssh-agent`. An empty endpoint is an agent that is always unavailable.
 /// @return The client.
 [[nodiscard]] std::unique_ptr<ISshAgent> makeSshAgent(EventLoop& loop, std::string endpoint);
-
-/// Where this process's agent listens.
-/// @param environment The environment to read `SSH_AUTH_SOCK` from (unused on Windows).
-/// @return `SSH_AUTH_SOCK` on POSIX, empty when unset; `\\.\pipe\openssh-ssh-agent` on Windows.
-[[nodiscard]] std::string defaultSshAgentEndpoint(core::Environment const& environment);
 
 } // namespace core::net

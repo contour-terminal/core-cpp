@@ -153,6 +153,7 @@ core_cpp_add_module(net KIND STATIC
         SleepUntil.hpp
         Sockets.hpp
         SplitSocket.hpp
+        SshAgentEndpoint.hpp
         TcpClient.hpp
         ThreadedAddressResolver.hpp
         UdpSocket.hpp
@@ -165,6 +166,7 @@ core_cpp_add_module(net KIND STATIC
         detail/ReadyBatch.hpp
         detail/RingQueue.hpp
         detail/ScopeGuard.hpp
+        detail/SshAgentEndpoint.hpp
         detail/StreamSocketOptions.hpp
         detail/WorkerIdentity.hpp
         testing/BackendMatrix.hpp
@@ -228,6 +230,7 @@ core_cpp_add_module(net KIND STATIC
         posix/PosixSocket.hpp
         posix/SocketErrors.cpp
         posix/SocketsPosix.cpp
+        posix/SshAgentEndpoint.cpp
         posix/StreamSocketOptions.cpp
         posix/UdpSocket.cpp
         posix/UnixListener.cpp
@@ -258,6 +261,7 @@ core_cpp_add_module(net KIND STATIC
         windows/NetworkEvents.hpp
         windows/SocketErrors.cpp
         windows/SocketsWin32.cpp
+        windows/SshAgentEndpoint.cpp
         windows/StreamSocketOptions.cpp
         windows/UdpSocket.cpp
         windows/UnixSocketPath.cpp
@@ -293,7 +297,6 @@ core_cpp_add_module(net_tls KIND STATIC
         SshAgent.hpp
         SshKeys.hpp
         Tls.hpp
-        detail/SshAgentEndpoint.hpp
         detail/SshWire.hpp
         testing/SoftwareSecurityKey.hpp
         testing/StrictTlsPeer.hpp
@@ -303,10 +306,6 @@ core_cpp_add_module(net_tls KIND STATIC
         Tls.cpp
         testing/SoftwareSecurityKey.cpp
         testing/StrictTlsPeer.cpp
-    SOURCES_POSIX
-        posix/SshAgentEndpoint.cpp
-    SOURCES_WINDOWS
-        windows/SshAgentEndpoint.cpp
     PUBLIC_LIBS core::net
     PRIVATE_LIBS OpenSSL::SSL OpenSSL::Crypto)
 
@@ -410,6 +409,7 @@ core_cpp_add_test(net
         posix/FdPassing_test.cpp
         posix/PortSharing_test.cpp
         posix/SocketErrors_test.cpp
+        posix/SshAgentEndpoint_test.cpp
         posix/UnixSocket_test.cpp
         posix/WaitReadableClose_test.cpp
     SOURCES_WINDOWS
@@ -421,6 +421,7 @@ core_cpp_add_test(net
         windows/NetworkEvents_test.cpp
         windows/PortSharing_test.cpp
         windows/SocketErrors_test.cpp
+        windows/SshAgentEndpoint_test.cpp
         windows/UnixListener_test.cpp
     LABELS loopback
     # IoAwaitable_test.cpp's loop of inline completions skips where symmetric transfer is not a
@@ -450,10 +451,6 @@ core_cpp_add_test(net NAME net_tls
         TlsSession_test.cpp
         TlsSocket_test.cpp
         Tls_test.cpp
-    SOURCES_POSIX
-        posix/SshAgentEndpoint_test.cpp
-    SOURCES_WINDOWS
-        windows/SshAgentEndpoint_test.cpp
     LABELS loopback
     # The keys and signatures ssh-keygen made, read where they are checked in (testdata/ssh/README.md).
     DEFINITIONS "CORE_CPP_SSH_TESTDATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/testdata/ssh\""

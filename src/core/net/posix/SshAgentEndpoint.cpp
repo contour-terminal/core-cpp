@@ -2,7 +2,7 @@
 #include <core/net/detail/SshAgentEndpoint.hpp>
 
 #include <core/net/Sockets.hpp>
-#include <core/net/SshAgent.hpp>
+#include <core/net/SshAgentEndpoint.hpp>
 
 namespace core::net
 {

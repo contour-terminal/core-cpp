@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include <core/net/SshAgent.hpp>
+#include <core/net/SshAgentEndpoint.hpp>
 #include <core/testing/Environment.hpp>
 
 #include <catch2/catch_test_macros.hpp>

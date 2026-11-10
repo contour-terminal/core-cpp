@@ -2,7 +2,7 @@
 #include <core/net/detail/SshAgentEndpoint.hpp>
 
 #include <core/WideString.hpp>
-#include <core/net/SshAgent.hpp>
+#include <core/net/SshAgentEndpoint.hpp>
 #include <core/net/windows/NamedPipe.hpp>
 
 namespace core::net

@@ -26,10 +26,11 @@ workflow refuses one without a section here.
   an `ISocket` by `tlsSessionOf()`; `sshStyleFingerprint()` writes a SHA-256 as `SHA256:<unpadded base64>`, as
   `ssh-keygen` does. `channelBinding()` answers an error below TLS 1.3: RFC 9266's tls-exporter binding is defined
   for TLS 1.3 only.
-- **An ssh-agent client** (`<core/net/SshAgent.hpp>`): `ISshAgent`, `makeSshAgent()` and `defaultSshAgentEndpoint()`
+- **An ssh-agent client** (`<core/net/SshAgent.hpp>`): `ISshAgent` and `makeSshAgent()`
   list an agent's identities and ask it to sign, over `SSH_AUTH_SOCK` on POSIX and the OpenSSH named pipe on Windows.
   `parseSshPublicKeyBlob()` reads the key blobs it answers with. On Windows the named-pipe
   connection is overlapped, so a slow agent (a security key awaiting a touch) parks the awaiting flow, not the loop.
+  `defaultSshAgentEndpoint()` (`<core/net/SshAgentEndpoint.hpp>`, in `core::net`) names where the agent listens.
 - **`core::IRandom` and `core::systemRandom()`** (`<core/Random.hpp>`): the operating system's random source behind an
   interface a test can replace: `getentropy()` on every POSIX system and under Emscripten,
   `BCryptGenRandom()` on Windows (any other platform is refused when CMake configures). Requests over getentropy's 256
