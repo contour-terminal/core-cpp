@@ -14,9 +14,25 @@ workflow refuses one without a section here.
 - **OpenSSH public keys and SSHSIG verification** (`<core/net/SshKeys.hpp>`, in `core::net_tls`):
   `parseSshPublicKey`, `parseAuthorizedKeysLine`, `fingerprintOf`, `sshKeyTypeName`, `verifySshSignature`,
   `sshsigSignedData` and `assembleSshsig`, for `ssh-ed25519`, `ecdsa-sha2-nistp256` and their `sk-` security-key
-  forms (user presence required). Every malformed input answers `SshKeyError`/`SshSigError`; nothing throws.
+  forms (user presence required). SSHSIG's hash is `sha512` only. Every malformed input answers
+  `SshKeyError`/`SshSigError`; nothing throws.
 - **`core::net::testing::SoftwareSecurityKey`**: a FIDO authenticator in software that signs as PROTOCOL.u2f says,
   for testing `sk-` key verification without a device.
+- **`TlsVersion` and `TlsOptions`** (`<core/net/ITlsSession.hpp>`, `<core/net/Tls.hpp>`): a server context takes a
+  `TlsOptions` whose `minimumVersion` can require TLS 1.3. Additive: the `options` parameter defaults to TLS 1.2, as
+  before.
+- **`ITlsSession`, `tlsSessionOf()` and `sshStyleFingerprint()`**: what a finished handshake lets a caller ask of its
+  connection (the RFC 9266 channel binding, the peer certificate's fingerprint, the negotiated version), found behind
+  an `ISocket` by `tlsSessionOf()`; `sshStyleFingerprint()` writes a SHA-256 as `SHA256:<unpadded base64>`, as
+  `ssh-keygen` does.
+- **An ssh-agent client** (`<core/net/SshAgent.hpp>`): `ISshAgent`, `makeSshAgent()` and `defaultSshAgentEndpoint()`
+  list an agent's identities and ask it to sign, over `SSH_AUTH_SOCK` on POSIX and the OpenSSH named pipe on Windows.
+  `parseSshPublicKeyBlob()` reads the key blobs it answers with. On Windows the named-pipe
+  connection (`connectNamedPipe`) is overlapped, so a slow agent (a security key awaiting a touch) parks the awaiting
+  flow, not the loop.
+- **`core::IRandom` and `core::systemRandom()`** (`<core/Random.hpp>`): the operating system's random source behind an
+  interface a test can replace: `getrandom()` on Linux, `arc4random_buf()` on macOS and the BSDs, `BCryptGenRandom()` on
+  Windows. A short read is continued; a hard failure ends the process rather than return bytes that are not random.
 - **`StrictTlsPeer::server` takes a maximum version**, as `client` does.
 
 ### Changed
