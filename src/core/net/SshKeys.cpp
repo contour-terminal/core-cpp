@@ -93,7 +93,7 @@ namespace
     constexpr auto Whitespace = std::string_view { " \t\r\n" };
 
     /// The message hashes an SSHSIG may name, the first being the one this module produces. Only
-    /// sha512: it is what `ssh-keygen -Y sign` and this module make, and the daemon's protocol fixes it.
+    /// sha512: it is what `ssh-keygen -Y sign` and this module make, and the callers' protocol fixes it.
     struct SshsigHash
     {
         std::string_view name;

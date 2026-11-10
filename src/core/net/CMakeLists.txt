@@ -252,6 +252,8 @@ core_cpp_add_module(net KIND STATIC
         windows/IocpOperation.hpp
         windows/IocpSocket.cpp
         windows/IocpSocket.hpp
+        windows/NamedPipe.cpp
+        windows/NamedPipe.hpp
         windows/NetworkEvents.cpp
         windows/NetworkEvents.hpp
         windows/SocketErrors.cpp
@@ -284,15 +286,18 @@ core_cpp_add_module(net KIND STATIC
 # SshKeys is OpenSSH public keys and SSHSIG verification, here because the signatures are
 # OpenSSL's to verify; testing/SoftwareSecurityKey is its tests' FIDO authenticator, made of
 # software because ssh-keygen makes sk signatures only with a device attached. Both are permitted
-# units of the seam, and neither header names an OpenSSL type.
+# units of the seam, and neither header names an OpenSSL type. SshAgent is the ssh-agent protocol
+# over a socket: no OpenSSL, here only for SshPublicKey.
 core_cpp_add_module(net_tls KIND STATIC
     HEADERS
+        SshAgent.hpp
         SshKeys.hpp
         Tls.hpp
         detail/SshWire.hpp
         testing/SoftwareSecurityKey.hpp
         testing/StrictTlsPeer.hpp
     SOURCES
+        SshAgent.cpp
         SshKeys.cpp
         Tls.cpp
         testing/SoftwareSecurityKey.cpp
@@ -407,6 +412,7 @@ core_cpp_add_test(net
         windows/IocpBackend_test.cpp
         windows/IocpDial_test.cpp
         windows/IocpSocket_test.cpp
+        windows/NamedPipe_test.cpp
         windows/NetworkEvents_test.cpp
         windows/PortSharing_test.cpp
         windows/SocketErrors_test.cpp
@@ -431,6 +437,7 @@ endif()
 # core::net_tls, and OpenSSL stays PRIVATE to it.
 core_cpp_add_test(net NAME net_tls
     SOURCES
+        SshAgent_test.cpp
         SshKeys_test.cpp
         TlsContext_test.cpp
         TlsLifetime_test.cpp
