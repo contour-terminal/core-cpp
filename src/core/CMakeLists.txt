@@ -13,12 +13,19 @@ if(CORE_CPP_WITH_TRACY)
     list(APPEND _coreCppBaseLibs Tracy::TracyClient)
 endif()
 
+# BCryptGenRandom, behind core::systemRandom(); PRIVATE, no bcrypt type reaches a header.
+set(_coreCppBaseWindowsLibs "")
+if(WIN32)
+    list(APPEND _coreCppBaseWindowsLibs bcrypt)
+endif()
+
 core_cpp_add_module(base KIND STATIC
     HEADERS
         Assert.hpp
         Base64.hpp
         Deferred.hpp
         Defines.hpp
+        detail/SystemRandom.hpp
         Environment.hpp
         Escape.hpp
         Flags.hpp
@@ -26,6 +33,7 @@ core_cpp_add_module(base KIND STATIC
         Generator.hpp
         Overloaded.hpp
         Profiling.hpp
+        Random.hpp
         Ranges.hpp
         Sha256.hpp
         Times.hpp
@@ -37,13 +45,22 @@ core_cpp_add_module(base KIND STATIC
         "${CORE_CPP_GENERATED_INCLUDE_DIR}/core/Config.hpp"
     SOURCES
         Environment.cpp
+        Random.cpp
         UserInfo.cpp
         Utf8Path.cpp
         Utils.cpp
+    # One fillFromSystemRandom() per platform (core::systemRandom()): getrandom() on Linux,
+    # arc4random_buf() on macOS and the BSDs, BCryptGenRandom() on Windows.
+    SOURCES_LINUX
+        linux/LinuxRandom.cpp
+    SOURCES_BSD
+        bsd/BsdRandom.cpp
     # The conversions between UTF-16 and UTF-8 behind every wide Win32 call, core-cpp's own and its
     # consumers'.
     SOURCES_WINDOWS
         WideString.cpp
+        windows/WindowsRandom.cpp
+    PRIVATE_LIBS ${_coreCppBaseWindowsLibs}
     PUBLIC_LIBS ${_coreCppBaseLibs})
 
 core_cpp_add_test(base
@@ -55,6 +72,7 @@ core_cpp_add_test(base
         FNV_test.cpp
         Generator_test.cpp
         Profiling_test.cpp
+        Random_test.cpp
         Ranges_test.cpp
         Sha256_test.cpp
         Times_test.cpp
