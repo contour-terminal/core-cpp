@@ -20,8 +20,11 @@ namespace core::net::detail
 ///
 /// **The socket's reads and writes are overlapped**, each waiting on its OVERLAPPED's event as a
 /// waitable HANDLE of @p loop, so a slow peer parks the awaiting flow and not the loop. A named
-/// pipe is not a SOCKET, so the loop's completion port cannot serve it as it serves an
-/// @c IocpSocket. The connect itself is synchronous: a busy pipe is waited for up to about 1.5 s.
+/// pipe is not a SOCKET, which is what @c IocpSocket serves, so the pipe has a socket of its own.
+/// Each operation shares ownership of the handle, so closing the socket, or destroying it, while a
+/// flow is parked is safe: the flow answers @c NetErrorCode::Cancelled and the last operation to
+/// settle closes the pipe. The connect itself is synchronous: a busy pipe is waited for up to about
+/// 1 s.
 /// @param loop The loop whose waits the socket's operations park on; must outlive the socket.
 /// @param name The pipe name, e.g. `\\.\pipe\openssh-ssh-agent`.
 /// @return The connected socket; @c NetErrorCode::ConnRefused when no such pipe exists,
