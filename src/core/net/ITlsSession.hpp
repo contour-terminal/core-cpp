@@ -43,7 +43,12 @@ class ITlsSession
     /// `"EXPORTER-Channel-Binding"`, 32 bytes and no context. Both ends of one session derive the
     /// same value, and no other session does, so a signature over it cannot be replayed on another
     /// connection.
-    /// @return The 32 bytes, or why they are not available (no handshake yet, or the export failed).
+    ///
+    /// Only a TLS 1.3 session has one: RFC 9266 defines tls-exporter for TLS 1.3, and under TLS 1.2
+    /// the exporter is not bound to the whole handshake (without extended master secret), so a 1.2
+    /// session answers an error rather than a binding that binds less than it claims.
+    /// @return The 32 bytes, or why they are not available (no handshake yet, a session below TLS 1.3,
+    ///         or the export failed).
     [[nodiscard]] virtual std::expected<std::array<std::byte, 32>, std::string> channelBinding() const = 0;
 
     /// @return The SHA-256 of the peer's DER certificate as 64 lower-case hex digits, or empty if the

@@ -186,3 +186,85 @@ TEST_CASE("sshStyleFingerprint matches ssh-keygen -lf", "[net][tls][session]")
     auto const digest = core::Sha256::hash(std::string_view {});
     CHECK(core::net::sshStyleFingerprint(digest) == "SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU");
 }
+
+namespace
+{
+
+/// The outcome of one handshake between a `TlsSocket` and a `StrictTlsPeer`.
+struct PeerHandshake
+{
+    bool finished = false;
+    bool socketOk = false;
+    bool peerOk = false;
+};
+
+/// Drives the handshakes of @p socket and of @p peer over @p wire concurrently, bounded.
+PeerHandshake shakeWithPeer(EventLoop& loop, ISocket* socket, StrictTlsPeer* peer, ISocket* wire)
+{
+    auto outcome = PeerHandshake {};
+    auto const socketSide = [](ISocket* s, bool* ok) -> Task<void> {
+        *ok = (co_await s->handshakeIfNeeded()).has_value();
+    };
+    auto const peerSide = [](StrictTlsPeer* strict, ISocket* s, bool* ok) -> Task<void> {
+        *ok = (co_await strict->handshake(s)).has_value();
+    };
+    outcome.finished =
+        loop.blockOn(core::net::withTimeout(&loop,
+                                            core::net::testing::allOf(socketSide(socket, &outcome.socketOk),
+                                                                      peerSide(peer, wire, &outcome.peerOk)),
+                                            ExchangeBound));
+    return outcome;
+}
+
+} // namespace
+
+TEST_CASE("channelBinding of a TLS 1.2 session is an error", "[net][tls][session]")
+{
+    // RFC 9266's tls-exporter binding is defined for TLS 1.3 only: under 1.2 the exporter is not
+    // bound to the full handshake without extended master secret, so it is refused outright.
+    auto backend = core::net::makeDefaultBackend();
+    EventLoop loop { *backend };
+    auto material = core::net::generateSelfSignedCertificate();
+    REQUIRE(material.has_value());
+    auto context = core::net::makeTlsServerContext(material->certPem, material->keyPem);
+    REQUIRE(context.has_value());
+    auto pair = core::net::testing::makeSocketPair(loop);
+    REQUIRE(pair.has_value());
+    auto server = (*context)->wrap(std::move(pair->first), loop);
+    auto wire = std::move(pair->second);
+    REQUIRE(server != nullptr);
+    auto peer = StrictTlsPeer::client(TlsVersion::Tls12);
+    REQUIRE(peer.has_value());
+
+    auto const outcome = shakeWithPeer(loop, server.get(), peer->get(), wire.get());
+    REQUIRE(outcome.finished);
+    REQUIRE(outcome.socketOk);
+    REQUIRE(outcome.peerOk);
+    auto const* const session = core::net::tlsSessionOf(*server);
+    REQUIRE(session != nullptr);
+    CHECK(session->negotiatedVersion() == TlsVersion::Tls12);
+    CHECK_FALSE(session->channelBinding().has_value());
+}
+
+TEST_CASE("a TLS 1.3-only client refuses a 1.2-only server", "[net][tls][session]")
+{
+    auto backend = core::net::makeDefaultBackend();
+    EventLoop loop { *backend };
+    auto material = core::net::generateSelfSignedCertificate();
+    REQUIRE(material.has_value());
+    auto context =
+        core::net::makeTlsClientContext({}, {}, TlsOptions { .minimumVersion = TlsVersion::Tls13 });
+    REQUIRE(context.has_value());
+    auto pair = core::net::testing::makeSocketPair(loop);
+    REQUIRE(pair.has_value());
+    auto client = (*context)->wrap(std::move(pair->first), loop);
+    auto wire = std::move(pair->second);
+    REQUIRE(client != nullptr);
+    auto peer = StrictTlsPeer::server(*material, TlsVersion::Tls12);
+    REQUIRE(peer.has_value());
+
+    auto const outcome = shakeWithPeer(loop, client.get(), peer->get(), wire.get());
+    REQUIRE(outcome.finished);
+    CHECK_FALSE(outcome.socketOk);
+    CHECK_FALSE(outcome.peerOk);
+}

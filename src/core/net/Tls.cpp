@@ -479,6 +479,8 @@ namespace
         {
             if (SSL_is_init_finished(_ssl) != 1)
                 return std::unexpected("the TLS handshake has not finished");
+            if (SSL_version(_ssl) < TLS1_3_VERSION)
+                return std::unexpected("the tls-exporter channel binding needs TLS 1.3 (RFC 9266)");
             ERR_clear_error();
             auto binding = std::array<std::byte, 32> {};
             constexpr auto Label = std::string_view { "EXPORTER-Channel-Binding" };
