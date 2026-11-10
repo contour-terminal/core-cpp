@@ -66,19 +66,20 @@ TEST_CASE("connectNamedPipe: bytes written reach the server, and its reply and h
     auto const ping =
         std::array { std::byte { 'p' }, std::byte { 'i' }, std::byte { 'n' }, std::byte { 'g' } };
     auto reply = std::array<std::byte, 8> {};
-    auto const task = [&]() -> core::async::Task<void> {
-        auto const wrote = co_await (*socket)->write(ping);
+    loop.blockOn([](core::net::ISocket* pipe,
+                    std::array<std::byte, 4> const* request,
+                    std::array<std::byte, 8>* buffer) -> core::async::Task<void> {
+        auto const wrote = co_await pipe->write(*request);
         REQUIRE(wrote.has_value());
-        auto const got = co_await (*socket)->read(reply);
+        auto const got = co_await pipe->read(*buffer);
         REQUIRE(got.has_value());
         CHECK(*got == 4);
-        auto const eof = co_await (*socket)->read(reply);
+        auto const eof = co_await pipe->read(*buffer);
         REQUIRE(eof.has_value());
         CHECK(*eof == 0);
         // ISocket::isClosed turns true once a read has seen the peer hang up.
-        CHECK((*socket)->isClosed());
-    };
-    loop.blockOn(task());
+        CHECK(pipe->isClosed());
+    }(socket->get(), &ping, &reply));
     serving.join();
     ::CloseHandle(server);
 }
@@ -101,10 +102,10 @@ struct PipeServer
     std::atomic<bool> sawHangUp = false;
 
     PipeServer(std::wstring pipeName, std::chrono::milliseconds replyDelay, bool reply):
-        name(std::move(pipeName))
+        name(std::move(pipeName)),
+        pipe(::CreateNamedPipeW(
+            name.c_str(), PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE | PIPE_WAIT, 1, 256, 256, 0, nullptr))
     {
-        pipe = ::CreateNamedPipeW(
-            name.c_str(), PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE | PIPE_WAIT, 1, 256, 256, 0, nullptr);
         REQUIRE(pipe != INVALID_HANDLE_VALUE);
         thread = std::thread { [this, replyDelay, reply] {
             std::ignore = ::ConnectNamedPipe(pipe, nullptr);

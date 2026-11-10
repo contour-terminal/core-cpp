@@ -267,6 +267,17 @@ namespace
 
         std::shared_ptr<PipeState> _state;
     };
+
+    /// What a failed CreateFileW() on the pipe means to a caller.
+    [[nodiscard]] NetErrorCode connectErrorCode(DWORD error) noexcept
+    {
+        switch (error)
+        {
+            case ERROR_FILE_NOT_FOUND: return NetErrorCode::ConnRefused;
+            case ERROR_ACCESS_DENIED: return NetErrorCode::PermissionDenied;
+            default: return NetErrorCode::SystemError;
+        }
+    }
 } // namespace
 
 std::expected<std::unique_ptr<ISocket>, NetError> connectNamedPipe(EventLoop& loop, std::wstring_view name)
@@ -296,10 +307,8 @@ std::expected<std::unique_ptr<ISocket>, NetError> connectNamedPipe(EventLoop& lo
     }
     if (handle == INVALID_HANDLE_VALUE)
     {
-        auto const code = error == ERROR_FILE_NOT_FOUND  ? NetErrorCode::ConnRefused
-                          : error == ERROR_ACCESS_DENIED ? NetErrorCode::PermissionDenied
-                                                         : NetErrorCode::SystemError;
-        return std::unexpected(makeNetError(code, static_cast<int>(error), "CreateFileW(pipe)"));
+        return std::unexpected(
+            makeNetError(connectErrorCode(error), static_cast<int>(error), "CreateFileW(pipe)"));
     }
     // From here the state owns the handle, whatever follows.
     auto state = std::make_shared<PipeState>(&loop, handle);
