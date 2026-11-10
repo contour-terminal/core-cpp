@@ -473,6 +473,18 @@ std::string_view sshKeyTypeName(SshKeyType type) noexcept
     return found == KeyAlgorithms.end() ? std::string_view {} : found->name;
 }
 
+std::expected<SshPublicKey, SshKeyError> parseSshPublicKeyBlob(std::span<std::byte const> blob)
+{
+    ERR_clear_error();
+    auto const clearErrors = detail::ScopeGuard { []() noexcept { ERR_clear_error(); } };
+    auto const parsed = parseKeyBlob(blob);
+    if (!parsed)
+        return std::unexpected(parsed.error());
+    return SshPublicKey { .type = parsed->algorithm->type,
+                          .blob = std::vector<std::byte>(blob.begin(), blob.end()),
+                          .comment = {} };
+}
+
 std::expected<SshPublicKey, SshKeyError> parseSshPublicKey(std::string_view line)
 {
     auto const [typeName, rest] = splitToken(trim(line));
@@ -482,19 +494,16 @@ std::expected<SshPublicKey, SshKeyError> parseSshPublicKey(std::string_view line
     auto const* const algorithm = algorithmNamed(bytesOf(typeName));
     if (algorithm == nullptr)
         return std::unexpected(SshKeyError::UnsupportedType);
-    auto blob = decodeBase64Strictly(encoded);
+    auto const blob = decodeBase64Strictly(encoded);
     if (!blob)
         return std::unexpected(SshKeyError::Malformed);
 
-    ERR_clear_error();
-    auto const clearErrors = detail::ScopeGuard { []() noexcept { ERR_clear_error(); } };
-    auto const parsed = parseKeyBlob(*blob);
+    auto key = parseSshPublicKeyBlob(*blob);
     // The type inside the blob must be the one the line names; an unknown one inside is malformed.
-    if (!parsed || parsed->algorithm != algorithm)
+    if (!key || key->type != algorithm->type)
         return std::unexpected(SshKeyError::Malformed);
-    return SshPublicKey { .type = algorithm->type,
-                          .blob = std::move(*blob),
-                          .comment = std::string { comment } };
+    key->comment = std::string { comment };
+    return key;
 }
 
 std::expected<std::optional<AuthorizedKeyLine>, SshKeyError> parseAuthorizedKeysLine(std::string_view line)

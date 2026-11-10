@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/SshAgent.hpp>
 
-#include <core/Base64.hpp>
-#include <core/net/Sockets.hpp>
+#include <core/net/detail/SshAgentEndpoint.hpp>
 #include <core/net/detail/SshWire.hpp>
 
 #include <algorithm>
@@ -11,11 +10,6 @@
 #include <ranges>
 #include <string_view>
 #include <utility>
-
-#ifdef _WIN32
-    #include <core/WideString.hpp>
-    #include <core/net/windows/NamedPipe.hpp>
-#endif
 
 namespace core::net
 {
@@ -35,10 +29,6 @@ namespace
     /// An agent's answer is a few keys' worth; OpenSSH itself refuses anything over 256 KiB.
     constexpr auto MaxReplySize = std::uint32_t { 256U * 1024U };
     constexpr auto FrameHeaderSize = std::size_t { 4 };
-
-#ifdef _WIN32
-    constexpr auto WindowsAgentPipe = std::string_view { R"(\\.\pipe\openssh-ssh-agent)" };
-#endif
 
     using Reply = std::expected<std::vector<std::byte>, SshAgentError>;
 
@@ -102,7 +92,7 @@ namespace
         co_return payload;
     }
 
-    /// Decodes an `SSH2_AGENT_IDENTITIES_ANSWER` body, dropping keys of an unsupported type.
+    /// Decodes an `SSH2_AGENT_IDENTITIES_ANSWER` body, dropping the keys it cannot use.
     std::expected<std::vector<SshPublicKey>, SshAgentError> decodeIdentities(std::span<std::byte const> body)
     {
         auto reader = detail::SshWireReader { body };
@@ -118,21 +108,13 @@ namespace
             if (!blob || !comment)
                 return std::unexpected(SshAgentError::Protocol);
 
-            // The `.pub` line a blob is parsed through: its type name leads the blob itself.
-            auto const typeName = detail::SshWireReader { *blob }.string();
-            if (!typeName)
-                return std::unexpected(SshAgentError::Protocol);
-            auto line = std::string { reinterpret_cast<char const*>(typeName->data()), typeName->size() };
-            line += ' ';
-            line += base64::encode(
-                std::string_view { reinterpret_cast<char const*>(blob->data()), blob->size() });
-            line += ' ';
-            line.append(reinterpret_cast<char const*>(comment->data()), comment->size());
-            auto key = parseSshPublicKey(line);
-            if (key)
-                keys.push_back(std::move(*key));
-            else if (key.error() == SshKeyError::Malformed)
-                return std::unexpected(SshAgentError::Protocol);
+            // A key this module cannot use (another type, or not valid) is no failure of the
+            // agent's: it is left out, as `ssh` leaves out what it cannot offer.
+            auto key = parseSshPublicKeyBlob(*blob);
+            if (!key)
+                continue;
+            key->comment.assign(reinterpret_cast<char const*>(comment->data()), comment->size());
+            keys.push_back(std::move(*key));
         }
         if (!reader.atEnd())
             return std::unexpected(SshAgentError::Protocol);
@@ -183,22 +165,6 @@ namespace
 
         SshAgentConnector _connector;
     };
-
-    /// One connection to @p endpoint: a named pipe on Windows, a Unix socket elsewhere.
-    async::Task<std::expected<std::unique_ptr<ISocket>, NetError>> connectEndpoint(EventLoop* loop,
-                                                                                   std::string endpoint)
-    {
-        if (endpoint.empty())
-            co_return std::unexpected(makeNetError(NetErrorCode::AddressError, 0, "no ssh-agent endpoint"));
-#ifdef _WIN32
-        auto const wide = core::toUtf16(endpoint);
-        if (!wide)
-            co_return std::unexpected(makeNetError(NetErrorCode::AddressError, 0, "ssh-agent pipe name"));
-        co_return detail::connectNamedPipe(*loop, *wide);
-#else
-        co_return co_await connectUnix(loop, endpoint);
-#endif
-    }
 } // namespace
 
 std::unique_ptr<ISshAgent> makeSshAgent(SshAgentConnector connector)
@@ -208,17 +174,9 @@ std::unique_ptr<ISshAgent> makeSshAgent(SshAgentConnector connector)
 
 std::unique_ptr<ISshAgent> makeSshAgent(EventLoop& loop, std::string endpoint)
 {
-    return makeSshAgent(
-        [loop = &loop, endpoint = std::move(endpoint)]() { return connectEndpoint(loop, endpoint); });
-}
-
-std::string defaultSshAgentEndpoint([[maybe_unused]] core::Environment const& environment)
-{
-#ifdef _WIN32
-    return std::string { WindowsAgentPipe };
-#else
-    return environment.get("SSH_AUTH_SOCK").value_or(std::string {});
-#endif
+    return makeSshAgent([loop = &loop, endpoint = std::move(endpoint)]() {
+        return detail::connectAgentEndpoint(loop, endpoint);
+    });
 }
 
 } // namespace core::net

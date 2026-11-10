@@ -9,6 +9,9 @@
 /// a key by handing the agent the bytes to sign. Each call dials the agent afresh and closes the
 /// connection when done, as OpenSSH does, so an agent that restarts between calls costs nothing.
 ///
+/// **An agent must outlive every Task it returns:** the tasks refer to it, and to the connector it
+/// was made with, until they finish.
+///
 /// No OpenSSL is involved: only the framing, and the public-key parsing of SshKeys.hpp.
 
 #include <core/Environment.hpp>

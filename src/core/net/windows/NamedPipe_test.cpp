@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <string>
 #include <thread>
+#include <tuple>
 
 using core::net::NetErrorCode;
 

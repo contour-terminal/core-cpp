@@ -183,7 +183,10 @@ others in notes.
 | `src/core/net/SshKeys.cpp` | origin: core-cpp | - | - | OpenSSH public keys, `authorized_keys` lines and SSHSIG verification over OpenSSL EVP (PROTOCOL.sshsig, PROTOCOL.u2f, RFC 8709, RFC 5656) |
 | `src/core/net/SshKeys.hpp` | origin: core-cpp | - | - | the OpenSSH key and SSHSIG vocabulary, with no OpenSSL type |
 | `src/core/net/SshKeys_test.cpp` | origin: core-cpp | - | - | held against `ssh-keygen`-made fixtures in `testdata/ssh/` and, for `sk-` keys, `testing::SoftwareSecurityKey`; truncated and oversized length fields |
+| `src/core/net/detail/SshAgentEndpoint.hpp` | origin: core-cpp | - | - | the platform half of the ssh-agent client: dialling an endpoint |
 | `src/core/net/detail/SshWire.hpp` | origin: core-cpp | - | - | the bounds-checked SSH wire reader and writer (RFC 4251 §5) `SshKeys.cpp` and the software security key share |
+| `src/core/net/posix/SshAgentEndpoint.cpp` | origin: core-cpp | - | - | the ssh-agent endpoint on POSIX: SSH_AUTH_SOCK, dialled as a Unix socket |
+| `src/core/net/posix/SshAgentEndpoint_test.cpp` | origin: core-cpp | - | - | defaultSshAgentEndpoint reading SSH_AUTH_SOCK through a fake environment |
 | `src/core/net/testing/SoftwareSecurityKey.cpp` | origin: core-cpp | - | - | a FIDO authenticator in software: OpenSSL signing the PROTOCOL.u2f layout, since `ssh-keygen` makes `sk-` signatures only with a device |
 | `src/core/net/testing/SoftwareSecurityKey.hpp` | origin: core-cpp | - | - | the software authenticator's interface, with no OpenSSL type |
 | `src/core/net/testdata/ssh/README.md` | origin: core-cpp | - | - | how the SSH fixtures were made |
@@ -196,6 +199,8 @@ others in notes.
 | `src/core/net/testdata/ssh/ed25519.pub` | origin: core-cpp | - | - | an ssh-keygen-made fixture of `SshKeys_test.cpp`; commands in `testdata/ssh/README.md` |
 | `src/core/net/testdata/ssh/ed25519.sig` | origin: core-cpp | - | - | an ssh-keygen-made fixture of `SshKeys_test.cpp`; commands in `testdata/ssh/README.md` |
 | `src/core/net/testdata/ssh/message.txt` | origin: core-cpp | - | - | an ssh-keygen-made fixture of `SshKeys_test.cpp`; commands in `testdata/ssh/README.md` |
+| `src/core/net/windows/SshAgentEndpoint.cpp` | origin: core-cpp | - | - | the ssh-agent endpoint on Windows: the Win32-OpenSSH pipe, dialled with connectNamedPipe |
+| `src/core/net/windows/SshAgentEndpoint_test.cpp` | origin: core-cpp | - | - | defaultSshAgentEndpoint naming the Win32-OpenSSH pipe |
 | `src/core/testing/windows/SuppressWindowsDialogs_test.cpp` | origin: core-cpp | - | - | 0.3.0: reads back from WerGetFlags that suppressWindowsDialogs() asked Windows Error Reporting for no UI |
 | `src/core/net/CallbackAllocation_test.cpp` | origin: core-cpp | - | - | 0.3.0 review: a drain-step callback that queues nothing costs no allocation, measured by replacing the global allocation functions, which is why it is a binary of its own |
 | `src/core/net/CompletionClaim_test.cpp` | origin: core-cpp | - | - | 0.4.0: the claim a frame-free completion queues for a chain nobody owns -- counted, armed, holding no reference -- and its free at teardown and take-back; a `[bench]` case for the completion path |

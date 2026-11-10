@@ -282,15 +282,90 @@ TEST_CASE("SshAgent: an agent that cannot be reached is unavailable")
     }
 }
 
-TEST_CASE("defaultSshAgentEndpoint")
+TEST_CASE("SshAgent.identities: a supported key that is not valid is dropped, not a protocol error")
 {
-#ifdef _WIN32
-    CHECK(core::net::defaultSshAgentEndpoint(core::testing::FakeEnvironment {})
-          == R"(\\.\pipe\openssh-ssh-agent)");
-#else
-    CHECK(core::net::defaultSshAgentEndpoint(
-              core::testing::FakeEnvironment { { { "SSH_AUTH_SOCK", "/run/agent.sock" } } })
-          == "/run/agent.sock");
-    CHECK(core::net::defaultSshAgentEndpoint(core::testing::FakeEnvironment {}).empty());
-#endif
+    auto fixture = Fixture {};
+    auto const good = keyOf(Ed25519Line);
+    auto broken = good.blob;
+    broken.pop_back(); // an ssh-ed25519 blob one byte short
+    fixture.script->reply =
+        frameOf(Msg::IdentitiesAnswer, identitiesBody({ { broken, "broken" }, { good.blob, "good" } }));
+
+    auto const agent = fixture.agent();
+    auto const keys = fixture.loop.blockOn(agent->identities());
+
+    REQUIRE(keys.has_value());
+    REQUIRE(keys->size() == 1);
+    CHECK(keys->front().blob == good.blob);
+    CHECK(keys->front().comment == "good");
+}
+
+TEST_CASE("SshAgent.identities: a count the entries do not back is a protocol error")
+{
+    auto fixture = Fixture {};
+    auto body = std::vector<std::byte> {};
+    appendSshUint32(body, 0xFFFFFFFFU);
+    fixture.script->reply = frameOf(Msg::IdentitiesAnswer, body);
+    auto const agent = fixture.agent();
+    auto const keys = fixture.loop.blockOn(agent->identities());
+    REQUIRE_FALSE(keys.has_value());
+    CHECK(keys.error() == SshAgentError::Protocol);
+}
+
+TEST_CASE("SshAgent.identities: bytes after the last key are a protocol error")
+{
+    auto fixture = Fixture {};
+    auto body = identitiesBody({ { keyOf(Ed25519Line).blob, "k" } });
+    body.push_back(std::byte { 0 });
+    fixture.script->reply = frameOf(Msg::IdentitiesAnswer, body);
+    auto const agent = fixture.agent();
+    auto const keys = fixture.loop.blockOn(agent->identities());
+    REQUIRE_FALSE(keys.has_value());
+    CHECK(keys.error() == SshAgentError::Protocol);
+}
+
+TEST_CASE("SshAgent.identities: SSH_AGENT_FAILURE is a refusal")
+{
+    auto fixture = Fixture {};
+    fixture.script->reply = frameOf(Msg::Failure, {});
+    auto const agent = fixture.agent();
+    auto const keys = fixture.loop.blockOn(agent->identities());
+    REQUIRE_FALSE(keys.has_value());
+    CHECK(keys.error() == SshAgentError::Refused);
+}
+
+TEST_CASE("SshAgent.identities: a frame cut off mid-payload is unavailable")
+{
+    auto fixture = Fixture {};
+    auto reply = frameOf(Msg::IdentitiesAnswer, identitiesBody({ { keyOf(Ed25519Line).blob, "k" } }));
+    reply.resize(reply.size() - 5);
+    fixture.script->reply = std::move(reply);
+    auto const agent = fixture.agent();
+    auto const keys = fixture.loop.blockOn(agent->identities());
+    REQUIRE_FALSE(keys.has_value());
+    CHECK(keys.error() == SshAgentError::Unavailable);
+}
+
+TEST_CASE("SshAgent.identities: a zero-length frame is a protocol error")
+{
+    auto fixture = Fixture {};
+    appendSshUint32(fixture.script->reply, 0);
+    auto const agent = fixture.agent();
+    auto const keys = fixture.loop.blockOn(agent->identities());
+    REQUIRE_FALSE(keys.has_value());
+    CHECK(keys.error() == SshAgentError::Protocol);
+}
+
+TEST_CASE("SshAgent.sign: bytes after the signature are a protocol error")
+{
+    auto fixture = Fixture {};
+    auto body = std::vector<std::byte> {};
+    appendSshString(body, std::string_view { "signature" });
+    body.push_back(std::byte { 0 });
+    fixture.script->reply = frameOf(Msg::SignResponse, body);
+    auto const agent = fixture.agent();
+    auto const data = std::vector<std::byte> { std::byte { 9 } };
+    auto const answer = fixture.loop.blockOn(agent->sign(keyOf(Ed25519Line), data));
+    REQUIRE_FALSE(answer.has_value());
+    CHECK(answer.error() == SshAgentError::Protocol);
 }

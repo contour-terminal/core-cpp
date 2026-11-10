@@ -67,6 +67,12 @@ enum class SshKeyError : std::uint8_t
 ///         must lie on the curve.
 [[nodiscard]] std::expected<SshPublicKey, SshKeyError> parseSshPublicKey(std::string_view line);
 
+/// Parses the wire encoding of a public key, as an agent or a certificate carries it.
+/// @param blob The key blob: `string type` and the fields that type defines, nothing after.
+/// @return The key, with an empty comment; @c SshKeyError::UnsupportedType for a type outside
+///         @c SshKeyType, @c SshKeyError::Malformed for a short, oversized or invalid one.
+[[nodiscard]] std::expected<SshPublicKey, SshKeyError> parseSshPublicKeyBlob(std::span<std::byte const> blob);
+
 /// One key line of an `authorized_keys` file.
 struct AuthorizedKeyLine
 {

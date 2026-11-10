@@ -730,3 +730,23 @@ TEST_CASE("SshWireReader never reads past its end", "[net][ssh]")
 }
 
 // }}}
+
+TEST_CASE("parseSshPublicKeyBlob takes the blob of a .pub line and nothing else")
+{
+    auto const line = core::net::parseSshPublicKey(fixture("ed25519.pub"));
+    REQUIRE(line.has_value());
+
+    auto const blob = core::net::parseSshPublicKeyBlob(line->blob);
+    REQUIRE(blob.has_value());
+    CHECK(blob->type == SshKeyType::Ed25519);
+    CHECK(blob->blob == line->blob);
+    CHECK(blob->comment.empty());
+
+    auto trailing = line->blob;
+    trailing.push_back(std::byte { 0 });
+    CHECK(core::net::parseSshPublicKeyBlob(trailing).error() == SshKeyError::Malformed);
+
+    auto rsa = std::vector<std::byte> {};
+    appendSshString(rsa, std::string_view { "ssh-rsa" });
+    CHECK(core::net::parseSshPublicKeyBlob(rsa).error() == SshKeyError::UnsupportedType);
+}

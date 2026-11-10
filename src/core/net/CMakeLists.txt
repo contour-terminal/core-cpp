@@ -293,6 +293,7 @@ core_cpp_add_module(net_tls KIND STATIC
         SshAgent.hpp
         SshKeys.hpp
         Tls.hpp
+        detail/SshAgentEndpoint.hpp
         detail/SshWire.hpp
         testing/SoftwareSecurityKey.hpp
         testing/StrictTlsPeer.hpp
@@ -302,6 +303,10 @@ core_cpp_add_module(net_tls KIND STATIC
         Tls.cpp
         testing/SoftwareSecurityKey.cpp
         testing/StrictTlsPeer.cpp
+    SOURCES_POSIX
+        posix/SshAgentEndpoint.cpp
+    SOURCES_WINDOWS
+        windows/SshAgentEndpoint.cpp
     PUBLIC_LIBS core::net
     PRIVATE_LIBS OpenSSL::SSL OpenSSL::Crypto)
 
@@ -445,6 +450,10 @@ core_cpp_add_test(net NAME net_tls
         TlsSession_test.cpp
         TlsSocket_test.cpp
         Tls_test.cpp
+    SOURCES_POSIX
+        posix/SshAgentEndpoint_test.cpp
+    SOURCES_WINDOWS
+        windows/SshAgentEndpoint_test.cpp
     LABELS loopback
     # The keys and signatures ssh-keygen made, read where they are checked in (testdata/ssh/README.md).
     DEFINITIONS "CORE_CPP_SSH_TESTDATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/testdata/ssh\""
