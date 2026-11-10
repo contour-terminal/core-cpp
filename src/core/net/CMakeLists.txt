@@ -140,6 +140,7 @@ core_cpp_add_module(net KIND STATIC
         IoBackend.hpp
         ISocket.hpp
         ITlsContext.hpp
+        ITlsSession.hpp
         KeepAlive.hpp
         LingeringClose.hpp
         PlatformLoop.hpp
@@ -423,6 +424,7 @@ core_cpp_add_test(net NAME net_tls
         TlsContext_test.cpp
         TlsLifetime_test.cpp
         TlsCancelRead_test.cpp
+        TlsSession_test.cpp
         TlsSocket_test.cpp
         Tls_test.cpp
     LABELS loopback

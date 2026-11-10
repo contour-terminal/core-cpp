@@ -123,7 +123,7 @@ StrictTlsPeer::StrictTlsPeer(std::unique_ptr<State> state) noexcept: _state(std:
 
 StrictTlsPeer::~StrictTlsPeer() = default;
 
-std::expected<std::unique_ptr<StrictTlsPeer>, std::string> StrictTlsPeer::client()
+std::expected<std::unique_ptr<StrictTlsPeer>, std::string> StrictTlsPeer::client(TlsVersion maximumVersion)
 {
     ERR_clear_error();
     auto state = std::make_unique<State>();
@@ -131,6 +131,8 @@ std::expected<std::unique_ptr<StrictTlsPeer>, std::string> StrictTlsPeer::client
     if (state->ctx == nullptr)
         return std::unexpected("SSL_CTX_new: " + opensslReason());
     SSL_CTX_set_verify(state->ctx, SSL_VERIFY_NONE, nullptr);
+    if (maximumVersion == TlsVersion::Tls12)
+        SSL_CTX_set_max_proto_version(state->ctx, TLS1_2_VERSION);
     if (auto attached = attachSsl(*state, SSL_set_connect_state); !attached)
         return std::unexpected(attached.error());
     return std::unique_ptr<StrictTlsPeer> { new StrictTlsPeer(std::move(state)) };
