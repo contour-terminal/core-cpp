@@ -14,6 +14,7 @@
 // clang-format on
 
 #include <algorithm>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <ranges>
@@ -30,12 +31,22 @@ namespace
     constexpr auto BusyAttempts = 3;
     constexpr auto BusyWaitMs = DWORD { 500 };
 
-    /// @return The error of a failed Win32 call, classified; the pipe hanging up is its clean end,
-    ///         which is @c NetErrorCode::Eof here and a zero-byte read to the caller.
-    NetError pipeError(DWORD error, char const* what)
+    /// Which operation a Win32 error belongs to: the pipe hanging up ends a read cleanly, but it is
+    /// a failure of a write.
+    enum class PipeDirection : uint8_t
+    {
+        Write,
+        Read,
+    };
+
+    /// @return The error of a failed Win32 call, classified; on the read path the pipe hanging up
+    ///         is its clean end, which is @c NetErrorCode::Eof here and a zero-byte read to the
+    ///         caller. A write to a hung-up pipe is a @c NetErrorCode::SystemError.
+    NetError pipeError(DWORD error, char const* what, PipeDirection direction)
     {
         auto code = NetErrorCode::SystemError;
-        if (error == ERROR_BROKEN_PIPE || error == ERROR_PIPE_NOT_CONNECTED)
+        if ((error == ERROR_BROKEN_PIPE || error == ERROR_PIPE_NOT_CONNECTED)
+            && direction == PipeDirection::Read)
             code = NetErrorCode::Eof;
         else if (error == ERROR_OPERATION_ABORTED)
             code = NetErrorCode::Cancelled;
@@ -58,6 +69,8 @@ namespace
         HANDLE writeEvent = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
         /// The read in flight, for cancelRead; set and cleared by the read path alone.
         OVERLAPPED* readOp = nullptr;
+        /// Whether a read has seen the peer hang up; isClosed() reports it (ISocket::isClosed).
+        bool hasReachedEof = false;
 
         /// @param owner The loop the operations wait on.
         /// @param pipe The open pipe; owned from here on, closed with the last share.
@@ -88,7 +101,8 @@ namespace
     async::Task<std::expected<DWORD, NetError>> settle(std::shared_ptr<PipeState> state,
                                                        OVERLAPPED* overlapped,
                                                        HANDLE event,
-                                                       char const* what)
+                                                       char const* what,
+                                                       PipeDirection direction)
     {
         auto settled = false;
         auto const release = detail::ScopeGuard { [&]() noexcept {
@@ -102,15 +116,18 @@ namespace
         {
             co_await state->loop->waitReadable(event, HandleKind::Waitable);
         }
-        catch (FdRegistrationFailed const&)
+        catch (FdRegistrationFailed& failure)
         {
-            co_return std::unexpected(makeNetError(NetErrorCode::SystemError, 0, "pipe wait registration"));
+            // The backend's reason stays; only a refusal that carried none gets a context of ours.
+            if (failure.reason.context.empty())
+                failure.reason.context = "pipe wait registration";
+            co_return std::unexpected(std::move(failure.reason));
         }
         auto transferred = DWORD { 0 };
         if (::GetOverlappedResult(state->handle, overlapped, &transferred, FALSE) == FALSE)
         {
             settled = true;
-            co_return std::unexpected(pipeError(::GetLastError(), what));
+            co_return std::unexpected(pipeError(::GetLastError(), what, direction));
         }
         settled = true;
         co_return transferred;
@@ -131,17 +148,24 @@ namespace
         auto const error = ::GetLastError();
         if (error != ERROR_IO_PENDING)
         {
-            auto failure = pipeError(error, "ReadFile(pipe)");
+            auto failure = pipeError(error, "ReadFile(pipe)", PipeDirection::Read);
             if (failure.code == NetErrorCode::Eof)
+            {
+                state->hasReachedEof = true;
                 co_return std::size_t { 0 };
+            }
             co_return std::unexpected(std::move(failure));
         }
         state->readOp = &overlapped;
-        auto const settled = co_await settle(state, &overlapped, state->readEvent, "ReadFile(pipe)");
+        auto const settled =
+            co_await settle(state, &overlapped, state->readEvent, "ReadFile(pipe)", PipeDirection::Read);
         if (settled)
             co_return static_cast<std::size_t>(*settled);
         if (settled.error().code == NetErrorCode::Eof)
+        {
+            state->hasReachedEof = true;
             co_return std::size_t { 0 };
+        }
         co_return std::unexpected(settled.error());
     }
 
@@ -161,9 +185,9 @@ namespace
             {
                 auto const error = ::GetLastError();
                 if (error != ERROR_IO_PENDING)
-                    co_return std::unexpected(pipeError(error, "WriteFile(pipe)"));
-                auto const settled =
-                    co_await settle(state, &overlapped, state->writeEvent, "WriteFile(pipe)");
+                    co_return std::unexpected(pipeError(error, "WriteFile(pipe)", PipeDirection::Write));
+                auto const settled = co_await settle(
+                    state, &overlapped, state->writeEvent, "WriteFile(pipe)", PipeDirection::Write);
                 if (!settled)
                     co_return std::unexpected(settled.error());
                 wrote = *settled;
@@ -229,7 +253,10 @@ namespace
             _state.reset();
         }
 
-        [[nodiscard]] bool isClosed() const noexcept override { return _state == nullptr; }
+        [[nodiscard]] bool isClosed() const noexcept override
+        {
+            return _state == nullptr || _state->hasReachedEof;
+        }
 
       private:
         static IoAwaitable closedAnswer()

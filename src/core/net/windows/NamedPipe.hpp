@@ -28,8 +28,9 @@ namespace core::net::detail
 /// @param loop The loop whose waits the socket's operations park on; must outlive the socket.
 /// @param name The pipe name, e.g. `\\.\pipe\openssh-ssh-agent`.
 /// @return The connected socket; @c NetErrorCode::ConnRefused when no such pipe exists,
-///         @c NetErrorCode::PermissionDenied when the OS refuses access, @c NetErrorCode::SystemError
-///         for anything else.
+///         @c NetErrorCode::PermissionDenied when the OS refuses access,
+///         @c NetErrorCode::ResourceExhausted when the socket's events cannot be made, and
+///         @c NetErrorCode::SystemError for anything else.
 [[nodiscard]] std::expected<std::unique_ptr<ISocket>, NetError> connectNamedPipe(EventLoop& loop,
                                                                                  std::wstring_view name);
 

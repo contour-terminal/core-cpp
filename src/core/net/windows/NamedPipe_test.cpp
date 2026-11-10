@@ -75,6 +75,8 @@ TEST_CASE("connectNamedPipe: bytes written reach the server, and its reply and h
         auto const eof = co_await (*socket)->read(reply);
         REQUIRE(eof.has_value());
         CHECK(*eof == 0);
+        // ISocket::isClosed turns true once a read has seen the peer hang up.
+        CHECK((*socket)->isClosed());
     };
     loop.blockOn(task());
     serving.join();
