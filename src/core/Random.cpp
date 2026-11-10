@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/Random.hpp>
 
-#include <core/detail/SystemRandom.hpp>
+#include <core/SystemRandom.hpp>
 
 namespace core
 {

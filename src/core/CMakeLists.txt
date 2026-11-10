@@ -32,7 +32,7 @@ core_cpp_add_module(base KIND STATIC
         Base64.hpp
         Deferred.hpp
         Defines.hpp
-        detail/SystemRandom.hpp
+        SystemRandom.hpp
         Environment.hpp
         Escape.hpp
         Flags.hpp
@@ -59,14 +59,14 @@ core_cpp_add_module(base KIND STATIC
     # One fillFromSystemRandom() per platform (core::systemRandom()): getentropy() on every POSIX
     # system and under Emscripten, BCryptGenRandom() on Windows.
     SOURCES_POSIX
-        posix/PosixRandom.cpp
+        PosixRandom.cpp
     SOURCES_EMSCRIPTEN
-        posix/PosixRandom.cpp
+        PosixRandom.cpp
     # The conversions between UTF-16 and UTF-8 behind every wide Win32 call, core-cpp's own and its
     # consumers'.
     SOURCES_WINDOWS
         WideString.cpp
-        windows/WindowsRandom.cpp
+        WindowsRandom.cpp
     PRIVATE_LIBS ${_coreCppBaseWindowsLibs}
     PUBLIC_LIBS ${_coreCppBaseLibs})
 
