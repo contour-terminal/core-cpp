@@ -13,6 +13,13 @@ if(CORE_CPP_WITH_TRACY)
     list(APPEND _coreCppBaseLibs Tracy::TracyClient)
 endif()
 
+# core::systemRandom() needs a platform that has a source for it (see SOURCES_POSIX, SOURCES_EMSCRIPTEN
+# and SOURCES_WINDOWS below); one that has none is refused here, not left to fail as an undefined symbol.
+if(NOT (CORE_CPP_PLATFORM_POSIX OR WIN32 OR EMSCRIPTEN))
+    message(FATAL_ERROR "[core-cpp] no system random source for this platform: core::systemRandom() needs "
+        "getentropy() (POSIX, Emscripten) or BCryptGenRandom() (Windows); add a source to the base module")
+endif()
+
 # BCryptGenRandom, behind core::systemRandom(); PRIVATE, no bcrypt type reaches a header.
 set(_coreCppBaseWindowsLibs "")
 if(WIN32)
@@ -49,12 +56,12 @@ core_cpp_add_module(base KIND STATIC
         UserInfo.cpp
         Utf8Path.cpp
         Utils.cpp
-    # One fillFromSystemRandom() per platform (core::systemRandom()): getrandom() on Linux,
-    # arc4random_buf() on macOS and the BSDs, BCryptGenRandom() on Windows.
-    SOURCES_LINUX
-        linux/LinuxRandom.cpp
-    SOURCES_BSD
-        bsd/BsdRandom.cpp
+    # One fillFromSystemRandom() per platform (core::systemRandom()): getentropy() on every POSIX
+    # system and under Emscripten, BCryptGenRandom() on Windows.
+    SOURCES_POSIX
+        posix/PosixRandom.cpp
+    SOURCES_EMSCRIPTEN
+        posix/PosixRandom.cpp
     # The conversions between UTF-16 and UTF-8 behind every wide Win32 call, core-cpp's own and its
     # consumers'.
     SOURCES_WINDOWS

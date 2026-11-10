@@ -29,11 +29,13 @@ class IRandom
     virtual void fill(std::span<std::byte> out) = 0;
 };
 
-/// The operating system's cryptographically secure random source: `getrandom()` on Linux,
-/// `arc4random_buf()` on macOS and the BSDs, `BCryptGenRandom()` on Windows.
+/// The operating system's cryptographically secure random source: `getentropy()` on every POSIX
+/// system (Linux, macOS, the BSDs, illumos) and under Emscripten, `BCryptGenRandom()` on Windows. A
+/// platform with neither is refused when CMake configures.
 ///
 /// A system that cannot supply random bytes has no safe way to go on, so a failure ends the process
-/// (see @c Require) rather than hand back bytes that are not random. Safe to call from any thread.
+/// (`core::detail::fail`, as a failed @c Require does) rather than hand back bytes that are not random. Safe
+/// to call from any thread.
 /// @return The process-wide source, valid for the life of the process.
 [[nodiscard]] IRandom& systemRandom();
 

@@ -27,14 +27,13 @@ TEST_CASE("systemRandom: a zero-length fill is fine")
     CHECK(untouched[0] == std::byte { 0x5A });
 }
 
-TEST_CASE("systemRandom: a request beyond one getrandom call fills every byte")
+TEST_CASE("systemRandom: a fill beyond one 256-byte request is filled in chunks")
 {
-    // Past the 256 bytes getrandom() promises in one go, and past a short read's reach.
+    // getentropy() takes at most 256 bytes a call, so 1 MiB takes the chunk loop 4096 times; the last
+    // chunk is all zero with probability 2^-2048 unless the loop stopped early.
     auto big = std::vector<std::byte>(1 << 20, std::byte { 0 });
     core::systemRandom().fill(big);
-    // The last kilobyte is all zero with probability 2^-8192 unless the tail was never filled.
-    CHECK(
-        std::ranges::any_of(std::span { big }.last(1024), [](std::byte b) { return b != std::byte { 0 }; }));
+    CHECK(std::ranges::any_of(std::span { big }.last(256), [](std::byte b) { return b != std::byte { 0 }; }));
 }
 
 TEST_CASE("systemRandom: is one source for the process")

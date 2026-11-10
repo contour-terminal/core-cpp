@@ -33,7 +33,7 @@ namespace
 
     /// Which operation a Win32 error belongs to: the pipe hanging up ends a read cleanly, but it is
     /// a failure of a write.
-    enum class PipeDirection : uint8_t
+    enum class PipeDirection : std::uint8_t
     {
         Write,
         Read,
