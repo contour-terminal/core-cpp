@@ -93,7 +93,9 @@ struct SshsigFields
     std::span<std::byte const> signature;
 };
 
-SshsigFields fieldsOf(std::string_view raw)
+/// The fields of @p raw, as views into it: a temporary would leave them dangling, hence the deleted
+/// overload.
+SshsigFields fieldsOf(std::string const& raw)
 {
     auto reader = SshWireReader { bytesOf(raw) };
     REQUIRE(reader.raw(6).has_value());
@@ -107,6 +109,8 @@ SshsigFields fieldsOf(std::string_view raw)
     REQUIRE(reader.atEnd());
     return { *publicKey, *nameSpace, *reserved, *hashAlgorithm, *signature };
 }
+
+SshsigFields fieldsOf(std::string&& raw) = delete;
 
 /// A raw SSHSIG blob assembled from parts, for the cases that must forge one.
 std::string sshsigOf(SshsigFields const& fields)
@@ -352,7 +356,6 @@ TEST_CASE("verifySshSignature accepts ssh-keygen -Y sign", "[net][ssh][sshsig]")
 {
     auto const [keyFile, sigFile] = GENERATE(table<std::string_view, std::string_view>({
         { "ed25519.pub", "ed25519.sig" },
-        { "ed25519.pub", "ed25519-sha256.sig" },
         { "ecdsa-p256.pub", "ecdsa-p256.sig" },
     }));
     CAPTURE(sigFile);
@@ -397,12 +400,35 @@ TEST_CASE("verifySshSignature refuses a signature by another key", "[net][ssh][s
     CHECK(verified.error() == SshSigError::KeyMismatch);
 }
 
-TEST_CASE("verifySshSignature refuses a hash other than sha512 and sha256", "[net][ssh][sshsig]")
+TEST_CASE("verifySshSignature refuses ssh-keygen's sha256 signature", "[net][ssh][sshsig]")
+{
+    // A genuine signature, made with -O hashalg=sha256: refused, because only sha512 is accepted.
+    auto const verified = core::net::verifySshSignature(
+        keyFixture("ed25519.pub"), Namespace, bytesOf(fixture("message.txt")), fixture("ed25519-sha256.sig"));
+    REQUIRE_FALSE(verified.has_value());
+    CHECK(verified.error() == SshSigError::UnsupportedHash);
+}
+
+TEST_CASE("verifySshSignature refuses a reserved field that is not empty", "[net][ssh][sshsig]")
+{
+    // Malformed, not BadSignature: the envelope is refused before any signature is checked.
+    auto const raw = unarmor(fixture("ed25519.sig"));
+    auto fields = fieldsOf(raw);
+    fields.reserved = bytesOf("x");
+    auto const verified = core::net::verifySshSignature(
+        keyFixture("ed25519.pub"), Namespace, bytesOf(fixture("message.txt")), sshsigOf(fields));
+    REQUIRE_FALSE(verified.has_value());
+    CHECK(verified.error() == SshSigError::Malformed);
+}
+
+TEST_CASE("verifySshSignature refuses a hash other than sha512", "[net][ssh][sshsig]")
 {
     auto const raw = unarmor(fixture("ed25519.sig"));
     auto fields = fieldsOf(raw);
-    auto const algorithm =
-        GENERATE(std::string_view { "sha384" }, std::string_view { "sha1" }, std::string_view {});
+    auto const algorithm = GENERATE(std::string_view { "sha256" },
+                                    std::string_view { "sha384" },
+                                    std::string_view { "sha1" },
+                                    std::string_view {});
     fields.hashAlgorithm = bytesOf(algorithm);
     auto const verified = core::net::verifySshSignature(
         keyFixture("ed25519.pub"), Namespace, bytesOf(fixture("message.txt")), sshsigOf(fields));
@@ -488,6 +514,18 @@ TEST_CASE("verifySshSignature refuses a malformed envelope", "[net][ssh][sshsig]
     {
         refuse({});
     }
+    SECTION("armor lines and nothing between")
+    {
+        refuse("-----BEGIN SSH SIGNATURE----------END SSH SIGNATURE-----");
+        refuse("-----BEGIN SSH SIGNATURE-----\n-----END SSH SIGNATURE-----\n");
+    }
+    SECTION("armor shorter than its two lines")
+    {
+        // Starts with BEGIN and ends with "-----": the size guard must refuse it before the body
+        // is cut, whatever the END line's spelling shares with BEGIN's.
+        refuse("-----BEGIN SSH SIGNATURE-----");
+        refuse("-----BEGIN SSH SIGNATURE-----END SSH SIGNATURE-----");
+    }
 }
 
 TEST_CASE("verifySshSignature refuses an ECDSA mpint that is not minimal or is negative",
@@ -538,10 +576,11 @@ TEST_CASE("assembleSshsig round-trips an agent's signature", "[net][ssh][sshsig]
     CAPTURE(name);
     auto const key = keyFixture(std::string { name } + ".pub");
     auto const message = fixture("message.txt");
-    auto const fields = fieldsOf(unarmor(fixture(std::string { name } + ".sig")));
+    auto const raw = unarmor(fixture(std::string { name } + ".sig"));
+    auto const fields = fieldsOf(raw);
 
     auto const assembled = core::net::assembleSshsig(key, Namespace, fields.signature);
-    CHECK(assembled == unarmor(fixture(std::string { name } + ".sig")));
+    CHECK(assembled == raw);
     CHECK(core::net::verifySshSignature(key, Namespace, bytesOf(message), assembled).has_value());
 }
 
@@ -593,6 +632,17 @@ TEST_CASE("verifySshSignature verifies security-key signatures", "[net][ssh][ssh
         CHECK(core::net::verifySshSignature(*key, Namespace, bytesOf(message), sshsig).error()
               == SshSigError::UserNotPresent);
     }
+    SECTION("without the user present and a bad signature")
+    {
+        // BadSignature, not UserNotPresent: the flag is read only from a signature that verified.
+        auto const signature = (*securityKey)->sign(signedData, UserPresence::Absent, 7);
+        REQUIRE(signature.has_value());
+        auto const sshsig = core::net::assembleSshsig(*key, Namespace, *signature);
+        auto changed = message;
+        changed.back() = '!';
+        CHECK(core::net::verifySshSignature(*key, Namespace, bytesOf(changed), sshsig).error()
+              == SshSigError::BadSignature);
+    }
     SECTION("with the flags edited after signing")
     {
         // Setting the flag on a signature made without it must not pass: the flags are signed.
@@ -627,10 +677,38 @@ TEST_CASE("verifySshSignature refuses a signature of another algorithm than the 
     REQUIRE(securityKey.has_value());
     auto const key = core::net::parseSshPublicKey((*securityKey)->publicKeyLine("sk"));
     REQUIRE(key.has_value());
-    auto const fields = fieldsOf(unarmor(fixture("ed25519.sig")));
+    auto const raw = unarmor(fixture("ed25519.sig"));
+    auto const fields = fieldsOf(raw);
     auto const sshsig = core::net::assembleSshsig(*key, Namespace, fields.signature);
     auto const verified =
         core::net::verifySshSignature(*key, Namespace, bytesOf(fixture("message.txt")), sshsig);
+    REQUIRE_FALSE(verified.has_value());
+    CHECK(verified.error() == SshSigError::Malformed);
+}
+
+TEST_CASE("verifySshSignature refuses a valid signature under another algorithm's name", "[net][ssh][sshsig]")
+{
+    // ssh-keygen's Ed25519 signature, whose bytes verify, relabelled as an sk-ssh-ed25519 one and
+    // otherwise left as it is (no flags or counter, so it still parses as an Ed25519 signature).
+    // Only the check that the signature's name is the key's own can refuse it.
+    auto const key = keyFixture("ed25519.pub");
+    auto const message = fixture("message.txt");
+    auto const raw = unarmor(fixture("ed25519.sig"));
+    auto const fields = fieldsOf(raw);
+    auto inner = SshWireReader { fields.signature };
+    auto const name = inner.string();
+    auto const value = inner.string();
+    REQUIRE((name && value && inner.atEnd()));
+
+    auto const relabel = [&](std::string_view newName) {
+        auto signature = std::vector<std::byte> {};
+        appendSshString(signature, newName);
+        appendSshString(signature, *value);
+        return core::net::verifySshSignature(
+            key, Namespace, bytesOf(message), core::net::assembleSshsig(key, Namespace, signature));
+    };
+    REQUIRE(relabel("ssh-ed25519").has_value()); // the control: the same bytes under their own name
+    auto const verified = relabel("sk-ssh-ed25519@openssh.com");
     REQUIRE_FALSE(verified.has_value());
     CHECK(verified.error() == SshSigError::Malformed);
 }

@@ -98,14 +98,14 @@ enum class SshSigError : std::uint8_t
     KeyMismatch,     ///< Signed by another key than the expected one.
     BadSignature,    ///< The signature does not verify.
     UserNotPresent,  ///< A security-key signature made without the user-presence flag.
-    UnsupportedHash, ///< A message hash other than `sha512` or `sha256`.
+    UnsupportedHash, ///< A message hash other than `sha512`.
 };
 
 /// Verifies an SSHSIG signature (`ssh-keygen -Y sign`) of @p message by @p key.
 ///
 /// The signature must embed exactly @p key (compared over the whole blob), be made for
-/// @p nameSpace, hash the message with `sha512` or `sha256`, and verify. A security-key signature
-/// must also carry the user-presence flag.
+/// @p nameSpace, hash the message with `sha512`, leave the reserved field empty, and verify. A security-key
+/// signature must also carry the user-presence flag.
 /// @param key The key the signature must be made by.
 /// @param nameSpace The purpose the signature must be made for, e.g. `contour-auth`.
 /// @param message The signed message.

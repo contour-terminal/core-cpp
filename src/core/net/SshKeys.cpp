@@ -92,7 +92,8 @@ namespace
     constexpr auto ArmorEnd = std::string_view { "-----END SSH SIGNATURE-----" };
     constexpr auto Whitespace = std::string_view { " \t\r\n" };
 
-    /// The message hashes an SSHSIG may name, and the one this module produces.
+    /// The message hashes an SSHSIG may name, the first being the one this module produces. Only
+    /// sha512: it is what `ssh-keygen -Y sign` and this module make, and the daemon's protocol fixes it.
     struct SshsigHash
     {
         std::string_view name;
@@ -100,7 +101,6 @@ namespace
     };
     constexpr auto SshsigHashes = std::array {
         SshsigHash { "sha512", EVP_sha512 },
-        SshsigHash { "sha256", EVP_sha256 },
     };
     constexpr auto ProducedHash = SshsigHashes[0];
 
@@ -379,7 +379,8 @@ namespace
             auto const raw = bytesOf(sshsig);
             return std::vector<std::byte> { raw.begin(), raw.end() };
         }
-        if (!trimmed.ends_with(ArmorEnd))
+        // The size guard first: BEGIN and END must not overlap, or the body's count underflows.
+        if (trimmed.size() < ArmorBegin.size() + ArmorEnd.size() || !trimmed.ends_with(ArmorEnd))
             return std::nullopt;
         auto body = std::string {};
         for (auto const c:
@@ -412,6 +413,9 @@ namespace
         auto const hashName = reader.string();
         auto const signature = reader.string();
         if (!publicKey || !nameSpace || !reserved || !hashName || !signature || !reader.atEnd())
+            return std::nullopt;
+        // OpenSSH writes the reserved field empty and signs it so; anything else is not its format.
+        if (!reserved->empty())
             return std::nullopt;
         return Envelope { *publicKey, *nameSpace, *reserved, *hashName, *signature };
     }

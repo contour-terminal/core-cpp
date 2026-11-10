@@ -17,7 +17,7 @@ ssh-keygen -Y sign -f ed25519 -n contour-auth -O hashalg=sha256 < message.txt > 
 ```
 
 Checked in: `message.txt`, `ed25519.pub`, `ed25519.fingerprint`, `ed25519.sig`,
-`ed25519-sha256.sig`, `ecdsa-p256.pub`, `ecdsa-p256.fingerprint`, `ecdsa-p256.sig` and
+`ed25519-sha256.sig` (a genuine signature the verifier must refuse, since only sha512 is accepted), `ecdsa-p256.pub`, `ecdsa-p256.fingerprint`, `ecdsa-p256.sig` and
 `ed25519-other.sig` (the signature by another key, for `KeyMismatch`).
 
 ## Why there are no `sk-` fixtures
