@@ -105,6 +105,7 @@ nav:
     - base: modules/base.md
     - log: modules/log.md
     - cli: modules/cli.md
+    - codec: modules/codec.md
     - platform: modules/platform.md
     - async: modules/async.md
     - net: modules/net.md

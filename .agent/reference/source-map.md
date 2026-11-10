@@ -40,6 +40,8 @@ src/core/
                             WideString (Windows only: UTF-8 and UTF-16 for the wide Win32 API)
   log/                      core::log (crispy): LogStore, LogSink; Assert (fatal, SoftRequire)
   cli/                      core::cli (crispy): CLI, App
+  codec/                    core::codec (contour vtbackend state codec): Writer, Reader (varint streams, frames),
+                            FieldEncoder, FieldDecoder (tolerant `visitFields` structs), DecodeError
   platform/                 core::platform (endo platform, one merged Clock): Clock, Types,
                             PlatformError, Wakeup, SignalHandler, SystemPipe, WinsockInit,
                             MessageQueue, FileSystem, FileInfoProvider, ProcessEnvironment,

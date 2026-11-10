@@ -7,6 +7,20 @@ release may break the API; every break is listed under **Breaking** with a migra
 release tag `vX.Y.Z` equals the version in `project(core-cpp VERSION X.Y.Z)`, and the release
 workflow refuses one without a section here.
 
+## [Unreleased]
+
+### Added
+
+- **`core::codec`, a tolerant field codec** (`<core/codec/Fields.hpp>`, `<core/codec/Stream.hpp>`,
+  `<core/codec/DecodeError.hpp>`; target `core::codec`, depends on base): `Writer` and `Reader` for LEB128 varints,
+  zigzag signed varints and length-prefixed frames, and `FieldEncoder`/`FieldDecoder` (`BasicFieldEncoder<Hooks>` and
+  `BasicFieldDecoder<Hooks>`) that read and write a struct from the one `visitFields(this auto& self, auto& visitor)`
+  list it declares. Bools, integers, floating point, enums (by a stable `EnumWire` table), `core::Flags` (by a stable
+  `FlagWire` table), durations, wall-clock instants, strings, byte vectors, vectors, arrays, maps, optionals, variants,
+  pairs and nested structs are supported; a reader skips the fields it does not know and leaves those the stream lacks
+  at their default. Foreign types are listed by `visitForeignFields(visitor, value)` overloads found through the hooks
+  tag. A decode keeps a memory budget proportional to the stream's size. Moved from contour's `vtbackend` state codec.
+
 ## [0.19.0] - 2026-11-10
 
 ### Added

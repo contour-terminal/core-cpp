@@ -1153,7 +1153,7 @@ jobs:
         run: |
           cmake -DMODE=sync -DREF="$GITHUB_SHA" -DREPO="$GITHUB_WORKSPACE" \
             -DDEST="$RUNNER_TEMP/vendor/core-cpp" \
-            "-DMODULES=base;log;cli;platform;async;net;testing" \
+            "-DMODULES=base;log;cli;codec;platform;async;net;testing" \
             -P cmake/CoreCppVendor.cmake
           sed -n '1,7p' "$RUNNER_TEMP/vendor/core-cpp/MANIFEST"
 

@@ -10,6 +10,7 @@ namespace is its directory (`src/core/net/` is `core::net`; headers directly in 
 | [base](base.md) | `core` | `core::base` | static | Threads; Tracy (optional) | available |
 | [log](log.md) | `core::log` | `core::log` | static | base | available |
 | [cli](cli.md) | `core::cli` | `core::cli` | static | base, log | available |
+| [codec](codec.md) | `core::codec` | `core::codec` | static | base | available |
 | [platform](platform.md) | `core::platform` | `core::platform` | static | base, log | available |
 | [async](async.md) | `core::async` | `core::async` | header-only | Threads | `StopToken`, `Task`, `whenAll`, `whenAny`, `DetachedTask`, `syncRun`, `ParkedWork`, `IExecutor`, `ResumeOn`, `ThreadPoolExecutor` and `AsyncQueue` |
 | [net](net.md) | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | header-only, static, static | async, platform; OpenSSL for `net_tls` | contour's event loop, sockets, TLS and HTTP server available; the merge with fastcached's: Tasks B2 to B11 |

@@ -16,6 +16,7 @@ is [the plan](docs/superpowers/plans/2026-09-18-core-cpp.md).
 | base | `core` | `core::base` | Threads |
 | log | `core::log` | `core::log` | base |
 | cli | `core::cli` | `core::cli` | base, log |
+| codec | `core::codec` | `core::codec` | base |
 | platform | `core::platform` | `core::platform` | base, log |
 | async | `core::async` | `core::async` (INTERFACE) | Threads |
 | net | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | async, platform |

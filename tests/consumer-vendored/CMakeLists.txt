@@ -6,7 +6,7 @@
 # this project's own suite.
 #
 #   cmake -DMODE=sync -DREF=<tag> -DDEST=<somewhere>/vendor/core-cpp \
-#         "-DMODULES=base;log;cli;platform;async;net;testing" -P <core-cpp>/cmake/CoreCppVendor.cmake
+#         "-DMODULES=base;log;cli;codec;platform;async;net;testing" -P <core-cpp>/cmake/CoreCppVendor.cmake
 #   cmake -S tests/consumer-vendored -B <build> -DCORE_CPP_VENDOR_DIR=<somewhere>/vendor/core-cpp
 #   cmake --build <build> && ctest --test-dir <build> --output-on-failure
 #
