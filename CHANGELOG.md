@@ -7,6 +7,23 @@ release may break the API; every break is listed under **Breaking** with a migra
 release tag `vX.Y.Z` equals the version in `project(core-cpp VERSION X.Y.Z)`, and the release
 workflow refuses one without a section here.
 
+## [Unreleased]
+
+### Added
+
+- **OpenSSH public keys and SSHSIG verification** (`<core/net/SshKeys.hpp>`, in `core::net_tls`):
+  `parseSshPublicKey`, `parseAuthorizedKeysLine`, `fingerprintOf`, `sshKeyTypeName`, `verifySshSignature`,
+  `sshsigSignedData` and `assembleSshsig`, for `ssh-ed25519`, `ecdsa-sha2-nistp256` and their `sk-` security-key
+  forms (user presence required). Every malformed input answers `SshKeyError`/`SshSigError`; nothing throws.
+- **`core::net::testing::SoftwareSecurityKey`**: a FIDO authenticator in software that signs as PROTOCOL.u2f says,
+  for testing `sk-` key verification without a device.
+- **`StrictTlsPeer::server` takes a maximum version**, as `client` does.
+
+### Changed
+
+- **`ITlsSession::channelBinding()` answers an error below TLS 1.3**: RFC 9266's tls-exporter binding is defined
+  for TLS 1.3 only.
+
 ## [0.18.1] - 2026-11-09
 
 ### Fixed

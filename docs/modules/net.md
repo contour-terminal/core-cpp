@@ -233,8 +233,8 @@ From contour's `src/net/README.md` at `6777ff05`, as far as they hold here:
   `IoBackend::wake()` is the one member of the interface another thread may call, and it is what
   `EventLoop::post()` uses to break a wait in flight.
 - **No OpenSSL type crosses a header**, and `core-cpp.openssl-seam` refuses one that does -- a
-  forward-declared struct tag included -- as well as an OpenSSL include outside `Tls.cpp` and the
-  tests' strict peer. `core::net_tls` links OpenSSL PRIVATE.
+  forward-declared struct tag included -- as well as an OpenSSL include outside `Tls.cpp`,
+  `SshKeys.cpp` and the two test doubles (the strict TLS peer and the software security key). `core::net_tls` links OpenSSL PRIVATE.
 - **A TLS connection closes in the order a strict peer requires.** `shutdownWrite()` writes and
   flushes `close_notify`, then half-closes the transport; a FIN with no alert before it is what a
   truncation looks like, and OpenSSL 3 reading from a socket reports it as an error. `close()` is

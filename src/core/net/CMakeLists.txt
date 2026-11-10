@@ -278,14 +278,24 @@ core_cpp_add_module(net KIND STATIC
 #
 # testing/StrictTlsPeer is the TLS layer's test double, public like every double under testing/:
 # OpenSSL driven by hand, which a consumer can hold its own TLS code against as the tests here hold
-# this layer. It is the second of the two units `core-cpp.openssl-seam` lets include OpenSSL
+# this layer. It is one of the units `core-cpp.openssl-seam` lets include OpenSSL
 # (tests/cmake/check-openssl-seam.cmake), and its header names no OpenSSL type.
+#
+# SshKeys is OpenSSH public keys and SSHSIG verification, here because the signatures are
+# OpenSSL's to verify; testing/SoftwareSecurityKey is its tests' FIDO authenticator, made of
+# software because ssh-keygen makes sk signatures only with a device attached. Both are permitted
+# units of the seam, and neither header names an OpenSSL type.
 core_cpp_add_module(net_tls KIND STATIC
     HEADERS
+        SshKeys.hpp
         Tls.hpp
+        detail/SshWire.hpp
+        testing/SoftwareSecurityKey.hpp
         testing/StrictTlsPeer.hpp
     SOURCES
+        SshKeys.cpp
         Tls.cpp
+        testing/SoftwareSecurityKey.cpp
         testing/StrictTlsPeer.cpp
     PUBLIC_LIBS core::net
     PRIVATE_LIBS OpenSSL::SSL OpenSSL::Crypto)
@@ -421,6 +431,7 @@ endif()
 # core::net_tls, and OpenSSL stays PRIVATE to it.
 core_cpp_add_test(net NAME net_tls
     SOURCES
+        SshKeys_test.cpp
         TlsContext_test.cpp
         TlsLifetime_test.cpp
         TlsCancelRead_test.cpp
@@ -428,6 +439,8 @@ core_cpp_add_test(net NAME net_tls
         TlsSocket_test.cpp
         Tls_test.cpp
     LABELS loopback
+    # The keys and signatures ssh-keygen made, read where they are checked in (testdata/ssh/README.md).
+    DEFINITIONS "CORE_CPP_SSH_TESTDATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/testdata/ssh\""
     TIMEOUT 120)
 
 # `EventLoop::run()` and `EventLoop::blockOn()` on a host-driven loop are precondition violations,

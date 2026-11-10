@@ -78,7 +78,7 @@ struct Session
             *out = (co_await socket->handshakeIfNeeded()).has_value();
         };
         auto const finished = loop.blockOn(core::net::withTimeout(
-            &loop, core::net::testing::allOf(side(a, &(*ok)[0]), side(b, &(*ok)[1])), ExchangeBound));
+            &loop, core::net::testing::allOf(side(a, &ok->front()), side(b, &ok->back())), ExchangeBound));
         return finished && (*ok)[0] && (*ok)[1];
     }
 };
@@ -122,7 +122,7 @@ TEST_CASE("a TLS 1.3-only server refuses a 1.2-only client", "[net][tls][session
 
 TEST_CASE("a TLS 1.3-only server negotiates 1.3 with a modern client", "[net][tls][session]")
 {
-    Session session { TlsOptions { .minimumVersion = TlsVersion::Tls13 }, true };
+    Session const session { TlsOptions { .minimumVersion = TlsVersion::Tls13 }, true };
     auto const* const server = core::net::tlsSessionOf(*session.server);
     auto const* const client = core::net::tlsSessionOf(*session.client);
     REQUIRE(server != nullptr);
@@ -133,7 +133,7 @@ TEST_CASE("a TLS 1.3-only server negotiates 1.3 with a modern client", "[net][tl
 
 TEST_CASE("both ends of one session export the same channel binding", "[net][tls][session]")
 {
-    Session first { {}, true };
+    Session const first { {}, true };
     auto const* const server = core::net::tlsSessionOf(*first.server);
     auto const* const client = core::net::tlsSessionOf(*first.client);
     REQUIRE(server != nullptr);
@@ -145,7 +145,7 @@ TEST_CASE("both ends of one session export the same channel binding", "[net][tls
     CHECK(serverBinding->size() == 32);
     CHECK(*serverBinding == *clientBinding);
 
-    Session second { {}, true };
+    Session const second { {}, true };
     auto const otherBinding = core::net::tlsSessionOf(*second.server)->channelBinding();
     REQUIRE(otherBinding.has_value());
     CHECK(*otherBinding != *serverBinding);
@@ -153,7 +153,7 @@ TEST_CASE("both ends of one session export the same channel binding", "[net][tls
 
 TEST_CASE("the client sees the server certificate's fingerprint", "[net][tls][session]")
 {
-    Session session { {}, true };
+    Session const session { {}, true };
     auto const expected = core::net::certificateFingerprint(session.material.certPem);
     REQUIRE(expected.has_value());
     auto const* const client = core::net::tlsSessionOf(*session.client);
@@ -164,7 +164,7 @@ TEST_CASE("the client sees the server certificate's fingerprint", "[net][tls][se
 
 TEST_CASE("channelBinding before the handshake is an error", "[net][tls][session]")
 {
-    Session session { {}, false };
+    Session const session { {}, false };
     auto const* const server = core::net::tlsSessionOf(*session.server);
     REQUIRE(server != nullptr);
     CHECK_FALSE(server->channelBinding().has_value());
