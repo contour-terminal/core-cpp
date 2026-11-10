@@ -55,7 +55,7 @@ class ITlsSession
     /// @return The SHA-256 of the peer's DER certificate, raw, so a caller may format it as it
     ///         likes (@c sshStyleFingerprint takes it as it is); no value if the handshake has not
     ///         finished or the peer presented no certificate.
-    [[nodiscard]] virtual std::optional<std::array<std::byte, 32>> peerCertificateFingerprint() const = 0;
+    [[nodiscard]] virtual std::optional<std::array<std::byte, 32>> peerCertificateDigest() const = 0;
 
     /// @return The protocol version the handshake settled on; no value before the handshake has
     ///         finished, when nothing has been negotiated yet.

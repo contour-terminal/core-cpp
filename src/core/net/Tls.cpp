@@ -508,7 +508,7 @@ namespace
             return binding;
         }
 
-        [[nodiscard]] std::optional<std::array<std::byte, 32>> peerCertificateFingerprint() const override
+        [[nodiscard]] std::optional<std::array<std::byte, 32>> peerCertificateDigest() const override
         {
             if (SSL_is_init_finished(_ssl) != 1)
                 return std::nullopt;

@@ -22,7 +22,7 @@ workflow refuses one without a section here.
   contexts take a `TlsOptions` whose `minimumVersion` can require TLS 1.3. Additive: the `options` parameter defaults
   to TLS 1.2, as before.
 - **`ITlsSession`, `tlsSessionOf()` and `sshStyleFingerprint()`**: what a finished handshake lets a caller ask of its
-  connection (the RFC 9266 channel binding, the peer certificate's raw SHA-256 as `std::optional<std::array<std::byte, 32>>`, the negotiated version as `std::optional<TlsVersion>`; both empty until the handshake finishes), found behind
+  connection (the RFC 9266 channel binding, the peer certificate's raw SHA-256, `peerCertificateDigest()`, as `std::optional<std::array<std::byte, 32>>`, the negotiated version as `std::optional<TlsVersion>`; both empty until the handshake finishes), found behind
   an `ISocket` by `tlsSessionOf()`; `sshStyleFingerprint()` writes a SHA-256 as `SHA256:<unpadded base64>`, as
   `ssh-keygen` does. `channelBinding()` answers an error below TLS 1.3: RFC 9266's tls-exporter binding is defined
   for TLS 1.3 only.

@@ -7,6 +7,7 @@
 // not a `TlsSocket` agreeing with itself; the binding is compared between two `TlsSocket`s because
 // equality across the two ends is the property.
 #include <core/Sha256.hpp>
+#include <core/Utils.hpp>
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/ISocket.hpp>
@@ -23,7 +24,6 @@
 #include <chrono>
 #include <cstddef>
 #include <expected>
-#include <format>
 #include <memory>
 #include <string>
 #include <utility>
@@ -152,19 +152,16 @@ TEST_CASE("both ends of one session export the same channel binding", "[net][tls
     CHECK(*otherBinding != *serverBinding);
 }
 
-TEST_CASE("the client sees the server certificate's fingerprint", "[net][tls][session]")
+TEST_CASE("the client sees the server certificate's digest", "[net][tls][session]")
 {
     Session const session { {}, true };
     auto const expected = core::net::certificateFingerprint(session.material.certPem);
     REQUIRE(expected.has_value());
     auto const* const client = core::net::tlsSessionOf(*session.client);
     REQUIRE(client != nullptr);
-    auto const digest = client->peerCertificateFingerprint();
+    auto const digest = client->peerCertificateDigest();
     REQUIRE(digest.has_value());
-    auto hex = std::string {};
-    for (auto const byte: *digest)
-        hex += std::format("{:02x}", std::to_integer<unsigned>(byte));
-    CHECK(hex == *expected);
+    CHECK(core::toLowerHexString(*digest) == *expected);
     CHECK(core::net::sshStyleFingerprint(*digest).starts_with("SHA256:"));
     CHECK(expected->size() == 64);
 }
@@ -175,7 +172,7 @@ TEST_CASE("channelBinding before the handshake is an error", "[net][tls][session
     auto const* const server = core::net::tlsSessionOf(*session.server);
     REQUIRE(server != nullptr);
     CHECK_FALSE(server->channelBinding().has_value());
-    CHECK_FALSE(server->peerCertificateFingerprint().has_value());
+    CHECK_FALSE(server->peerCertificateDigest().has_value());
     CHECK_FALSE(server->negotiatedVersion().has_value());
 }
 
