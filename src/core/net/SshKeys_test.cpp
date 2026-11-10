@@ -267,7 +267,7 @@ TEST_CASE("parseSshPublicKey refuses an ECDSA point off the curve", "[net][ssh]"
     CHECK(key.error() == SshKeyError::Malformed);
 }
 
-TEST_CASE("fingerprintOf matches ssh-keygen -lf", "[net][ssh]")
+TEST_CASE("sshFingerprintOf matches ssh-keygen -lf", "[net][ssh]")
 {
     auto const name = GENERATE(std::string_view { "ed25519" }, std::string_view { "ecdsa-p256" });
     CAPTURE(name);
@@ -275,7 +275,7 @@ TEST_CASE("fingerprintOf matches ssh-keygen -lf", "[net][ssh]")
     auto const fingerprint =
         listed.substr(listed.find(' ') + 1, listed.find(' ', listed.find(' ') + 1) - listed.find(' ') - 1);
     CHECK(fingerprint.starts_with("SHA256:"));
-    CHECK(core::net::fingerprintOf(keyFixture(std::string { name } + ".pub")) == fingerprint);
+    CHECK(core::net::sshFingerprintOf(keyFixture(std::string { name } + ".pub")) == fingerprint);
 }
 
 // }}}

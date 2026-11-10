@@ -4,6 +4,8 @@
 /// @file
 /// The platform half of the ssh-agent client: how an endpoint is dialled. Implemented in `posix/`
 /// (a Unix socket) and `windows/` (a named pipe); the client itself is platform-free.
+///
+/// Private to core::net and the ssh-agent client: listed under SOURCES, not HEADERS.
 
 #include <core/async/Task.hpp>
 #include <core/net/EventLoop.hpp>

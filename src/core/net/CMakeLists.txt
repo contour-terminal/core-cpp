@@ -166,7 +166,6 @@ core_cpp_add_module(net KIND STATIC
         detail/ReadyBatch.hpp
         detail/RingQueue.hpp
         detail/ScopeGuard.hpp
-        detail/SshAgentEndpoint.hpp
         detail/StreamSocketOptions.hpp
         detail/WorkerIdentity.hpp
         testing/BackendMatrix.hpp
@@ -214,6 +213,7 @@ core_cpp_add_module(net KIND STATIC
         detail/DialPrimitives.hpp
         detail/PeerAddress.hpp
         detail/SocketErrors.hpp
+        detail/SshAgentEndpoint.hpp
         detail/WakeupChannel.hpp
     SOURCES_POSIX
         detail/WouldBlock.hpp
@@ -297,13 +297,13 @@ core_cpp_add_module(net_tls KIND STATIC
         SshAgent.hpp
         SshKeys.hpp
         Tls.hpp
-        detail/SshWire.hpp
         testing/SoftwareSecurityKey.hpp
         testing/StrictTlsPeer.hpp
     SOURCES
         SshAgent.cpp
         SshKeys.cpp
         Tls.cpp
+        detail/SshWire.hpp
         testing/SoftwareSecurityKey.cpp
         testing/StrictTlsPeer.cpp
     PUBLIC_LIBS core::net

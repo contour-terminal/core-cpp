@@ -23,6 +23,7 @@
 #include <chrono>
 #include <cstddef>
 #include <expected>
+#include <format>
 #include <memory>
 #include <string>
 #include <utility>
@@ -158,7 +159,13 @@ TEST_CASE("the client sees the server certificate's fingerprint", "[net][tls][se
     REQUIRE(expected.has_value());
     auto const* const client = core::net::tlsSessionOf(*session.client);
     REQUIRE(client != nullptr);
-    CHECK(client->peerCertificateFingerprint() == *expected);
+    auto const digest = client->peerCertificateFingerprint();
+    REQUIRE(digest.has_value());
+    auto hex = std::string {};
+    for (auto const byte: *digest)
+        hex += std::format("{:02x}", std::to_integer<unsigned>(byte));
+    CHECK(hex == *expected);
+    CHECK(core::net::sshStyleFingerprint(*digest).starts_with("SHA256:"));
     CHECK(expected->size() == 64);
 }
 
@@ -168,7 +175,8 @@ TEST_CASE("channelBinding before the handshake is an error", "[net][tls][session
     auto const* const server = core::net::tlsSessionOf(*session.server);
     REQUIRE(server != nullptr);
     CHECK_FALSE(server->channelBinding().has_value());
-    CHECK(server->peerCertificateFingerprint().empty());
+    CHECK_FALSE(server->peerCertificateFingerprint().has_value());
+    CHECK_FALSE(server->negotiatedVersion().has_value());
 }
 
 TEST_CASE("tlsSessionOf is null for a socket that is not TLS", "[net][tls][session]")

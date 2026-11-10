@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <optional>
 #include <string>
 
 namespace core::net
@@ -51,13 +52,14 @@ class ITlsSession
     ///         or the export failed).
     [[nodiscard]] virtual std::expected<std::array<std::byte, 32>, std::string> channelBinding() const = 0;
 
-    /// @return The SHA-256 of the peer's DER certificate as 64 lower-case hex digits, or empty if the
-    ///         handshake has not finished or the peer presented no certificate.
-    [[nodiscard]] virtual std::string peerCertificateFingerprint() const = 0;
+    /// @return The SHA-256 of the peer's DER certificate, raw, so a caller may format it as it
+    ///         likes (@c sshStyleFingerprint takes it as it is); no value if the handshake has not
+    ///         finished or the peer presented no certificate.
+    [[nodiscard]] virtual std::optional<std::array<std::byte, 32>> peerCertificateFingerprint() const = 0;
 
-    /// @return The protocol version the handshake settled on; @c TlsVersion::Tls12 before it
-    ///         finishes (nothing has been negotiated yet).
-    [[nodiscard]] virtual TlsVersion negotiatedVersion() const = 0;
+    /// @return The protocol version the handshake settled on; no value before the handshake has
+    ///         finished, when nothing has been negotiated yet.
+    [[nodiscard]] virtual std::optional<TlsVersion> negotiatedVersion() const = 0;
 
   protected:
     ITlsSession() = default;

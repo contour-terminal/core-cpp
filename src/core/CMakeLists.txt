@@ -32,7 +32,6 @@ core_cpp_add_module(base KIND STATIC
         Base64.hpp
         Deferred.hpp
         Defines.hpp
-        SystemRandom.hpp
         Environment.hpp
         Escape.hpp
         Flags.hpp
@@ -53,6 +52,7 @@ core_cpp_add_module(base KIND STATIC
     SOURCES
         Environment.cpp
         Random.cpp
+        SystemRandomSource.hpp
         UserInfo.cpp
         Utf8Path.cpp
         Utils.cpp

@@ -51,6 +51,9 @@ struct SshPublicKey
     /// The comment after the key, or empty.
     std::string comment;
 
+    /// Compares every member, @c comment included: two entries for one key that differ only in
+    /// their comment are not equal. To ask whether two entries are the same key, compare @c blob
+    /// or @c sshFingerprintOf.
     auto operator<=>(SshPublicKey const&) const = default;
 };
 
@@ -94,7 +97,7 @@ struct AuthorizedKeyLine
 /// The fingerprint `ssh-keygen -l` prints for @p key.
 /// @param key The key.
 /// @return `SHA256:` and the unpadded base64 of the SHA-256 of its blob.
-[[nodiscard]] std::string fingerprintOf(SshPublicKey const& key);
+[[nodiscard]] std::string sshFingerprintOf(SshPublicKey const& key);
 
 /// Why an SSHSIG signature was refused.
 enum class SshSigError : std::uint8_t

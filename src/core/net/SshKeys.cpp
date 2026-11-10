@@ -557,7 +557,7 @@ std::expected<std::optional<AuthorizedKeyLine>, SshKeyError> parseAuthorizedKeys
     return std::optional { std::move(entry) };
 }
 
-std::string fingerprintOf(SshPublicKey const& key)
+std::string sshFingerprintOf(SshPublicKey const& key)
 {
     return sshStyleFingerprint(Sha256::hash(std::span<std::byte const> { key.blob }));
 }

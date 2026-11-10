@@ -4,6 +4,8 @@
 /// @file
 /// The platform half of `<core/Random.hpp>`: one definition per platform, chosen by the source lists
 /// in `src/core/CMakeLists.txt`.
+///
+/// Private to core::base: listed under SOURCES, not HEADERS, and not for a consumer to include.
 
 #include <cstddef>
 #include <span>

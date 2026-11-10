@@ -9,6 +9,8 @@
 /// and a short or oversized length answers `std::nullopt` rather than reading past the end. It is
 /// shared by `SshKeys.cpp` and the software security key the tests sign with, so both speak exactly
 /// one encoding.
+///
+/// Private to core::net_tls (and its tests): listed under SOURCES, not HEADERS.
 
 #include <cstddef>
 #include <cstdint>

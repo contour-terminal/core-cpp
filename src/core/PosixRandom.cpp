@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/Assert.hpp>
-#include <core/SystemRandom.hpp>
+#include <core/SystemRandomSource.hpp>
 
 #include <algorithm>
 #include <cerrno>

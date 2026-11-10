@@ -66,20 +66,31 @@ namespace
     using BioPtr = std::unique_ptr<BIO, decltype(&BIO_free)>;
     using X509Ptr = std::unique_ptr<X509, decltype(&X509_free)>;
 
+    /// The SHA-256 of @p cert's DER, or nothing if it cannot be computed.
+    [[nodiscard]] std::optional<std::array<std::byte, 32>> certificateDigest(X509 const* cert)
+    {
+        auto digest = std::array<std::byte, 32> {};
+        auto length = 0U;
+        if (cert == nullptr
+            || X509_digest(cert, EVP_sha256(), reinterpret_cast<unsigned char*>(digest.data()), &length) != 1
+            || length != digest.size())
+            return std::nullopt;
+        return digest;
+    }
+
     /// The SHA-256 fingerprint of @p cert as lower-case hex, or empty if it cannot be computed.
     [[nodiscard]] std::string fingerprintOf(X509 const* cert)
     {
-        auto digest = std::array<unsigned char, EVP_MAX_MD_SIZE> {};
-        auto length = 0U;
-        if (cert == nullptr || X509_digest(cert, EVP_sha256(), digest.data(), &length) != 1)
+        auto const digest = certificateDigest(cert);
+        if (!digest)
             return {};
         constexpr auto Hex = std::string_view { "0123456789abcdef" };
         auto out = std::string {};
-        out.reserve(std::size_t { length } * 2);
-        for (auto const byte: std::span { digest.data(), length })
+        out.reserve(digest->size() * 2);
+        for (auto const byte: *digest)
         {
-            out += Hex[byte >> 4U];
-            out += Hex[byte & 0x0FU];
+            out += Hex[std::to_integer<unsigned>(byte) >> 4U];
+            out += Hex[std::to_integer<unsigned>(byte) & 0x0FU];
         }
         return out;
     }
@@ -497,19 +508,19 @@ namespace
             return binding;
         }
 
-        [[nodiscard]] std::string peerCertificateFingerprint() const override
+        [[nodiscard]] std::optional<std::array<std::byte, 32>> peerCertificateFingerprint() const override
         {
             if (SSL_is_init_finished(_ssl) != 1)
-                return {};
+                return std::nullopt;
             auto const peer = X509Ptr { SSL_get1_peer_certificate(_ssl), X509_free };
-            return fingerprintOf(peer.get());
+            return certificateDigest(peer.get());
         }
 
-        [[nodiscard]] TlsVersion negotiatedVersion() const override
+        [[nodiscard]] std::optional<TlsVersion> negotiatedVersion() const override
         {
-            if (SSL_is_init_finished(_ssl) == 1 && SSL_version(_ssl) >= TLS1_3_VERSION)
-                return TlsVersion::Tls13;
-            return TlsVersion::Tls12;
+            if (SSL_is_init_finished(_ssl) != 1)
+                return std::nullopt;
+            return SSL_version(_ssl) >= TLS1_3_VERSION ? TlsVersion::Tls13 : TlsVersion::Tls12;
         }
 
         /// Reports whether the peer has finished sending, decrypting whatever records that takes
