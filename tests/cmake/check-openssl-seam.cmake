@@ -63,7 +63,9 @@ endif()
 if(NOT DEFINED PERMITTED)
     set(PERMITTED
         "src/core/net/Tls.cpp|the TLS layer itself: every OpenSSL call core::net_tls makes"
-        "src/core/net/testing/StrictTlsPeer.cpp|the TLS tests' oracle: OpenSSL driven by hand, which is what makes it independent of the code under test")
+        "src/core/net/SshKeys.cpp|OpenSSH public keys and SSHSIG: the Ed25519 and ECDSA verification, and the digests, are OpenSSL's"
+        "src/core/net/testing/StrictTlsPeer.cpp|the TLS tests' oracle: OpenSSL driven by hand, which is what makes it independent of the code under test"
+        "src/core/net/testing/SoftwareSecurityKey.cpp|the SSH tests' FIDO authenticator: OpenSSL signing as PROTOCOL.u2f says one does, since ssh-keygen makes sk signatures only with a device attached")
 endif()
 
 set(permittedPaths "")

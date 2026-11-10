@@ -22,6 +22,7 @@ fastcached's `src/FastCache/Core` at `ee71f868` (and `Sha256.hpp` at `8c27b162`)
 | `<core/Generator.hpp>` | `core::Generator<T>`, a lazy, single-pass coroutine range; see [Generator](#generator) below |
 | `<core/Overloaded.hpp>` | `core::Overloaded`, lambdas combined into one visitor |
 | `<core/Profiling.hpp>` | the `CORE_ZONE_*`, `CORE_FRAME_MARK*`, `CORE_THREAD_NAME` and `CORE_PLOT` macros; see [Profiling](../design/profiling.md) |
+| `<core/Random.hpp>` | `core::IRandom` and `core::systemRandom()`: the operating system's random source (`getentropy()` on POSIX and Emscripten, `BCryptGenRandom()` on Windows) behind an interface a test can replace; a hard failure ends the process |
 | `<core/Ranges.hpp>` | `core::findOrNull()` and `findIfOrNull()`, which answer a pointer; `core::ranges::Iota` and `FoldLeft`, the standard facility where the library has it and a fallback where it does not |
 | `<core/Sha256.hpp>` | `core::Sha256`, SHA-256 incremental (`update()`, `finish()`) and one-shot (`hash()`), and `core::hmacSha256()`; see [SHA-256 and HMAC](#sha-256-and-hmac) below |
 | `<core/Times.hpp>` | `core::times()`, a counted range to iterate or to pipe a callable into |

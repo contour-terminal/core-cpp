@@ -7,7 +7,7 @@ directory `src/core/net/`. Three targets:
 |---|---|---|---|
 | `core::net_types` | header-only | `NetError`, `NetErrorCode`, `IoResult` | everywhere, Emscripten included |
 | `core::net` | static | everything else below | Linux, macOS, the BSDs, Windows; under single-threaded WebAssembly, the `IoBackend` contract, the host-driven backend, the event loop and its timers |
-| `core::net_tls` | static | `ITlsContext` and the TLS socket | with `CORE_CPP_WITH_TLS`, natively |
+| `core::net_tls` | static | the TLS socket and its session, OpenSSH public keys and SSHSIG verification, the ssh-agent client | with `CORE_CPP_WITH_TLS`, natively |
 
 !!! note "Status"
     contour's `src/net` at `6777ff05`, merged with fastcached's async and networking layer
@@ -65,7 +65,12 @@ directory `src/core/net/`. Three targets:
 | `<core/net/testing/SocketDecorator.hpp>`, `<core/net/testing/ParkingReadableSocket.hpp>` | `SocketDecorator`, which forwards every verb so a double overrides only the one it stages; `ParkingReadableSocket` and `ParkingWritableSocket`, which park until the test decides and count how each parked operation ended |
 | `<core/net/Diagnostics.hpp>` | `setDiagnosticSink()`: where a failure nobody can be handed goes (a wait that fails mid-sweep); discarded by default |
 | `<core/net/ITlsContext.hpp>` (`core::net`) | `ITlsContext`, the seam a TLS implementation plugs in behind, and `wrapTls(socket, context, loop)`, which hands a socket back unchanged for a null context -- so an accept path compiles identically in a build without TLS |
-| `<core/net/Tls.hpp>` (`core::net_tls`) | a TLS `ISocket` over any other, driven through memory BIOs on the same loop, with an eager `handshakeIfNeeded()`, a `waitReadable()` that tells `close_notify` from data and a `shutdownWrite()` that sends `close_notify` before the FIN; `makeTlsServerContext()` and `makeTlsServerContextFromFiles()` (a chain and its key), `makeSelfSignedServerContext(SelfSignedOptions)`, `makeTlsClientContext()` (a pinned CA and a host name, or trust on first use), `generateSelfSignedCertificate(SelfSignedOptions)`, `certificateFingerprint()`, `constantTimeEquals()` |
+| `<core/net/Tls.hpp>` (`core::net_tls`) | a TLS `ISocket` over any other, driven through memory BIOs on the same loop, with an eager `handshakeIfNeeded()`, a `waitReadable()` that tells `close_notify` from data and a `shutdownWrite()` that sends `close_notify` before the FIN; `makeTlsServerContext()` and `makeTlsServerContextFromFiles()` (a chain and its key), `makeSelfSignedServerContext(SelfSignedOptions)`, `makeTlsClientContext()` (a pinned CA and a host name, or trust on first use), `generateSelfSignedCertificate(SelfSignedOptions)`, `certificateFingerprint()`, `constantTimeEquals()`; `TlsOptions` (a minimum protocol version), `tlsSessionOf()`, which finds the `ITlsSession` behind an `ISocket`, and `sshStyleFingerprint()`, a SHA-256 as `SHA256:<unpadded base64>` |
+| `<core/net/ITlsSession.hpp>` (`core::net`) | `ITlsSession`: what a finished handshake answers -- `channelBinding()` (RFC 9266, TLS 1.3 only), `peerCertificateDigest()` (the raw SHA-256, empty without a peer certificate) and `negotiatedVersion()` (empty before the handshake) -- and `TlsVersion` |
+| `<core/net/SshKeys.hpp>` (`core::net_tls`) | OpenSSH public keys and SSHSIG verification: `SshPublicKey`, `parseSshPublicKey()`, `parseSshPublicKeyBlob()`, `parseAuthorizedKeysLine()`, `sshFingerprintOf()`, `verifySshSignature()`, `sshsigSignedData()`, `assembleSshsig()`; `ssh-ed25519`, `ecdsa-sha2-nistp256` and their `sk-` forms |
+| `<core/net/SshAgent.hpp>` (`core::net_tls`) | the ssh-agent client: `ISshAgent` (`identities()`, `sign()`), `makeSshAgent()` and its `SshAgentError`; one connection per request |
+| `<core/net/SshAgentEndpoint.hpp>` | `defaultSshAgentEndpoint()`: `SSH_AUTH_SOCK` on POSIX, the OpenSSH named pipe on Windows. In `core::net`, so every build has it |
+| `<core/net/testing/SoftwareSecurityKey.hpp>` (`core::net_tls`) | `SoftwareSecurityKey`, a FIDO authenticator in software that signs as PROTOCOL.u2f says, for testing `sk-` key verification without a device |
 
 ## The error vocabulary
 
@@ -233,8 +238,8 @@ From contour's `src/net/README.md` at `6777ff05`, as far as they hold here:
   `IoBackend::wake()` is the one member of the interface another thread may call, and it is what
   `EventLoop::post()` uses to break a wait in flight.
 - **No OpenSSL type crosses a header**, and `core-cpp.openssl-seam` refuses one that does -- a
-  forward-declared struct tag included -- as well as an OpenSSL include outside `Tls.cpp` and the
-  tests' strict peer. `core::net_tls` links OpenSSL PRIVATE.
+  forward-declared struct tag included -- as well as an OpenSSL include outside `Tls.cpp`,
+  `SshKeys.cpp` and the two test doubles (the strict TLS peer and the software security key). `core::net_tls` links OpenSSL PRIVATE.
 - **A TLS connection closes in the order a strict peer requires.** `shutdownWrite()` writes and
   flushes `close_notify`, then half-closes the transport; a FIN with no alert before it is what a
   truncation looks like, and OpenSSL 3 reading from a socket reports it as an error. `close()` is
