@@ -53,7 +53,7 @@ jobs:
           fi
           echo "ref input: $REF"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Empty is actions/checkout's own default for this input and means "whatever ref triggered
           # this run", so the nightly and a dispatch that names nothing behave exactly as they did
