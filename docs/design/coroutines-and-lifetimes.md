@@ -45,7 +45,8 @@ against.
   [Threading](threading.md).
 - **A loop resumes what it parks, or frees it, and it frees only what nothing else owns.** What the
   loop borrows (a `Task` somebody holds, a `blockOn` root) is resumed at teardown so its stop token
-  unwinds it; what the loop owns (a `DetachedTask`, which carries no stop token) is freed, looping to
+  unwinds it -- and a `blockOn` root that an exception out of a turn left unfinished is cancelled and
+  kept by the loop until a drain has unwound it, because a park may still name a frame below it; what the loop owns (a `DetachedTask`, which carries no stop token) is freed, looping to
   a fixpoint because freeing a chain can park again
   ([fastcached#1025](https://github.com/LASTRADA-Software/fastcached/issues/1025),
   [fastcached#1054](https://github.com/LASTRADA-Software/fastcached/issues/1054)).

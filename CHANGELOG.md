@@ -21,6 +21,15 @@ workflow refuses one without a section here.
   at their default. Foreign types are listed by `visitForeignFields(visitor, value)` overloads found through the hooks
   tag. A decode keeps a memory budget proportional to the stream's size. Moved from contour's `vtbackend` state codec.
 
+### Fixed
+
+- **`EventLoop::blockOn` no longer frees frames a park still names when an exception escapes a turn.** A throwing
+  `post` or timer callback ended `blockOn` with its flow unfinished, and the root was destroyed with it; where the
+  flow was parked below the root -- in a sub-task, or on another executor -- the park kept naming the freed frame,
+  and the next drain, or `~EventLoop`'s, resumed it: a heap-use-after-free. The flow is now cancelled and its root
+  handed to the loop, which frees it once a drain has unwound the chain. The root runs under a stop token of its
+  own, linked to `rootStopSource()`, so the cancellation reaches this flow alone.
+
 ## [0.19.0] - 2026-11-10
 
 ### Added
