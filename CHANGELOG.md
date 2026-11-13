@@ -29,6 +29,11 @@ workflow refuses one without a section here.
   and the next drain, or `~EventLoop`'s, resumed it: a heap-use-after-free. The flow is now cancelled and its root
   handed to the loop, which frees it once a drain has unwound the chain. The root runs under a stop token of its
   own, linked to `rootStopSource()`, so the cancellation reaches this flow alone.
+- **`UnixListener` removes only the socket file it bound.** Closing a listener removed its path by name, so a
+  listener bound on the same path since -- after the first one's file was unlinked, by a restarted daemon or a
+  replacement -- lost its socket file and listened on a path no client could reach. The file's identity (`st_dev`,
+  `st_ino`) is recorded at bind, and the close removes the path only while it still names that file. `path()` keeps
+  answering the bound path after the close.
 
 ## [0.19.0] - 2026-11-10
 
