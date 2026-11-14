@@ -137,6 +137,13 @@ others in notes.
 | `src/core/cli/CLI.hpp` | contour-terminal/contour | `src/crispy/CLI.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | post-import fix (Task A9): `parse()` documents what it throws as well as what it returns; core-cpp#13 (0.5.0): `ParserError` is gone, and `parse()` returns `std::expected<FlagStore, ParseError>` |
 | `src/core/cli/CLI_test.cpp` | contour-terminal/contour | `src/crispy/CLI_test.cpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | post-import additions (Task A9): the help-layout and parse-failure cases; post-import addition (Task A9 fix round 1): the space-before-a-line-feed cases; core-cpp#13 (0.5.0): the parse-failure cases assert each `ParseErrorKind` and its token |
 | `src/core/cli/CMakeLists.txt` | origin: core-cpp | - | - | a TIMEOUT on the `cli` test (Task A9 fix round 3): a wrapping loop that stops making progress reads as a silence, not a failure |
+| `src/core/codec/CMakeLists.txt` | origin: core-cpp | - | - | - |
+| `src/core/codec/DecodeError.hpp` | contour-terminal/contour | `src/vtbackend/core/StateDecodeError.hpp` | `3334cdeb80789e8999b8f199501debfc1af657da` | `vtbackend::StateDecodeError` renamed `core::codec::DecodeError` |
+| `src/core/codec/Fields.hpp` | contour-terminal/contour | `src/vtbackend/state/StateFields.hpp` | `3334cdeb80789e8999b8f199501debfc1af657da` | the generic half only: the tables become `EnumWire`/`FlagWire`, the foreign-type overloads are found through a hooks tag (`visitForeignFields`) |
+| `src/core/codec/Fields_test.cpp` | origin: core-cpp | - | - | - |
+| `src/core/codec/Stream.cpp` | contour-terminal/contour | `src/vtbackend/state/StateCodec.cpp` | `3334cdeb80789e8999b8f199501debfc1af657da` | `StateWriter`/`StateReader` without the stream header, as `Writer`/`Reader` |
+| `src/core/codec/Stream.hpp` | contour-terminal/contour | `src/vtbackend/state/StateCodec.hpp` | `3334cdeb80789e8999b8f199501debfc1af657da` | `StateWriter`/`StateReader` without the stream header, as `Writer`/`Reader` |
+| `src/core/codec/Stream_test.cpp` | origin: core-cpp | - | - | - |
 | `src/core/SystemRandomSource.hpp` | origin: core-cpp | - | - | the platform half of `Random.hpp`: one `fillFromSystemRandom()` per platform |
 | `src/core/log/Assert.hpp` | contour-terminal/contour | `src/crispy/Assert.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | `fatal()`/`SoftRequire()` moved here from crispy's `Assert.hpp` to close a base→log layering cycle; `Require`/`Guarantee`/`todo`/`unreachable`/`setFailHandler` stay in `src/core/Assert.hpp` |
 | `src/core/log/CMakeLists.txt` | origin: core-cpp | - | - | - |

@@ -28,7 +28,7 @@ cmake -DMODE=sync -DREF=<tag or full SHA> -DDEST=<dir> \
 # The same, choosing the modules and the repository explicitly. MODULES is a CMake list, so the
 # shell must not see its semicolons: quote the whole -D argument.
 cmake -DMODE=sync -DREF=<tag or full SHA> -DDEST=<dir> -DREPO=<url or path> \
-      "-DMODULES=base;log;cli;platform;async;net;testing" \
+      "-DMODULES=base;log;cli;codec;platform;async;net;testing" \
       -P <core-cpp checkout>/cmake/CoreCppVendor.cmake
 
 # Verify <dir> against its MANIFEST. Needs no git, and this one IS the copy's own script.
