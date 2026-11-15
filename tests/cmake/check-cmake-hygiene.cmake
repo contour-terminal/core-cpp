@@ -178,6 +178,8 @@ core_cpp_hygiene_allow(source-glob tests/cmake/check-install.cmake
     "enumerates the headers an install produced, to resolve their includes; it is not a source list")
 core_cpp_hygiene_allow(source-glob tests/cmake/check-read-buffer-guard.cmake
     "derives the set of ISocket::read definitions from the tree it scans; it is not a source list")
+core_cpp_hygiene_allow(source-glob tests/cmake/check-tui-corners.cmake
+    "enumerates the TUI sources it scans for a square corner; it is not a source list")
 
 # The consumer smoke projects under tests/ are not core-cpp's build: each is a project of its own,
 # written the way the consumer it stands for writes one. These rules say what core-cpp may do

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <core/tui/Box.hpp>
 #include <core/tui/Component.hpp>
 #include <core/tui/StyledText.hpp>
 
@@ -32,8 +33,17 @@ enum class TooltipContentType : std::uint8_t
 class Tooltip: public Component
 {
   public:
+    /// @brief Constructs an empty tooltip framed in single lines.
     Tooltip() = default;
+
+    /// @brief Constructs an empty tooltip framed in @p border.
+    /// @param border The frame's style.
+    explicit Tooltip(BorderStyle border);
+
     ~Tooltip() override = default;
+
+    /// @brief Returns the style the tooltip is framed in.
+    [[nodiscard]] BorderStyle border() const noexcept { return _border; }
 
     // --- Content ---
 
@@ -95,6 +105,7 @@ class Tooltip: public Component
     [[nodiscard]] bool focusable() const override { return false; }
 
   private:
+    BorderStyle _border = BorderStyle::Single;
     std::string _rawContent;
     TooltipContentType _contentType = TooltipContentType::PlainText;
     StyledText _styledContent;

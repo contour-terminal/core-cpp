@@ -3,6 +3,7 @@
 
 #include <core/Clock.hpp>
 #include <core/Defines.hpp>
+#include <core/tui/Box.hpp>
 #include <core/tui/Buffer.hpp>
 #include <core/tui/Component.hpp>
 #include <core/tui/CursorShape.hpp>
@@ -71,6 +72,7 @@ struct ScreenConfig
     /// reset at the start of each row the inline viewport draws. The frame diff's own option.
     DiffReflow reflow = DiffReflow::Keep;
     ScreenBuffer screenBuffer = ScreenBuffer::Primary; ///< The terminal buffer drawn on.
+    BorderStyle tooltipBorder = BorderStyle::Single;   ///< The frame of the hover tooltip the screen shows.
 };
 
 /// Cursor movement calculations for inline rendering.

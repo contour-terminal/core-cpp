@@ -158,6 +158,16 @@ auto dashboard = core::tui::Responsive { {
 screen.root().addChild(dashboard, { .flex = core::tui::layout::Style { .grow = 1 } });
 ```
 
+- **Borders.** Every widget that draws a frame takes a `BorderStyle` (`<core/tui/Box.hpp>`: `None`, `Single`,
+  `Double`, `Rounded` -- `╭ ╮ ╰ ╯` --, `Heavy`, `Dashed`) and draws its corners, lines and junctions from
+  `BorderChars::fromStyle()` of it, never from a literal: `Box` and the three dialogs through their config's
+  `border`, `QuestionComponent` (its left bar) through `QuestionConfig::border`, `CompletionPopup(BorderStyle)`,
+  `CommandPalettePopup(BorderStyle, clock)`, `FuzzyPickerPopup(BorderStyle, clock)`, `Tooltip(BorderStyle)`, and
+  the tooltip a `Screen` shows through `ScreenConfig::tooltipBorder`. Each default is the frame the widget drew
+  before: `Single` for the completion popup and the tooltip, `Rounded` for the others. `Borders_test.cpp` renders
+  each of them in every style with corners and refuses a corner of any other style, so a widget that hard-codes
+  one fails there.
+
 ```cpp
 auto bytes = std::string {};
 auto surface = core::tui::HeadlessSurface { core::tui::Size { .width = 80, .height = 24 },

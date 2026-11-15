@@ -22,7 +22,12 @@ FuzzyPickerPopup::FuzzyPickerPopup(): FuzzyPickerPopup(defaultSteadyClock())
 {
 }
 
-FuzzyPickerPopup::FuzzyPickerPopup(IClock const& clock): _filterField(clock)
+FuzzyPickerPopup::FuzzyPickerPopup(IClock const& clock): FuzzyPickerPopup(BorderStyle::Rounded, clock)
+{
+}
+
+FuzzyPickerPopup::FuzzyPickerPopup(BorderStyle border, IClock const& clock):
+    _border(border), _filterField(clock)
 {
     setVisible(false);
 }
@@ -48,7 +53,7 @@ void FuzzyPickerPopup::render(Canvas& canvas)
     auto const innerWidth = pickerWidth - 2;
 
     auto const borderRect = Rect { .x = 0, .y = 0, .width = pickerWidth, .height = pickerHeight };
-    canvas.drawBox(borderRect, BorderStyle::Rounded, theme.dialogBorder);
+    canvas.drawBox(borderRect, _border, theme.dialogBorder);
 
     // Filter input field
     auto const filterRow = 1;

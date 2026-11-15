@@ -260,6 +260,7 @@ core_cpp_add_test(tui NAME tui_output
 # above it, which is what proves the split holds for the code the cases exercise.
 core_cpp_add_test(tui NAME tui_core
     SOURCES
+        Borders_test.cpp
         CommandPalettePopup_test.cpp
         CommandRegistry_test.cpp
         Completer_test.cpp

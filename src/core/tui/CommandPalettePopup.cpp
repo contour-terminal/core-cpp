@@ -22,7 +22,13 @@ CommandPalettePopup::CommandPalettePopup(): CommandPalettePopup(defaultSteadyClo
 {
 }
 
-CommandPalettePopup::CommandPalettePopup(IClock const& clock): _filterField(clock)
+CommandPalettePopup::CommandPalettePopup(IClock const& clock):
+    CommandPalettePopup(BorderStyle::Rounded, clock)
+{
+}
+
+CommandPalettePopup::CommandPalettePopup(BorderStyle border, IClock const& clock):
+    _border(border), _filterField(clock)
 {
 }
 
@@ -43,7 +49,7 @@ void CommandPalettePopup::render(Canvas& canvas)
     auto const innerWidth = paletteWidth - 2;
 
     auto const borderRect = Rect { .x = 0, .y = 0, .width = paletteWidth, .height = paletteHeight };
-    canvas.drawBox(borderRect, BorderStyle::Rounded, theme.dialogBorder);
+    canvas.drawBox(borderRect, _border, theme.dialogBorder);
 
     // Filter input field
     auto const filterRow = 1;

@@ -148,6 +148,15 @@ if(TARGET core-cpp-tui_core)
         LABELS "core-cpp;tui;wasm"
         TIMEOUT 900)
 endif()
+# No widget hard-codes a square corner (U.10): a scan of src/core/tui outside the border helper. It reads
+# files and nothing else, so it is tree-level, and the `style` job runs it.
+add_test(NAME core-cpp.tui-corners
+         COMMAND "${CMAKE_COMMAND}" "-DROOT=${CORE_CPP_SOURCE_DIR}"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-tui-corners.cmake")
+set_tests_properties(core-cpp.tui-corners PROPERTIES
+    FAIL_REGULAR_EXPRESSION "CMake Error"
+    LABELS "core-cpp;hygiene;tree-level"
+    TIMEOUT 60)
 add_test(NAME core-cpp.tui-core-symbols-selftest
          COMMAND "${CMAKE_COMMAND}"
                  "-DCHECKER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-tui-core-symbols.cmake"

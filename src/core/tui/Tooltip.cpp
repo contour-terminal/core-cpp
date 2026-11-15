@@ -10,6 +10,10 @@
 namespace core::tui
 {
 
+Tooltip::Tooltip(BorderStyle border): _border(border)
+{
+}
+
 void Tooltip::setContent(std::string_view text, TooltipContentType type)
 {
     _rawContent = std::string(text);
@@ -79,28 +83,7 @@ void Tooltip::render(Canvas& canvas)
     // Fill background
     canvas.fill(Rect { .x = 0, .y = 0, .width = size.width, .height = size.height }, ' ', boxStyle);
 
-    // Draw border (simple box characters)
-    // Top border
-    canvas.put(0, 0, "\xe2\x94\x8c", boxStyle); // U+250C BOX DRAWINGS LIGHT DOWN AND RIGHT
-    for (auto const x: std::views::iota(1, std::max(1, size.width - 1)))
-        canvas.put(0, x, "\xe2\x94\x80", boxStyle);          // U+2500 BOX DRAWINGS LIGHT HORIZONTAL
-    canvas.put(0, size.width - 1, "\xe2\x94\x90", boxStyle); // U+2510 BOX DRAWINGS LIGHT DOWN AND LEFT
-
-    // Side borders
-    for (auto const y: std::views::iota(1, std::max(1, size.height - 1)))
-    {
-        canvas.put(y, 0, "\xe2\x94\x82", boxStyle); // U+2502 BOX DRAWINGS LIGHT VERTICAL
-        canvas.put(y, size.width - 1, "\xe2\x94\x82", boxStyle);
-    }
-
-    // Bottom border
-    canvas.put(size.height - 1, 0, "\xe2\x94\x94", boxStyle); // U+2514 BOX DRAWINGS LIGHT UP AND RIGHT
-    for (auto const x: std::views::iota(1, std::max(1, size.width - 1)))
-        canvas.put(size.height - 1, x, "\xe2\x94\x80", boxStyle);
-    canvas.put(size.height - 1,
-               size.width - 1,
-               "\xe2\x94\x98",
-               boxStyle); // U+2518 BOX DRAWINGS LIGHT UP AND LEFT
+    canvas.drawBox(Rect { .x = 0, .y = 0, .width = size.width, .height = size.height }, _border, boxStyle);
 
     // Render content
     auto contentCanvas = canvas.subcanvas(Rect { .x = BorderWidth + Padding,

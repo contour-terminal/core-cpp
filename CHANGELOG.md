@@ -82,6 +82,16 @@ workflow refuses one without a section here.
   the parent. Sizes and positions are capped at `MaxCells` (2^20), weights at `MaxWeight` (2^16), and a node's
   children past `MaxChildren` (2^20) are not laid out (zero-size at the parent's origin); within these bounds no
   input overflows. Reuses `core::tui::Rect` and `core::tui::Size`.
+- **Every bordered widget in the headless TUI takes a `BorderStyle`**, so a view can frame all of them with
+  `BorderStyle::Rounded` (`╭ ╮ ╰ ╯`). New: `CompletionPopup(BorderStyle)`, `CommandPalettePopup(BorderStyle, clock)`,
+  `FuzzyPickerPopup(BorderStyle, clock)`, `Tooltip(BorderStyle)`, `ScreenConfig::tooltipBorder` (the tooltip a `Screen`
+  shows), `QuestionConfig::border` (the question's left bar) and a `border()` accessor on each popup and the tooltip;
+  `Box` and the dialogs already had one. Each default is what the widget drew before -- `Single` for the completion
+  popup and the tooltip, `Rounded` for the rest -- so existing callers render unchanged. `CompletionPopup`'s detail
+  panel now joins the menu's frame in the menu's style rather than always in single lines. `BorderStyle`'s zero stays
+  `None`; the defaults live in each widget. `core-cpp.tui-corners` (tree-level) refuses a square corner spelled in
+  any `src/core/tui` source outside the border helper. Consumers grepped: endo constructs these widgets with their default
+  constructors and configs, which keep their look; fastcached, Lightweight's `dbtool` and contour do not use them.
 - **A layout pass and `Responsive` in the headless TUI** (`core::tui_core`). `LayoutParams` gains `flex`, an
   optional `layout::Style` whose item half (grow, shrink, basis, min/max size) sizes the child in its parent, with
   the child's `minSize()` and `preferredSize()` hints joining it; a `Component` lays such children out with

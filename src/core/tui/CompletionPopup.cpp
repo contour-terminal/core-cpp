@@ -15,6 +15,10 @@
 namespace core::tui
 {
 
+CompletionPopup::CompletionPopup(BorderStyle border): _border(border)
+{
+}
+
 namespace
 {
     constexpr int DetailMaxWidth = 40; ///< Maximum detail panel width.
@@ -79,7 +83,7 @@ void CompletionPopup::render(Canvas& canvas)
 
     // Draw border using Canvas API
     auto borderRect = Rect { .x = 0, .y = 0, .width = menuWidth, .height = menuHeight };
-    canvas.drawBox(borderRect, BorderStyle::Single, theme.dialogBorder);
+    canvas.drawBox(borderRect, _border, theme.dialogBorder);
 
     // Scroll indicator at top if needed
     if (_selection.scrollOffset() > 0)
@@ -206,7 +210,7 @@ void CompletionPopup::render(Canvas& canvas)
     if (!_detailContent.empty() && detailWidth > 0 && availableForDetail >= DetailMinWidth)
     {
         auto const panelWidth = std::min(detailWidth, availableForDetail);
-        auto const border = BorderChars::fromStyle(BorderStyle::Single);
+        auto const border = BorderChars::fromStyle(_border);
 
         // Replace main popup's right border with T-junctions for seamless merge
         canvas.put(0, menuWidth - 1, border.topT, theme.dialogBorder);

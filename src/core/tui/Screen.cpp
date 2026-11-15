@@ -63,7 +63,8 @@ Screen::Screen(ScreenSurface& surface, ScreenConfig config, IClock const& clock)
     _config(config),
     _theme(currentTheme()),
     _root(std::make_unique<RootComponent>()),
-    _hoverState(HoverState::DefaultHoverDelay, clock)
+    _hoverState(HoverState::DefaultHoverDelay, clock),
+    _tooltip(_config.tooltipBorder)
 {
     _root->setScreen(this);
 

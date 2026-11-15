@@ -250,6 +250,11 @@ jobs:
           cmake -DTARGETS="$GITHUB_WORKSPACE/cmake/CoreCppTargets.cmake"
           -P tests/cmake/check-platform-sources.cmake
 
+      # A frame's corners come from its BorderStyle; no widget source spells a square one (U.10).
+      # covers: core-cpp.tui-corners
+      - name: No widget hard-codes a square corner
+        run: cmake -DROOT="$GITHUB_WORKSPACE" -P tests/cmake/check-tui-corners.cmake
+
       # Each scenario configures a project with no language enabled, so the default generator will do.
       # covers: core-cpp.layering
       - name: Module table layering

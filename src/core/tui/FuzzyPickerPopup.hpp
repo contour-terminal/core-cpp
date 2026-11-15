@@ -3,6 +3,7 @@
 
 #include <core/Clock.hpp>
 #include <core/Defines.hpp>
+#include <core/tui/Box.hpp>
 #include <core/tui/Component.hpp>
 #include <core/tui/InputEvent.hpp>
 #include <core/tui/InputField.hpp>
@@ -45,6 +46,18 @@ class FuzzyPickerPopup: public Component
 
     /// A clock is kept, not copied: a temporary would dangle, so an rvalue clock is refused.
     explicit FuzzyPickerPopup(IClock const&& clock) = delete;
+
+    /// @brief Constructs a hidden picker framed in @p border, its filter field timed by @p clock.
+    /// @param border The frame's style.
+    /// @param clock The clock the filter field measures on (not owned; must outlive the picker).
+    explicit FuzzyPickerPopup(BorderStyle border,
+                              IClock const& clock CORE_LIFETIMEBOUND = defaultSteadyClock());
+
+    /// A clock is kept, not copied: a temporary would dangle, so an rvalue clock is refused.
+    FuzzyPickerPopup(BorderStyle border, IClock const&& clock) = delete;
+
+    /// @brief Returns the style the picker is framed in.
+    [[nodiscard]] BorderStyle border() const noexcept { return _border; }
 
     ~FuzzyPickerPopup() override = default;
 
@@ -100,6 +113,8 @@ class FuzzyPickerPopup: public Component
     [[nodiscard]] int renderedWidth() const noexcept;
 
   private:
+    BorderStyle _border = BorderStyle::Rounded;
+
     /// @brief A filtered item with fuzzy match positions for highlighting.
     struct FilteredItem
     {

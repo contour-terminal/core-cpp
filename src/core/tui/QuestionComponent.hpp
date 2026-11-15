@@ -3,6 +3,7 @@
 
 #include <core/Clock.hpp>
 #include <core/Defines.hpp>
+#include <core/tui/Box.hpp>
 #include <core/tui/Component.hpp>
 #include <core/tui/InputField.hpp>
 #include <core/tui/List.hpp>
@@ -47,6 +48,8 @@ struct QuestionConfig
     bool multiSelect = false;            ///< Single-select vs multi-select.
     bool allowOther = true;              ///< Show "Other..." for free-text fallback.
     bool masked = false;                 ///< Mask input in free-text mode (for passwords/API keys).
+    BorderStyle border =
+        BorderStyle::Rounded; ///< The left bar's style: its top and bottom corners and lines.
 };
 
 /// @brief Inline question component for asking the user a question.
@@ -58,7 +61,8 @@ struct QuestionConfig
 /// 3. **Multi-select** (options, multiSelect=true): Question text + List with checkboxes.
 ///    If allowOther, toggling "Other..." shows/hides an InputField below the list.
 ///
-/// Renders with left-bar chrome (╭─/│/╰─) matching AgentInputComponent style.
+/// Renders with left-bar chrome (╭─/│/╰─ with the default @c QuestionConfig::border) matching
+/// AgentInputComponent style.
 ///
 /// It is a @c runtime::ModalComponent<QuestionResult>, so it can be driven to a
 /// result with `co_await runModal(...)` as well as via the synchronous

@@ -45,6 +45,7 @@ void QuestionComponent::render(Canvas& canvas)
     auto const& theme = currentTheme();
     auto barStyle = Style {};
     barStyle.fg = theme.agentColors.leftBar;
+    auto const bar = BorderChars::fromStyle(_config.border);
     auto labelStyle = Style {};
     labelStyle.fg = theme.agentColors.leftBar;
     auto questionStyle = Style {};
@@ -57,12 +58,12 @@ void QuestionComponent::render(Canvas& canvas)
     auto row = 0;
 
     // --- Header line: ╭─ question ─────
-    canvas.putString(row, 0, "\xe2\x95\xad", barStyle); // ╭
-    canvas.putString(row, 1, "\xe2\x94\x80", barStyle); // ─
+    canvas.putString(row, 0, bar.topLeft, barStyle);
+    canvas.putString(row, 1, bar.horizontal, barStyle);
     canvas.put(row, 2, " ", {});
     auto col = 3 + canvas.putString(row, 3, "question", labelStyle);
     // Fill rest of header with ─
-    canvas.drawHLine(row, col + 1, width - col - 1, "\xe2\x94\x80", barStyle); // ─
+    canvas.drawHLine(row, col + 1, width - col - 1, bar.horizontal, barStyle);
     ++row;
 
     // --- Question text lines: │  question text (supports multi-line via \n)
@@ -71,7 +72,7 @@ void QuestionComponent::render(Canvas& canvas)
     {
         auto const nl = remaining.find('\n');
         auto const line = remaining.substr(0, nl);
-        canvas.putString(row, 0, "\xe2\x94\x82", barStyle); // │
+        canvas.putString(row, 0, bar.vertical, barStyle);
         canvas.putString(row, LeftBarWidth + BarPadding, line, questionStyle);
         ++row;
         if (nl == std::string_view::npos)
@@ -82,8 +83,8 @@ void QuestionComponent::render(Canvas& canvas)
     if (isFreeTextOnly())
     {
         // --- Free-text only: ╰─ ❯ [input]
-        canvas.putString(row, 0, "\xe2\x95\xb0", barStyle); // ╰
-        canvas.putString(row, 1, "\xe2\x94\x80", barStyle); // ─
+        canvas.putString(row, 0, bar.bottomLeft, barStyle);
+        canvas.putString(row, 1, bar.horizontal, barStyle);
 
         auto const fieldArea = Rect {
             .x = LeftBarWidth + BarPadding,
@@ -97,7 +98,7 @@ void QuestionComponent::render(Canvas& canvas)
     else if (_config.multiSelect)
     {
         // --- Multi-select: │ blank, then list items with │, then optional input, then ╰─ hint
-        canvas.putString(row, 0, "\xe2\x94\x82", barStyle); // │ blank separator
+        canvas.putString(row, 0, bar.vertical, barStyle); // blank separator
         ++row;
 
         // List items
@@ -106,7 +107,7 @@ void QuestionComponent::render(Canvas& canvas)
         {
             if (row >= canvas.height())
                 break;
-            canvas.putString(row, 0, "\xe2\x94\x82", barStyle); // │
+            canvas.putString(row, 0, bar.vertical, barStyle);
             ++row;
         }
 
@@ -124,7 +125,7 @@ void QuestionComponent::render(Canvas& canvas)
         // Optional InputField when "Other..." is active
         if (_otherActive)
         {
-            canvas.putString(row, 0, "\xe2\x94\x82", barStyle); // │
+            canvas.putString(row, 0, bar.vertical, barStyle);
             auto const inputArea = Rect {
                 .x = LeftBarWidth + BarPadding,
                 .y = row,
@@ -137,8 +138,8 @@ void QuestionComponent::render(Canvas& canvas)
         }
 
         // Bottom bar with hint
-        canvas.putString(row, 0, "\xe2\x95\xb0", barStyle); // ╰
-        canvas.putString(row, 1, "\xe2\x94\x80", barStyle); // ─
+        canvas.putString(row, 0, bar.bottomLeft, barStyle);
+        canvas.putString(row, 1, bar.horizontal, barStyle);
         canvas.putString(row,
                          LeftBarWidth + BarPadding,
                          "Space toggle \xe2\x94\x82 Enter confirm \xe2\x94\x82 Esc cancel",
@@ -150,7 +151,7 @@ void QuestionComponent::render(Canvas& canvas)
         if (!_otherActive)
         {
             // Show list with blank separator
-            canvas.putString(row, 0, "\xe2\x94\x82", barStyle); // │ blank separator
+            canvas.putString(row, 0, bar.vertical, barStyle); // blank separator
             ++row;
 
             auto const listHeight = static_cast<int>(_list.items().size());
@@ -158,7 +159,7 @@ void QuestionComponent::render(Canvas& canvas)
             {
                 if (row >= canvas.height())
                     break;
-                canvas.putString(row, 0, "\xe2\x94\x82", barStyle); // │
+                canvas.putString(row, 0, bar.vertical, barStyle);
                 ++row;
             }
 
@@ -175,16 +176,16 @@ void QuestionComponent::render(Canvas& canvas)
             _list.render(listCanvas);
 
             // Bottom bar with hint
-            canvas.putString(row, 0, "\xe2\x95\xb0", barStyle); // ╰
-            canvas.putString(row, 1, "\xe2\x94\x80", barStyle); // ─
+            canvas.putString(row, 0, bar.bottomLeft, barStyle);
+            canvas.putString(row, 1, bar.horizontal, barStyle);
             canvas.putString(
                 row, LeftBarWidth + BarPadding, "Enter select \xe2\x94\x82 Esc cancel", hintStyle);
         }
         else
         {
             // Other active: show InputField replacing list
-            canvas.putString(row, 0, "\xe2\x95\xb0", barStyle); // ╰
-            canvas.putString(row, 1, "\xe2\x94\x80", barStyle); // ─
+            canvas.putString(row, 0, bar.bottomLeft, barStyle);
+            canvas.putString(row, 1, bar.horizontal, barStyle);
             auto const fieldArea = Rect {
                 .x = LeftBarWidth + BarPadding,
                 .y = row,
