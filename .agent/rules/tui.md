@@ -23,6 +23,10 @@ Its consumers are endo, tuidu, fastcached's console tools and Lightweight's `dbt
   header from a `tui_core` file compiles, because every header shares one include root, and is a
   layering violation all the same; `core-cpp.tui-core-symbols` catches what it leaves in the
   archive. A WebAssembly guest builds on this target (docs/design/tui-headless.md).
+- **The frame diff is one function, `writeFrameDiff()` (`FrameDiff.cpp`)**, and `Screen`'s three
+  flush paths and the pure `diffFrames()` all call it. A change to what a frame writes lands there,
+  behind a `DiffOptions` field when only some paths want it -- never as a fourth loop in `Screen`,
+  which is how the inline path came to write row marks and images the fullscreen path never did.
 - **`core::tui` is everything else** and may depend on `platform`, `async`, `net`, libunicode,
   and stb when `CORE_CPP_WITH_IMAGES` is on.
 - **The leaf has an option of its own, `CORE_CPP_WITH_TUI_OUTPUT`, and that is load-bearing.**

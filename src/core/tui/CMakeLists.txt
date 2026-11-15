@@ -98,6 +98,7 @@ core_cpp_add_module(tui_core KIND STATIC
     HEADERS
         Box.hpp
         Buffer.hpp
+        ByteSinkOutput.hpp
         Canvas.hpp
         Cell.hpp
         CommandPalettePopup.hpp
@@ -108,9 +109,11 @@ core_cpp_add_module(tui_core KIND STATIC
         EditAction.hpp
         Element.hpp
         EndProbe.hpp
+        FrameDiff.hpp
         FuzzyPickerPopup.hpp
         GenericSyntaxHighlighter.hpp
         GhostTextHelper.hpp
+        HeadlessSurface.hpp
         HoverState.hpp
         HyperlinkEmitter.hpp
         ImageProvider.hpp
@@ -155,6 +158,7 @@ core_cpp_add_module(tui_core KIND STATIC
     SOURCES
         Box.cpp
         Buffer.cpp
+        ByteSinkOutput.cpp
         Canvas.cpp
         Cell.cpp
         CommandPalettePopup.cpp
@@ -162,8 +166,10 @@ core_cpp_add_module(tui_core KIND STATIC
         CompletionPopup.cpp
         Component.cpp
         Dialog.cpp
+        FrameDiff.cpp
         FuzzyPickerPopup.cpp
         GenericSyntaxHighlighter.cpp
+        HeadlessSurface.cpp
         HoverState.cpp
         HyperlinkEmitter.cpp
         InputField.cpp
@@ -254,9 +260,11 @@ core_cpp_add_test(tui NAME tui_core
         Completer_test.cpp
         CompletionPopup_test.cpp
         Dialog_test.cpp
+        FrameDiff_test.cpp
         FuzzyMatch_test.cpp
         FuzzyPickerPopup_test.cpp
         GenericSyntaxHighlighter_test.cpp
+        HeadlessSurface_test.cpp
         InputField_test.cpp
         KeyBindings_test.cpp
         MarkdownHtml_test.cpp

@@ -15,9 +15,10 @@
 #   * `StyledText::fromMarkdown` (178), `MarkdownRenderer::renderInline` (94) and
 #     `renderTableCompact` (60), `MarkdownTable::stripInlineMarkdown` (55): the same, over
 #     Markdown's inline grammar.
-#   * `InputField::render` (200), `Screen::flushInline` (121), `CompletionPopup::render` (62)
-#     and `QuestionComponent::processInput` (53) are renderers whose branches are the cases of
-#     the layout (clipping, scrolling, selection, decoration, images).
+#   * `InputField::render` (200), `Screen::flushInline` (65; 121 before its cell loop moved to
+#     `FrameDiff.cpp`), `CompletionPopup::render` (62) and `QuestionComponent::processInput` (53)
+#     are renderers whose branches are the cases of the layout (clipping, scrolling, selection,
+#     decoration, images).
 #
 # 210 is the largest of those (`InputField::render`) with room for the measurement to move
 # between LLVM releases. A raised threshold rather than a disabled check, because a disabled check

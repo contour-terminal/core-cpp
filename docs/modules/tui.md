@@ -63,13 +63,42 @@ The headless half: everything below that needs no terminal under it -- `VtParser
 renderer, `Theme`, `Unicode` and `Screen`. It links `core::base`, `core::tui_output` and libunicode,
 and nothing of [platform](platform.md), [async](async.md) or [net](net.md); configured with
 `CORE_CPP_WITH_TUI` off and `CORE_CPP_WITH_TUI_CORE` on, core-cpp builds it without the terminal
-half. `Screen` draws on a `ScreenSurface` -- a size, a `TerminalOutput` and the one cursor query the
-inline viewport asks -- which `Terminal` implements on a real terminal and a program with none
-implements itself; `MockScreenSurface` is the test double, over a `MockTerminalOutput`. `core-cpp.tui-core-symbols` reads
-tui_core's includes and its archive's symbols for anything it may not reach, and
-`tests/consumer-tui-core` (CI's `consumer-smoke (tui-core)`) renders a component through it with the
-terminal half off. Why it is shaped this way, and what remains before a WebAssembly guest builds
-it: [A headless TUI](../design/tui-headless.md).
+half.
+
+- **The surface.** `Screen` draws on a `ScreenSurface` -- a size, a `TerminalOutput` and the one
+  cursor query the inline viewport asks -- which `Terminal` implements on a real terminal.
+  `HeadlessSurface(Size, ByteSink)` is the surface for a program with no terminal at all: its output
+  is a `ByteSinkOutput`, which hands every flushed byte to the sink and asks the operating system
+  nothing (no size, no probe, no terminal test), so it behaves the same natively and in a guest.
+  Its cursor query answers `QueryUnanswered::NotAsked`, so it is meant for the fullscreen and fixed
+  viewports; an inline viewport on it falls back as on a silent terminal. `SinkDestination` says
+  whether a terminal stands past the sink (frames bracketed in DEC mode 2026) or not, and
+  `resize()` takes the host's new size. `MockScreenSurface` is the test double, over a
+  `MockTerminalOutput`.
+- **The diff.** `diffFrames(previous, next, DiffOptions)` returns the bytes that turn one `Buffer`
+  into the other; `writeFrameDiff(out, previous, next, options)` writes the same bytes into a
+  `TerminalOutput`, and is what every `Screen` flush path calls. Both are
+  pure in their frames. `DiffOptions` holds what the flush paths differed in: `DiffAddressing`
+  (`Absolute`, cursor-addressed, for fullscreen and fixed; `Relative`, row by row from column 0,
+  for inline), `DiffRepaint` (`Changed` cells or `All`), the `area` covered, and, each off by
+  default, `DiffHyperlinks`, `DiffImages`, `DiffRowMarks` and `DiffReflow`. The cursor is not the
+  diff's: hiding, placing and showing it stay `Screen`'s, so identical frames diff to nothing.
+
+```cpp
+auto bytes = std::string {};
+auto surface = core::tui::HeadlessSurface { core::tui::Size { .width = 80, .height = 24 },
+                                            [&bytes](std::string_view chunk) { bytes += chunk; } };
+auto screen = core::tui::Screen { surface };
+screen.root().addChild(view, { .area = { .x = 0, .y = 0, .width = 80, .height = 24 } });
+screen.draw(); // bytes now holds the frame; the next draw() appends only what changed
+```
+
+Two checks keep the half headless. `core-cpp.tui-core-symbols` reads tui_core's includes and its
+archive's symbols for anything of the terminal half, `platform`, `async` or `net`.
+`tests/consumer-tui-core` is a CPM consumer that renders a component through `HeadlessSurface` with
+the terminal half off; CI's `consumer-smoke (tui-core)` builds and runs it. Why it is shaped this way, and what remains before a
+WebAssembly guest builds it:
+[A headless TUI](../design/tui-headless.md).
 
 ## `core::tui`
 

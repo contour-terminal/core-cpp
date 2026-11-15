@@ -5,75 +5,50 @@
 
 #include <core/tui/Canvas.hpp>
 #include <core/tui/Component.hpp>
+#include <core/tui/FrameDiff.hpp>
+#include <core/tui/HeadlessSurface.hpp>
+#include <core/tui/Rect.hpp>
 #include <core/tui/Screen.hpp>
-#include <core/tui/ScreenSurface.hpp>
-#include <core/tui/TerminalOutput.hpp>
 
 #include <cstdio>
-#include <expected>
 #include <string>
 #include <string_view>
-#include <utility>
 
 namespace
 {
-
-/// A @c TerminalOutput whose destination is a string.
-class CapturingOutput: public core::tui::TerminalOutput
-{
-  public:
-    [[nodiscard]] bool isTerminal() const noexcept override { return true; }
-
-    [[nodiscard]] std::string const& captured() const noexcept { return _captured; }
-
-  protected:
-    void writeToDestination(std::string_view bytes) override { _captured.append(bytes); }
-
-  private:
-    std::string _captured;
-};
-
-/// A fixed-size surface over a @c CapturingOutput, which no one can ask where the cursor is.
-class FixedSurface: public core::tui::ScreenSurface
-{
-  public:
-    [[nodiscard]] auto columns() const noexcept -> int override { return 20; }
-    [[nodiscard]] auto rows() const noexcept -> int override { return 3; }
-    [[nodiscard]] auto output() noexcept -> core::tui::TerminalOutput& override { return _output; }
-    [[nodiscard]] auto queryCursorPosition()
-        -> std::expected<std::pair<int, int>, core::tui::QueryUnanswered> override
-    {
-        return std::unexpected { core::tui::QueryUnanswered::NotAsked };
-    }
-
-    [[nodiscard]] std::string const& captured() const noexcept { return _output.captured(); }
-
-  private:
-    CapturingOutput _output;
-};
 
 /// Draws one word at its top-left corner.
 class Greeting: public core::tui::Component
 {
   public:
-    void render(core::tui::Canvas& canvas) override { canvas.put(0, 0, "headless", {}); }
+    void render(core::tui::Canvas& canvas) override { canvas.putString(0, 0, "headless", {}); }
 };
 
 } // namespace
 
 int main()
 {
-    auto surface = FixedSurface {};
+    auto frame = std::string {};
+    auto surface = core::tui::HeadlessSurface { core::tui::Size { .width = 20, .height = 3 },
+                                                [&frame](std::string_view bytes) { frame += bytes; } };
     auto screen = core::tui::Screen { surface };
     auto greeting = Greeting {};
     screen.root().addChild(greeting, { .area = { .x = 0, .y = 0, .width = 20, .height = 1 } });
     screen.draw();
 
-    if (surface.captured().find("headless") == std::string::npos)
+    // Each cell is reached by its own cursor move: the first and the last letter of the word.
+    if (!frame.contains("\033[1;1Hh") || !frame.contains("\033[1;8Hs"))
     {
         std::fprintf(stderr, "consumer-tui-core: the frame does not hold the component's text\n");
         return 1;
     }
-    std::printf("consumer-tui-core: %zu bytes of frame, no terminal\n", surface.captured().size());
+
+    // The diff between the frame on the screen and itself is empty: nothing to send.
+    if (!core::tui::diffFrames(screen.renderedBuffer(), screen.renderedBuffer()).empty())
+    {
+        std::fprintf(stderr, "consumer-tui-core: an unchanged frame diffs to bytes\n");
+        return 1;
+    }
+    std::printf("consumer-tui-core: %zu bytes of frame, no terminal\n", frame.size());
     return 0;
 }

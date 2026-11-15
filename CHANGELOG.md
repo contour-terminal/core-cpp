@@ -46,6 +46,17 @@ workflow refuses one without a section here.
   `TerminalOutput` and stays a `Device` by default, unchanged; endo and fastcached derive no output; contour does not
   vendor `tui`. A subclass with a member of its own named `kind` or `simulatedCursorPosition` now hides or overrides
   the new virtual and must rename it; none was found.
+- **`core::tui::diffFrames()` and `writeFrameDiff()`, the frame diff as a function** (`<core/tui/FrameDiff.hpp>`):
+  two `Buffer`s in, the bytes that turn the first into the second out, pure, with `DiffOptions` choosing absolute
+  (cursor-addressed) or relative (row by row) addressing, changed cells or all, the area covered, and whether the
+  frame's hyperlinks, Sixel images, row marks and reflow inhibition are written. Identical frames diff to nothing.
+  `Screen`'s fullscreen, fixed and inline flushes and `Buffer::writeTo()` all call it; their output is unchanged, so no
+  consumer changes anything (endo, the one consumer that drives a `Screen`, grepped).
+- **`core::tui::HeadlessSurface`**, a `ScreenSurface` of a size and a byte sink, for a `Screen` with no terminal under
+  it (a WebAssembly guest): every frame's bytes go to the sink, the cursor query answers `NotAsked`, and `resize()`
+  takes the host's size. Its output, **`core::tui::ByteSinkOutput`**, is a `TerminalOutput` that hands what it flushes
+  to a `ByteSink` and asks the operating system nothing -- no size, no probe, no terminal test. This is how a `Screen`
+  is built from a size and a byte sink: `Screen { headlessSurface }`, through the one constructor. Additive.
 - **`SOURCES_PORTABLE`, a platform source list for a platform that is neither POSIX nor Windows**, and
   `core::tui_output`'s `portable/TerminalOutput.cpp` in it: the output's five OS-bound members (`initialize`,
   `detectCapabilities`, `writeToDestination`, `isTerminal`, `updateDimensions`) with the C++ standard library alone,

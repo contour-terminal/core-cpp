@@ -562,6 +562,8 @@ others in notes.
 | `src/core/tui/Box.hpp` | contour-terminal/endo | `src/tui/Box.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Buffer.cpp` | contour-terminal/endo | `src/tui/Buffer.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the OSC 8 `id=` is the bare hash; endo prefixed it `endo-`, and no consumer's hyperlinks carry another project's name |
 | `src/core/tui/Buffer.hpp` | contour-terminal/endo | `src/tui/Buffer.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/ByteSinkOutput.cpp` | origin: core-cpp | - | - | a `TerminalOutput` onto a byte sink that asks the OS nothing (U.3) |
+| `src/core/tui/ByteSinkOutput.hpp` | origin: core-cpp | - | - | a `TerminalOutput` onto a byte sink that asks the OS nothing (U.3) |
 | `src/core/tui/CMakeLists.txt` | origin: core-cpp | - | - | endo's `src/tui/CMakeLists.txt` is one `add_library`; this is the module-table form, and where the `core::tui_output` split is spelled |
 | `src/core/tui/Canvas.cpp` | contour-terminal/endo | `src/tui/Canvas.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Canvas.hpp` | contour-terminal/endo | `src/tui/Canvas.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
@@ -595,6 +597,9 @@ others in notes.
 | `src/core/tui/Error.hpp` | contour-terminal/endo | `src/tui/Error.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/FilesystemImageProvider.cpp` | contour-terminal/endo | `src/tui/ImageProvider.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | renamed with the class it defines; see `FilesystemImageProvider.hpp`; post-import fix: `prepare()` reads its source as UTF-8 (`core::pathFromUtf8()`) and hands `loadImage()` and its messages UTF-8 (`core::pathToUtf8()`); `prepare()` refuses a source that is not UTF-8 |
 | `src/core/tui/FilesystemImageProvider.hpp` | contour-terminal/endo | `src/tui/ImageProvider.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `FilesystemImageProvider` and `isRemoteImageSource()` split out of `ImageProvider.hpp`, because they are the part that needs a decoder and so exist only with `CORE_CPP_WITH_IMAGES` |
+| `src/core/tui/FrameDiff.cpp` | origin: core-cpp | - | - | `writeFrameDiff()`/`diffFrames()`: the cell loops of endo's `Screen::flushFullscreen`/`flushInline` (`src/tui/Screen.cpp`, f774a210) and core-cpp's row-mark emitter, moved out of `Screen` behind `DiffOptions` (U.3) |
+| `src/core/tui/FrameDiff.hpp` | origin: core-cpp | - | - | the frame diff as a function (U.3) |
+| `src/core/tui/FrameDiff_test.cpp` | origin: core-cpp | - | - | - |
 | `src/core/tui/FuzzyMatch_test.cpp` | contour-terminal/endo | `src/tui/FuzzyMatch_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | core-cpp#30: `using namespace core::tui::completer` beside `core::tui` |
 | `src/core/tui/FuzzyPickerPopup.cpp` | contour-terminal/endo | `src/tui/FuzzyPickerPopup.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | core-cpp#30: the completer types are qualified `completer::` |
 | `src/core/tui/FuzzyPickerPopup.hpp` | contour-terminal/endo | `src/tui/FuzzyPickerPopup.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | core-cpp#30: the completer types are qualified `completer::` |
@@ -603,6 +608,9 @@ others in notes.
 | `src/core/tui/GenericSyntaxHighlighter.hpp` | contour-terminal/endo | `src/tui/GenericSyntaxHighlighter.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/GenericSyntaxHighlighter_test.cpp` | contour-terminal/endo | `src/tui/GenericSyntaxHighlighter_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | A7 fix round 1 adds the oversized-assembly-token case. A7 fix round 1b asserts `.endo-format` is `LanguageId::None` |
 | `src/core/tui/GhostTextHelper.hpp` | contour-terminal/endo | `src/tui/GhostTextHelper.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/HeadlessSurface.cpp` | origin: core-cpp | - | - | the `ScreenSurface` of a size and a byte sink (U.3) |
+| `src/core/tui/HeadlessSurface.hpp` | origin: core-cpp | - | - | the `ScreenSurface` of a size and a byte sink (U.3) |
+| `src/core/tui/HeadlessSurface_test.cpp` | origin: core-cpp | - | - | - |
 | `src/core/tui/HoverState.cpp` | contour-terminal/endo | `src/tui/HoverState.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/HoverState.hpp` | contour-terminal/endo | `src/tui/HoverState.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/HyperlinkEmitter.cpp` | contour-terminal/endo | `src/tui/HyperlinkEmitter.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
@@ -648,7 +656,7 @@ others in notes.
 | `src/core/tui/QuestionComponent_test.cpp` | contour-terminal/endo | `src/tui/QuestionComponent_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Rect.hpp` | contour-terminal/endo | `src/tui/Rect.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Renderer_test.cpp` | contour-terminal/endo | `src/tui/Renderer_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
-| `src/core/tui/Screen.cpp` | contour-terminal/endo | `src/tui/Screen.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `flushInline`'s C-style loop is a `while`, with the `++row` written out on each of its three exit paths |
+| `src/core/tui/Screen.cpp` | contour-terminal/endo | `src/tui/Screen.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `flushInline`'s C-style loop is a `while`, with the `++row` written out on each of its three exit paths; the cell loops of `flushArea`/`flushInline` and the row-mark emitter moved to `FrameDiff.cpp`, which both now call (core-cpp, U.3) |
 | `src/core/tui/Screen.hpp` | contour-terminal/endo | `src/tui/Screen.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Screen_test.cpp` | contour-terminal/endo | `src/tui/Screen_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/ScreenSurface.hpp` | origin: core-cpp | - | - | what `Screen` draws on, split off `Terminal` for `core::tui_core` (docs/design/tui-headless.md) |

@@ -116,6 +116,23 @@ cursor query with `QueryUnanswered` so the inline viewport falls back exactly as
 silent terminal -- and the pure `diffFrames(previous, next, options)` that `Screen`'s three flush
 paths call.
 
+**As built (U.3).** The plan's "`Screen` constructible from a size and a byte sink" is
+`HeadlessSurface(Size, ByteSink)` handed to the one `Screen` constructor, not a second constructor:
+an owning one would make `Screen` hold a surface it sometimes owns and sometimes borrows, for a saving
+of one line at the call site. Its output is a `ByteSinkOutput`, which overrides every member that
+would otherwise reach the process's standard output, so the same surface behaves identically
+natively and in a guest. The diff is two functions over one body: `writeFrameDiff(out, previous,
+next, options)` writes through a `TerminalOutput` -- which `Screen` calls, so `MockTerminalOutput`
+still sees each move and write and every existing `Screen` case keeps its meaning -- and
+`diffFrames()` runs it into a `ByteSinkOutput` over a string and returns the bytes. What the three
+flush paths differed in became `DiffOptions`: `DiffAddressing::Absolute` (fullscreen and fixed,
+cursor-addressed, over an area) or `Relative` (inline, row by row from column 0), and, each off by
+default, hyperlinks, Sixel images, row marks and reflow inhibition. Hiding, placing and showing the
+cursor stay `Screen`'s, because only the frame driver knows where the cursor should end, so
+identical frames diff to nothing. Absolute addressing gained images and marks, which `Screen`'s
+fullscreen path never wrote and still does not ask for: an image there skips the cells it covers,
+and a cell an image no longer covers is repainted.
+
 ### The output needs no operating system, and no RTTI (U.2)
 
 **As built.** The five members of `TerminalOutput` that had bodies only under `posix/` and `windows/`
