@@ -39,6 +39,25 @@ InlineCursorMovement calculateInlineCursorMovement(int previousContentHeight,
     return result;
 }
 
+namespace
+{
+
+    /// @brief The number of rows from the top of @p frame down to its last row holding anything
+    /// but blanks: how much of an inline frame there is to show.
+    [[nodiscard]] int contentHeightOf(Buffer const& frame) noexcept
+    {
+        auto const blank = [](Cell const* cell) {
+            return cell == nullptr || cell->grapheme.empty() || cell->grapheme == " ";
+        };
+        for (auto const row: std::views::iota(0, frame.rows()) | std::views::reverse)
+            for (auto const col: std::views::iota(0, frame.cols()))
+                if (!blank(frame.cellAt({ .x = col, .y = row })))
+                    return row + 1;
+        return 0;
+    }
+
+} // namespace
+
 Screen::Screen(ScreenSurface& surface, ScreenConfig config):
     _surface(surface), _config(config), _theme(currentTheme()), _root(std::make_unique<RootComponent>())
 {
@@ -130,25 +149,7 @@ void Screen::draw()
     if (_config.viewport == Viewport::Inline)
     {
         _previousMainContentHeight = _mainContentHeight;
-        _mainContentHeight = 0;
-        for (auto const row: std::views::iota(0, _current.rows()) | std::views::reverse)
-        {
-            bool hasContent = false;
-            for (auto const col: std::views::iota(0, _current.cols()))
-            {
-                Cell const& cell = _current.at(row, col);
-                if (!cell.grapheme.empty() && cell.grapheme != " ")
-                {
-                    hasContent = true;
-                    break;
-                }
-            }
-            if (hasContent)
-            {
-                _mainContentHeight = row + 1;
-                break;
-            }
-        }
+        _mainContentHeight = contentHeightOf(_current);
     }
 
     renderOverlays();
@@ -607,26 +608,7 @@ void Screen::flushInline()
 {
     auto& out = _surface.output();
 
-    // Calculate content height (find last non-empty row)
-    int contentHeight = 0;
-    for (auto const row: std::views::iota(0, _current.rows()) | std::views::reverse)
-    {
-        bool hasContent = false;
-        for (auto const col: std::views::iota(0, _current.cols()))
-        {
-            Cell const& cell = _current.at(row, col);
-            if (!cell.grapheme.empty() && cell.grapheme != " ")
-            {
-                hasContent = true;
-                break;
-            }
-        }
-        if (hasContent)
-        {
-            contentHeight = row + 1;
-            break;
-        }
-    }
+    int const contentHeight = contentHeightOf(_current);
 
     // Move cursor to start of content region (row 0)
     // The cursor is currently at _previousCursorRow from the last render

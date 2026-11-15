@@ -152,6 +152,25 @@ now answers it: `virtual OutputKind kind() const` (`Device`, the default, or `Si
 type test also changes one edge: an output that is not a mock but reports `Simulation` is treated
 as one, and the tests pin both directions.
 
+### No exceptions in the headless half (U.4)
+
+**As built.** `Buffer::at()` threw and `Buffer::tryAt()` returned null for the same question, so
+both became one `Buffer::cellAt(Point)`, null outside. The no-op tests this needed found a real
+abort -- `fill()` and `clearRect()` above or left of the buffer, and a fixed viewport past the
+screen's edge, built reversed ranges that a hardened standard library aborts on -- and all three now
+clip through `Rect::intersect()`.
+
+The check that stays on is a configuration, not a grep: CI's `consumer-smoke (tui-core)` builds
+`tests/consumer-tui-core` a second time with `-fno-exceptions -fno-rtti` over the whole build, so a
+`throw`, a `try`, a `dynamic_cast` or a `typeid` anywhere in the closure -- core-cpp's or
+libunicode's -- fails natively before any wasm toolchain is involved. libunicode's table generator
+is a host tool and throws, so that build takes the libunicode tree the step before it generated the
+tables into, exactly as a wasm build will. Its first run found two in
+`core::base`: `detail::fail()`'s `try` block, redundant under its `noexcept`, and
+`pathFromTrustedUtf8()`'s `throw`. The latter goes through `core::throwOrFail()`, which is the
+`throw` with exceptions on and a `Require()`-style failure with them off; the decision lives in
+that one function rather than in a macro at each site.
+
 ### Width tables: libunicode builds for `wasm32-wasip1` from pre-generated tables (U.7 option a)
 
 Measured, not assumed. libunicode v0.9.3 already treats a source tree that carries its nine

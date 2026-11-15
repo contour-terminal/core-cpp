@@ -22,9 +22,24 @@ workflow refuses one without a section here.
   `<core/tui/Terminal.hpp>` where a `Screen` is made from a forward-declared `Terminal`. Consumers grepped: endo
   (constructs `Screen` from a `Terminal` member whose header it includes; compiles unchanged), fastcached (no
   `core::tui` use), Lightweight's `dbtool` (`core::tui_output` only), contour (does not vendor `tui`).
+- **`core::tui::Buffer::at()` and `Buffer::tryAt()` are gone; `Buffer::cellAt(Point)` replaces both.** `at()` threw
+  `std::out_of_range` outside the buffer, which the headless TUI cannot do with exceptions off; `cellAt()` returns
+  the cell, or nullptr outside, with `Point { .x = column, .y = row }` in place of the `(row, col)` pair. Migrate
+  `buffer.at(row, col).grapheme` to `buffer.cellAt({ .x = col, .y = row })->grapheme` where the cell is known to be
+  inside, and test for nullptr where it is not. Consumers grepped: endo (`src/shell/ui/PromptComponent_test.cpp:589`
+  and `:590` call `at()`, and must change), fastcached (no `core::tui` use), Lightweight's `dbtool`
+  (`core::tui_output` only), contour (does not vendor `tui`).
 
 ### Added
 
+- **`core::throwOrFail(exception)`** (`<core/Assert.hpp>`): `throw exception;` where exceptions are compiled in, and
+  a `Require()`-style failure where they are not, for the throws a `-fno-exceptions` build compiles.
+  `pathFromTrustedUtf8()` throws through it, unchanged where exceptions are on. Every consumer builds with exceptions
+  on, so none sees a difference; contour vendors both headers and picks this up on its next re-vendor.
+- **CI builds `core::tui_core` with `-fno-exceptions -fno-rtti`**: `consumer-smoke (tui-core)` builds
+  `tests/consumer-tui-core` a second time in the guest's language mode, `core::base`, `core::tui_output` and
+  libunicode included, and runs it. libunicode's table generator, a host tool that throws, is not built in that mode:
+  the second build takes the libunicode tree the first one generated its tables into.
 - **`core::tui_core`, the headless half of the TUI** (option `CORE_CPP_WITH_TUI_CORE`, defaulting to
   `CORE_CPP_WITH_TUI`, which forces it on): the parser, cells, buffers, canvas, components, widgets, the Markdown
   renderer and `Screen`, linking `core::base`, `core::tui_output` and libunicode -- nothing of `core::platform`,
@@ -62,6 +77,18 @@ workflow refuses one without a section here.
   `detectCapabilities`, `writeToDestination`, `isTerminal`, `updateDimensions`) with the C++ standard library alone,
   so the base output needs no operating system. `core::tui_output`'s row says `PLATFORMS any`; the TUI options stay
   forced off under Emscripten until a WebAssembly target has a row of its own. Native platforms are unchanged.
+
+### Fixed
+
+- **`core::tui::Buffer::fill()` and `clearRect()` with an area wholly outside the buffer write nothing.** Above or
+  left of it, the clamped range ran backwards, which a hardened standard library (`_GLIBCXX_ASSERTIONS`) aborts on;
+  a fixed viewport past the screen's edge did the same in `Screen`'s flush. Both now clip through
+  `Rect::intersect()`.
+- **`core::detail::fail()` no longer needs exceptions to compile.** Its try block caught a throwing fail handler
+  only to abort, which its `noexcept` already does through `std::terminate()`; `<core/Assert.hpp>` now builds with
+  `-fno-exceptions`. A fail handler that throws still ends the process, now through `std::terminate()` (so an
+  installed terminate handler runs first) rather than a direct `std::abort()`. No consumer installs a fail handler
+  (contour, endo, fastcached, Lightweight grepped).
 
 ## [0.20.0] - 2026-11-14
 

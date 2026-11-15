@@ -1723,7 +1723,7 @@ TEST_CASE("Screen.componentAt_agreesWithPaintingWhenZIndicesTie")
     screen.draw();
 
     // Whichever sibling is painted last covers the cell; that one must be the hit-test answer.
-    auto const painted = screen.renderedBuffer().at(0, 0).grapheme;
+    auto const painted = screen.renderedBuffer().cellAt({ .x = 0, .y = 0 })->grapheme;
     auto* const hit = screen.componentAt(0, 0);
     REQUIRE(hit != nullptr);
     auto const* const hitSibling = static_cast<PaintedRecorder const*>(hit);
@@ -1738,7 +1738,7 @@ TEST_CASE("Screen.componentAt_agreesWithPaintingWhenZIndicesTie")
     screen.root().addChild(first, LayoutParams { .area = { .x = 10, .y = 0, .width = 5, .height = 2 } });
     screen.root().addChild(second, LayoutParams { .area = { .x = 10, .y = 0, .width = 5, .height = 2 } });
     screen.draw();
-    CHECK(screen.renderedBuffer().at(0, 10).grapheme == "2");
+    CHECK(screen.renderedBuffer().cellAt({ .x = 10, .y = 0 })->grapheme == "2");
     CHECK(screen.componentAt(0, 10) == &second);
 }
 
@@ -1757,7 +1757,7 @@ TEST_CASE("Screen.componentAt_agreesWithPaintingForAnOverlaysChildren")
     screen.showOverlay(overlay, Point { .x = 5, .y = 2 });
     screen.draw();
 
-    CHECK(screen.renderedBuffer().at(2, 5).grapheme == "H");
+    CHECK(screen.renderedBuffer().cellAt({ .x = 5, .y = 2 })->grapheme == "H");
     CHECK(screen.componentAt(2, 5) == &high);
 }
 

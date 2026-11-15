@@ -41,7 +41,7 @@ auto renderRow(QuestionComponent& comp, int row, int width = 60, int height = 15
     auto result = std::string {};
     for (auto const col: std::views::iota(0, std::max(0, width)))
     {
-        auto const& cell = buffer.at(row, col);
+        auto const& cell = *buffer.cellAt({ .x = col, .y = row });
         if (!cell.grapheme.empty() && cell.width > 0)
             result += cell.grapheme;
     }
@@ -310,12 +310,12 @@ TEST_CASE("QuestionComponent.multiline_question_text", "[tui][question]")
     // Row 2: second question line (│  cmake --build...)
     auto row1Text = std::string {};
     for (auto const col: std::views::iota(0, 80))
-        row1Text += buffer.at(1, col).grapheme;
+        row1Text += buffer.cellAt({ .x = col, .y = 1 })->grapheme;
     CHECK(row1Text.contains("Allow shell_execute"));
 
     auto row2Text = std::string {};
     for (auto const col: std::views::iota(0, 80))
-        row2Text += buffer.at(2, col).grapheme;
+        row2Text += buffer.cellAt({ .x = col, .y = 2 })->grapheme;
     CHECK(row2Text.contains("cmake --build --preset clang-debug"));
 }
 
@@ -384,7 +384,7 @@ TEST_CASE("List.multi_select_render_checked_single_item", "[tui][list]")
     auto firstRow = std::string {};
     for (auto const col: std::views::iota(0, 20))
     {
-        auto const& cell = buffer.at(0, col);
+        auto const& cell = *buffer.cellAt({ .x = col, .y = 0 });
         if (!cell.grapheme.empty() && cell.width > 0)
             firstRow += cell.grapheme;
     }

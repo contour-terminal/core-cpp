@@ -77,12 +77,17 @@ half.
   `MockTerminalOutput`.
 - **The diff.** `diffFrames(previous, next, DiffOptions)` returns the bytes that turn one `Buffer`
   into the other; `writeFrameDiff(out, previous, next, options)` writes the same bytes into a
-  `TerminalOutput`, and is what every `Screen` flush path calls. Both are
+  `TerminalOutput`, and is what every `Screen` flush path and `Buffer::writeTo()` call. Both are
   pure in their frames. `DiffOptions` holds what the flush paths differed in: `DiffAddressing`
   (`Absolute`, cursor-addressed, for fullscreen and fixed; `Relative`, row by row from column 0,
   for inline), `DiffRepaint` (`Changed` cells or `All`), the `area` covered, and, each off by
   default, `DiffHyperlinks`, `DiffImages`, `DiffRowMarks` and `DiffReflow`. The cursor is not the
   diff's: hiding, placing and showing it stay `Screen`'s, so identical frames diff to nothing.
+- **No exceptions, no RTTI.** A cell is reached through `Buffer::cellAt(Point)`, which is null
+  outside the buffer, so an out-of-range read or write is a null check; nothing in the headless
+  half throws or asks for a type at run time. The one throw `core::base` keeps on this path,
+  `pathFromTrustedUtf8()`'s, goes through `core::throwOrFail()`, which fails as `Require()` does
+  when exceptions are compiled out.
 
 ```cpp
 auto bytes = std::string {};
@@ -96,8 +101,10 @@ screen.draw(); // bytes now holds the frame; the next draw() appends only what c
 Two checks keep the half headless. `core-cpp.tui-core-symbols` reads tui_core's includes and its
 archive's symbols for anything of the terminal half, `platform`, `async` or `net`.
 `tests/consumer-tui-core` is a CPM consumer that renders a component through `HeadlessSurface` with
-the terminal half off; CI's `consumer-smoke (tui-core)` builds and runs it. Why it is shaped this way, and what remains before a
-WebAssembly guest builds it:
+the terminal half off; CI's `consumer-smoke (tui-core)` builds and runs it twice, the second time
+with `-fno-exceptions -fno-rtti` across the whole build (`core::base`, `core::tui_output`,
+`core::tui_core` and libunicode), which is the language mode a WebAssembly guest compiles in. Why it
+is shaped this way, and what remains before a WebAssembly guest builds it:
 [A headless TUI](../design/tui-headless.md).
 
 ## `core::tui`
@@ -147,7 +154,8 @@ runtime. Native only: there is no terminal under Emscripten. The list below cove
   mid-drag.
 - **Drawing.** `Buffer` is a grid of `Cell`s, `Canvas` a clipped view of one, and `Screen` the
   renderer that diffs a frame against the last and writes only what changed, inline, full-screen or
-  in a fixed area. `Theme`, `StyledText`, `Text`, `Box`, `Rect` and `HyperlinkEmitter` sit under it.
+  in a fixed area. A cell is reached through `Buffer::cellAt(Point)`, null outside the buffer.
+  `Theme`, `StyledText`, `Text`, `Box`, `Rect` and `HyperlinkEmitter` sit under it.
 - **Components.** `Component` and the widgets over it: `InputField` (multi-line editing, undo, kill
   ring, ghost text, selection), `List`, `TreeTableView`, `Dialog`, `StatusBar`, `LogPanel`,
   `Spinner`, `ProgressBar`, `Tooltip`, `QuestionComponent`, and the popups `CompletionPopup`,

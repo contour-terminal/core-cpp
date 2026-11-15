@@ -2,7 +2,7 @@
 #include <core/tui/Buffer.hpp>
 
 #include <core/FNV.hpp>
-#include <core/tui/HyperlinkEmitter.hpp>
+#include <core/tui/FrameDiff.hpp>
 #include <core/tui/TerminalOutput.hpp>
 #include <core/tui/Unicode.hpp>
 
@@ -12,7 +12,6 @@
 #include <cstdint>
 #include <format>
 #include <ranges>
-#include <stdexcept>
 #include <utility>
 
 namespace core::tui
@@ -76,32 +75,18 @@ void Buffer::resize(int rows, int cols)
     _cursor.y = std::max(_cursor.y, 0);
 }
 
-Cell& Buffer::at(int row, int col)
+Cell* Buffer::cellAt(Point position) noexcept
 {
-    if (!inBounds(row, col))
-        throw std::out_of_range("Buffer::at: coordinates out of bounds");
-    return _cells[index(row, col)];
-}
-
-Cell const& Buffer::at(int row, int col) const
-{
-    if (!inBounds(row, col))
-        throw std::out_of_range("Buffer::at: coordinates out of bounds");
-    return _cells[index(row, col)];
-}
-
-Cell* Buffer::tryAt(int row, int col) noexcept
-{
-    if (!inBounds(row, col))
+    if (!inBounds(position.y, position.x))
         return nullptr;
-    return &_cells[index(row, col)];
+    return &_cells[index(position.y, position.x)];
 }
 
-Cell const* Buffer::tryAt(int row, int col) const noexcept
+Cell const* Buffer::cellAt(Point position) const noexcept
 {
-    if (!inBounds(row, col))
+    if (!inBounds(position.y, position.x))
         return nullptr;
-    return &_cells[index(row, col)];
+    return &_cells[index(position.y, position.x)];
 }
 
 void Buffer::clear(Style const& style)
@@ -115,19 +100,12 @@ void Buffer::clear(Style const& style)
 
 void Buffer::clearRect(Rect area, Style const& style)
 {
-    // Clamp area to buffer bounds
-    int const startRow = std::max(0, area.y);
-    int const startCol = std::max(0, area.x);
-    int const endRow = std::min(_rows, area.bottom());
-    int const endCol = std::min(_cols, area.right());
-
-    for (auto const row: std::views::iota(startRow, endRow))
-    {
-        for (auto const col: std::views::iota(startCol, endCol))
-        {
+    // Clipped to the buffer: an area partly outside is cleared where it is inside, and one wholly
+    // outside clears nothing.
+    auto const clipped = area.intersect(Rect { .x = 0, .y = 0, .width = _cols, .height = _rows });
+    for (auto const row: std::views::iota(clipped.y, clipped.bottom()))
+        for (auto const col: std::views::iota(clipped.x, clipped.right()))
             _cells[index(row, col)].reset(style);
-        }
-    }
 }
 
 int Buffer::putString(int row, int col, std::string_view text, Style const& style, int maxWidth)
@@ -200,17 +178,13 @@ int Buffer::putString(int row, int col, std::string_view text, Style const& styl
 
 void Buffer::fill(Rect area, char ch, Style const& style)
 {
-    // Clamp area to buffer bounds
-    int const startRow = std::max(0, area.y);
-    int const startCol = std::max(0, area.x);
-    int const endRow = std::min(_rows, area.bottom());
-    int const endCol = std::min(_cols, area.right());
-
+    // Clipped to the buffer, as clearRect() is.
+    auto const clipped = area.intersect(Rect { .x = 0, .y = 0, .width = _cols, .height = _rows });
     std::string const grapheme(1, ch);
 
-    for (auto const row: std::views::iota(startRow, endRow))
+    for (auto const row: std::views::iota(clipped.y, clipped.bottom()))
     {
-        for (auto const col: std::views::iota(startCol, endCol))
+        for (auto const col: std::views::iota(clipped.x, clipped.right()))
         {
             Cell& cell = _cells[index(row, col)];
             cell.grapheme = grapheme;
@@ -296,33 +270,16 @@ void Buffer::clearMarks() noexcept
 
 void Buffer::writeTo(TerminalOutput& out) const
 {
-    // Honour hyperlink regions here too, not just in Screen's flush loops: the payload lives at
-    // this layer, so a component that registers a link and renders through writeTo() would
-    // otherwise lose it silently, with nothing to hint why.
-    auto const linkIndex = HyperlinkIndex { *this };
-    auto linkEmitter = HyperlinkEmitter { out, linkIndex };
-
-    for (auto const row: std::views::iota(0, _rows))
-    {
-        out.carriageReturn();
-        auto col = 0;
-        while (col < _cols)
-        {
-            auto const& cell = at(row, col);
-            if (cell.isContinuation())
-            {
-                ++col;
-                continue;
-            }
-            linkEmitter.beforeWrite(row, col);
-            out.writeText(cell.grapheme, cell.style);
-            col += std::max(1, static_cast<int>(cell.width));
-        }
-        linkEmitter.close();
-        out.clearToEndOfLine();
-        if (row < _rows - 1)
-            out.linefeed();
-    }
+    // A full repaint, row by row from where the cursor is: the inline flush's diff with nothing to
+    // diff against. Hyperlink regions are honoured here too, not just in Screen's flushes: the
+    // payload lives at this layer, so a component that registers a link and renders through
+    // writeTo() would otherwise lose it silently, with nothing to hint why.
+    writeFrameDiff(out,
+                   *this,
+                   *this,
+                   DiffOptions { .addressing = DiffAddressing::Relative,
+                                 .repaint = DiffRepaint::All,
+                                 .hyperlinks = DiffHyperlinks::Emit });
 
     // Position terminal cursor at the buffer's logical cursor location.
     if (_cursorVisible)

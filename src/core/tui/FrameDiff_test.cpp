@@ -154,6 +154,18 @@ TEST_CASE("diffFrames: the area bounds what is written")
           == "\033[2;4Hb\033[m");
 }
 
+TEST_CASE("diffFrames: an area wholly outside the frame writes nothing")
+{
+    auto const previous = frame(2, 4);
+    auto const next = frame(2, 4, "abcd");
+
+    // Below, to the right, and above-left: each clips to nothing rather than to a reversed range.
+    for (auto const area: { Rect { .x = 0, .y = 5, .width = 4, .height = 2 },
+                            Rect { .x = 9, .y = 0, .width = 2, .height = 2 },
+                            Rect { .x = -5, .y = -5, .width = 3, .height = 3 } })
+        CHECK(diffFrames(previous, next, DiffOptions { .repaint = DiffRepaint::All, .area = area }).empty());
+}
+
 TEST_CASE("diffFrames: a cell beyond the previous frame counts as changed")
 {
     auto const previous = frame(1, 1, "a");

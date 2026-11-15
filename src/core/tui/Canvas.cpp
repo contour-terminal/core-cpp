@@ -25,7 +25,7 @@ void Canvas::put(int row, int col, std::string_view grapheme, Style const& style
     int const bufRow = toBufferRow(row);
     int const bufCol = toBufferCol(col);
 
-    if (Cell* cell = _buffer.tryAt(bufRow, bufCol))
+    if (Cell* cell = _buffer.cellAt({ .x = bufCol, .y = bufRow }))
     {
         cell->grapheme = std::string(grapheme);
         cell->style = style;

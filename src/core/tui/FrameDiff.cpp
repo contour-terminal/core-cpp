@@ -36,7 +36,7 @@ namespace
             _sorted.reserve(buffer.marks().size());
             for (auto const& mark: buffer.marks())
             {
-                auto const* cell = buffer.tryAt(mark.row, mark.column);
+                auto const* cell = buffer.cellAt({ .x = mark.column, .y = mark.row });
                 if (cell != nullptr && !cell->isContinuation())
                     _sorted.push_back(&mark);
             }
@@ -150,7 +150,7 @@ namespace
         /// @brief Whether @p cell at (@p row, @p col) differs from what the previous frame showed there.
         [[nodiscard]] bool changed(Cell const& cell, int row, int col) const noexcept
         {
-            auto const* previous = _previous.tryAt(row, col);
+            auto const* previous = _previous.cellAt({ .x = col, .y = row });
             return previous == nullptr || cell != *previous || _links.retargeted(row, col);
         }
 
@@ -216,15 +216,16 @@ namespace
                         staleImages.push_back(&image);
         }
 
-        auto const lastRow = std::min(area.bottom(), next.rows());
-        auto const lastCol = std::min(area.right(), next.cols());
-        for (auto const row: std::views::iota(std::max(0, area.y), std::max(0, lastRow)))
+        // Clipped to the frame: an area wholly outside it writes nothing.
+        auto const clipped =
+            area.intersect(Rect { .x = 0, .y = 0, .width = next.cols(), .height = next.rows() });
+        for (auto const row: std::views::iota(clipped.y, clipped.bottom()))
         {
             auto const rowMarksChanged = context.beginRow(row);
-            auto col = std::max(0, area.x);
-            while (col < lastCol)
+            auto col = clipped.x;
+            while (col < clipped.right())
             {
-                auto const& cell = *next.tryAt(row, col);
+                auto const& cell = *next.cellAt({ .x = col, .y = row });
                 auto const advance = std::max(1, static_cast<int>(cell.width));
 
                 // A continuation cell is written with the wide character before it; an image's cells
@@ -344,7 +345,7 @@ namespace
             auto col = 0;
             while (col < next.cols())
             {
-                auto const& cell = *next.tryAt(row, col);
+                auto const& cell = *next.cellAt({ .x = col, .y = row });
 
                 if (cell.isContinuation())
                 {

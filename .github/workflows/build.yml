@@ -1105,7 +1105,9 @@ jobs:
   #   tui-core  a program with no terminal (a WebAssembly guest's native twin) links core::tui_core,
   #             with CORE_CPP_WITH_TUI off and CORE_CPP_WITH_TUI_CORE on. The project asserts that
   #             core::tui does not exist, that the link closure holds nothing of platform, async or
-  #             net, and renders a component into a string through Screen.
+  #             net, and renders a component into a string through Screen. It is built a second
+  #             time with -fno-exceptions -fno-rtti, everything in it included -- core::base,
+  #             core::tui_output, core::tui_core and libunicode -- as a WebAssembly guest builds them.
   consumer-smoke:
     name: consumer-smoke (${{ matrix.leg }})
     runs-on: ubuntu-24.04
@@ -1167,6 +1169,29 @@ jobs:
             -DCORE_CPP_SOURCE_DIR="$GITHUB_WORKSPACE"
           cmake --build "$RUNNER_TEMP/consumer-tui-core"
           ctest --test-dir "$RUNNER_TEMP/consumer-tui-core" --output-on-failure
+
+      # The guest's language mode, natively: no exceptions and no RTTI anywhere in the build, so a
+      # throw, a try block, a dynamic_cast or a typeid reaching core::tui_core's closure fails here
+      # rather than in the first wasm build. The same consumer, so the same assertions run.
+      # libunicode's table generator is a host tool that throws, so it must not be built in this
+      # mode: the step above generated the tables into its libunicode source tree, and this build
+      # takes that tree, which libunicode then uses without building the generator -- the recipe a
+      # wasm build follows (docs/design/tui-headless.md, "Where the tables come from").
+      - name: core::tui_core builds and renders with -fno-exceptions -fno-rtti
+        if: matrix.leg == 'tui-core'
+        run: |
+          libunicode_source=$(sed -n 's/^libunicode_SOURCE_DIR:STATIC=//p' "$RUNNER_TEMP/consumer-tui-core/CMakeCache.txt")
+          test -f "$libunicode_source/src/libunicode/ucd_enums.h" || {
+            echo "::error::no generated libunicode tree from the previous step (got '$libunicode_source')"
+            exit 1
+          }
+          cmake -S tests/consumer-tui-core -B "$RUNNER_TEMP/consumer-tui-core-noexcept" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER="clang++-$LLVM_VERSION" \
+            -DCMAKE_CXX_FLAGS="-fno-exceptions -fno-rtti" \
+            -DCPM_libunicode_SOURCE="$libunicode_source" \
+            -DCORE_CPP_SOURCE_DIR="$GITHUB_WORKSPACE"
+          cmake --build "$RUNNER_TEMP/consumer-tui-core-noexcept"
+          ctest --test-dir "$RUNNER_TEMP/consumer-tui-core-noexcept" --output-on-failure --no-tests=error
 
       # The headless half's own suite and the archive's symbol check, in a tree where the terminal
       # half does not exist: what passes here passes without core::tui to lean on.

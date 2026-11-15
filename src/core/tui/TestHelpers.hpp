@@ -39,7 +39,7 @@ inline std::string canvasToString(Buffer const& buffer, Rect area = {})
 
         for (auto const col: std::views::iota(area.x, std::max(area.x, area.right())))
         {
-            if (auto const* cell = buffer.tryAt(row, col))
+            if (auto const* cell = buffer.cellAt({ .x = col, .y = row }))
             {
                 if (cell->isContinuation())
                     continue; // Skip continuation cells (wide chars)
@@ -81,7 +81,7 @@ inline std::string renderPopup(CompletionPopup& popup, int width, int height)
 /// @return The grapheme string, or empty if out of bounds or continuation.
 inline std::string graphemeAt(Buffer const& buffer, int row, int col)
 {
-    if (auto const* cell = buffer.tryAt(row, col))
+    if (auto const* cell = buffer.cellAt({ .x = col, .y = row }))
     {
         if (cell->isContinuation())
             return "";
@@ -97,7 +97,7 @@ inline std::string graphemeAt(Buffer const& buffer, int row, int col)
 /// @return The style, or default style if out of bounds.
 inline Style styleAt(Buffer const& buffer, int row, int col)
 {
-    if (auto const* cell = buffer.tryAt(row, col))
+    if (auto const* cell = buffer.cellAt({ .x = col, .y = row }))
         return cell->style;
     return {};
 }
