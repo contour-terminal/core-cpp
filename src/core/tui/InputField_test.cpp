@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/tui/Buffer.hpp>
 #include <core/tui/Canvas.hpp>
+#include <core/tui/CellTestSupport.hpp>
 #include <core/tui/InputField.hpp>
 #include <core/tui/TextDecorator.hpp>
 #include <core/tui/Theme.hpp>
@@ -9,6 +10,8 @@
 
 #include <algorithm>
 #include <ranges>
+
+using core::tui::test::requireCell;
 
 using namespace core::tui;
 
@@ -1330,12 +1333,12 @@ TEST_CASE("InputField.multiline_render_basic")
     field.render(canvas);
 
     // Row 0 should contain "aaa", row 1 should contain "bbb"
-    CHECK(buf.cellAt({ .x = 0, .y = 0 })->grapheme == "a");
-    CHECK(buf.cellAt({ .x = 1, .y = 0 })->grapheme == "a");
-    CHECK(buf.cellAt({ .x = 2, .y = 0 })->grapheme == "a");
-    CHECK(buf.cellAt({ .x = 0, .y = 1 })->grapheme == "b");
-    CHECK(buf.cellAt({ .x = 1, .y = 1 })->grapheme == "b");
-    CHECK(buf.cellAt({ .x = 2, .y = 1 })->grapheme == "b");
+    CHECK(requireCell(buf, { .x = 0, .y = 0 }).grapheme == "a");
+    CHECK(requireCell(buf, { .x = 1, .y = 0 }).grapheme == "a");
+    CHECK(requireCell(buf, { .x = 2, .y = 0 }).grapheme == "a");
+    CHECK(requireCell(buf, { .x = 0, .y = 1 }).grapheme == "b");
+    CHECK(requireCell(buf, { .x = 1, .y = 1 }).grapheme == "b");
+    CHECK(requireCell(buf, { .x = 2, .y = 1 }).grapheme == "b");
 }
 
 TEST_CASE("InputField.multiline_render_with_prompt")
@@ -1353,13 +1356,13 @@ TEST_CASE("InputField.multiline_render_with_prompt")
     field.render(canvas);
 
     // Row 0: "> " prompt then "aaa"
-    CHECK(buf.cellAt({ .x = 0, .y = 0 })->grapheme == ">");
-    CHECK(buf.cellAt({ .x = 1, .y = 0 })->grapheme == " ");
-    CHECK(buf.cellAt({ .x = 2, .y = 0 })->grapheme == "a");
+    CHECK(requireCell(buf, { .x = 0, .y = 0 }).grapheme == ">");
+    CHECK(requireCell(buf, { .x = 1, .y = 0 }).grapheme == " ");
+    CHECK(requireCell(buf, { .x = 2, .y = 0 }).grapheme == "a");
     // Row 1: "  " continuation then "bbb"
-    CHECK(buf.cellAt({ .x = 0, .y = 1 })->grapheme == " ");
-    CHECK(buf.cellAt({ .x = 1, .y = 1 })->grapheme == " ");
-    CHECK(buf.cellAt({ .x = 2, .y = 1 })->grapheme == "b");
+    CHECK(requireCell(buf, { .x = 0, .y = 1 }).grapheme == " ");
+    CHECK(requireCell(buf, { .x = 1, .y = 1 }).grapheme == " ");
+    CHECK(requireCell(buf, { .x = 2, .y = 1 }).grapheme == "b");
 }
 
 TEST_CASE("InputField.multiline_render_ghost_text_on_last_line")
@@ -1376,9 +1379,9 @@ TEST_CASE("InputField.multiline_render_ghost_text_on_last_line")
     field.render(canvas);
 
     // Ghost text appears after "bbb" on row 1 (last line)
-    CHECK(buf.cellAt({ .x = 3, .y = 1 })->grapheme == "c");
-    CHECK(buf.cellAt({ .x = 4, .y = 1 })->grapheme == "c");
-    CHECK(buf.cellAt({ .x = 5, .y = 1 })->grapheme == "c");
+    CHECK(requireCell(buf, { .x = 3, .y = 1 }).grapheme == "c");
+    CHECK(requireCell(buf, { .x = 4, .y = 1 }).grapheme == "c");
+    CHECK(requireCell(buf, { .x = 5, .y = 1 }).grapheme == "c");
 }
 
 TEST_CASE("InputField.multiline_continuation_prompt")
@@ -1409,16 +1412,16 @@ TEST_CASE("InputField.multiline_auto_continuation_alignment")
     field.render(canvas);
 
     // Row 0: "> aaa" — text starts at col 2
-    CHECK(buf.cellAt({ .x = 0, .y = 0 })->grapheme == ">");
-    CHECK(buf.cellAt({ .x = 2, .y = 0 })->grapheme == "a");
+    CHECK(requireCell(buf, { .x = 0, .y = 0 }).grapheme == ">");
+    CHECK(requireCell(buf, { .x = 2, .y = 0 }).grapheme == "a");
     // Row 1: "  bbb" — auto-continuation: 2 spaces, text at col 2
-    CHECK(buf.cellAt({ .x = 0, .y = 1 })->grapheme == " ");
-    CHECK(buf.cellAt({ .x = 1, .y = 1 })->grapheme == " ");
-    CHECK(buf.cellAt({ .x = 2, .y = 1 })->grapheme == "b");
+    CHECK(requireCell(buf, { .x = 0, .y = 1 }).grapheme == " ");
+    CHECK(requireCell(buf, { .x = 1, .y = 1 }).grapheme == " ");
+    CHECK(requireCell(buf, { .x = 2, .y = 1 }).grapheme == "b");
     // Row 2: "  ccc" — same alignment
-    CHECK(buf.cellAt({ .x = 0, .y = 2 })->grapheme == " ");
-    CHECK(buf.cellAt({ .x = 1, .y = 2 })->grapheme == " ");
-    CHECK(buf.cellAt({ .x = 2, .y = 2 })->grapheme == "c");
+    CHECK(requireCell(buf, { .x = 0, .y = 2 }).grapheme == " ");
+    CHECK(requireCell(buf, { .x = 1, .y = 2 }).grapheme == " ");
+    CHECK(requireCell(buf, { .x = 2, .y = 2 }).grapheme == "c");
 }
 
 TEST_CASE("InputField.decorator_foreground_applied")
@@ -1456,8 +1459,8 @@ TEST_CASE("InputField.decorator_foreground_applied")
     CHECK(decorator.queriedIndices[2] == 2);
 
     // First grapheme should have red foreground
-    CHECK(std::holds_alternative<RgbColor>(buf.cellAt({ .x = 0, .y = 0 })->style.fg));
-    auto const& fg = std::get<RgbColor>(buf.cellAt({ .x = 0, .y = 0 })->style.fg);
+    CHECK(std::holds_alternative<RgbColor>(requireCell(buf, { .x = 0, .y = 0 }).style.fg));
+    auto const& fg = std::get<RgbColor>(requireCell(buf, { .x = 0, .y = 0 }).style.fg);
     CHECK(fg.r == 255);
     CHECK(fg.g == 0);
     CHECK(fg.b == 0);
@@ -1492,8 +1495,8 @@ TEST_CASE("InputField.decorator_background_applied")
     CHECK(decorator.callCount > 0);
 
     // Text cells should have the decorator background
-    CHECK(std::holds_alternative<RgbColor>(buf.cellAt({ .x = 0, .y = 0 })->style.bg));
-    auto const& bg = std::get<RgbColor>(buf.cellAt({ .x = 0, .y = 0 })->style.bg);
+    CHECK(std::holds_alternative<RgbColor>(requireCell(buf, { .x = 0, .y = 0 }).style.bg));
+    auto const& bg = std::get<RgbColor>(requireCell(buf, { .x = 0, .y = 0 }).style.bg);
     CHECK(bg.r == 42);
 }
 
@@ -1593,9 +1596,9 @@ TEST_CASE("InputField.ghost_text_decorator_background_per_column")
 
     // Ghost text starts at column 2 (after "ab").
     // Each ghost character should have its own per-column background.
-    auto const& bgX = std::get<RgbColor>(buf.cellAt({ .x = 2, .y = 0 })->style.bg);
-    auto const& bgY = std::get<RgbColor>(buf.cellAt({ .x = 3, .y = 0 })->style.bg);
-    auto const& bgZ = std::get<RgbColor>(buf.cellAt({ .x = 4, .y = 0 })->style.bg);
+    auto const& bgX = std::get<RgbColor>(requireCell(buf, { .x = 2, .y = 0 }).style.bg);
+    auto const& bgY = std::get<RgbColor>(requireCell(buf, { .x = 3, .y = 0 }).style.bg);
+    auto const& bgZ = std::get<RgbColor>(requireCell(buf, { .x = 4, .y = 0 }).style.bg);
 
     // Verify each ghost char got a distinct background matching its column
     CHECK(bgX.r == 20); // col 2 * 10
@@ -1638,8 +1641,8 @@ TEST_CASE("InputField.multiline_ghost_text_decorator_background_per_column")
     field.render(canvas);
 
     // Ghost text on row 1 (last line), starting at column 3 (after "bbb").
-    auto const& bgX = std::get<RgbColor>(buf.cellAt({ .x = 3, .y = 1 })->style.bg);
-    auto const& bgY = std::get<RgbColor>(buf.cellAt({ .x = 4, .y = 1 })->style.bg);
+    auto const& bgX = std::get<RgbColor>(requireCell(buf, { .x = 3, .y = 1 }).style.bg);
+    auto const& bgY = std::get<RgbColor>(requireCell(buf, { .x = 4, .y = 1 }).style.bg);
 
     // Each ghost char should get its own column's gradient background
     CHECK(bgX.r == 30); // col 3 * 10
@@ -2397,7 +2400,7 @@ std::string rowText(Buffer const& buffer)
     std::string out;
     for (auto const c: std::views::iota(0, std::max(0, buffer.cols())))
     {
-        auto const& cell = *buffer.cellAt({ .x = c, .y = 0 });
+        auto const& cell = requireCell(buffer, { .x = c, .y = 0 });
         out += cell.grapheme.empty() ? std::string(" ") : cell.grapheme;
     }
     return out;

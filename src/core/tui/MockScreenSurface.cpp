@@ -29,7 +29,11 @@ auto MockScreenSurface::output() noexcept -> TerminalOutput&
 
 auto MockScreenSurface::queryCursorPosition() -> std::expected<std::pair<int, int>, QueryUnanswered>
 {
-    return *_output->simulatedCursorPosition(); // A mock always knows its cursor.
+    // MockTerminalOutput answers its cursor, but a subclass of it may override the answer away;
+    // that is a surface with no cursor to report, which the inline viewport already handles.
+    if (auto const position = _output->simulatedCursorPosition())
+        return *position;
+    return std::unexpected(QueryUnanswered::NotAsked);
 }
 
 } // namespace core::tui

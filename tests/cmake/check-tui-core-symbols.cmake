@@ -51,8 +51,18 @@ if(DEFINED FILES)
         endif()
         # Both spellings: <core/...> by the include root, and "..." relative to the file, which in
         # src/core/tui/ reaches the terminal half as "Terminal.hpp", "posix/PosixIO.hpp" or
-        # "../platform/Clock.hpp" without naming core/. A quoted path is read as one under core/tui/,
-        # normalized, unless it names core/ itself.
+        # "../platform/Clock.hpp" without naming core/. A quoted path is read relative to the
+        # directory of the file that includes it -- as the compiler reads it first -- so
+        # "../Terminal.hpp" from runtime/ is core/tui/Terminal.hpp, normalized, unless it names
+        # core/ itself.
+        cmake_path(GET file PARENT_PATH fileDirectory)
+        set(quotedBase "core/tui")
+        if(DEFINED SOURCE_DIR)
+            cmake_path(RELATIVE_PATH fileDirectory BASE_DIRECTORY "${SOURCE_DIR}" OUTPUT_VARIABLE relativeDirectory)
+            if(NOT relativeDirectory STREQUAL "." AND NOT relativeDirectory STREQUAL "")
+                set(quotedBase "core/tui/${relativeDirectory}")
+            endif()
+        endif()
         file(STRINGS "${file}" includes REGEX "^[ \t]*#[ \t]*include[ \t]*(<core/|\")")
         foreach(line IN LISTS includes)
             if(line MATCHES "<(core/[^>]+)>")
@@ -62,7 +72,7 @@ if(DEFINED FILES)
                 set(header "${CMAKE_MATCH_1}")
                 set(spelled "\"${header}\"")
                 if(NOT header MATCHES "^core/")
-                    cmake_path(SET header NORMALIZE "core/tui/${header}")
+                    cmake_path(SET header NORMALIZE "${quotedBase}/${header}")
                 endif()
             else()
                 continue()

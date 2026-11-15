@@ -77,7 +77,8 @@ endforeach()
 
 # The include scan, over planted source trees. Each case is a Screen.cpp (which the checker requires
 # to see, so a list that is not tui_core's cannot pass as clean) plus one file holding one include.
-# name | expected outcome | the include's argument in Other.cpp, as spelled | text the refusal must name
+# name | expected outcome | the include's argument, as spelled | text the refusal must name
+#      | the planted file's path under the tree (Other.cpp when empty)
 set(includeCases
     "includes-clean|pass|<core/tui/Buffer.hpp>|"
     "includes-leaf|pass|<core/tui/TerminalOutput.hpp>|"
@@ -99,7 +100,11 @@ set(includeCases
     "includes-quoted-posix|fail|\"posix/PosixIO.hpp\"|<core/tui/posix/PosixIO.hpp>"
     "includes-quoted-runtime|fail|\"runtime/TuiRuntime.hpp\"|<core/tui/runtime/TuiRuntime.hpp>"
     "includes-quoted-parent|fail|\"../platform/Clock.hpp\"|<core/platform/Clock.hpp>"
-    "includes-quoted-rooted|fail|\"core/net/EventLoop.hpp\"|<core/net/EventLoop.hpp>")
+    "includes-quoted-rooted|fail|\"core/net/EventLoop.hpp\"|<core/net/EventLoop.hpp>"
+    "includes-quoted-subdirectory-parent|fail|\"../Terminal.hpp\"|<core/tui/Terminal.hpp>|runtime/Other.hpp"
+    "includes-quoted-subdirectory-sibling|fail|\"TuiRuntime.hpp\"|<core/tui/runtime/TuiRuntime.hpp>|runtime/Other.hpp"
+    "includes-quoted-subdirectory-contract|pass|\"ModalComponent.hpp\"||runtime/Other.hpp"
+    "includes-quoted-subdirectory-clean|pass|\"../Buffer.hpp\"||completer/Other.cpp")
 foreach(case IN LISTS includeCases)
     string(REPLACE "|" ";" fields "${case}")
     list(GET fields 0 name)
@@ -110,11 +115,15 @@ foreach(case IN LISTS includeCases)
     if(count GREATER 3)
         list(GET fields 3 needle)
     endif()
+    set(planted "Other.cpp")
+    if(count GREATER 4)
+        list(GET fields 4 planted)
+    endif()
     set(dir "${WORK_DIR}/${name}")
     file(WRITE "${dir}/Screen.cpp" "#include <core/tui/Screen.hpp>\n")
-    file(WRITE "${dir}/Other.cpp" "// planted\n#include ${include}\n")
+    file(WRITE "${dir}/${planted}" "// planted\n#include ${include}\n")
     execute_process(
-        COMMAND "${CMAKE_COMMAND}" "-DSOURCE_DIR=${dir}" "-DFILES=Screen.cpp|Other.cpp" -P "${CHECKER}"
+        COMMAND "${CMAKE_COMMAND}" "-DSOURCE_DIR=${dir}" "-DFILES=Screen.cpp|${planted}" -P "${CHECKER}"
         RESULT_VARIABLE result
         OUTPUT_VARIABLE out
         ERROR_VARIABLE err)

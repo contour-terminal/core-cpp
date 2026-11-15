@@ -569,6 +569,7 @@ others in notes.
 | `src/core/tui/Canvas.hpp` | contour-terminal/endo | `src/tui/Canvas.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Cell.cpp` | contour-terminal/endo | `src/tui/Cell.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Cell.hpp` | contour-terminal/endo | `src/tui/Cell.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/CellTestSupport.hpp` | origin: core-cpp | - | - | test-only: `requireCell()`, a `Buffer::cellAt()` that fails the Catch2 case instead of returning null |
 | `src/core/tui/ClipboardProtocol.cpp` | origin: core-cpp | - | - | - |
 | `src/core/tui/ClipboardProtocol.hpp` | origin: core-cpp | - | - | - |
 | `src/core/tui/ClipboardProtocol_test.cpp` | origin: core-cpp | - | - | - |
@@ -685,6 +686,7 @@ others in notes.
 | `src/core/tui/TerminalInput.cpp` | contour-terminal/endo | `src/tui/platform/TerminalInput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the members that touch no OS state, which endo had in both platform files |
 | `src/core/tui/TerminalInput.hpp` | contour-terminal/endo | `src/tui/TerminalInput.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the OS state is the opaque `NativeState` the platform sources define, so this header includes neither `<windows.h>` nor `<termios.h>` (Ruling R41) |
 | `src/core/tui/TerminalInput_test.cpp` | origin: core-cpp | - | - | - |
+| `src/core/tui/TerminalNullOutputCanary.cpp` | origin: core-cpp | - | - | the canary for `Terminal`'s non-null output precondition |
 | `src/core/tui/TerminalOutput.cpp` | contour-terminal/endo | `src/tui/platform/TerminalOutput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `SyncGuard` and `syncGuard()` are here rather than per platform, because the sequences now go through `writeToDestination()`; the members that only compose bytes, which endo duplicated in `src/tui/platform/TerminalOutputWin32.cpp` (same commit); `copyToClipboard()` encodes through `core::base64::encode()` rather than a third copy of a base64 encoder. A7 fix round 1: `~SyncGuard()` and its move-assignment flush before writing the end sequence |
 | `src/core/tui/TerminalOutput.hpp` | contour-terminal/endo | `src/tui/TerminalOutput.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | post-import fix: `SyncGuard` holds the `TerminalOutput` it brackets instead of a native handle, so its `#if _WIN32` `NativeHandle` alias is gone (Ruling R41); `isTerminal()` added. A7 fix round 1 restores "and flushes" to the destructor's description; post-import addition: `OutputKind` and the `kind()` / `simulatedCursorPosition()` virtuals (core-cpp) |
 | `src/core/tui/TerminalOutput_test.cpp` | origin: core-cpp | - | - | the upstream file has no test; written for the `SyncGuard` and `isTerminal()` fix. A7 fix round 1 replaces `a default-constructed SyncGuard writes nothing`, which asserted on an unrelated capture, with the two flush cases |

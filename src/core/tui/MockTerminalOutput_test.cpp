@@ -1,15 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/tui/MockScreenSurface.hpp>
 #include <core/tui/MockTerminalOutput.hpp>
+#include <core/tui/ScreenSurface.hpp>
 #include <core/tui/TerminalOutput.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 
+using core::tui::MockScreenSurface;
 using core::tui::MockTerminalOutput;
 using core::tui::OutputKind;
+using core::tui::QueryUnanswered;
 using core::tui::TerminalOutput;
 
 namespace
@@ -33,6 +39,17 @@ class StringOutput final: public TerminalOutput
 /// it replaces matched every subclass of MockTerminalOutput too.
 class DerivedMock final: public MockTerminalOutput
 {
+};
+
+/// A mock that has overridden its simulated cursor away: still a simulation, but with no cursor
+/// to report.
+class CursorlessMock final: public MockTerminalOutput
+{
+  public:
+    [[nodiscard]] auto simulatedCursorPosition() const noexcept -> std::optional<std::pair<int, int>> override
+    {
+        return std::nullopt;
+    }
 };
 
 } // namespace
@@ -78,4 +95,23 @@ TEST_CASE("tui.MockTerminalOutput: a subclass of the mock is still a simulation"
     TerminalOutput const& base = mock;
 
     CHECK(base.kind() == OutputKind::Simulation);
+}
+
+TEST_CASE("tui.MockScreenSurface: answers the cursor query from the mock's cursor")
+{
+    auto surface = MockScreenSurface {};
+    surface.mock().moveTo(4, 9);
+
+    auto const cursor = surface.queryCursorPosition();
+    REQUIRE(cursor.has_value());
+    CHECK(*cursor == std::pair { 4, 9 });
+}
+
+TEST_CASE("tui.MockScreenSurface: a mock with no simulated cursor leaves the query unanswered")
+{
+    auto surface = MockScreenSurface { std::make_unique<CursorlessMock>() };
+
+    auto const cursor = surface.queryCursorPosition();
+    REQUIRE_FALSE(cursor.has_value());
+    CHECK(cursor.error() == QueryUnanswered::NotAsked);
 }

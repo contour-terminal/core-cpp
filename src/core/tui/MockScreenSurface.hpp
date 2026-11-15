@@ -30,7 +30,8 @@ class MockScreenSurface final: public ScreenSurface
     [[nodiscard]] auto output() noexcept -> TerminalOutput& override;
 
     /// @brief Answers from the mock's cursor.
-    /// @return The mock's cursor as (row, column), both 1-based; never unanswered.
+    /// @return The mock's cursor as (row, column), both 1-based; or @c QueryUnanswered::NotAsked when
+    ///         the output, a subclass of the mock, reports no simulated cursor.
     [[nodiscard]] auto queryCursorPosition() -> std::expected<std::pair<int, int>, QueryUnanswered> override;
 
     /// @brief Returns the mock the frames are written to.

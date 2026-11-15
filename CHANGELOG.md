@@ -51,7 +51,8 @@ workflow refuses one without a section here.
   `core::async`, `core::net`, `Terminal`, `TerminalInput`, `TerminalChannel` or the runtime;
   `tests/consumer-tui-core` is a CPM consumer that renders a component with the terminal half off.
   It also refuses `ClipboardWriter`, `SemanticBlockClient`, `FilesystemImageProvider` and `ImageLoader.hpp`'s
-  functions, and its include scan reads quoted includes as well as `<core/...>` ones.
+  functions, and its include scan reads quoted includes, relative to the including file's directory as the compiler does, as
+  well as `<core/...>` ones.
 - **`core::tui::OutputKind` and `TerminalOutput::kind()` / `simulatedCursorPosition()`.** An output says whether a
   terminal stands behind it (`Device`, the default) or whether it models the screen itself (`Simulation`, which
   `MockTerminalOutput` reports, answering its cursor 1-based). `Terminal` reads these where it used to
@@ -80,6 +81,10 @@ workflow refuses one without a section here.
 
 ### Fixed
 
+- **`core::tui::Terminal` refuses a null output instead of dereferencing it.** Both constructors that take a
+  `std::unique_ptr<TerminalOutput>` asked it its kind before any check, so a null pointer crashed; it is a documented
+  precondition now, failed through `Require()` (the fail handler, then the end of the process). No consumer passes
+  null (endo and Lightweight's `dbtool` grepped).
 - **`core::tui::Buffer::fill()` and `clearRect()` with an area wholly outside the buffer write nothing.** Above or
   left of it, the clamped range ran backwards, which a hardened standard library (`_GLIBCXX_ASSERTIONS`) aborts on;
   a fixed viewport past the screen's edge did the same in `Screen`'s flush. Both now clip through

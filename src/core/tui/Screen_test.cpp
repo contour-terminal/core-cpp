@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/tui/CellTestSupport.hpp>
+#include <core/tui/HeadlessSurface.hpp>
 #include <core/tui/HoverState.hpp>
 #include <core/tui/MockScreenSurface.hpp>
 #include <core/tui/MockTerminalOutput.hpp>
@@ -19,6 +21,8 @@
 #include <thread>
 #include <variant>
 #include <vector>
+
+using core::tui::test::requireCell;
 
 using namespace core::tui;
 
@@ -1723,7 +1727,7 @@ TEST_CASE("Screen.componentAt_agreesWithPaintingWhenZIndicesTie")
     screen.draw();
 
     // Whichever sibling is painted last covers the cell; that one must be the hit-test answer.
-    auto const painted = screen.renderedBuffer().cellAt({ .x = 0, .y = 0 })->grapheme;
+    auto const painted = requireCell(screen.renderedBuffer(), { .x = 0, .y = 0 }).grapheme;
     auto* const hit = screen.componentAt(0, 0);
     REQUIRE(hit != nullptr);
     auto const* const hitSibling = static_cast<PaintedRecorder const*>(hit);
@@ -1738,7 +1742,7 @@ TEST_CASE("Screen.componentAt_agreesWithPaintingWhenZIndicesTie")
     screen.root().addChild(first, LayoutParams { .area = { .x = 10, .y = 0, .width = 5, .height = 2 } });
     screen.root().addChild(second, LayoutParams { .area = { .x = 10, .y = 0, .width = 5, .height = 2 } });
     screen.draw();
-    CHECK(screen.renderedBuffer().cellAt({ .x = 10, .y = 0 })->grapheme == "2");
+    CHECK(requireCell(screen.renderedBuffer(), { .x = 10, .y = 0 }).grapheme == "2");
     CHECK(screen.componentAt(0, 10) == &second);
 }
 
@@ -1757,7 +1761,7 @@ TEST_CASE("Screen.componentAt_agreesWithPaintingForAnOverlaysChildren")
     screen.showOverlay(overlay, Point { .x = 5, .y = 2 });
     screen.draw();
 
-    CHECK(screen.renderedBuffer().cellAt({ .x = 5, .y = 2 })->grapheme == "H");
+    CHECK(requireCell(screen.renderedBuffer(), { .x = 5, .y = 2 }).grapheme == "H");
     CHECK(screen.componentAt(2, 5) == &high);
 }
 
@@ -2457,4 +2461,42 @@ TEST_CASE("TerminalOutput.deleteLines_writesDL")
     CHECK(mock.deletedLines() == 0);
     mock.deleteLines(1);
     CHECK(mock.deletedLines() == 1);
+}
+
+TEST_CASE("Screen.fixedViewport_pastTheScreensEdge_drawsWithoutWritingOutsideIt")
+{
+    // Pins the CHANGELOG's fix: a fixed area below or right of the screen made the flush build a
+    // row range that ran backwards, which a hardened standard library (_GLIBCXX_ASSERTIONS) aborts
+    // on. Drawn once, it must write none of the component's cells.
+    auto bytes = std::string {};
+    auto surface = HeadlessSurface { Size { .width = 20, .height = 4 },
+                                     [&bytes](std::string_view chunk) { bytes += chunk; } };
+    auto screen = Screen(surface);
+    screen.setViewport(Rect { .x = 25, .y = 6, .width = 10, .height = 2 });
+    auto painter = PaintedRecorder {};
+    painter.glyph = 'Z';
+    screen.root().addChild(painter, LayoutParams { .area = { .x = 0, .y = 0, .width = 10, .height = 2 } });
+
+    screen.draw();
+
+    CHECK_FALSE(bytes.contains('Z'));
+}
+
+TEST_CASE("Screen.fixedViewport_partlyPastTheScreensEdge_writesOnlyWhatIsOnScreen")
+{
+    // The same area straddling the bottom-right corner: the part on screen is painted, the rest
+    // clipped rather than written past the edge.
+    auto bytes = std::string {};
+    auto surface = HeadlessSurface { Size { .width = 20, .height = 4 },
+                                     [&bytes](std::string_view chunk) { bytes += chunk; } };
+    auto screen = Screen(surface);
+    screen.setViewport(Rect { .x = 15, .y = 2, .width = 10, .height = 5 });
+    auto painter = PaintedRecorder {};
+    painter.glyph = 'Z';
+    screen.root().addChild(painter, LayoutParams { .area = { .x = 0, .y = 0, .width = 10, .height = 5 } });
+
+    screen.draw();
+
+    // Columns 15..19 of rows 2..3: five cells on each of two rows.
+    CHECK(std::ranges::count(bytes, 'Z') == 10);
 }

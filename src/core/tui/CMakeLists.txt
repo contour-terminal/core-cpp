@@ -304,3 +304,22 @@ core_cpp_add_test(tui
         posix/TerminalInput_test.cpp
     SOURCES_WINDOWS
         windows/TerminalInput_test.cpp)
+
+# A null output handed to Terminal is a failed precondition, which ends the process -- so it is
+# watched from outside, one process per constructor, judged by the precondition's own text and
+# refused if construction returned (TerminalNullOutputCanary.cpp says why not by exit code). Behind
+# CORE_CPP_TESTING as a core_cpp_add_test would be, so a consumer's ctest registers none of it.
+if(CORE_CPP_TESTING AND TARGET core-cpp-tui)
+    add_executable(core-cpp-tui-null-output-canary TerminalNullOutputCanary.cpp)
+    target_link_libraries(core-cpp-tui-null-output-canary PRIVATE core::tui core::testing_dialogs)
+    core_cpp_apply_toolchain(core-cpp-tui-null-output-canary)
+    foreach(mode IN ITEMS output queryInput)
+        add_test(NAME core-cpp.tui-null-output-canary.${mode}
+                 COMMAND core-cpp-tui-null-output-canary ${mode})
+        set_tests_properties(core-cpp.tui-null-output-canary.${mode} PROPERTIES
+            PASS_REGULAR_EXPRESSION "Precondition failed\\. output != nullptr"
+            FAIL_REGULAR_EXPRESSION "was accepted"
+            TIMEOUT 60
+            LABELS "core-cpp;tui;canary")
+    endforeach()
+endif()

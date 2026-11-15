@@ -97,11 +97,14 @@ class Terminal: public ScreenSurface
 
     /// @brief Constructs a Terminal with a custom TerminalOutput (for dependency injection in tests).
     /// @param output The output implementation to use (ownership transferred).
+    /// @pre @p output is not null. A null output fails the precondition (`Require`), which reports
+    ///      through the fail handler and ends the process; it is never dereferenced.
     explicit Terminal(std::unique_ptr<TerminalOutput> output);
 
     /// @brief Constructs a Terminal whose queries read replies through @p queryInput and time out
     /// by @p clock, whatever @p output is -- so a test can drive a query with a mock output.
     /// @param output The output implementation to use (ownership transferred).
+    /// @pre @p output is not null, as for the constructor above.
     /// @param queryInput The input queries read from (not owned; must outlive this Terminal).
     /// @param clock The clock query timeouts are measured on (not owned; must outlive this Terminal).
     Terminal(std::unique_ptr<TerminalOutput> output,

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/tui/Terminal.hpp>
 
+#include <core/Assert.hpp>
 #include <core/platform/Clock.hpp>
 #include <core/tui/InputEvent.hpp>
 
@@ -26,6 +27,16 @@ namespace
 {
     /// How long a query waits for its reply, on the injected clock.
     constexpr auto QueryReplyTimeout = std::chrono::milliseconds(100);
+
+    /// Passes @p output through, failing the precondition first if it is null: the constructors
+    /// ask it its kind in their initializer lists, before any body could check.
+    /// @param output The output a Terminal is being constructed over.
+    /// @return @p output, never null.
+    auto requireOutput(std::unique_ptr<TerminalOutput> output) -> std::unique_ptr<TerminalOutput>
+    {
+        Require(output != nullptr);
+        return output;
+    }
 } // namespace
 
 Terminal::Terminal():
@@ -34,7 +45,7 @@ Terminal::Terminal():
 }
 
 Terminal::Terminal(std::unique_ptr<TerminalOutput> output):
-    _output(std::move(output)),
+    _output(requireOutput(std::move(output))),
     _clock(core::platform::defaultSteadyClock()),
     _mockMode(_output->kind() == OutputKind::Simulation)
 {
@@ -43,7 +54,7 @@ Terminal::Terminal(std::unique_ptr<TerminalOutput> output):
 Terminal::Terminal(std::unique_ptr<TerminalOutput> output,
                    TerminalQueryInput& queryInput,
                    core::platform::IClock& clock):
-    _output(std::move(output)),
+    _output(requireOutput(std::move(output))),
     _clock(clock),
     _queryInput(&queryInput),
     _mockMode(_output->kind() == OutputKind::Simulation)
