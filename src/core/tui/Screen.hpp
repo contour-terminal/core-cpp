@@ -6,6 +6,7 @@
 #include <core/tui/Buffer.hpp>
 #include <core/tui/Component.hpp>
 #include <core/tui/CursorShape.hpp>
+#include <core/tui/FrameDiff.hpp>
 #include <core/tui/HoverState.hpp>
 #include <core/tui/Theme.hpp>
 #include <core/tui/Tooltip.hpp>
@@ -46,19 +47,30 @@ enum class UnscrollMode : uint8_t
     Disabled, ///< Never use unscroll (fallback to clearing rows).
 };
 
+/// Which of the terminal's screen buffers a Screen draws on.
+enum class ScreenBuffer : uint8_t
+{
+    Primary, ///< The buffer the shell was on, scrollback and all (default).
+    /// The alternate screen buffer (DEC private mode 1049), entered for the lifetime of the Screen
+    /// and left on destruction, which restores the primary buffer and the user's scrollback.
+    /// Intended for full-screen apps with @c Viewport::Fullscreen.
+    Alternate,
+};
+
 /// Configuration for the Screen.
+///
+/// Every enumeration here is zero for its default, so a zero-initialized configuration is the
+/// default one.
 struct ScreenConfig
 {
     Viewport viewport = Viewport::Fullscreen;
     Rect fixedArea {};                              ///< For Viewport::Fixed.
     int inlineMaxHeight = 0;                        ///< For Viewport::Inline (0 = no limit).
     UnscrollMode unscrollMode = UnscrollMode::Auto; ///< Unscroll behavior for inline mode.
-    bool inhibitReflow = false;                     ///< Disable text reflow (DEC 2028) on rendered lines.
-
-    /// Switch to the terminal's alternate screen buffer (DEC private mode 1049) for the
-    /// lifetime of the Screen, restoring the primary buffer (and the user's scrollback) on
-    /// destruction. Intended for full-screen apps with @c Viewport::Fullscreen.
-    bool alternateScreen = false;
+    /// Whether rendered lines turn text reflow (DEC 2028) off: @c DiffReflow::Inhibit writes the
+    /// reset at the start of each row the inline viewport draws. The frame diff's own option.
+    DiffReflow reflow = DiffReflow::Keep;
+    ScreenBuffer screenBuffer = ScreenBuffer::Primary; ///< The terminal buffer drawn on.
 };
 
 /// Cursor movement calculations for inline rendering.

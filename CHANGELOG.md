@@ -11,6 +11,15 @@ workflow refuses one without a section here.
 
 ### Breaking
 
+- **`core::tui::ScreenConfig`'s two `bool`s are enumerations.** `inhibitReflow` is `reflow`, a `DiffReflow`
+  (`Keep`, the default, or `Inhibit`, the frame diff's own option it was always translated into), and
+  `alternateScreen` is `screenBuffer`, a new `ScreenBuffer` (`Primary`, the default, or `Alternate`). Each default is
+  its enumeration's zero, so the defaults are unchanged. Migrate `.inhibitReflow = true` to
+  `.reflow = core::tui::DiffReflow::Inhibit` and `.alternateScreen = true` to
+  `.screenBuffer = core::tui::ScreenBuffer::Alternate`. Consumers grepped: endo sets `.inhibitReflow = true` in
+  `src/shell/Shell.cpp:3226` and `src/shell/ui/Prompt.cpp:110` and must change both; tuidu sets
+  `config.alternateScreen = true` in `src/tuidu/App.cpp:28` and must change it when it moves its pin (v0.5.0);
+  fastcached and `dbtool` do not use `Screen`; contour does not vendor `tui`.
 - **`core::platform::IClock` is `core::IClock` now** (`<core/Clock.hpp>`, in `core::base`), with `SteadyClock`,
   `ManualClock`, `defaultSteadyClock()`, `SteadyTimePoint` and `SteadyDuration`. `<core/platform/Clock.hpp>` includes it
   and names each in `core::platform` by a using-declaration, so every `core::platform::` spelling still compiles and

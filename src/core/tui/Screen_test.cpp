@@ -12,6 +12,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <functional>
 #include <iterator>
@@ -20,6 +21,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -212,6 +214,86 @@ TEST_CASE("Screen.unscrollMode_enumValues")
     CHECK(static_cast<int>(UnscrollMode::Auto) == 0);
     CHECK(static_cast<int>(UnscrollMode::Enabled) == 1);
     CHECK(static_cast<int>(UnscrollMode::Disabled) == 2);
+}
+
+TEST_CASE("Screen.screenConfig_defaultsAreTheZeroOfEachEnumeration")
+{
+    // The bools ScreenConfig had are enumerations now; this pins that the defaults did not move,
+    // and that each default is its enumeration's zero, so a zero-initialized field means "off".
+    auto const config = ScreenConfig {};
+    struct Row
+    {
+        std::string_view field;
+        bool isDefault;
+        bool isZero;
+    };
+    auto const rows = std::array {
+        Row { .field = "viewport",
+              .isDefault = config.viewport == Viewport::Fullscreen,
+              .isZero = std::to_underlying(config.viewport) == 0 },
+        Row { .field = "unscrollMode",
+              .isDefault = config.unscrollMode == UnscrollMode::Auto,
+              .isZero = std::to_underlying(config.unscrollMode) == 0 },
+        Row { .field = "reflow",
+              .isDefault = config.reflow == DiffReflow::Keep,
+              .isZero = std::to_underlying(config.reflow) == 0 },
+        Row { .field = "screenBuffer",
+              .isDefault = config.screenBuffer == ScreenBuffer::Primary,
+              .isZero = std::to_underlying(config.screenBuffer) == 0 },
+        Row { .field = "inlineMaxHeight", .isDefault = config.inlineMaxHeight == 0, .isZero = true },
+        Row { .field = "fixedArea", .isDefault = config.fixedArea == Rect {}, .isZero = true },
+    };
+    for (auto const& row: rows)
+    {
+        INFO(row.field);
+        CHECK(row.isDefault);
+        CHECK(row.isZero);
+    }
+}
+
+TEST_CASE("Screen.screenConfig_alternateScreenBufferIsEnteredAndLeft")
+{
+    auto mockOutput = std::make_unique<MockTerminalOutput>(20, 4);
+    auto* mock = mockOutput.get();
+    auto surface = MockScreenSurface(std::move(mockOutput));
+    auto const wrote = [mock](std::string_view sequence) {
+        return std::ranges::any_of(mock->rawWrites(),
+                                   [sequence](auto const& write) { return write.text == sequence; });
+    };
+
+    {
+        auto const primary = Screen(surface);
+        CHECK_FALSE(wrote("\033[?1049h"));
+    }
+    CHECK_FALSE(wrote("\033[?1049l"));
+
+    {
+        auto const alternate = Screen(surface, ScreenConfig { .screenBuffer = ScreenBuffer::Alternate });
+        CHECK(wrote("\033[?1049h"));
+        CHECK_FALSE(wrote("\033[?1049l"));
+    }
+    CHECK(wrote("\033[?1049l"));
+}
+
+TEST_CASE("Screen.screenConfig_reflowInhibitionReachesTheInlineFrame")
+{
+    auto const frameWith = [](DiffReflow reflow) {
+        auto bytes = std::string {};
+        auto surface = HeadlessSurface { Size { .width = 10, .height = 4 },
+                                         [&bytes](std::string_view chunk) { bytes += chunk; } };
+        auto screen = Screen(surface, ScreenConfig { .viewport = Viewport::Inline, .reflow = reflow });
+        struct Painter: Component
+        {
+            void render(Canvas& canvas) override { canvas.putString(0, 0, "RRR", {}); }
+        };
+        auto painter = Painter {};
+        screen.root().addChild(painter, LayoutParams { .area = { .x = 0, .y = 0, .width = 3, .height = 1 } });
+        screen.draw();
+        return bytes;
+    };
+
+    CHECK_FALSE(frameWith(DiffReflow::Keep).contains("\033[?2028l"));
+    CHECK(frameWith(DiffReflow::Inhibit).contains("\033[?2028l"));
 }
 
 TEST_CASE("Screen.screenConfig_defaultUnscrollMode")

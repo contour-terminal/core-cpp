@@ -105,7 +105,7 @@ Screen::Screen(ScreenSurface& surface, ScreenConfig config, IClock const& clock)
 
     // Switch to the alternate screen buffer (DEC private mode 1049) so the app paints on a
     // fresh screen and the user's scrollback is preserved; restored in the destructor.
-    if (_config.alternateScreen)
+    if (_config.screenBuffer == ScreenBuffer::Alternate)
     {
         _surface.output().writeRaw("\033[?1049h");
         _surface.output().flush();
@@ -736,7 +736,7 @@ void Screen::flushInline()
                       .hyperlinks = DiffHyperlinks::Emit,
                       .images = DiffImages::Emit,
                       .rowMarks = DiffRowMarks::Emit,
-                      .reflow = _config.inhibitReflow ? DiffReflow::Inhibit : DiffReflow::Keep });
+                      .reflow = _config.reflow });
 
     // Clear excess rows when content shrank (to avoid leaving garbage on screen)
     if (rowsToClear > 0)
