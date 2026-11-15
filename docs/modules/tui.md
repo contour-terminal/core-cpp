@@ -95,6 +95,36 @@ half.
   `core::defaultSteadyClock()`. A test passes a `core::ManualClock` and advances it, so no case
   sleeps. `SemanticBlockClient`, in the terminal half, takes one the same way.
 
+- **Layout.** `core::tui::layout::solve(root, available)` (`<core/tui/layout/Solve.hpp>`) is a flexbox
+  layout as a pure function: a tree of `Node`s -- each a `Style`, its children and a preferred `Size` -- and a
+  `Rect` in, one `Rect` per node out, in depth-first pre-order with the root first. A `Style` holds the container's
+  `Direction` (`Row`, `Column`), `Wrap`, `Justify` (`Start`, `Center`, `End`, `SpaceBetween`), `Align` (`Stretch`,
+  the default, `Start`, `Center`, `End`) and `gap`, and the item's `grow`, `shrink` (1 by default), `basis` (the
+  preferred main size when absent) and `minSize`/`maxSize` (0 is unbounded). Everything is integer cells, with no
+  floating point, so equal input lays out identically everywhere:
+    - a line's `gap`s are subtracted first;
+    - leftover cells go to the growing children in proportion to `grow`, each taking the whole part of its share
+      and the cells that remain going one at a time to the earliest growing children (10 over three equal growers
+      is 4/3/3, over `grow` 1:2 it is 4/6);
+    - a deficit is taken from the shrinking children in proportion to `shrink` times the basis, the cells that
+      remain one at a time from the latest;
+    - a child pushed past its `minSize` or `maxSize` is frozen there and the rest shared again among the others,
+      pass after pass, until no limit is crossed or no child can take more;
+    - a line's leftover is placed by `justify` (`Center` puts the odd cell after the children, `SpaceBetween` gives
+      the odd cells to the earliest gaps), each child across the line by `align`;
+    - with `Wrap::Wrap` a child whose basis would not fit after the line's starts the next line; lines are as tall
+      as their tallest child's preferred cross size, and the container's leftover cross space is shared among them
+      one cell at a time from the first;
+    - what still does not fit is clipped to the parent: the last children lose cells first, and no size is ever
+      negative -- a container with no width gives every node in it a width of 0.
+    - sizes, gaps and positions above `MaxCells` (2^20) are capped to it, `grow`/`shrink` above `MaxWeight`
+      (2^16) likewise, and a node's children past `MaxChildren` (2^20) are not laid out -- each of them, and every
+      node beneath it, gets a zero-size rectangle at the parent's origin. Within these three bounds no sum
+      overflows (a weight total is at most 2^56), and a share's product of deficit and weight is formed exactly
+      even past 64 bits, so no input overflows.
+
+    `Responsive` and the layout pass over `Component` trees are not here yet; `solve()` is the core they will call.
+
 ```cpp
 auto bytes = std::string {};
 auto surface = core::tui::HeadlessSurface { core::tui::Size { .width = 80, .height = 24 },

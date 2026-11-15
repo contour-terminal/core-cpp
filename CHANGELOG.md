@@ -55,6 +55,15 @@ workflow refuses one without a section here.
 
 ### Added
 
+- **`core::tui::layout::solve()`, a flexbox layout in the headless TUI** (`<core/tui/layout/Solve.hpp>`,
+  `<core/tui/layout/Style.hpp>`, in `core::tui_core`): a tree of `Node`s (a `Style` of direction, wrap, justify,
+  align, gap, grow, shrink, basis and min/max size, children and a preferred size) and a `Rect` in, one `Rect` per
+  node out in depth-first order. Integer cells, no floating point: leftover cells go to the earliest growing child
+  first, a deficit is taken in proportion to shrink times basis with the odd cells from the last child, a child that
+  reaches its min or max size is frozen and the rest re-shared until stable, and what still overflows is clipped to
+  the parent. Sizes and positions are capped at `MaxCells` (2^20), weights at `MaxWeight` (2^16), and a node's
+  children past `MaxChildren` (2^20) are not laid out (zero-size at the parent's origin); within these bounds no
+  input overflows. Reuses `core::tui::Rect` and `core::tui::Size`.
 - **`core-cpp.unicode-wasi`, core::tui's width tables in a WebAssembly guest.** `tests/wasi-unicode` builds libunicode
   for `wasm32-wasip1` from the tables a native configure generated (`CPM_libunicode_SOURCE`; it refuses a tree without
   them, so the guest's build never downloads `UCD.zip` or builds the table generator), with

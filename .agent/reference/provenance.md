@@ -726,6 +726,10 @@ others in notes.
 | `src/core/tui/detail/Utf16ToUtf8.hpp` | contour-terminal/endo | `src/tui/platform/Win32Utf.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | rewritten (core-cpp#20): `appendUtf16AsUtf8()` became the stateful `Utf16ToUtf8`, which pairs surrogates across reads instead of encoding each code unit on its own (CESU-8); moved out of `windows/` so its test runs everywhere |
 | `src/core/tui/detail/Utf16ToUtf8_test.cpp` | origin: core-cpp | - | - | - |
 | `src/core/tui/detail/XtVersion.hpp` | contour-terminal/endo | `src/tui/platform/TerminalOutput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `parseXTVersionName()` and the unscroll terminal list, which endo had verbatim in `src/tui/platform/TerminalOutputWin32.cpp` too; spelled `parseXtVersionName()` and `supportsUnscroll()` here |
+| `src/core/tui/layout/Solve.cpp` | origin: core-cpp | - | - | the flexbox layout as a pure function (U.8) |
+| `src/core/tui/layout/Solve.hpp` | origin: core-cpp | - | - | the flexbox layout as a pure function (U.8) |
+| `src/core/tui/layout/Solve_test.cpp` | origin: core-cpp | - | - | - |
+| `src/core/tui/layout/Style.hpp` | origin: core-cpp | - | - | a layout node and its style (U.8) |
 | `src/core/tui/portable/TerminalOutput.cpp` | origin: core-cpp | - | - | the five OS-bound `TerminalOutput` members with the C++ standard library alone, for a platform that is neither POSIX nor Windows |
 | `src/core/tui/posix/ImageLoader.cpp` | contour-terminal/endo | `src/tui/ImageLoader.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the POSIX `readClipboardImage()` and its helper |
 | `src/core/tui/posix/PosixIO.hpp` | contour-terminal/endo | `src/tui/platform/PosixIO.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | moved out of `tui/platform/`, which Ruling R40 does not keep |

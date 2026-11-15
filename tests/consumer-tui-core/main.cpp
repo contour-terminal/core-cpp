@@ -9,6 +9,7 @@
 #include <core/tui/HeadlessSurface.hpp>
 #include <core/tui/Rect.hpp>
 #include <core/tui/Screen.hpp>
+#include <core/tui/layout/Solve.hpp>
 
 #include <cstdio>
 #include <string>
@@ -49,6 +50,17 @@ int main()
         std::fprintf(stderr, "consumer-tui-core: an unchanged frame diffs to bytes\n");
         return 1;
     }
+
+    // The flexbox layout is part of the headless half too: two growing children share a row.
+    auto const half = core::tui::layout::Node { .style = { .grow = 1 } };
+    auto const row = core::tui::layout::Node { .children = { half, half } };
+    auto const rects = core::tui::layout::solve(row, { .x = 0, .y = 0, .width = 20, .height = 3 });
+    if (rects.size() != 3 || rects[2] != core::tui::Rect { .x = 10, .y = 0, .width = 10, .height = 3 })
+    {
+        std::fprintf(stderr, "consumer-tui-core: the layout did not split the row\n");
+        return 1;
+    }
+
     std::printf("consumer-tui-core: %zu bytes of frame, no terminal\n", frame.size());
     return 0;
 }

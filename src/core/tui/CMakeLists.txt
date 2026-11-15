@@ -154,6 +154,8 @@ core_cpp_add_module(tui_core KIND STATIC
         completer/CompletionProvider.hpp
         completer/FuzzyMatch.hpp
         completer/SmartCaseMatch.hpp
+        layout/Solve.hpp
+        layout/Style.hpp
         runtime/ModalComponent.hpp
     SOURCES
         Box.cpp
@@ -196,6 +198,7 @@ core_cpp_add_module(tui_core KIND STATIC
         completer/Completer.cpp
         completer/FuzzyMatch.cpp
         completer/SmartCaseMatch.cpp
+        layout/Solve.cpp
     PUBLIC_LIBS core::base core::tui_output unicode::unicode)
 
 # core::tui: the terminal half of endo's terminal UI, on top of core::tui_core. Native only -- there
@@ -283,7 +286,8 @@ core_cpp_add_test(tui NAME tui_core
         TimerUtils_test.cpp
         TreeTableView_test.cpp
         Unicode_test.cpp
-        VtParser_test.cpp)
+        VtParser_test.cpp
+        layout/Solve_test.cpp)
 
 # The terminal half. Screen_test.cpp is not here: it drives Screen over a MockScreenSurface, so it
 # runs above, with the terminal half off. windows/TerminalInput_test.cpp is Windows-only: it drives
