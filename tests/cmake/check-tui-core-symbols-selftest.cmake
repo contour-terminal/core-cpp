@@ -33,7 +33,14 @@ set(cases
     "runtime|fail|${screen}                 U core::tui::runtime::TuiRuntime::nextEvent()\n|core::tui::runtime::TuiRuntime"
     "terminal-typeinfo|fail|${screen}0000000000000000 V typeinfo for core::tui::Terminal\n|typeinfo for core::tui::Terminal"
     "terminal-vtable|fail|${screen}0000000000000000 V vtable for core::tui::Terminal\n|vtable for core::tui::Terminal"
-    "query-input|fail|${screen}                 U core::tui::TerminalQueryInput::~TerminalQueryInput()\n|TerminalQueryInput")
+    "query-input|fail|${screen}                 U core::tui::TerminalQueryInput::~TerminalQueryInput()\n|TerminalQueryInput"
+    "clipboard-writer|fail|${screen}                 U core::tui::ClipboardWriter::write(std::basic_string_view<char, std::char_traits<char> >)\n|core::tui::ClipboardWriter::write"
+    "clipboard-writer-timeouts|fail|${screen}0000000000000000 W core::tui::ClipboardWriterTimeouts::ClipboardWriterTimeouts()\n|ClipboardWriterTimeouts"
+    "semantic-block-client|fail|${screen}0000000000000000 V vtable for core::tui::SemanticBlockClient\n|vtable for core::tui::SemanticBlockClient"
+    "filesystem-image-provider|fail|${screen}                 U core::tui::FilesystemImageProvider::FilesystemImageProvider()\n|FilesystemImageProvider"
+    "image-loader|fail|${screen}                 U core::tui::loadImage(std::basic_string_view<char, std::char_traits<char> >)\n|core::tui::loadImage"
+    "image-loader-type|fail|${screen}0000000000000000 W core::tui::OwnedImage::~OwnedImage()\n|core::tui::OwnedImage"
+    "image-provider|pass|${screen}0000000000000000 V typeinfo for core::tui::ImageProvider\n|")
 
 set(failures "")
 foreach(case IN LISTS cases)
@@ -70,17 +77,29 @@ endforeach()
 
 # The include scan, over planted source trees. Each case is a Screen.cpp (which the checker requires
 # to see, so a list that is not tui_core's cannot pass as clean) plus one file holding one include.
-# name | expected outcome | the include in Other.cpp ('' for none) | text the refusal must name
+# name | expected outcome | the include's argument in Other.cpp, as spelled | text the refusal must name
 set(includeCases
-    "includes-clean|pass|core/tui/Buffer.hpp|"
-    "includes-leaf|pass|core/tui/TerminalOutput.hpp|"
-    "includes-modal-contract|pass|core/tui/runtime/ModalComponent.hpp|"
-    "includes-platform|fail|core/platform/Clock.hpp|<core/platform/Clock.hpp>"
-    "includes-async|fail|core/async/Task.hpp|<core/async/Task.hpp>"
-    "includes-net|fail|core/net/EventLoop.hpp|<core/net/EventLoop.hpp>"
-    "includes-terminal|fail|core/tui/Terminal.hpp|<core/tui/Terminal.hpp>"
-    "includes-runtime|fail|core/tui/runtime/TuiRuntime.hpp|<core/tui/runtime/TuiRuntime.hpp>"
-    "includes-posix|fail|core/tui/posix/PosixIO.hpp|<core/tui/posix/PosixIO.hpp>")
+    "includes-clean|pass|<core/tui/Buffer.hpp>|"
+    "includes-leaf|pass|<core/tui/TerminalOutput.hpp>|"
+    "includes-modal-contract|pass|<core/tui/runtime/ModalComponent.hpp>|"
+    "includes-platform|fail|<core/platform/Clock.hpp>|<core/platform/Clock.hpp>"
+    "includes-async|fail|<core/async/Task.hpp>|<core/async/Task.hpp>"
+    "includes-net|fail|<core/net/EventLoop.hpp>|<core/net/EventLoop.hpp>"
+    "includes-terminal|fail|<core/tui/Terminal.hpp>|<core/tui/Terminal.hpp>"
+    "includes-runtime|fail|<core/tui/runtime/TuiRuntime.hpp>|<core/tui/runtime/TuiRuntime.hpp>"
+    "includes-posix|fail|<core/tui/posix/PosixIO.hpp>|<core/tui/posix/PosixIO.hpp>"
+    "includes-clipboard-writer|fail|<core/tui/ClipboardWriter.hpp>|<core/tui/ClipboardWriter.hpp>"
+    "includes-semantic-block-client|fail|<core/tui/SemanticBlockClient.hpp>|<core/tui/SemanticBlockClient.hpp>"
+    "includes-filesystem-image-provider|fail|<core/tui/FilesystemImageProvider.hpp>|<core/tui/FilesystemImageProvider.hpp>"
+    "includes-image-loader|fail|<core/tui/ImageLoader.hpp>|<core/tui/ImageLoader.hpp>"
+    "includes-quoted-clean|pass|\"Buffer.hpp\"|"
+    "includes-quoted-modal-contract|pass|\"runtime/ModalComponent.hpp\"|"
+    "includes-quoted-terminal|fail|\"Terminal.hpp\"|<core/tui/Terminal.hpp>"
+    "includes-quoted-dot-terminal|fail|\"./Terminal.hpp\"|<core/tui/Terminal.hpp>"
+    "includes-quoted-posix|fail|\"posix/PosixIO.hpp\"|<core/tui/posix/PosixIO.hpp>"
+    "includes-quoted-runtime|fail|\"runtime/TuiRuntime.hpp\"|<core/tui/runtime/TuiRuntime.hpp>"
+    "includes-quoted-parent|fail|\"../platform/Clock.hpp\"|<core/platform/Clock.hpp>"
+    "includes-quoted-rooted|fail|\"core/net/EventLoop.hpp\"|<core/net/EventLoop.hpp>")
 foreach(case IN LISTS includeCases)
     string(REPLACE "|" ";" fields "${case}")
     list(GET fields 0 name)
@@ -93,7 +112,7 @@ foreach(case IN LISTS includeCases)
     endif()
     set(dir "${WORK_DIR}/${name}")
     file(WRITE "${dir}/Screen.cpp" "#include <core/tui/Screen.hpp>\n")
-    file(WRITE "${dir}/Other.cpp" "// planted\n#include <${include}>\n")
+    file(WRITE "${dir}/Other.cpp" "// planted\n#include ${include}\n")
     execute_process(
         COMMAND "${CMAKE_COMMAND}" "-DSOURCE_DIR=${dir}" "-DFILES=Screen.cpp|Other.cpp" -P "${CHECKER}"
         RESULT_VARIABLE result

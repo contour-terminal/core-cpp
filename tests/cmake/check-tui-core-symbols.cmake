@@ -10,7 +10,8 @@
 # stays in it as an undefined symbol for the consumer's link to fail on. So this reads
 #
 #   - the INCLUDES of every file in tui_core's own source and header lists (FILES), refusing
-#     <core/platform/...>, <core/async/...>, <core/net/...> and the terminal half's headers; and
+#     <core/platform/...>, <core/async/...>, <core/net/...> and the terminal half's headers, whether
+#     included by the include root or by a quoted path relative to the file; and
 #   - the archive's SYMBOL TABLE (`nm -C`, every symbol, defined or undefined, demangled), refusing
 #     any symbol of those namespaces or of the terminal half's classes, typeinfo and vtables
 #     included.
@@ -48,17 +49,29 @@ if(DEFINED FILES)
         if(file MATCHES "/Screen\\.cpp$")
             set(sawScreen ON)
         endif()
-        file(STRINGS "${file}" includes REGEX "^[ \t]*#[ \t]*include[ \t]*<core/")
+        # Both spellings: <core/...> by the include root, and "..." relative to the file, which in
+        # src/core/tui/ reaches the terminal half as "Terminal.hpp", "posix/PosixIO.hpp" or
+        # "../platform/Clock.hpp" without naming core/. A quoted path is read as one under core/tui/,
+        # normalized, unless it names core/ itself.
+        file(STRINGS "${file}" includes REGEX "^[ \t]*#[ \t]*include[ \t]*(<core/|\")")
         foreach(line IN LISTS includes)
-            if(NOT line MATCHES "<(core/[^>]+)>")
+            if(line MATCHES "<(core/[^>]+)>")
+                set(header "${CMAKE_MATCH_1}")
+                set(spelled "<${header}>")
+            elseif(line MATCHES "\"([^\"]+)\"")
+                set(header "${CMAKE_MATCH_1}")
+                set(spelled "\"${header}\"")
+                if(NOT header MATCHES "^core/")
+                    cmake_path(SET header NORMALIZE "core/tui/${header}")
+                endif()
+            else()
                 continue()
             endif()
-            set(header "${CMAKE_MATCH_1}")
             if(header MATCHES "^core/(platform|async|net)/"
                OR header MATCHES "^core/tui/(Terminal|TerminalInput|TerminalChannel|ClipboardWriter|SemanticBlockClient|FilesystemImageProvider|ImageLoader)\\.hpp$"
                OR header MATCHES "^core/tui/(posix|windows|testing)/"
                OR (header MATCHES "^core/tui/runtime/" AND NOT header STREQUAL "core/tui/runtime/ModalComponent.hpp"))
-                list(APPEND problems "${file}: includes <${header}>")
+                list(APPEND problems "${file}: includes ${spelled} (<${header}>)")
             endif()
         endforeach()
     endforeach()
@@ -105,7 +118,9 @@ if(haveSymbols)
     endif()
 
     # What tui_core may not hold. core::tui::TerminalOutput and its SgrBuilder are the leaf's and are
-    # allowed; Terminal, TerminalQueryInput, TerminalInput, TerminalChannel and the runtime are the
+    # allowed; Terminal, TerminalQueryInput, TerminalInput, TerminalChannel, ClipboardWriter,
+    # SemanticBlockClient, the image file loaders (FilesystemImageProvider and ImageLoader.hpp's
+    # functions and types; the ImageProvider interface is tui_core's) and the runtime are the
     # terminal half's -- all of the runtime but ModalComponent, the pure Component contract tui_core
     # carries at its runtime/ path, which is taken out of each line before the line is read. A class
     # name must end where the match does, so `typeinfo for core::tui::Terminal` is caught and
@@ -115,7 +130,9 @@ if(haveSymbols)
         "core::async::"
         "core::net::"
         "core::tui::runtime::"
-        "core::tui::(Terminal|TerminalQueryInput|TerminalInput|TerminalChannel)([^A-Za-z0-9_]|$)")
+        "core::tui::(Terminal|TerminalQueryInput|TerminalInput|TerminalChannel)([^A-Za-z0-9_]|$)"
+        "core::tui::(ClipboardWriter|ClipboardWriterTimeouts|SemanticBlockClient|SemanticBlockResult|CommandBlockInfo)([^A-Za-z0-9_]|$)"
+        "core::tui::(FilesystemImageProvider|OwnedImage|ClipboardImage|loadImage|loadImageFromMemory|resizeImage|detectImageMediaType|isImageExtension|readClipboardImage)([^A-Za-z0-9_]|$)")
 
     string(REPLACE "\n" ";" lines "${symbols}")
     foreach(line IN LISTS lines)
