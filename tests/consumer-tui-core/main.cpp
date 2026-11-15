@@ -8,10 +8,12 @@
 #include <core/tui/FrameDiff.hpp>
 #include <core/tui/HeadlessSurface.hpp>
 #include <core/tui/Rect.hpp>
+#include <core/tui/Responsive.hpp>
 #include <core/tui/Screen.hpp>
 #include <core/tui/layout/Solve.hpp>
 
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -58,6 +60,24 @@ int main()
     if (rects.size() != 3 || rects[2] != core::tui::Rect { .x = 10, .y = 0, .width = 10, .height = 3 })
     {
         std::fprintf(stderr, "consumer-tui-core: the layout did not split the row\n");
+        return 1;
+    }
+
+    // And the layout pass over a component tree: a Responsive at the root, which fills the screen and
+    // builds the layout its size chooses, once.
+    auto builds = 0;
+    auto responsive =
+        core::tui::Responsive { { core::tui::Breakpoint { .minColumns = 0, .minRows = 0, .make = [&builds] {
+                                                             ++builds;
+                                                             return std::make_unique<Greeting>();
+                                                         } } } };
+    screen.root().addChild(responsive, { .flex = core::tui::layout::Style { .grow = 1 } });
+    screen.draw();
+    screen.draw();
+    if (builds != 1 || responsive.current() == nullptr
+        || responsive.current()->area() != core::tui::Rect { .x = 0, .y = 0, .width = 20, .height = 3 })
+    {
+        std::fprintf(stderr, "consumer-tui-core: the Responsive did not fill the screen with one layout\n");
         return 1;
     }
 

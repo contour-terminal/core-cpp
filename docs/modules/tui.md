@@ -2,7 +2,8 @@
 
 The terminal UI. Namespace `core::tui`, directory `src/core/tui/`, targets `core::tui_output`
 (with `CORE_CPP_WITH_TUI_OUTPUT`), `core::tui_core` (with `CORE_CPP_WITH_TUI_CORE`) and `core::tui`
-(with `CORE_CPP_WITH_TUI`). All three are on by default and off under Emscripten; each forces the
+(with `CORE_CPP_WITH_TUI`). All three are on by default and off under Emscripten; under WASI
+(`wasm32-wasip1`) `core::tui` is off and the other two build. Each forces the
 one below it on (`CORE_CPP_WITH_TUI` forces `CORE_CPP_WITH_TUI_CORE`, which forces
 `CORE_CPP_WITH_TUI_OUTPUT`), and the two lower options default to whatever `CORE_CPP_WITH_TUI` is on
 a first configure (a cache entry keeps its value after that, so turning the TUI off in an existing
@@ -191,12 +192,19 @@ configure generated them into (`CPM_libunicode_SOURCE`), so the guest's build do
 `tests/wasi-unicode` is that build, and `core-cpp.unicode-wasi` runs its width and grapheme table
 under Node's WASI wherever `WASI_SDK_PREFIX` names a wasi-sdk.
 
+WASI has a platform row of its own ([options](../getting-started/options.md#under-wasi)): configured with
+wasi-sdk's `wasi-sdk-p1.cmake`, core-cpp builds `core::tui_output` and `core::tui_core` and not `core::tui`,
+compiles `portable/` where a native build compiles `posix/` or `windows/`, and builds libunicode with no SIMD.
+`core-cpp.tui-core-wasi` configures it so, builds `core::tui_core` with `-fno-exceptions -fno-rtti` and
+`CORE_CPP_WERROR`, and links `tests/consumer-tui-core` into a `wasm32-wasip1` module that renders, diffs and
+lays out a component tree under Node's WASI.
+
 ## `core::tui`
 
 The rest, on top of `core::tui_core`, [platform](platform.md), [async](async.md) and
 [net](net.md), and on stb when `CORE_CPP_WITH_IMAGES` is on: `Terminal`, `TerminalInput`,
 `TerminalChannel`, `ClipboardWriter`, `SemanticBlockClient`, the image file loaders and the
-runtime. Native only: there is no terminal under Emscripten. The list below covers both halves.
+runtime. Native only: there is no terminal under Emscripten or WASI. The list below covers both halves.
 
 - **Input.** `TerminalInput` puts the terminal in raw mode, enables the protocols above and decodes
   what comes back through `VtParser` into an `InputEvent` — keys (`KeyCode`, `Modifier`), mouse,

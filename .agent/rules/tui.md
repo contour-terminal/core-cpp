@@ -39,6 +39,11 @@ Its consumers are endo, tuidu, fastcached's console tools and Lightweight's `dbt
   or `net`.
 - **The TUI never builds under Emscripten.** `CORE_CPP_WITH_TUI`, `CORE_CPP_WITH_TUI_CORE` and
   `CORE_CPP_WITH_TUI_OUTPUT` are forced off there.
+- **Under WASI the headless half builds and the terminal half does not.** WASI is its own platform
+  (`CORE_CPP_PLATFORM_WASI`): not POSIX, whatever a toolchain says of `UNIX`, so `posix/` never compiles
+  there; `portable/` does. Only rows marked `PLATFORMS any wasi` build, and a row gets the mark once
+  it is known to build there. `core-cpp.tui-core-wasi` is the proof, and it
+  links and runs a guest -- a `tui_core` file that reaches for a descriptor, a signal or a thread breaks it.
 
 ## Output goes through the destination, never to a file descriptor
 

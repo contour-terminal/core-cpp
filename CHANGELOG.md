@@ -82,6 +82,17 @@ workflow refuses one without a section here.
   the parent. Sizes and positions are capped at `MaxCells` (2^20), weights at `MaxWeight` (2^16), and a node's
   children past `MaxChildren` (2^20) are not laid out (zero-size at the parent's origin); within these bounds no
   input overflows. Reuses `core::tui::Rect` and `core::tui::Size`.
+- **WASI (`wasm32-wasip1`) is a platform of its own in the build.** A configure with wasi-sdk's
+  `wasi-sdk-p1.cmake` builds `core::base`, `core::tui_output` and `core::tui_core` -- the rows of
+  `cmake/CoreCppModules.cmake` now marked `PLATFORMS any wasi` -- and nothing else; `CORE_CPP_WITH_TUI`,
+  `CORE_CPP_WITH_IMAGES` and `CORE_CPP_WITH_TLS` are forced off there, `CORE_CPP_WITH_TUI_CORE` is not. WASI never
+  compiles `SOURCES_POSIX`, even where a toolchain sets `UNIX`; it compiles `SOURCES_WASI` and `SOURCES_PORTABLE`.
+  Threads is not linked without `_REENTRANT`, and libunicode is configured with `LIBUNICODE_SIMD_IMPLEMENTATION none`.
+  `core::currentUserPasswordEntry()` moved out of `UserInfo.cpp` into per-platform sources (no `#ifdef` left);
+  its behaviour is unchanged everywhere it built before. `core-cpp.tui-core-wasi` (label `wasm`) configures,
+  builds with `-fno-exceptions -fno-rtti` and runs a guest under Node's WASI; it skips without `WASI_SDK_PREFIX`
+  or node. Before, a WASI configure stopped in `core::base`. Consumers: none builds for WASI yet; native
+  configurations are unchanged.
 - **Every bordered widget in the headless TUI takes a `BorderStyle`**, so a view can frame all of them with
   `BorderStyle::Rounded` (`╭ ╮ ╰ ╯`). New: `CompletionPopup(BorderStyle)`, `CommandPalettePopup(BorderStyle, clock)`,
   `FuzzyPickerPopup(BorderStyle, clock)`, `Tooltip(BorderStyle)`, `ScreenConfig::tooltipBorder` (the tooltip a `Screen`

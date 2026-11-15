@@ -27,7 +27,7 @@ fastcached's `src/FastCache/Core` at `ee71f868` (and `Sha256.hpp` at `8c27b162`)
 | `<core/Ranges.hpp>` | `core::findOrNull()` and `findIfOrNull()`, which answer a pointer; `core::ranges::Iota` and `FoldLeft`, the standard facility where the library has it and a fallback where it does not |
 | `<core/Sha256.hpp>` | `core::Sha256`, SHA-256 incremental (`update()`, `finish()`) and one-shot (`hash()`), and `core::hmacSha256()`; see [SHA-256 and HMAC](#sha-256-and-hmac) below |
 | `<core/Times.hpp>` | `core::times()`, a counted range to iterate or to pipe a callable into |
-| `<core/UserInfo.hpp>` | the calling user's password-database entry (`getpwuid_r()`); none on Windows or under Emscripten |
+| `<core/UserInfo.hpp>` | the calling user's password-database entry (`getpwuid_r()` on POSIX and under Emscripten); none on Windows or under WASI |
 | `<core/Utf8Path.hpp>` | `core::pathFromUtf8()`, `pathFromTrustedUtf8()` and `pathToUtf8()`, between a UTF-8 string and a `std::filesystem::path`; see [Paths and UTF-8](#paths-and-utf-8) below |
 | `<core/Utils.hpp>` | string splitting, trimming, joining and case mapping, `toInteger()`, hex strings (`toLowerHexString()` for bytes), `${VAR}` substitution, `nextPowerOfTwo()`, `views::enumerate()`, `threadName()` |
 | `<core/WideString.hpp>` | Windows only: `core::toUtf16()` and `toUtf8()`, between UTF-8 and the UTF-16 of the wide Win32 API, and `systemErrorMessage()`, a Win32 error's message in UTF-8; see [UTF-16 on Windows](#utf-16-on-windows) below |

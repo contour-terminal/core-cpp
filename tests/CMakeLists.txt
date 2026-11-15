@@ -148,6 +148,26 @@ if(TARGET core-cpp-tui_core)
         LABELS "core-cpp;tui;wasm"
         TIMEOUT 900)
 endif()
+# WASI's row (U.11): core-cpp configured for wasm32-wasip1 lists core::tui_core and not core::tui,
+# builds it with -fno-exceptions -fno-rtti, and a consumer of it links and runs under Node's WASI.
+# Needs wasi-sdk and node as core-cpp.unicode-wasi does, and skips the same way without them.
+if(TARGET core-cpp-tui_core)
+    add_test(NAME core-cpp.tui-core-wasi
+             COMMAND "${CMAKE_COMMAND}"
+                     "-DSOURCE_DIR=${CORE_CPP_SOURCE_DIR}"
+                     "-DLIBUNICODE_SOURCE=${_coreCppLibunicodeSource}"
+                     "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/tui-core-wasi"
+                     "-DCTEST=${CMAKE_CTEST_COMMAND}"
+                     "-DGENERATOR=${CMAKE_GENERATOR}"
+                     "-DSKIP_EXIT_CODE=${CORE_CPP_SKIP_EXIT_CODE}"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/run-tui-core-wasi.cmake")
+    set_tests_properties(core-cpp.tui-core-wasi PROPERTIES
+        SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
+        SKIP_REGULAR_EXPRESSION "run-tui-core-wasi: SKIPPED"
+        FAIL_REGULAR_EXPRESSION "CMake Error"
+        LABELS "core-cpp;tui;wasm"
+        TIMEOUT 1200)
+endif()
 # No widget hard-codes a square corner (U.10): a scan of src/core/tui outside the border helper. It reads
 # files and nothing else, so it is tree-level, and the `style` job runs it.
 add_test(NAME core-cpp.tui-corners

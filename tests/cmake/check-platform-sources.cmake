@@ -4,11 +4,14 @@
 # each platform (cmake/CoreCppTargets.cmake). Emscripten sets UNIX, but it is not a native POSIX
 # system: it compiles SOURCES_EMSCRIPTEN and never SOURCES_POSIX, and a wasm-subset module compiles
 # nothing but its SOURCES_EMSCRIPTEN there. SOURCES_PORTABLE is what a platform that is neither POSIX
-# nor Windows compiles in their place: Emscripten, and one with neither UNIX nor WIN32 set at all.
+# nor Windows compiles in their place: Emscripten, WASI, and one with neither UNIX nor WIN32 set at all.
+# WASI (CORE_CPP_PLATFORM_WASI) compiles SOURCES_WASI and never SOURCES_POSIX, even where a toolchain
+# file sets UNIX.
 #
 # And which table rows build at all (core_cpp_row_builds): a native row builds nowhere under
 # Emscripten, which is what lets a module's header-only target build there while the rest of the
-# module does not, and a row whose WHEN option is OFF builds nowhere.
+# module does not, and a row whose WHEN option is OFF builds nowhere. Under WASI only a row whose
+# PLATFORMS end in wasi builds.
 #
 # Usage: cmake -DTARGETS=<cmake/CoreCppTargets.cmake> -P tests/cmake/check-platform-sources.cmake
 #
@@ -18,6 +21,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 # "<scenario>|<platform variables that are true>|<PLATFORMS>|<sources expected, in order>"
+# A PLATFORMS of two words is written with a +, any+wasi, which is a list once the scenario runs.
 set(scenarios
     "linux|UNIX,LINUX|any|common.cpp,posix.cpp,linux.cpp"
     "macos|UNIX,APPLE|any|common.cpp,posix.cpp,bsd.cpp"
@@ -25,6 +29,9 @@ set(scenarios
     "windows|WIN32|any|common.cpp,windows.cpp"
     "emscripten|UNIX,EMSCRIPTEN|any|common.cpp,emscripten.cpp,portable.cpp"
     "emscripten-subset|UNIX,EMSCRIPTEN|wasm-subset|emscripten.cpp,portable.cpp"
+    "wasi|CORE_CPP_PLATFORM_WASI|any+wasi|common.cpp,wasi.cpp,portable.cpp"
+    "wasi-with-unix|UNIX,CORE_CPP_PLATFORM_WASI|any+wasi|common.cpp,wasi.cpp,portable.cpp"
+    "linux-wasi-row|UNIX,LINUX|any+wasi|common.cpp,posix.cpp,linux.cpp"
     "neither|none|any|common.cpp,portable.cpp"
     "linux-subset|UNIX,LINUX|wasm-subset|common.cpp,posix.cpp,linux.cpp"
     "windows-subset|WIN32|wasm-subset|common.cpp,windows.cpp"
@@ -40,8 +47,15 @@ set(rowScenarios
     "row-linux-when-on|UNIX,LINUX|native|ON|ON"
     "row-linux-when-off|UNIX,LINUX|native|OFF|OFF"
     "row-emscripten-any-when-off|UNIX,EMSCRIPTEN|any|OFF|OFF"
+    "row-wasi-any|CORE_CPP_PLATFORM_WASI|any|none|OFF"
+    "row-wasi-marked|CORE_CPP_PLATFORM_WASI|any+wasi|none|ON"
+    "row-wasi-marked-when-off|CORE_CPP_PLATFORM_WASI|any+wasi|OFF|OFF"
+    "row-wasi-subset|CORE_CPP_PLATFORM_WASI|wasm-subset|none|OFF"
+    "row-wasi-native|CORE_CPP_PLATFORM_WASI|native|none|OFF"
+    "row-linux-marked|UNIX,LINUX|any+wasi|none|ON"
+    "row-emscripten-marked|UNIX,EMSCRIPTEN|any+wasi|none|ON"
 )
-set(platformVariables UNIX LINUX APPLE BSD WIN32 EMSCRIPTEN)
+set(platformVariables UNIX LINUX APPLE BSD WIN32 EMSCRIPTEN CORE_CPP_PLATFORM_WASI)
 
 if(DEFINED SCENARIO)
     # A script run defines WIN32 or UNIX for its host; only the scenario's variables are true here.
@@ -54,6 +68,7 @@ if(DEFINED SCENARIO)
     endforeach()
 
     include("${TARGETS}")
+    string(REPLACE "+" ";" PLATFORMS "${PLATFORMS}")
 
     if(DEFINED WHEN_VALUE)
         set(when "")
@@ -76,6 +91,7 @@ if(DEFINED SCENARIO)
     set(arg_SOURCES_BSD bsd.cpp)
     set(arg_SOURCES_WINDOWS windows.cpp)
     set(arg_SOURCES_EMSCRIPTEN emscripten.cpp)
+    set(arg_SOURCES_WASI wasi.cpp)
     set(arg_SOURCES_PORTABLE portable.cpp)
     core_cpp_selected_sources(arg "${PLATFORMS}" selected)
 

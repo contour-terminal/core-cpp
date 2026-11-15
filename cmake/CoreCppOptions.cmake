@@ -79,6 +79,16 @@ if(CORE_CPP_SANITIZERS AND NOT PROJECT_IS_TOP_LEVEL)
         "A parent project applies its sanitizers to the targets in the CORE_CPP_TARGETS global property.")
 endif()
 
+# The WebAssembly System Interface, preview 1 (wasm32-wasip1): wasi-sdk's toolchain files and CMake's own
+# Platform/WASI.cmake name the system WASI. Not a POSIX system -- CMake leaves UNIX unset there, and
+# cmake/CoreCppTargets.cmake does not rely on that -- and not Emscripten: no browser, no POSIX emulation, no
+# threads in preview 1. What builds there is what needs only the C++ standard library and WASI's libc: the
+# rows of cmake/CoreCppModules.cmake that say PLATFORMS any, the headless TUI among them.
+set(CORE_CPP_PLATFORM_WASI OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
+    set(CORE_CPP_PLATFORM_WASI ON)
+endif()
+
 # Under Emscripten only the WebAssembly subset builds (Part I §1), which has neither
 # a terminal nor TLS. A normal variable shadows the cache entry for core-cpp's
 # directories and leaves the parent's cache alone.
@@ -89,5 +99,18 @@ if(EMSCRIPTEN)
             message(STATUS "[core-cpp] ${_coreCppWasmOff} is OFF under Emscripten (WebAssembly subset only)")
         endif()
         set(${_coreCppWasmOff} OFF)
+    endforeach()
+endif()
+
+# Under WASI the terminal half of the TUI (a tty, signals, the event loop), image decoding and TLS are
+# off; the headless half is not -- it is what a WASI guest is built for (docs/design/tui-headless.md).
+# CORE_CPP_WITH_TUI_CORE keeps its default, which CORE_CPP_WITH_TUI's default (ON) gave it above, so a
+# plain WASI configure builds core::tui_core and core::tui_output and not core::tui.
+if(CORE_CPP_PLATFORM_WASI)
+    foreach(_coreCppWasiOff IN ITEMS CORE_CPP_WITH_TUI CORE_CPP_WITH_IMAGES CORE_CPP_WITH_TLS)
+        if(${_coreCppWasiOff})
+            message(STATUS "[core-cpp] ${_coreCppWasiOff} is OFF under WASI (no terminal, no images, no TLS)")
+        endif()
+        set(${_coreCppWasiOff} OFF)
     endforeach()
 endif()

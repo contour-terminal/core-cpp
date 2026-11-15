@@ -219,6 +219,38 @@ core_cpp_dependency(OpenSSL
 # A first configure with CORE_CPP_WITH_TUI_CORE on and no installed libunicode fetches it from GitHub,
 # and libunicode's own configure then downloads UCD.zip from www.unicode.org -- the one fetch this
 # build makes outside GitHub (docs/getting-started/building.md).
+#
+# Under WASI, LIBUNICODE_SIMD_IMPLEMENTATION none: libunicode's default for a processor it does not know is
+# std::experimental::simd, which wasi-sdk's libc++ does not have. A WASI build takes the tables a native
+# configure generated (CPM_libunicode_SOURCE, or an installed libunicode), never the generator or UCD.zip
+# (docs/design/tui-headless.md, "Where the tables come from").
+set(_coreCppLibunicodePlatformOptions "")
+if(CORE_CPP_PLATFORM_WASI)
+    list(APPEND _coreCppLibunicodePlatformOptions "LIBUNICODE_SIMD_IMPLEMENTATION none")
+endif()
+
+## @brief WRAP of the libunicode row: under WASI, where the row turns libunicode's SIMD off, a libunicode
+## core-cpp built from source compiles without -Wunused-template.
+##
+## With no SIMD, libunicode 0.9.3's `scan.cpp` leaves its `ascending()` template unused, so a consumer
+## that compiles everything beneath it with -Werror -- tests/consumer-tui-core does -- fails on a choice
+## core-cpp made. The warning is turned off on that target alone, PRIVATE, and only in the configuration
+## that causes it; the source fix (`ascending()` under the SIMD branch) belongs in libunicode. An
+## IMPORTED libunicode was built by someone else and is left alone.
+function(core_cpp_libunicode_without_simd name)
+    if(NOT CORE_CPP_PLATFORM_WASI OR NOT TARGET unicode::unicode)
+        return()
+    endif()
+    get_target_property(real unicode::unicode ALIASED_TARGET)
+    if(NOT real)
+        set(real unicode::unicode)
+    endif()
+    get_target_property(imported ${real} IMPORTED)
+    if(imported)
+        return()
+    endif()
+    target_compile_options(${real} PRIVATE -Wno-unused-template)
+endfunction()
 core_cpp_dependency(libunicode
     WHEN CORE_CPP_WITH_TUI_CORE
     TARGETS unicode::unicode
@@ -227,7 +259,8 @@ core_cpp_dependency(libunicode
         EXCLUDE_FROM_ALL YES SYSTEM YES
         OPTIONS "LIBUNICODE_TESTING OFF" "LIBUNICODE_BENCHMARK OFF" "LIBUNICODE_TOOLS OFF"
                 "LIBUNICODE_EXAMPLES OFF" "PEDANTIC_COMPILER OFF" "PEDANTIC_COMPILER_WERROR OFF"
-                "BUILD_SHARED_LIBS OFF")
+                "BUILD_SHARED_LIBS OFF" ${_coreCppLibunicodePlatformOptions}
+    WRAP core_cpp_libunicode_without_simd)
 
 ## @brief WRAP of the stb row: the INTERFACE target over the DOWNLOAD_ONLY source tree.
 ##

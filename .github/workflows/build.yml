@@ -243,7 +243,7 @@ jobs:
           -DWORK_DIR="$RUNNER_TEMP/vendor-selftest"
           -P tests/cmake/check-vendor-selftest.cmake
 
-      # Emscripten sets UNIX; it must still compile no SOURCES_POSIX file.
+      # Emscripten sets UNIX, and a WASI toolchain may; neither must compile a SOURCES_POSIX file.
       # covers: core-cpp.platform-sources
       - name: Platform source selection
         run: >-

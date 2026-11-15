@@ -110,6 +110,21 @@ and a failed `REQUIRE` by throwing, and without exception catching every such th
 test binary, which breaks the exit-code contract (a `SKIP` exits 1 instead of 77). CI runs it
 with emsdk 3.1.56 and with the latest release.
 
+For a WASI guest, wasi-sdk's toolchain file builds the headless TUI for `wasm32-wasip1`, taking
+libunicode from a tree a native configure generated its tables into, so nothing is downloaded:
+
+```sh
+cmake -S . -B out/build/wasi -G Ninja \
+      -DCMAKE_TOOLCHAIN_FILE="$WASI_SDK_PREFIX/share/cmake/wasi-sdk-p1.cmake" \
+      -DWASI_SDK_PREFIX="$WASI_SDK_PREFIX" -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CXX_FLAGS="-fno-exceptions -fno-rtti" -DCORE_CPP_TESTING=OFF \
+      -DCPM_libunicode_SOURCE="$PWD/out/build/clang-debug/_deps/libunicode-src"
+cmake --build out/build/wasi --target core-cpp-tui_core
+```
+
+`core-cpp.tui-core-wasi` does this, and links and runs a consumer under Node's WASI, wherever
+`WASI_SDK_PREFIX` names a wasi-sdk ([options](options.md#under-wasi)).
+
 ## The compiler cache
 
 A top-level build goes through the first compiler cache that works:

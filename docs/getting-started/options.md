@@ -40,6 +40,18 @@ Only the WebAssembly subset builds, and `CORE_CPP_WITH_TUI`, `CORE_CPP_WITH_TUI_
 `CORE_CPP_WITH_TUI_OUTPUT`, `CORE_CPP_WITH_IMAGES` and `CORE_CPP_WITH_TLS` are forced off, by a normal variable that leaves the parent's cache
 untouched. Without pthreads, Threads is not linked.
 
+## Under WASI
+
+`wasm32-wasip1` (wasi-sdk's `wasi-sdk-p1.cmake`, which names the system `WASI`) is a platform of its own:
+neither POSIX nor Emscripten. Only the rows of `cmake/CoreCppModules.cmake` marked `PLATFORMS any wasi`
+build -- `core::base`, `core::tui_output` and `core::tui_core` -- from their `SOURCES`, `SOURCES_WASI` and
+`SOURCES_PORTABLE`; a row earns the mark once it is known to build there, and the rest are off (`cli`, for
+one, asks the terminal for its width with `TIOCGWINSZ`, which WASI does not have). `CORE_CPP_WITH_TUI`,
+`CORE_CPP_WITH_IMAGES` and `CORE_CPP_WITH_TLS` are forced off; `CORE_CPP_WITH_TUI_CORE` is not, so a plain
+configure builds the headless TUI. Without threads (preview 1 has none), Threads is not linked, and libunicode
+is configured with `LIBUNICODE_SIMD_IMPLEMENTATION none`. `core-cpp.tui-core-wasi` builds all three and
+links and runs a program on them.
+
 ## Compiler-cache options (top-level builds only)
 
 These belong to the compiler-cache module that core-cpp shares, verbatim, with Pace (formerly

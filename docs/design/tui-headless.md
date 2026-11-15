@@ -289,6 +289,39 @@ component wherever it held one -- focus, hover, pointer capture -- since the sam
 component for its cursor shape. Breakpoints are constructor input; `Responsive::choose()` is the pure function that picks one, table-tested on its own. `FlexBox::add()` owns
 what it adds, so a breakpoint's `make` returns one object that owns its whole subtree.
 
+### WASI in the build (U.11)
+
+**As built.** WASI is a platform of its own, `CORE_CPP_PLATFORM_WASI` (`CMAKE_SYSTEM_NAME` is `WASI`, as
+wasi-sdk's toolchain files and CMake's own `Platform/WASI.cmake` set it). Finding 3 did not hold as measured:
+with CMake 4.3 and wasi-sdk 34, `UNIX` is unset under WASI, so `UNIX AND NOT EMSCRIPTEN` already left the POSIX
+sources out. The condition says `AND NOT CORE_CPP_PLATFORM_WASI` anyway, so a toolchain that does set `UNIX`
+cannot hand WASI `posix/`, and `core-cpp.platform-sources` pins that (`wasi-with-unix`). WASI compiles a
+row's `SOURCES`, the new `SOURCES_WASI` and `SOURCES_PORTABLE`.
+
+Which rows build there is data, not a rule: `PLATFORMS any wasi`. Treating every `any` row as buildable was
+tried first and was false -- `cli` asks the terminal for its width with `TIOCGWINSZ` and catches exceptions --
+so the mark is given to a row once it builds, links and runs there: `core::base`, `core::tui_output` and
+`core::tui_core`. `platform` and `net`, whose WebAssembly subset leans on Emscripten's POSIX emulation, and
+everything else are off, and the configure says so per module. Under WASI the options force
+`CORE_CPP_WITH_TUI`, `CORE_CPP_WITH_IMAGES` and `CORE_CPP_WITH_TLS` off and leave `CORE_CPP_WITH_TUI_CORE` at
+its default; preview 1 has no threads, so Threads is not linked (`_REENTRANT` tells `wasm32-wasip1-threads`
+apart); libunicode gets `LIBUNICODE_SIMD_IMPLEMENTATION none`.
+
+`core::base` needed two things. `getentropy()` is in WASI's libc, so `PosixRandom.cpp` is its random source
+too. `UserInfo.cpp` included `<pwd.h>` behind `#ifndef _WIN32`; it now holds only the platform-free
+`userHomeDirectory()`, and `currentUserPasswordEntry()` is per platform -- `PosixUserInfo.cpp` (POSIX,
+Emscripten) or `NoPasswordDatabase.cpp` (Windows, WASI) -- with no `#ifdef` left.
+
+`core-cpp.tui-core-wasi` (`tests/cmake/run-tui-core-wasi.cmake`) is the test: core-cpp configured with
+`wasi-sdk-p1.cmake` and default options lists `core::tui_core` and `core::tui_output`, not `core::tui`, and
+builds everything it enables with `-fno-exceptions -fno-rtti` and `CORE_CPP_WERROR`; then
+`tests/consumer-tui-core` links a `wasm32-wasip1` module that renders, diffs, lays out and runs a
+`Responsive`, and runs it under Node's WASI. Both take libunicode from the tables the enclosing build
+generated. Locally, wasi-sdk 34 and Node 22: it links (the Release module is 3.9 MB unstripped) and passes.
+With no SIMD, libunicode's `scan.cpp` leaves its `ascending()` template unused, which a consumer's `-Werror`
+makes fatal. core-cpp chose no SIMD, so the libunicode row's WRAP turns `-Wunused-template` off on that one
+target, PRIVATE, under WASI only; the source fix belongs in libunicode.
+
 ## Order
 
 U.1 (this target), U.2 (OS-free output, no RTTI), U.3 (headless surface, `diffFrames`), U.4 (no
