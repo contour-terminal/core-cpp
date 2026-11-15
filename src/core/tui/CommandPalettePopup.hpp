@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <core/Clock.hpp>
+#include <core/Defines.hpp>
 #include <core/tui/CommandRegistry.hpp>
 #include <core/tui/Component.hpp>
 #include <core/tui/InputEvent.hpp>
@@ -34,8 +36,20 @@ enum class CommandPaletteAction : std::uint8_t
 class CommandPalettePopup: public Component
 {
   public:
-    CommandPalettePopup() = default;
+    /// @brief Constructs a hidden palette timed by the process's steady clock.
+    CommandPalettePopup();
+
+    /// @brief Constructs a hidden palette whose filter field is timed by @p clock.
+    /// @param clock The clock the filter field measures on (not owned; must outlive the palette).
+    explicit CommandPalettePopup(IClock const& clock CORE_LIFETIMEBOUND);
+
+    /// A clock is kept, not copied: a temporary would dangle, so an rvalue clock is refused.
+    explicit CommandPalettePopup(IClock const&& clock) = delete;
+
     ~CommandPalettePopup() override = default;
+
+    /// @brief Returns the clock the input field's multi-clicks are measured on.
+    [[nodiscard]] IClock const& clock() const noexcept { return _filterField.clock(); }
 
     // --- Component Interface ---
 

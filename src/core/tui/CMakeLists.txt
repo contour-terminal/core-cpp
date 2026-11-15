@@ -278,7 +278,9 @@ core_cpp_add_test(tui NAME tui_core
         ScrollableSelection_test.cpp
         Sixel_test.cpp
         SmartCaseMatch_test.cpp
+        Spinner_test.cpp
         StyledText_test.cpp
+        TimerUtils_test.cpp
         TreeTableView_test.cpp
         Unicode_test.cpp
         VtParser_test.cpp)

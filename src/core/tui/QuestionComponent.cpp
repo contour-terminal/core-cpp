@@ -11,7 +11,8 @@
 namespace core::tui
 {
 
-QuestionComponent::QuestionComponent(QuestionConfig config): _config(std::move(config))
+QuestionComponent::QuestionComponent(QuestionConfig config, IClock const& clock):
+    _config(std::move(config)), _inputField(clock)
 {
     _inputField.setPrompt("\xe2\x9d\xaf "); // ❯
 

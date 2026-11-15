@@ -13,8 +13,8 @@
 namespace core::tui
 {
 
-SemanticBlockClient::SemanticBlockClient(TerminalOutput& output, TerminalInput& input):
-    _output(output), _input(input)
+SemanticBlockClient::SemanticBlockClient(TerminalOutput& output, TerminalInput& input, IClock const& clock):
+    _output(output), _input(input), _clock(clock)
 {
 }
 
@@ -250,11 +250,11 @@ auto SemanticBlockClient::parseBlockJson(std::string_view json) -> std::optional
 
 auto SemanticBlockClient::pollForDcs(int timeoutMs) -> std::optional<std::string>
 {
-    auto const deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    auto const deadline = _clock.now() + std::chrono::milliseconds(timeoutMs);
 
     while (true)
     {
-        auto const now = std::chrono::steady_clock::now();
+        auto const now = _clock.now();
         if (now >= deadline)
             break;
 

@@ -13,8 +13,8 @@
 namespace core::tui
 {
 
-TreeTableView::TreeTableView(TreeTableModel& model, TreeTableConfig config) noexcept:
-    _model(model), _config(config)
+TreeTableView::TreeTableView(TreeTableModel& model, TreeTableConfig config, IClock const& clock) noexcept:
+    _model(model), _config(config), _clock(clock)
 {
 }
 
@@ -220,7 +220,7 @@ EventResult TreeTableView::onEvent(InputEvent const& event)
                 return EventResult::Ignored;
             }
 
-            auto const now = std::chrono::steady_clock::now();
+            auto const now = _clock.now();
             auto const isDoubleClick =
                 _hadClick && _lastClickRow == *index && (now - _lastClickTime) <= DoubleClickInterval;
 

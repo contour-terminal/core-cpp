@@ -55,6 +55,8 @@ others in notes.
 | `src/core/Assert.hpp` | contour-terminal/contour | `src/crispy/Assert.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | `Require`/`Guarantee`/`todo`/`unreachable`/`setFailHandler`; `fatal`/`SoftRequire` split out to `src/core/log/Assert.hpp` to close a base→log layering cycle; `fail()` has no try block (noexcept already ends the process on a throwing handler) and `throwOrFail()` is added, so the header compiles with exceptions off (core-cpp, U.4) |
 | `src/core/Base64.hpp` | contour-terminal/contour | `src/crispy/Base64.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | post-import fix (Task A9): `decodeLength()` stops at the table's 64 sentinel rather than at its size, so it measures the base64 prefix; `decode()`'s index lambda no longer copies the 256-byte table per call |
 | `src/core/Base64_test.cpp` | contour-terminal/contour | `src/crispy/Base64_test.cpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | post-import additions (Task A9): `decodeLength()`'s cases |
+| `src/core/Clock.hpp` | contour-terminal/endo | `src/platform/Clock.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the steady half of `src/core/platform/Clock.hpp` (`IClock`, `SteadyClock`, `ManualClock`, `defaultSteadyClock()`, the steady time types), moved into `core::base` in U.5 so the headless TUI takes the same seam; `core/platform/Clock.hpp` names them by using-declarations |
+| `src/core/Clock_test.cpp` | contour-terminal/endo | `src/platform/Clock_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the steady-clock cases of `src/core/platform/Clock_test.cpp`, moved with the header (U.5) |
 | `src/core/CMakeLists.txt` | origin: core-cpp | - | - | - |
 | `src/core/Config.hpp.in` | origin: core-cpp | - | - | generates `core/Config.hpp` |
 | `src/core/Deferred.hpp` | contour-terminal/contour | `src/crispy/Deferred.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | - |
@@ -674,6 +676,7 @@ others in notes.
 | `src/core/tui/SmartCaseMatch_test.cpp` | contour-terminal/endo | `src/tui/SmartCaseMatch_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | core-cpp#30: `using namespace core::tui::completer` beside `core::tui` |
 | `src/core/tui/Spinner.cpp` | contour-terminal/endo | `src/tui/Spinner.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | spells the constants `Spinner.hpp` renames |
 | `src/core/tui/Spinner.hpp` | contour-terminal/endo | `src/tui/Spinner.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | private `constexpr` constants renamed to CamelCase: `FilledChar`, `EmptyChar`, `PartialChars` |
+| `src/core/tui/Spinner_test.cpp` | origin: core-cpp | - | - | the spinner's frame timing on a `ManualClock` (U.5) |
 | `src/core/tui/StatusBar.cpp` | contour-terminal/endo | `src/tui/StatusBar.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/StatusBar.hpp` | contour-terminal/endo | `src/tui/StatusBar.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/StbImageImpl.cpp` | contour-terminal/endo | `src/tui/StbImageImpl.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the warning pragmas are gone: the module's CMakeLists.txt compiles this file with warnings off and `-fno-sanitize=undefined`, as per-source PRIVATE options; defines `STBI_WINDOWS_UTF8`, so `stbi_load()` opens a UTF-8 file name with `_wfopen_s()` on Windows |
@@ -700,6 +703,7 @@ others in notes.
 | `src/core/tui/Theme.cpp` | contour-terminal/endo | `src/tui/Theme.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | A7 fix round 1b: the path-gradient colours are described as blue and teal, not as one application's signature |
 | `src/core/tui/Theme.hpp` | contour-terminal/endo | `src/tui/Theme.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | A7 fix round 1b: `categoryColorFromIndex()`'s Doxygen names a host's own highlighter rather than `endo::TokenCategory` |
 | `src/core/tui/TimerUtils.hpp` | contour-terminal/endo | `src/tui/TimerUtils.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/TimerUtils_test.cpp` | origin: core-cpp | - | - | `remainingMs()` on a `ManualClock` (U.5) |
 | `src/core/tui/Tooltip.cpp` | contour-terminal/endo | `src/tui/Tooltip.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Tooltip.hpp` | contour-terminal/endo | `src/tui/Tooltip.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/TreeTableView.cpp` | contour-terminal/endo | `src/tui/TreeTableView.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |

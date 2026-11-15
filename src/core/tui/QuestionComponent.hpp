@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <core/Clock.hpp>
+#include <core/Defines.hpp>
 #include <core/tui/Component.hpp>
 #include <core/tui/InputField.hpp>
 #include <core/tui/List.hpp>
@@ -66,8 +68,17 @@ class QuestionComponent: public runtime::ModalComponent<QuestionResult>
   public:
     /// @brief Constructs a question component with the given configuration.
     /// @param config The question configuration.
-    explicit QuestionComponent(QuestionConfig config);
+    /// @param clock The clock the free-text field measures on (not owned; must outlive the component).
+    explicit QuestionComponent(QuestionConfig config,
+                               IClock const& clock CORE_LIFETIMEBOUND = defaultSteadyClock());
+
+    /// A clock is kept, not copied: a temporary would dangle, so an rvalue clock is refused.
+    QuestionComponent(QuestionConfig config, IClock const&& clock) = delete;
+
     ~QuestionComponent() override = default;
+
+    /// @brief Returns the clock the input field's multi-clicks are measured on.
+    [[nodiscard]] IClock const& clock() const noexcept { return _inputField.clock(); }
 
     // --- Component Interface ---
 

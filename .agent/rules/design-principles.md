@@ -28,7 +28,7 @@ given, never through a concrete type, a singleton, or a free function with hidde
 
 | Resource | Seam | Test double |
 |---|---|---|
-| Time | `core::platform::IClock`, `IWallClock` | `ManualClock`, `ManualWallClock` |
+| Time | `core::IClock` (`<core/Clock.hpp>`), `core::platform::IWallClock` | `core::ManualClock`, `core::platform::ManualWallClock` |
 | Readiness and completion | `core::net::IoBackend` | `testing::ScriptedBackend`, `testing::NullBackend` |
 | The browser's event loop | `core::net::IHostScheduler` | `testing::ManualHostScheduler` |
 | An event loop | `core::net::EventLoop` (an `IExecutor`) | `testing::TestLoop` |

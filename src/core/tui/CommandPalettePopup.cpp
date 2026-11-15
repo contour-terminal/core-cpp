@@ -18,6 +18,14 @@ namespace core::tui
 // Component Interface
 // ============================================================================
 
+CommandPalettePopup::CommandPalettePopup(): CommandPalettePopup(defaultSteadyClock())
+{
+}
+
+CommandPalettePopup::CommandPalettePopup(IClock const& clock): _filterField(clock)
+{
+}
+
 void CommandPalettePopup::render(Canvas& canvas)
 {
     if (!visible())

@@ -171,6 +171,14 @@ namespace
     }
 } // namespace
 
+InputField::InputField(): InputField(defaultSteadyClock())
+{
+}
+
+InputField::InputField(IClock const& clock): _clock(clock)
+{
+}
+
 auto InputField::processEvent(InputEvent const& event) -> InputFieldAction
 {
     if (auto const* key = std::get_if<KeyEvent>(&event))
@@ -2231,7 +2239,7 @@ auto InputField::handleMouse(MouseEvent::Type type, int line, int column, Modifi
 
 auto InputField::detectClickCount(int line, int column) -> int
 {
-    auto const now = std::chrono::steady_clock::now();
+    auto const now = _clock.now();
     auto const elapsed = now - _lastClickTime;
 
     // Check if this is a continuation of multi-click sequence

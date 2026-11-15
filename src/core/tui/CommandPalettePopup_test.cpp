@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/Clock.hpp>
 #include <core/tui/CommandPalettePopup.hpp>
 #include <core/tui/CommandRegistry.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+
+#include <type_traits>
 
 using namespace core::tui;
 
@@ -266,4 +269,16 @@ TEST_CASE("CommandPalettePopup.showSubMenu")
 
     popup.showSubMenu(std::move(items), "Pick One");
     CHECK(popup.visible());
+}
+
+TEST_CASE("CommandPalettePopup.injectedClockReachesTheFilterField")
+{
+    // The filter field's multi-click window runs on the clock the palette was given.
+    auto const clock = core::ManualClock {};
+    auto const palette = CommandPalettePopup { clock };
+    CHECK(&palette.clock() == &clock);
+    CHECK(&CommandPalettePopup {}.clock() == &core::defaultSteadyClock());
+
+    // A clock is kept, so a temporary one is refused at compile time.
+    STATIC_CHECK_FALSE(std::is_constructible_v<CommandPalettePopup, core::ManualClock>);
 }

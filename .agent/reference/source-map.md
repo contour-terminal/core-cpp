@@ -37,12 +37,14 @@ src/core/
   *.hpp, *.cpp              core::base (crispy, fastcached Core): Assert, Defines, Environment,
                             Escape, FNV, Flags, Times, UserInfo, Utils, Overloaded, Deferred,
                             Base64, Generator (endo), Profiling, Ranges, Sha256, Utf8Path,
-                            WideString (Windows only: UTF-8 and UTF-16 for the wide Win32 API)
+                            WideString (Windows only: UTF-8 and UTF-16 for the wide Win32 API),
+                            Clock (IClock, SteadyClock, ManualClock; moved from platform in U.5)
   log/                      core::log (crispy): LogStore, LogSink; Assert (fatal, SoftRequire)
   cli/                      core::cli (crispy): CLI, App
   codec/                    core::codec (contour vtbackend state codec): Writer, Reader (varint streams, frames),
                             FieldEncoder, FieldDecoder (tolerant `visitFields` structs), DecodeError
-  platform/                 core::platform (endo platform, one merged Clock): Clock, Types,
+  platform/                 core::platform (endo platform, one merged Clock): Clock (re-exports
+                            core/Clock.hpp; CachedClock, the wall clocks), Types,
                             PlatformError, Wakeup, SignalHandler, SystemPipe, WinsockInit,
                             MessageQueue, FileSystem, FileInfoProvider, ProcessEnvironment,
                             UserPaths, PathUtils, GlobMatch, FileUri, SystemInfo, StringUtils;

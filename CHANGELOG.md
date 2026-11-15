@@ -11,6 +11,20 @@ workflow refuses one without a section here.
 
 ### Breaking
 
+- **`core::platform::IClock` is `core::IClock` now** (`<core/Clock.hpp>`, in `core::base`), with `SteadyClock`,
+  `ManualClock`, `defaultSteadyClock()`, `SteadyTimePoint` and `SteadyDuration`. `<core/platform/Clock.hpp>` includes it
+  and names each in `core::platform` by a using-declaration, so every `core::platform::` spelling still compiles and
+  names the same type; `CachedClock` and the wall clocks stay in `core::platform`. What breaks is a forward
+  declaration: `namespace core::platform { class IClock; }` now conflicts with the using-declaration once
+  `<core/platform/Clock.hpp>` is seen. Migrate it to `namespace core { class IClock; }`, or include `<core/Clock.hpp>`.
+  Consumers grepped: contour forward-declares it in `src/vtbackend/screen/LinkDetector.hpp:33-36` and must change
+  that on its next re-vendor; endo, fastcached and Lightweight's `dbtool` declare none.
+- **`core::tui::remainingMs()` takes the clock it measures on**: `remainingMs(clock, start, timeout)`, for both the
+  time-point and the optional overload. Migrate `remainingMs(start, timeout)` to
+  `remainingMs(core::defaultSteadyClock(), start, timeout)`, or pass the clock the start was read from. Consumers
+  grepped: endo calls it five times (`src/shell/ui/PromptComponent.cpp:1872`, `:1877`, `:1884`,
+  `src/agent/ui/AgentInputComponent.cpp:680`, `:687`) and must change; fastcached and `dbtool` do not use it; contour
+  does not vendor `tui`.
 - **`core::tui::Screen` draws on a `ScreenSurface`, not a `Terminal`.** The constructor takes `ScreenSurface&`, which
   `Terminal` now implements, so `Screen(terminal, config)` compiles unchanged. `Screen::terminal()` is gone; it is
   `Screen::surface()`, returning the `ScreenSurface&`. A caller that reached `Terminal`-only members through it keeps
@@ -32,6 +46,16 @@ workflow refuses one without a section here.
 
 ### Added
 
+- **The headless TUI measures time on an injected `core::IClock`.** `Screen` (its hover delay), `HoverState`,
+  `Spinner`, `InputField` and `TreeTableView` (their double-click windows) and, in the terminal half,
+  `SemanticBlockClient` take an `IClock const&` as a last constructor argument, by default
+  `core::defaultSteadyClock()`, and none of them reads `std::chrono::steady_clock` any more. `CommandPalettePopup`,
+  `FuzzyPickerPopup` and `QuestionComponent` take one the same way and hand it to their `InputField`. The clock is
+  kept, so each of these constructors refuses a temporary one (a deleted `IClock const&&` overload) and marks the
+  parameter with the new `CORE_LIFETIMEBOUND` (`<core/Defines.hpp>`: `[[clang::lifetimebound]]` under Clang,
+  nothing elsewhere). Existing constructor
+  calls compile unchanged and keep the steady clock; a test passes a `core::ManualClock` and advances it instead of
+  sleeping. `HoverState::tick()` takes a `core::SteadyTimePoint`, the same type it took before.
 - **`core::throwOrFail(exception)`** (`<core/Assert.hpp>`): `throw exception;` where exceptions are compiled in, and
   a `Require()`-style failure where they are not, for the throws a `-fno-exceptions` build compiles.
   `pathFromTrustedUtf8()` throws through it, unchanged where exceptions are on. Every consumer builds with exceptions

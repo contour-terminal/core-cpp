@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/Clock.hpp>
 #include <core/tui/Buffer.hpp>
 #include <core/tui/Canvas.hpp>
 #include <core/tui/CellTestSupport.hpp>
@@ -9,6 +10,7 @@
 
 #include <algorithm>
 #include <ranges>
+#include <type_traits>
 
 using core::tui::test::requireCell;
 
@@ -406,4 +408,15 @@ TEST_CASE("List.space_no_toggle_in_single_select", "[tui][list]")
 
     auto const action = list.processEvent(charKey(' '));
     CHECK(action == ListAction::None);
+}
+
+TEST_CASE("QuestionComponent.injectedClockReachesTheInputField")
+{
+    auto const clock = core::ManualClock {};
+    auto const question = QuestionComponent(QuestionConfig { .questionText = "Name?" }, clock);
+    CHECK(&question.clock() == &clock);
+    CHECK(&QuestionComponent(QuestionConfig { .questionText = "Name?" }).clock()
+          == &core::defaultSteadyClock());
+
+    STATIC_CHECK_FALSE(std::is_constructible_v<QuestionComponent, QuestionConfig, core::ManualClock>);
 }

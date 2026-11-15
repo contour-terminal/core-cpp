@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/Clock.hpp>
 #include <core/tui/Buffer.hpp>
 #include <core/tui/Canvas.hpp>
 #include <core/tui/CellTestSupport.hpp>
@@ -10,7 +11,9 @@
 
 #include <algorithm>
 #include <ranges>
+#include <type_traits>
 
+using core::ManualClock;
 using core::tui::test::requireCell;
 
 using namespace core::tui;
@@ -914,7 +917,8 @@ TEST_CASE("InputField.mouse_drag_creates_selection")
 
 TEST_CASE("InputField.double_click_selects_word")
 {
-    InputField field;
+    auto const clock = ManualClock {}; // Frozen: every click lands inside the multi-click window.
+    auto field = InputField { clock };
     field.setText("hello world");
 
     // First click
@@ -930,7 +934,8 @@ TEST_CASE("InputField.double_click_selects_word")
 
 TEST_CASE("InputField.double_click_on_path_selects_component")
 {
-    InputField field;
+    auto const clock = ManualClock {}; // Frozen: every click lands inside the multi-click window.
+    auto field = InputField { clock };
     field.setText("/home/user/file.txt");
 
     // First click on "user"
@@ -946,7 +951,8 @@ TEST_CASE("InputField.double_click_on_path_selects_component")
 
 TEST_CASE("InputField.triple_click_selects_line")
 {
-    InputField field;
+    auto const clock = ManualClock {}; // Frozen: every click lands inside the multi-click window.
+    auto field = InputField { clock };
     field.setMultiline(true);
     field.setText("first line\nsecond line\nthird line");
 
@@ -965,9 +971,10 @@ TEST_CASE("InputField.triple_click_selects_line")
     CHECK(field.selectedText() == "second line\n");
 }
 
-TEST_CASE("InputField.click_count_resets_after_timeout")
+TEST_CASE("InputField.click_count_resets_after_moving_away")
 {
-    InputField field;
+    auto const clock = ManualClock {};
+    auto field = InputField { clock };
     field.setText("hello world");
 
     // First click
@@ -975,10 +982,54 @@ TEST_CASE("InputField.click_count_resets_after_timeout")
     (void) field.handleMouse(MouseEvent::Type::Release, 0, 5, Modifier::None);
     CHECK(!field.hasSelection());
 
-    // Wait... (simulated by just doing another single click at different position)
-    // Click at different position should reset click count
+    // A click at a different position, no time later, starts a new count.
     (void) field.handleMouse(MouseEvent::Type::Press, 0, 0, Modifier::None);
     CHECK(!field.hasSelection()); // Single click, no selection
+}
+
+TEST_CASE("InputField.double_click_is_timed_on_the_injected_clock")
+{
+    auto clock = ManualClock {};
+    auto field = InputField { clock };
+    field.setText("hello world");
+    auto const click = [&field] {
+        auto const action = field.handleMouse(MouseEvent::Type::Press, 0, 7, Modifier::None);
+        (void) field.handleMouse(MouseEvent::Type::Release, 0, 7, Modifier::None);
+        return action;
+    };
+
+    SECTION("a second click 399 ms later is a double-click")
+    {
+        (void) click();
+        clock.advance(std::chrono::milliseconds(399));
+        CHECK(click() == InputFieldAction::Changed);
+        CHECK(field.selectedText() == "world");
+    }
+
+    SECTION("a second click 400 ms later is a new single click")
+    {
+        (void) click();
+        clock.advance(std::chrono::milliseconds(400));
+        (void) click();
+        CHECK_FALSE(field.hasSelection());
+    }
+
+    SECTION("a third click inside the window of the second is a triple-click")
+    {
+        field.setMultiline(true);
+        field.setText("first line\nsecond line");
+        auto const press = [&field] {
+            auto const action = field.handleMouse(MouseEvent::Type::Press, 1, 3, Modifier::None);
+            (void) field.handleMouse(MouseEvent::Type::Release, 1, 3, Modifier::None);
+            return action;
+        };
+        (void) press();
+        clock.advance(std::chrono::milliseconds(300));
+        (void) press();
+        clock.advance(std::chrono::milliseconds(300)); // 600 ms after the first, 300 after the second
+        CHECK(press() == InputFieldAction::Changed);
+        CHECK(field.selectedText() == "second line");
+    }
 }
 
 TEST_CASE("InputField.select_word_fish_style")
@@ -2556,4 +2607,10 @@ TEST_CASE("InputField.hscroll_resets_on_clear_and_setText")
     buffer = renderSingleLine(field, 10);
     CHECK(rowText(buffer).substr(0, 3) == "abc");
     CHECK(buffer.cursor().x == 3);
+}
+
+TEST_CASE("InputField.a_temporary_clock_is_refused")
+{
+    STATIC_CHECK(std::is_constructible_v<InputField, ManualClock&>);
+    STATIC_CHECK_FALSE(std::is_constructible_v<InputField, ManualClock>);
 }

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <core/Clock.hpp>
+#include <core/Defines.hpp>
 #include <core/tui/Component.hpp>
 #include <core/tui/InputEvent.hpp>
 #include <core/tui/InputField.hpp>
@@ -34,9 +36,20 @@ enum class FuzzyPickerAction : std::uint8_t
 class FuzzyPickerPopup: public Component
 {
   public:
-    FuzzyPickerPopup() { setVisible(false); }
+    /// @brief Constructs a hidden picker timed by the process's steady clock.
+    FuzzyPickerPopup();
+
+    /// @brief Constructs a hidden picker whose filter field is timed by @p clock.
+    /// @param clock The clock the filter field measures on (not owned; must outlive the picker).
+    explicit FuzzyPickerPopup(IClock const& clock CORE_LIFETIMEBOUND);
+
+    /// A clock is kept, not copied: a temporary would dangle, so an rvalue clock is refused.
+    explicit FuzzyPickerPopup(IClock const&& clock) = delete;
 
     ~FuzzyPickerPopup() override = default;
+
+    /// @brief Returns the clock the input field's multi-clicks are measured on.
+    [[nodiscard]] IClock const& clock() const noexcept { return _filterField.clock(); }
 
     // --- Component Interface ---
 

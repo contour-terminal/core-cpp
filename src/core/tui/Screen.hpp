@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <core/Clock.hpp>
+#include <core/Defines.hpp>
 #include <core/tui/Buffer.hpp>
 #include <core/tui/Component.hpp>
 #include <core/tui/CursorShape.hpp>
@@ -109,7 +111,13 @@ class Screen
     /// Constructs a Screen that draws on the given surface.
     /// @param surface What the screen draws on (a @c Terminal on a real terminal); must outlive it.
     /// @param config Optional configuration.
-    explicit Screen(ScreenSurface& surface, ScreenConfig config = {});
+    /// @param clock The clock hover delays are measured on (not owned; must outlive the screen).
+    explicit Screen(ScreenSurface& surface,
+                    ScreenConfig config = {},
+                    IClock const& clock CORE_LIFETIMEBOUND = defaultSteadyClock());
+
+    /// A clock is kept, not copied: a temporary would dangle, so an rvalue clock is refused.
+    Screen(ScreenSurface& surface, ScreenConfig config, IClock const&& clock) = delete;
 
     ~Screen();
 

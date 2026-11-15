@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <core/Clock.hpp>
+#include <core/Defines.hpp>
 #include <core/tui/TerminalOutput.hpp>
 
 #include <array>
@@ -43,12 +45,25 @@ class Spinner
   public:
     /// @brief Constructs a spinner with the given type.
     /// @param type The spinner animation pattern.
-    explicit Spinner(SpinnerType type = SpinnerType::Dots);
+    /// @param clock The clock frames are timed on (not owned; must outlive this spinner).
+    explicit Spinner(SpinnerType type = SpinnerType::Dots,
+                     IClock const& clock CORE_LIFETIMEBOUND = defaultSteadyClock());
+
+    /// A clock is kept, not copied: a temporary would dangle, so an rvalue clock is refused.
+    Spinner(SpinnerType type, IClock const&& clock) = delete;
 
     /// @brief Constructs a spinner with custom frames.
     /// @param frames The frames to animate through.
     /// @param interval The time between frames.
-    Spinner(std::span<std::string_view const> frames, std::chrono::milliseconds interval);
+    /// @param clock The clock frames are timed on (not owned; must outlive this spinner).
+    Spinner(std::span<std::string_view const> frames,
+            std::chrono::milliseconds interval,
+            IClock const& clock CORE_LIFETIMEBOUND = defaultSteadyClock());
+
+    /// A clock is kept, not copied: a temporary would dangle, so an rvalue clock is refused.
+    Spinner(std::span<std::string_view const> frames,
+            std::chrono::milliseconds interval,
+            IClock const&& clock) = delete;
 
     /// @brief Advances the spinner to the next frame if enough time has passed.
     /// @return True if the frame changed and a re-render is needed.
@@ -96,7 +111,8 @@ class Spinner
     std::span<std::string_view const> _frames;
     std::chrono::milliseconds _interval;
     std::size_t _frameIndex = 0;
-    std::chrono::steady_clock::time_point _lastTick;
+    IClock const* _clock; ///< Never null; a pointer so that a Spinner stays assignable.
+    SteadyTimePoint _lastTick;
 };
 
 /// @brief A progress bar component.

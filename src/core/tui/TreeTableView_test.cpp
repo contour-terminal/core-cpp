@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/Clock.hpp>
 #include <core/tui/TreeTableView.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <map>
 #include <ranges>
 #include <string>
+#include <type_traits>
 #include <vector>
 
+using core::ManualClock;
 using namespace core::tui;
 
 namespace
@@ -232,7 +236,8 @@ TEST_CASE("TreeTableView: left-click selects the row under the pointer", "[treet
 TEST_CASE("TreeTableView: double-click activates (descends into) the row", "[treetable][mouse]")
 {
     FakeModel model;
-    TreeTableView view(model);
+    auto const clock = ManualClock {}; // Frozen: both presses land inside the double-click window.
+    TreeTableView view(model, {}, clock);
     view.setArea(Rect { .x = 0, .y = 0, .width = 20, .height = 10 });
 
     // Row 3 is index 1 = node 2 ("dir"), which is descendable. Two quick presses descend.
@@ -246,13 +251,41 @@ TEST_CASE("TreeTableView: double-click activates (descends into) the row", "[tre
 TEST_CASE("TreeTableView: two clicks on different rows do not activate", "[treetable][mouse]")
 {
     FakeModel model;
-    TreeTableView view(model);
+    auto const clock = ManualClock {}; // Frozen: both presses land inside the double-click window.
+    TreeTableView view(model, {}, clock);
     view.setArea(Rect { .x = 0, .y = 0, .width = 20, .height = 10 });
 
     CHECK(view.onEvent(mousePress(3)) == EventResult::Handled); // index 1 (dir)
     CHECK(view.onEvent(mousePress(4)) == EventResult::Handled); // index 2 (leaf) — different row
     CHECK(model.current() == 0);                                // no descend
     CHECK(view.cursorIndex() == 2);
+}
+
+TEST_CASE("TreeTableView: a double-click is timed on the injected clock", "[treetable][mouse]")
+{
+    FakeModel model;
+    auto clock = ManualClock {};
+    TreeTableView view(model, {}, clock);
+    view.setArea(Rect { .x = 0, .y = 0, .width = 20, .height = 10 });
+
+    SECTION("a second press 400 ms later activates")
+    {
+        CHECK(view.onEvent(mousePress(3)) == EventResult::Handled);
+        clock.advance(std::chrono::milliseconds(400));
+        CHECK(view.onEvent(mousePress(3)) == EventResult::Handled);
+        CHECK(model.current() == 2);
+    }
+
+    SECTION("a second press 401 ms later only selects, and starts a new double-click")
+    {
+        CHECK(view.onEvent(mousePress(3)) == EventResult::Handled);
+        clock.advance(std::chrono::milliseconds(401));
+        CHECK(view.onEvent(mousePress(3)) == EventResult::Handled);
+        CHECK(model.current() == 0);
+        clock.advance(std::chrono::milliseconds(100));
+        CHECK(view.onEvent(mousePress(3)) == EventResult::Handled);
+        CHECK(model.current() == 2);
+    }
 }
 
 TEST_CASE("TreeTableView: clicks on the header or below the list are ignored", "[treetable][mouse]")
@@ -386,4 +419,10 @@ TEST_CASE("TreeTableView: g / G jump to top / bottom in onEvent", "[treetable]")
     CHECK(view.cursorIndex() == 49);
     CHECK(view.onEvent(key(U'g')) == EventResult::Handled);
     CHECK(view.cursorIndex() == 0);
+}
+
+TEST_CASE("TreeTableView: a temporary clock is refused", "[treetable]")
+{
+    STATIC_CHECK(std::is_constructible_v<TreeTableView, TreeTableModel&, TreeTableConfig, ManualClock&>);
+    STATIC_CHECK_FALSE(std::is_constructible_v<TreeTableView, TreeTableModel&, TreeTableConfig, ManualClock>);
 }

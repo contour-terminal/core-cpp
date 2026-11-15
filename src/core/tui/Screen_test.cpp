@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/Clock.hpp>
 #include <core/tui/CellTestSupport.hpp>
 #include <core/tui/HeadlessSurface.hpp>
 #include <core/tui/HoverState.hpp>
@@ -18,10 +19,11 @@
 #include <ranges>
 #include <string>
 #include <string_view>
-#include <thread>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
+using core::ManualClock;
 using core::tui::test::requireCell;
 
 using namespace core::tui;
@@ -246,7 +248,8 @@ TEST_CASE("HoverState.initialState")
 
 TEST_CASE("HoverState.onMouseMove_startsHover")
 {
-    HoverState hover(std::chrono::milliseconds(100));
+    auto clock = ManualClock {};
+    HoverState hover(std::chrono::milliseconds(100), clock);
 
     hover.onMouseMove(10, 20, nullptr);
 
@@ -254,50 +257,51 @@ TEST_CASE("HoverState.onMouseMove_startsHover")
     CHECK(hover.currentHover().has_value());
     CHECK(hover.currentHover()->x == 10);
     CHECK(hover.currentHover()->y == 20);
-    CHECK(hover.timeoutMs() > 0); // Timeout active
-    CHECK(hover.timeoutMs() <= 100);
+    CHECK(hover.timeoutMs() == 100); // The whole delay: no time has passed on the clock.
 }
 
 TEST_CASE("HoverState.onMouseMove_samePosition_noReset")
 {
-    HoverState hover(std::chrono::milliseconds(100));
+    auto clock = ManualClock {};
+    HoverState hover(std::chrono::milliseconds(100), clock);
 
     hover.onMouseMove(10, 20, nullptr);
     auto const initialTimeout = hover.timeoutMs();
 
-    // Small delay
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    clock.advance(std::chrono::milliseconds(10));
 
     // Same position - should NOT reset the timer
     hover.onMouseMove(10, 20, nullptr);
     auto const secondTimeout = hover.timeoutMs();
 
-    // Timer should have progressed (second timeout should be less)
-    CHECK(secondTimeout < initialTimeout);
+    // The timer kept running from the first move.
+    CHECK(initialTimeout == 100);
+    CHECK(secondTimeout == 90);
 }
 
 TEST_CASE("HoverState.onMouseMove_differentPosition_resetsTimer")
 {
-    HoverState hover(std::chrono::milliseconds(100));
+    auto clock = ManualClock {};
+    HoverState hover(std::chrono::milliseconds(100), clock);
 
     hover.onMouseMove(10, 20, nullptr);
 
-    // Wait a bit
-    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    clock.advance(std::chrono::milliseconds(30));
 
     // Move to different position - should reset the timer
     hover.onMouseMove(15, 25, nullptr);
     auto const timeout = hover.timeoutMs();
 
-    // Timer should be close to full delay again
-    CHECK(timeout > 80); // Allowing some tolerance
+    // The timer restarted at the new position.
+    CHECK(timeout == 100);
     CHECK(hover.currentHover()->x == 15);
     CHECK(hover.currentHover()->y == 25);
 }
 
 TEST_CASE("HoverState.tick_triggersCallback")
 {
-    HoverState hover(std::chrono::milliseconds(10));
+    auto clock = ManualClock {};
+    HoverState hover(std::chrono::milliseconds(10), clock);
 
     bool callbackCalled = false;
     HoverInfo capturedInfo;
@@ -309,10 +313,9 @@ TEST_CASE("HoverState.tick_triggersCallback")
 
     hover.onMouseMove(50, 60, nullptr);
 
-    // Wait for hover delay to expire
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    clock.advance(std::chrono::milliseconds(20));
 
-    hover.tick(std::chrono::steady_clock::now());
+    hover.tick(clock.now());
 
     CHECK(callbackCalled);
     CHECK(hover.isHoverConfirmed());
@@ -320,9 +323,33 @@ TEST_CASE("HoverState.tick_triggersCallback")
     CHECK(capturedInfo.y == 60);
 }
 
+TEST_CASE("HoverState.delay_confirmsOnTheMillisecondItElapses")
+{
+    auto clock = ManualClock {};
+    auto hover = HoverState(std::chrono::milliseconds(500), clock);
+    auto confirmations = 0;
+    hover.setOnHoverConfirmed([&](HoverInfo const&) { ++confirmations; });
+
+    hover.onMouseMove(3, 4, nullptr);
+    clock.advance(std::chrono::milliseconds(499));
+    CHECK(hover.timeoutMs() == 1);
+    hover.tick(clock.now());
+    CHECK_FALSE(hover.isHoverConfirmed());
+
+    clock.advance(std::chrono::milliseconds(1));
+    CHECK(hover.timeoutMs() == 0);
+    hover.tick(clock.now());
+    CHECK(hover.isHoverConfirmed());
+    CHECK(hover.timeoutMs() == -1); // Nothing left to wait for.
+
+    hover.tick(clock.now()); // Confirmed once, not on every tick after.
+    CHECK(confirmations == 1);
+}
+
 TEST_CASE("HoverState.onMouseLeave_triggersCallback")
 {
-    HoverState hover(std::chrono::milliseconds(10));
+    auto clock = ManualClock {};
+    HoverState hover(std::chrono::milliseconds(10), clock);
 
     bool leaveCallbackCalled = false;
 
@@ -332,8 +359,8 @@ TEST_CASE("HoverState.onMouseLeave_triggersCallback")
     hover.onMouseMove(10, 20, nullptr);
 
     // Confirm hover
-    std::this_thread::sleep_for(std::chrono::milliseconds(15));
-    hover.tick(std::chrono::steady_clock::now());
+    clock.advance(std::chrono::milliseconds(15));
+    hover.tick(clock.now());
     CHECK(hover.isHoverConfirmed());
 
     // Leave
@@ -346,14 +373,15 @@ TEST_CASE("HoverState.onMouseLeave_triggersCallback")
 
 TEST_CASE("HoverState.reset_clearsState")
 {
-    HoverState hover(std::chrono::milliseconds(10));
+    auto clock = ManualClock {};
+    HoverState hover(std::chrono::milliseconds(10), clock);
 
     bool leaveCallbackCalled = false;
     hover.setOnHoverLeave([&]() { leaveCallbackCalled = true; });
 
     hover.onMouseMove(10, 20, nullptr);
-    std::this_thread::sleep_for(std::chrono::milliseconds(15));
-    hover.tick(std::chrono::steady_clock::now());
+    clock.advance(std::chrono::milliseconds(15));
+    hover.tick(clock.now());
     CHECK(hover.isHoverConfirmed());
 
     hover.reset();
@@ -366,7 +394,8 @@ TEST_CASE("HoverState.reset_clearsState")
 
 TEST_CASE("HoverState.mouseMove_whileConfirmed_triggersLeaveAndRestart")
 {
-    HoverState hover(std::chrono::milliseconds(10));
+    auto clock = ManualClock {};
+    HoverState hover(std::chrono::milliseconds(10), clock);
 
     int leaveCount = 0;
 
@@ -375,8 +404,8 @@ TEST_CASE("HoverState.mouseMove_whileConfirmed_triggersLeaveAndRestart")
     hover.onMouseMove(10, 20, nullptr);
 
     // Confirm hover
-    std::this_thread::sleep_for(std::chrono::milliseconds(15));
-    hover.tick(std::chrono::steady_clock::now());
+    clock.advance(std::chrono::milliseconds(15));
+    hover.tick(clock.now());
     CHECK(hover.isHoverConfirmed());
 
     // Move to different position - should trigger leave and restart
@@ -489,15 +518,16 @@ TEST_CASE("HoverState.confirmedCallback_receivesTarget")
         }
     };
 
-    HoverState hover(std::chrono::milliseconds(10));
+    auto clock = ManualClock {};
+    HoverState hover(std::chrono::milliseconds(10), clock);
     MockComponent comp;
     HoverInfo captured {};
 
     hover.setOnHoverConfirmed([&](HoverInfo const& info) { captured = info; });
     hover.onMouseMove(15, 20, &comp);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    hover.tick(std::chrono::steady_clock::now());
+    clock.advance(std::chrono::milliseconds(20));
+    hover.tick(clock.now());
 
     CHECK(hover.isHoverConfirmed());
     CHECK(captured.target == &comp);
@@ -512,14 +542,15 @@ TEST_CASE("HoverState.confirmedCallback_receivesTarget")
 
 TEST_CASE("HoverState.leave_afterConfirm_clearsState")
 {
-    HoverState hover(std::chrono::milliseconds(10));
+    auto clock = ManualClock {};
+    HoverState hover(std::chrono::milliseconds(10), clock);
     bool leaveCalled = false;
     hover.setOnHoverConfirmed([](HoverInfo const&) {});
     hover.setOnHoverLeave([&]() { leaveCalled = true; });
 
     hover.onMouseMove(10, 20, nullptr);
-    std::this_thread::sleep_for(std::chrono::milliseconds(15));
-    hover.tick(std::chrono::steady_clock::now());
+    clock.advance(std::chrono::milliseconds(15));
+    hover.tick(clock.now());
     CHECK(hover.isHoverConfirmed());
 
     // Move to different position triggers leave + restart
@@ -607,7 +638,8 @@ struct HoverableTestComp: Component
 TEST_CASE("Screen.hoverToTooltip_callbackFires")
 {
     MockScreenSurface surface;
-    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
+    auto clock = ManualClock {};
+    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen }, clock);
 
     HoverableTestComp comp;
     auto const compLayout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 3 } };
@@ -632,8 +664,14 @@ TEST_CASE("Screen.hoverToTooltip_callbackFires")
     CHECK(hover->y == 1);
     CHECK(hover->target == &comp);
 
-    // Wait and tick
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    // The Screen's hover delay runs on the clock it was given, to the millisecond.
+    clock.advance(HoverState::DefaultHoverDelay - std::chrono::milliseconds(1));
+    screen.tickHover();
+    CHECK_FALSE(screen.hoverState().isHoverConfirmed());
+    CHECK_FALSE(screen.isTooltipVisible());
+    CHECK(screen.pollTimeoutMs() == 1);
+
+    clock.advance(std::chrono::milliseconds(1));
     screen.tickHover();
 
     CHECK(screen.hoverState().isHoverConfirmed());
@@ -643,7 +681,8 @@ TEST_CASE("Screen.hoverToTooltip_callbackFires")
 TEST_CASE("Screen.hoverToTooltip_fullFlow")
 {
     MockScreenSurface surface; // uninitialized = 80x24 defaults
-    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
+    auto clock = ManualClock {};
+    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen }, clock);
 
     HoverableTestComp comp;
     auto const compLayout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 3 } };
@@ -654,8 +693,7 @@ TEST_CASE("Screen.hoverToTooltip_fullFlow")
     // Mouse move over error text (1-based terminal coordinates)
     (void) screen.dispatchEvent(test::mouseMove(5, 1));
 
-    // Wait for hover delay + margin, then tick
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
 
     CHECK(screen.isTooltipVisible());
@@ -669,7 +707,8 @@ TEST_CASE("Screen.hoverToTooltip_fullFlow")
 TEST_CASE("Screen.hoverToTooltip_mouseMovesAway_hidesTooltip")
 {
     MockScreenSurface surface;
-    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
+    auto clock = ManualClock {};
+    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen }, clock);
 
     HoverableTestComp comp;
     auto const compLayout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 3 } };
@@ -679,7 +718,7 @@ TEST_CASE("Screen.hoverToTooltip_mouseMovesAway_hidesTooltip")
 
     // Trigger hover
     (void) screen.dispatchEvent(test::mouseMove(5, 1));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
     REQUIRE(screen.isTooltipVisible());
 
@@ -692,7 +731,8 @@ TEST_CASE("Screen.hoverToTooltip_mouseMovesAway_hidesTooltip")
 TEST_CASE("Screen.hoverToTooltip_keyEvent_hidesTooltip")
 {
     MockScreenSurface surface;
-    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
+    auto clock = ManualClock {};
+    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen }, clock);
 
     HoverableTestComp comp;
     auto const compLayout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 3 } };
@@ -702,7 +742,7 @@ TEST_CASE("Screen.hoverToTooltip_keyEvent_hidesTooltip")
 
     // Trigger hover
     (void) screen.dispatchEvent(test::mouseMove(5, 1));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
     REQUIRE(screen.isTooltipVisible());
 
@@ -715,7 +755,8 @@ TEST_CASE("Screen.hoverToTooltip_keyEvent_hidesTooltip")
 TEST_CASE("Screen.hoverToTooltip_nulloptHover_noTooltip")
 {
     MockScreenSurface surface;
-    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
+    auto clock = ManualClock {};
+    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen }, clock);
 
     HoverableTestComp comp;
     auto const compLayout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 3 } };
@@ -726,7 +767,7 @@ TEST_CASE("Screen.hoverToTooltip_nulloptHover_noTooltip")
     // Mouse over region where onHover returns nullopt (column 50, row 2)
     (void) screen.dispatchEvent(test::mouseMove(50, 3));
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
 
     CHECK_FALSE(screen.isTooltipVisible());
@@ -735,7 +776,8 @@ TEST_CASE("Screen.hoverToTooltip_nulloptHover_noTooltip")
 TEST_CASE("Screen.hoverToTooltip_inlineMode")
 {
     MockScreenSurface surface; // 80x24 defaults
-    Screen screen(surface, ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 });
+    auto clock = ManualClock {};
+    Screen screen(surface, ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 }, clock);
 
     HoverableTestComp comp;
     auto const compLayout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 3 } };
@@ -753,7 +795,7 @@ TEST_CASE("Screen.hoverToTooltip_inlineMode")
     auto const terminalRow = surface.rows(); // bottom of terminal, 1-based
     (void) screen.dispatchEvent(test::mouseMove(5, terminalRow));
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
 
     // The hover may or may not trigger a tooltip depending on exact inline
@@ -1198,7 +1240,9 @@ TEST_CASE("Screen.inlineHover_cursorAtTop_correctMapping")
     auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(surface, screenConfig);
+
+    auto clock = ManualClock {};
+    auto screen = Screen(surface, screenConfig, clock);
 
     auto comp = RowReportingComponent {};
     comp.contentRows = 3;
@@ -1210,7 +1254,7 @@ TEST_CASE("Screen.inlineHover_cursorAtTop_correctMapping")
     // Content starts at row 0 (mock cursor starts at 0).
     // Terminal mouse coordinates are 1-based, so row 1 = content row 0.
     (void) screen.dispatchEvent(test::mouseMove(5, 1)); // row 1 in 1-based = content row 0
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
 
     CHECK(screen.isTooltipVisible());
@@ -1244,7 +1288,9 @@ TEST_CASE("Screen.inlineHover_cursorInMiddle_correctMapping")
     auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(surface, screenConfig);
+
+    auto clock = ManualClock {};
+    auto screen = Screen(surface, screenConfig, clock);
 
     auto comp = RowReportingComponent {};
     comp.contentRows = 3;
@@ -1255,14 +1301,14 @@ TEST_CASE("Screen.inlineHover_cursorInMiddle_correctMapping")
 
     // Hover above content area (terminal row 5, 1-based = row 4 0-based, content starts at 10)
     (void) screen.dispatchEvent(test::mouseMove(5, 5));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
     CHECK_FALSE(screen.isTooltipVisible());
 
     // Hover at first content row (terminal row 11 in 1-based = row 10 0-based = content row 0)
     screen.hoverState().reset();
     (void) screen.dispatchEvent(test::mouseMove(5, 11));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
 
     CHECK(screen.isTooltipVisible());
@@ -1276,7 +1322,7 @@ TEST_CASE("Screen.inlineHover_cursorInMiddle_correctMapping")
     // Hover at second content row (terminal row 12 in 1-based = content row 1)
     screen.hoverState().reset();
     (void) screen.dispatchEvent(test::mouseMove(5, 12));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
 
     CHECK(screen.isTooltipVisible());
@@ -1290,7 +1336,7 @@ TEST_CASE("Screen.inlineHover_cursorInMiddle_correctMapping")
     // Hover below content area (terminal row 20 in 1-based)
     screen.hoverState().reset();
     (void) screen.dispatchEvent(test::mouseMove(5, 20));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
     CHECK_FALSE(screen.isTooltipVisible());
 }
@@ -1309,7 +1355,9 @@ TEST_CASE("Screen.inlineHover_cursorAtBottom_correctMapping")
     auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(surface, screenConfig);
+
+    auto clock = ManualClock {};
+    auto screen = Screen(surface, screenConfig, clock);
 
     auto comp = RowReportingComponent {};
     comp.contentRows = 3;
@@ -1321,7 +1369,7 @@ TEST_CASE("Screen.inlineHover_cursorAtBottom_correctMapping")
     // Content starts at row 21 (24 - 3 = 21, 0-based), so terminal row 22 in 1-based = content row 0.
     // With scrolling from LFs, the content is at the bottom.
     (void) screen.dispatchEvent(test::mouseMove(5, 22));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
 
     CHECK(screen.isTooltipVisible());
@@ -1340,7 +1388,9 @@ TEST_CASE("Screen.inlineHover_contentGrowth_correctMapping")
     auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(surface, screenConfig);
+
+    auto clock = ManualClock {};
+    auto screen = Screen(surface, screenConfig, clock);
 
     auto comp = RowReportingComponent {};
     comp.contentRows = 1;
@@ -1356,7 +1406,7 @@ TEST_CASE("Screen.inlineHover_contentGrowth_correctMapping")
 
     // Content starts at row 0 (cursor at top). Hover at row 1 (1-based) = content row 0.
     (void) screen.dispatchEvent(test::mouseMove(5, 1));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
 
     CHECK(screen.isTooltipVisible());
@@ -1370,7 +1420,7 @@ TEST_CASE("Screen.inlineHover_contentGrowth_correctMapping")
     // Hover at row 3 (1-based) = content row 2.
     screen.hoverState().reset();
     (void) screen.dispatchEvent(test::mouseMove(5, 3));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
 
     CHECK(screen.isTooltipVisible());
@@ -2499,4 +2549,13 @@ TEST_CASE("Screen.fixedViewport_partlyPastTheScreensEdge_writesOnlyWhatIsOnScree
 
     // Columns 15..19 of rows 2..3: five cells on each of two rows.
     CHECK(std::ranges::count(bytes, 'Z') == 10);
+}
+
+TEST_CASE("Screen.aTemporaryClockIsRefused")
+{
+    // Screen and HoverState keep the clock they are given; a temporary one would dangle.
+    STATIC_CHECK(std::is_constructible_v<Screen, ScreenSurface&, ScreenConfig, ManualClock&>);
+    STATIC_CHECK_FALSE(std::is_constructible_v<Screen, ScreenSurface&, ScreenConfig, ManualClock>);
+    STATIC_CHECK(std::is_constructible_v<HoverState, std::chrono::milliseconds, ManualClock&>);
+    STATIC_CHECK_FALSE(std::is_constructible_v<HoverState, std::chrono::milliseconds, ManualClock>);
 }

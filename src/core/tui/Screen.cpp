@@ -58,8 +58,12 @@ namespace
 
 } // namespace
 
-Screen::Screen(ScreenSurface& surface, ScreenConfig config):
-    _surface(surface), _config(config), _theme(currentTheme()), _root(std::make_unique<RootComponent>())
+Screen::Screen(ScreenSurface& surface, ScreenConfig config, IClock const& clock):
+    _surface(surface),
+    _config(config),
+    _theme(currentTheme()),
+    _root(std::make_unique<RootComponent>()),
+    _hoverState(HoverState::DefaultHoverDelay, clock)
 {
     _root->setScreen(this);
 
@@ -1005,7 +1009,7 @@ int Screen::pollTimeoutMs() const
 
 void Screen::tickHover()
 {
-    _hoverState.tick(std::chrono::steady_clock::now());
+    _hoverState.tick(_hoverState.clock().now());
 }
 
 void Screen::showTooltip(std::string_view text, Point position, TooltipContentType contentType)

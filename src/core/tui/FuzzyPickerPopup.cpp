@@ -18,6 +18,15 @@ namespace core::tui
 // Component Interface
 // ============================================================================
 
+FuzzyPickerPopup::FuzzyPickerPopup(): FuzzyPickerPopup(defaultSteadyClock())
+{
+}
+
+FuzzyPickerPopup::FuzzyPickerPopup(IClock const& clock): _filterField(clock)
+{
+    setVisible(false);
+}
+
 void FuzzyPickerPopup::render(Canvas& canvas)
 {
     if (!visible())

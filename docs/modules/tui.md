@@ -88,6 +88,12 @@ half.
   half throws or asks for a type at run time. The one throw `core::base` keeps on this path,
   `pathFromTrustedUtf8()`'s, goes through `core::throwOrFail()`, which fails as `Require()` does
   when exceptions are compiled out.
+- **Time is injected.** Nothing in the headless half reads `std::chrono::steady_clock` itself: the
+  hover delay (`HoverState`, and so `Screen`), a `Spinner`'s frames, `InputField`'s and
+  `TreeTableView`'s multi-click windows and `remainingMs()` (`<core/tui/TimerUtils.hpp>`) all measure
+  on a `core::IClock` (`<core/Clock.hpp>`, [base](base.md)) passed to their constructor, by default
+  `core::defaultSteadyClock()`. A test passes a `core::ManualClock` and advances it, so no case
+  sleeps. `SemanticBlockClient`, in the terminal half, takes one the same way.
 
 ```cpp
 auto bytes = std::string {};

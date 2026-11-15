@@ -228,6 +228,22 @@ does not earn a module row. The header is `<chrono>` plus `<mutex>` for `ManualC
 compile for `wasm32-wasip1` with wasi-sdk 34 (checked with `ManualClock` itself). This is U.5's
 first commit.
 
+**As built (U.5).** One commit, not two: the move and its first users land together, so the
+interface never sits in `core::base` with nothing headless taking it. `defaultSteadyClock()` moved
+with the interface, because every widget's clock parameter defaults to it and the headless half
+cannot name `core::platform`. Each of `Screen`, `HoverState`, `Spinner`, `InputField`,
+`TreeTableView` and `SemanticBlockClient` takes an `IClock const&` as its last constructor argument,
+defaulted, so no existing call site changes, and so do the composites that hold an `InputField`
+(`CommandPalettePopup`, `FuzzyPickerPopup`, `QuestionComponent`), which hand it on. Each such
+constructor deletes its `IClock const&&` overload, since the clock is kept and a temporary would
+dangle, and marks the parameter `CORE_LIFETIMEBOUND`; the value types (`HoverState`, `Spinner`) keep it as a
+pointer so they stay assignable. `remainingMs()` is a free function with no object to hold a clock,
+so it takes one as its first argument -- the one source break the step has besides the forward
+declaration above. The plan's "cursor blink" has no subject here: nothing in `core::tui` blinks a
+cursor (the terminal does, for the blinking `CursorShape`s), so the clocked behaviours tested are the
+hover delay, the spinner's frame and the two double-click windows. `Terminal` and `ClipboardWriter`
+keep their `core::platform::IClock&` spelling, which is now the same type.
+
 ## Order
 
 U.1 (this target), U.2 (OS-free output, no RTTI), U.3 (headless surface, `diffFrames`), U.4 (no
