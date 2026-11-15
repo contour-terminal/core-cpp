@@ -55,6 +55,13 @@ workflow refuses one without a section here.
 
 ### Added
 
+- **`core-cpp.unicode-wasi`, core::tui's width tables in a WebAssembly guest.** `tests/wasi-unicode` builds libunicode
+  for `wasm32-wasip1` from the tables a native configure generated (`CPM_libunicode_SOURCE`; it refuses a tree without
+  them, so the guest's build never downloads `UCD.zip` or builds the table generator), with
+  `-fno-exceptions -fno-rtti`, adds it with `add_subdirectory()` rather than CPM so the build reaches no network at
+  all, and runs a table of grapheme clusters and `core::tui::stringWidth()` columns under
+  Node's WASI. The test drives it against the enclosing build's libunicode tree; it skips without `WASI_SDK_PREFIX` or
+  node. Test-only: no target, option or dependency changes.
 - **The headless TUI measures time on an injected `core::IClock`.** `Screen` (its hover delay), `HoverState`,
   `Spinner`, `InputField` and `TreeTableView` (their double-click windows) and, in the terminal half,
   `SemanticBlockClient` take an `IClock const&` as a last constructor argument, by default

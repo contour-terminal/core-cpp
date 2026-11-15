@@ -191,6 +191,9 @@ foreach(_consumerProject IN ITEMS consumer-cpm consumer-vendored consumer-wasm c
     core_cpp_hygiene_allow(global-compile-options "tests/${_consumerProject}/CMakeLists.txt" "${_consumerProjectReason}")
     core_cpp_hygiene_allow(global-cmake-variable "tests/${_consumerProject}/CMakeLists.txt" "${_consumerProjectReason}")
 endforeach()
+# tests/wasi-unicode is the same kind of project for a WebAssembly guest: it sets the guest's
+# language mode (-fno-exceptions -fno-rtti) over everything it builds, libunicode included.
+core_cpp_hygiene_allow(global-cmake-variable tests/wasi-unicode/CMakeLists.txt "${_consumerProjectReason}")
 core_cpp_hygiene_allow(unprefixed-function tests/consumer-cpm/CMakeLists.txt "${_consumerProjectReason}")
 core_cpp_hygiene_allow(unprefixed-function tests/consumer-wasm/CMakeLists.txt "${_consumerProjectReason}")
 core_cpp_hygiene_allow(diagnostic-pragma src/core/testing/SuppressWindowsDialogsAtStartup.cpp

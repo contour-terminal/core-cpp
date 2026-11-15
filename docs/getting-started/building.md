@@ -33,6 +33,9 @@ cmake --workflow --preset ci-clang-debug     # the same three steps in one comma
   found and used instead, and `-DCORE_CPP_WITH_TUI=OFF` drops libunicode and the Unicode
   download with it (add `-DCORE_CPP_WITH_TUI_OUTPUT=ON` to keep `core::tui_output`, which does not
   need them).
+  `-DCPM_libunicode_SOURCE=<tree>` reuses a libunicode tree an earlier configure generated its tables
+  into, which then neither downloads `UCD.zip` nor builds the table generator: how a WebAssembly
+  guest's build gets the tables (`tests/wasi-unicode`).
 
 ## Presets
 

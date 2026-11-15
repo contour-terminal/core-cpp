@@ -206,6 +206,24 @@ then the cross build against the same tree. Contour builds libunicode natively a
 build reuses that tree and downloads nothing. U.11 adds `LIBUNICODE_SIMD_IMPLEMENTATION none` to
 the dependency row's options for a WASI build.
 
+**As built (U.7).** `tests/wasi-unicode` is the recipe as a project: it adds libunicode from
+`CPM_libunicode_SOURCE` with `add_subdirectory()` -- no CPM, whose bootstrap is itself a download --
+and refuses to configure unless all nine generated files are there, so it
+cannot fall back to downloading `UCD.zip` or building the generator for the guest; it builds
+libunicode with `LIBUNICODE_SIMD_IMPLEMENTATION none`, static, and the whole build with
+`-fno-exceptions -fno-rtti`. Its program is a table -- ASCII, CJK, Hangul, halfwidth kana, an emoji,
+a combining mark, a flag, a ZWJ family, a skin tone and a mix -- of the grapheme clusters libunicode
+splits each text into and the columns `core::tui::stringWidth()` gives it, compiled from
+`src/core/tui/Unicode.cpp` itself, since that file needs libunicode and nothing else of core-cpp; the
+whole of `tui_core` waits for the WASI row (U.11). `core-cpp.unicode-wasi`
+(`tests/cmake/run-wasi-unicode.cmake`) configures it with wasi-sdk's `wasi-sdk-p1.cmake` against the
+libunicode tree the enclosing build generated (`libunicode_SOURCE_DIR`), refuses a configure that does
+not report the tables as found, builds it and runs the module under Node's WASI preview 1
+(`tests/wasi-unicode/run-wasi.mjs`), judged by its output. It also refuses a configure that printed a CPM line or a
+download; run inside a network namespace with no network and an empty `CPM_SOURCE_CACHE`, it passes. Without `WASI_SDK_PREFIX` or node it
+skips and says which; locally, with wasi-sdk 34 and Node 22, it passes, and the release module is
+316 KiB unstripped. CI runs it once U.12's job sets `WASI_SDK_PREFIX`.
+
 ### `IClock` moves into `core::base`
 
 `IClock`, `SteadyTimePoint`, `SteadyDuration`, `SteadyClock` and `ManualClock` move from

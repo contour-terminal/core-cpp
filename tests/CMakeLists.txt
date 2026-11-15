@@ -123,6 +123,31 @@ if(TARGET core-cpp-tui_core)
                      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-tui-core-symbols.cmake")
     set_tests_properties(core-cpp.tui-core-symbols PROPERTIES LABELS "core-cpp;hygiene;tui" TIMEOUT 60)
 endif()
+# The guest's width tables (docs/design/tui-headless.md, "Width tables", option a): libunicode
+# built for wasm32-wasip1 from the tables this build generated, and core::tui's width and grapheme
+# table run under Node's WASI. It needs wasi-sdk (WASI_SDK_PREFIX in the test's environment) and
+# node, and skips, saying which, without them. Per leg: it compiles and runs.
+if(TARGET core-cpp-tui_core)
+    set(_coreCppLibunicodeSource "")
+    if(DEFINED libunicode_SOURCE_DIR)
+        set(_coreCppLibunicodeSource "${libunicode_SOURCE_DIR}")
+    endif()
+    add_test(NAME core-cpp.unicode-wasi
+             COMMAND "${CMAKE_COMMAND}"
+                     "-DSOURCE_DIR=${CORE_CPP_SOURCE_DIR}"
+                     "-DLIBUNICODE_SOURCE=${_coreCppLibunicodeSource}"
+                     "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/unicode-wasi"
+                     "-DCTEST=${CMAKE_CTEST_COMMAND}"
+                     "-DGENERATOR=${CMAKE_GENERATOR}"
+                     "-DSKIP_EXIT_CODE=${CORE_CPP_SKIP_EXIT_CODE}"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/run-wasi-unicode.cmake")
+    set_tests_properties(core-cpp.unicode-wasi PROPERTIES
+        SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
+        SKIP_REGULAR_EXPRESSION "run-wasi-unicode: SKIPPED"
+        FAIL_REGULAR_EXPRESSION "CMake Error"
+        LABELS "core-cpp;tui;wasm"
+        TIMEOUT 900)
+endif()
 add_test(NAME core-cpp.tui-core-symbols-selftest
          COMMAND "${CMAKE_COMMAND}"
                  "-DCHECKER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-tui-core-symbols.cmake"

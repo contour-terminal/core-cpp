@@ -113,6 +113,11 @@ with `-fno-exceptions -fno-rtti` across the whole build (`core::base`, `core::tu
 is shaped this way, and what remains before a WebAssembly guest builds it:
 [A headless TUI](../design/tui-headless.md).
 
+A guest measures text with the same libunicode tables, built for `wasm32-wasip1` from a tree a native
+configure generated them into (`CPM_libunicode_SOURCE`), so the guest's build downloads nothing.
+`tests/wasi-unicode` is that build, and `core-cpp.unicode-wasi` runs its width and grapheme table
+under Node's WASI wherever `WASI_SDK_PREFIX` names a wasi-sdk.
+
 ## `core::tui`
 
 The rest, on top of `core::tui_core`, [platform](platform.md), [async](async.md) and
