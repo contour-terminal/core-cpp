@@ -634,6 +634,8 @@ others in notes.
 | `src/core/tui/MarkdownTable.cpp` | contour-terminal/endo | `src/tui/MarkdownTable.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/MarkdownTable.hpp` | contour-terminal/endo | `src/tui/MarkdownTable.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/MarkdownTable_test.cpp` | contour-terminal/endo | `src/tui/MarkdownTable_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/MockScreenSurface.cpp` | origin: core-cpp | - | - | the `ScreenSurface` test double, so `Screen` is tested without the terminal half |
+| `src/core/tui/MockScreenSurface.hpp` | origin: core-cpp | - | - | the `ScreenSurface` test double, so `Screen` is tested without the terminal half |
 | `src/core/tui/MockTerminalOutput.cpp` | contour-terminal/endo | `src/tui/MockTerminalOutput.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `syncGuard()` returns `{}` where endo returns `SyncGuard()`; otherwise left exactly as endo has it, so no renderer test changes meaning |
 | `src/core/tui/MockTerminalOutput.hpp` | contour-terminal/endo | `src/tui/MockTerminalOutput.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Modifier.hpp` | contour-terminal/endo | `src/tui/Modifier.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |

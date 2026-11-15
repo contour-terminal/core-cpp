@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/tui/HoverState.hpp>
+#include <core/tui/MockScreenSurface.hpp>
 #include <core/tui/MockTerminalOutput.hpp>
 #include <core/tui/Screen.hpp>
-#include <core/tui/Terminal.hpp>
 #include <core/tui/TestHelpers.hpp>
 #include <core/tui/Tooltip.hpp>
 
@@ -602,8 +602,8 @@ struct HoverableTestComp: Component
 
 TEST_CASE("Screen.hoverToTooltip_callbackFires")
 {
-    Terminal terminal;
-    Screen screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    MockScreenSurface surface;
+    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
 
     HoverableTestComp comp;
     auto const compLayout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 3 } };
@@ -638,8 +638,8 @@ TEST_CASE("Screen.hoverToTooltip_callbackFires")
 
 TEST_CASE("Screen.hoverToTooltip_fullFlow")
 {
-    Terminal terminal; // uninitialized = 80x24 defaults
-    Screen screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    MockScreenSurface surface; // uninitialized = 80x24 defaults
+    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
 
     HoverableTestComp comp;
     auto const compLayout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 3 } };
@@ -664,8 +664,8 @@ TEST_CASE("Screen.hoverToTooltip_fullFlow")
 
 TEST_CASE("Screen.hoverToTooltip_mouseMovesAway_hidesTooltip")
 {
-    Terminal terminal;
-    Screen screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    MockScreenSurface surface;
+    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
 
     HoverableTestComp comp;
     auto const compLayout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 3 } };
@@ -687,8 +687,8 @@ TEST_CASE("Screen.hoverToTooltip_mouseMovesAway_hidesTooltip")
 
 TEST_CASE("Screen.hoverToTooltip_keyEvent_hidesTooltip")
 {
-    Terminal terminal;
-    Screen screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    MockScreenSurface surface;
+    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
 
     HoverableTestComp comp;
     auto const compLayout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 3 } };
@@ -710,8 +710,8 @@ TEST_CASE("Screen.hoverToTooltip_keyEvent_hidesTooltip")
 
 TEST_CASE("Screen.hoverToTooltip_nulloptHover_noTooltip")
 {
-    Terminal terminal;
-    Screen screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    MockScreenSurface surface;
+    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
 
     HoverableTestComp comp;
     auto const compLayout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 3 } };
@@ -730,8 +730,8 @@ TEST_CASE("Screen.hoverToTooltip_nulloptHover_noTooltip")
 
 TEST_CASE("Screen.hoverToTooltip_inlineMode")
 {
-    Terminal terminal; // 80x24 defaults
-    Screen screen(terminal, ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 });
+    MockScreenSurface surface; // 80x24 defaults
+    Screen screen(surface, ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 });
 
     HoverableTestComp comp;
     auto const compLayout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 3 } };
@@ -746,7 +746,7 @@ TEST_CASE("Screen.hoverToTooltip_inlineMode")
     // content height is 1 (just "error text here" on row 0, rows 1-2 are
     // empty spaces), _inlineContentStartRow ≈ 24 - 1 = 23.
     // We use row 24 (1-based) = terminal row 23 (0-based) = content row 0.
-    auto const terminalRow = terminal.rows(); // bottom of terminal, 1-based
+    auto const terminalRow = surface.rows(); // bottom of terminal, 1-based
     (void) screen.dispatchEvent(test::mouseMove(5, terminalRow));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(600));
@@ -795,10 +795,10 @@ TEST_CASE("Screen.inlineCursor_releaseCursorCycle_noDrift")
 {
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 24);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(terminal, screenConfig);
+    auto screen = Screen(surface, screenConfig);
 
     auto comp = FixedContentComponent {};
     comp.contentRows = 4;
@@ -852,10 +852,10 @@ TEST_CASE("Screen.inlineCursor_heightChangeAfterClearAndRelease_drift")
 {
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 24);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(terminal, screenConfig);
+    auto screen = Screen(surface, screenConfig);
 
     auto comp = VariableHeightComponent {};
     comp.height = 2;
@@ -892,10 +892,10 @@ TEST_CASE("Screen.inlineCursor_twoComponentSwap_noDrift")
 {
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 24);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(terminal, screenConfig);
+    auto screen = Screen(surface, screenConfig);
 
     // "Shell" component: height 3, cursor at row 1
     auto shellComp = VariableHeightComponent {};
@@ -946,7 +946,7 @@ TEST_CASE("Screen.inline_toggle_no_drift")
 
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 24);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto const screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
     auto const layout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 12 } };
@@ -962,7 +962,7 @@ TEST_CASE("Screen.inline_toggle_no_drift")
     agentComp.cursorRow = 0;
 
     // --- Shell Screen: first render (baseline) ---
-    auto shellScreen = std::make_unique<Screen>(terminal, screenConfig);
+    auto shellScreen = std::make_unique<Screen>(surface, screenConfig);
     shellScreen->root().addChild(shellComp, layout);
     shellScreen->setFocus(&shellComp);
     shellScreen->draw();
@@ -977,7 +977,7 @@ TEST_CASE("Screen.inline_toggle_no_drift")
         shellScreen->root().removeChild(shellComp);
         shellScreen.reset(); // Destroy shell screen
 
-        auto agentScreen = std::make_unique<Screen>(terminal, screenConfig);
+        auto agentScreen = std::make_unique<Screen>(surface, screenConfig);
         agentScreen->root().addChild(agentComp, layout);
         agentScreen->setFocus(&agentComp);
         agentScreen->draw();
@@ -987,7 +987,7 @@ TEST_CASE("Screen.inline_toggle_no_drift")
         agentScreen->root().removeChild(agentComp);
         agentScreen.reset(); // Destroy agent screen
 
-        shellScreen = std::make_unique<Screen>(terminal, screenConfig);
+        shellScreen = std::make_unique<Screen>(surface, screenConfig);
         shellScreen->root().addChild(shellComp, layout);
         shellScreen->setFocus(&shellComp);
         shellScreen->draw();
@@ -1008,7 +1008,7 @@ TEST_CASE("Screen.inline_toggle_different_heights_no_drift")
 
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 24);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto const screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
     auto const layout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 12 } };
@@ -1024,7 +1024,7 @@ TEST_CASE("Screen.inline_toggle_different_heights_no_drift")
     agentComp.cursorRow = 0;
 
     // --- Shell first render (baseline) ---
-    auto shellScreen = std::make_unique<Screen>(terminal, screenConfig);
+    auto shellScreen = std::make_unique<Screen>(surface, screenConfig);
     shellScreen->root().addChild(shellComp, layout);
     shellScreen->setFocus(&shellComp);
     shellScreen->draw();
@@ -1037,7 +1037,7 @@ TEST_CASE("Screen.inline_toggle_different_heights_no_drift")
         shellScreen->root().removeChild(shellComp);
         shellScreen.reset();
 
-        auto agentScreen = std::make_unique<Screen>(terminal, screenConfig);
+        auto agentScreen = std::make_unique<Screen>(surface, screenConfig);
         agentScreen->root().addChild(agentComp, layout);
         agentScreen->setFocus(&agentComp);
         agentScreen->draw();
@@ -1047,7 +1047,7 @@ TEST_CASE("Screen.inline_toggle_different_heights_no_drift")
         agentScreen->root().removeChild(agentComp);
         agentScreen.reset();
 
-        shellScreen = std::make_unique<Screen>(terminal, screenConfig);
+        shellScreen = std::make_unique<Screen>(surface, screenConfig);
         shellScreen->root().addChild(shellComp, layout);
         shellScreen->setFocus(&shellComp);
         shellScreen->draw();
@@ -1067,7 +1067,7 @@ TEST_CASE("Screen.inline_toggle_shell4_agent2_no_drift")
 
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 24);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto const screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
     auto const layout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 12 } };
@@ -1083,7 +1083,7 @@ TEST_CASE("Screen.inline_toggle_shell4_agent2_no_drift")
     agentComp.cursorRow = 0;
 
     // --- Shell first render (baseline) ---
-    auto shellScreen = std::make_unique<Screen>(terminal, screenConfig);
+    auto shellScreen = std::make_unique<Screen>(surface, screenConfig);
     shellScreen->root().addChild(shellComp, layout);
     shellScreen->setFocus(&shellComp);
     shellScreen->draw();
@@ -1096,7 +1096,7 @@ TEST_CASE("Screen.inline_toggle_shell4_agent2_no_drift")
         shellScreen->root().removeChild(shellComp);
         shellScreen.reset();
 
-        auto agentScreen = std::make_unique<Screen>(terminal, screenConfig);
+        auto agentScreen = std::make_unique<Screen>(surface, screenConfig);
         agentScreen->root().addChild(agentComp, layout);
         agentScreen->setFocus(&agentComp);
         agentScreen->draw();
@@ -1107,7 +1107,7 @@ TEST_CASE("Screen.inline_toggle_shell4_agent2_no_drift")
         agentScreen->root().removeChild(agentComp);
         agentScreen.reset();
 
-        shellScreen = std::make_unique<Screen>(terminal, screenConfig);
+        shellScreen = std::make_unique<Screen>(surface, screenConfig);
         shellScreen->root().addChild(shellComp, layout);
         shellScreen->setFocus(&shellComp);
         shellScreen->draw();
@@ -1123,10 +1123,10 @@ TEST_CASE("Screen.inlineCursor_clearAndReleaseCycle_noDrift")
 {
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 24);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(terminal, screenConfig);
+    auto screen = Screen(surface, screenConfig);
 
     auto comp = FixedContentComponent {};
     comp.contentRows = 4;
@@ -1191,10 +1191,10 @@ TEST_CASE("Screen.inlineHover_cursorAtTop_correctMapping")
     // Cursor starts at row 0 (top of terminal) — content should be at top,
     // and hovering at content rows should produce correct component-relative coordinates.
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 50);
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(terminal, screenConfig);
+    auto screen = Screen(surface, screenConfig);
 
     auto comp = RowReportingComponent {};
     comp.contentRows = 3;
@@ -1237,10 +1237,10 @@ TEST_CASE("Screen.inlineHover_cursorInMiddle_correctMapping")
     mock->linefeed(); // row 9
     mock->linefeed(); // row 10 — content starts here
 
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(terminal, screenConfig);
+    auto screen = Screen(surface, screenConfig);
 
     auto comp = RowReportingComponent {};
     comp.contentRows = 3;
@@ -1302,10 +1302,10 @@ TEST_CASE("Screen.inlineHover_cursorAtBottom_correctMapping")
     for ([[maybe_unused]] auto const i: std::views::iota(0, 23))
         mock->linefeed();
 
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(terminal, screenConfig);
+    auto screen = Screen(surface, screenConfig);
 
     auto comp = RowReportingComponent {};
     comp.contentRows = 3;
@@ -1333,10 +1333,10 @@ TEST_CASE("Screen.inlineHover_contentGrowth_correctMapping")
 {
     // Content starts small (1 row), then grows to 3 rows. Hover should still map correctly.
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 50);
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(terminal, screenConfig);
+    auto screen = Screen(surface, screenConfig);
 
     auto comp = RowReportingComponent {};
     comp.contentRows = 1;
@@ -1420,8 +1420,8 @@ TEST_CASE("Screen.hyperlink_emittedOnceAcrossPerCellWrites_andClosed")
 {
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 4);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
-    auto screen = Screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    auto surface = MockScreenSurface(std::move(mockOutput));
+    auto screen = Screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
 
     auto comp = LinkedTextComponent {};
     attachSingleRow(screen, comp);
@@ -1442,8 +1442,8 @@ TEST_CASE("Screen.hyperlink_absentWhenNoRegionRegistered")
 {
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 4);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
-    auto screen = Screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    auto surface = MockScreenSurface(std::move(mockOutput));
+    auto screen = Screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
 
     auto comp = LinkedTextComponent {};
     comp.linked = false;
@@ -1461,8 +1461,8 @@ TEST_CASE("Screen.hyperlink_uriChangeWithIdenticalCells_forcesRewrite")
     // repainted and the terminal would keep opening the stale target forever.
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 4);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
-    auto screen = Screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    auto surface = MockScreenSurface(std::move(mockOutput));
+    auto screen = Screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
 
     auto comp = LinkedTextComponent {};
     comp.uri = "file://box/before";
@@ -1488,8 +1488,8 @@ TEST_CASE("Screen.hyperlink_unchangedFrameEmitsNoFraming")
     // no framing bytes at all.
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 4);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
-    auto screen = Screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    auto surface = MockScreenSurface(std::move(mockOutput));
+    auto screen = Screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
 
     auto comp = LinkedTextComponent {};
     attachSingleRow(screen, comp);
@@ -1506,8 +1506,8 @@ TEST_CASE("Screen.hyperlink_idIsStableAcrossRedrawsOfSameUri")
     // would otherwise treat each repaint as a brand-new link.
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 4);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
-    auto screen = Screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    auto surface = MockScreenSurface(std::move(mockOutput));
+    auto screen = Screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
 
     auto comp = LinkedTextComponent {};
     attachSingleRow(screen, comp);
@@ -1526,8 +1526,8 @@ TEST_CASE("Screen.fixedViewport_repaintsItsAreaAndClosesFraming")
     // painted, the link inside it is emitted once, and no framing leaks past the flush.
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 4);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
-    auto screen = Screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    auto surface = MockScreenSurface(std::move(mockOutput));
+    auto screen = Screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
     screen.setViewport(Rect { .x = 0, .y = 0, .width = 80, .height = 1 });
 
     auto comp = LinkedTextComponent {};
@@ -1604,8 +1604,8 @@ constexpr auto AreaB = Rect { .x = 20, .y = 1, .width = 10, .height = 3 };
 
 TEST_CASE("Screen.componentAt_findsTheDeepestVisibleComponent")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto panel = MouseRecorder {};
     auto leaf = MouseRecorder {};
     auto hidden = MouseRecorder {};
@@ -1623,8 +1623,8 @@ TEST_CASE("Screen.componentAt_findsTheDeepestVisibleComponent")
 
 TEST_CASE("Screen.componentAt_prefersTheHigherZIndex")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto high = MouseRecorder {};
     auto low = MouseRecorder {};
     // Added first, so insertion order alone would put it underneath.
@@ -1639,8 +1639,8 @@ TEST_CASE("Screen.componentAt_prefersTheHigherZIndex")
 
 TEST_CASE("Screen.componentAt_findsOverlaysBeforeTheTree")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto tree = MouseRecorder {};
     auto first = MouseRecorder {};
     auto second = MouseRecorder {};
@@ -1661,8 +1661,8 @@ TEST_CASE("Screen.componentAt_findsOverlaysBeforeTheTree")
 
 TEST_CASE("Screen.componentAt_neverReturnsTheTooltip")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto tree = MouseRecorder {};
     screen.root().addChild(tree, LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 10 } });
     screen.showTooltip("a tooltip", Point { .x = 0, .y = 0 }); // drawn from row 1 down
@@ -1674,8 +1674,8 @@ TEST_CASE("Screen.componentAt_neverReturnsTheTooltip")
 
 TEST_CASE("Screen.mousePress_overAnOverlayGoesToTheOverlay")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto tree = MouseRecorder {};
     auto overlay = MouseRecorder {};
     screen.root().addChild(tree, LayoutParams { .area = { .x = 0, .y = 0, .width = 40, .height = 10 } });
@@ -1710,8 +1710,8 @@ struct PaintedRecorder: MouseRecorder
 
 TEST_CASE("Screen.componentAt_agreesWithPaintingWhenZIndicesTie")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     constexpr auto Count = 40; // enough siblings that an unstable sort would reorder ties
     auto siblings = std::vector<PaintedRecorder>(Count);
     for (auto const i: std::views::iota(size_t { 0 }, siblings.size()))
@@ -1744,8 +1744,8 @@ TEST_CASE("Screen.componentAt_agreesWithPaintingWhenZIndicesTie")
 
 TEST_CASE("Screen.componentAt_agreesWithPaintingForAnOverlaysChildren")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto overlay = MouseRecorder {};
     auto high = PaintedRecorder {};
     auto low = PaintedRecorder {};
@@ -1763,8 +1763,8 @@ TEST_CASE("Screen.componentAt_agreesWithPaintingForAnOverlaysChildren")
 
 TEST_CASE("Screen.pointerCapture_followsTheDragOutsideThePressedComponent")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto source = MouseRecorder {};
     auto other = MouseRecorder {};
     screen.root().addChild(source, LayoutParams { .area = AreaA });
@@ -1792,8 +1792,8 @@ TEST_CASE("Screen.pointerCapture_followsTheDragOutsideThePressedComponent")
 
 TEST_CASE("Screen.pointerCapture_isTakenByTheAncestorThatHandledThePress")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto panel = MouseRecorder {};
     auto leaf = MouseRecorder {};
     leaf.pressResult = EventResult::Ignored;
@@ -1820,8 +1820,8 @@ TEST_CASE("Screen.pointerCapture_isTakenByTheAncestorThatHandledThePress")
 
 TEST_CASE("Screen.pointerCapture_isNotTakenByAPressNobodyHandled")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto source = MouseRecorder {};
     auto other = MouseRecorder {};
     source.pressResult = EventResult::Ignored;
@@ -1838,8 +1838,8 @@ TEST_CASE("Screen.pointerCapture_isNotTakenByAPressNobodyHandled")
 
 TEST_CASE("Screen.pointerCapture_endsWhenTheTargetIsDestroyed")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto source = std::make_unique<MouseRecorder>();
     auto other = MouseRecorder {};
     screen.root().addChild(*source, LayoutParams { .area = AreaA });
@@ -1858,8 +1858,8 @@ TEST_CASE("Screen.pointerCapture_endsWhenTheTargetIsDestroyed")
 
 TEST_CASE("Screen.pointerCapture_endsWhenTheTargetOrItsAncestorLeavesTheTree")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto panel = MouseRecorder {};
     auto source = MouseRecorder {};
     panel.pressResult = EventResult::Ignored;
@@ -1885,8 +1885,8 @@ TEST_CASE("Screen.pointerCapture_endsWhenTheTargetOrItsAncestorLeavesTheTree")
 
 TEST_CASE("Screen.pointerCapture_endsWhenTheOverlayHoldingItIsHidden")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto overlay = MouseRecorder {};
     screen.showOverlay(overlay, Point { .x = 5, .y = 2 });
     screen.draw();
@@ -1899,8 +1899,8 @@ TEST_CASE("Screen.pointerCapture_endsWhenTheOverlayHoldingItIsHidden")
 
 TEST_CASE("Screen.releasePointer_endsTheCapture")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto source = MouseRecorder {};
     auto other = MouseRecorder {};
     screen.root().addChild(source, LayoutParams { .area = AreaA });
@@ -1917,8 +1917,8 @@ TEST_CASE("Screen.releasePointer_endsTheCapture")
 
 TEST_CASE("Screen.pointerCapture_neverTakesScrollEvents")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto source = MouseRecorder {};
     auto other = MouseRecorder {};
     screen.root().addChild(source, LayoutParams { .area = AreaA });
@@ -1940,8 +1940,8 @@ TEST_CASE("Screen.pointerCapture_movesToTheComponentOfTheNextPress")
 {
     // A release the terminal never delivered -- the window lost focus mid-drag -- holds the pointer
     // only until the next press.
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto source = MouseRecorder {};
     auto other = MouseRecorder {};
     screen.root().addChild(source, LayoutParams { .area = AreaA });
@@ -1959,8 +1959,8 @@ TEST_CASE("Screen.pointerCapture_movesToTheComponentOfTheNextPress")
 
 TEST_CASE("Screen.pointerCapture_isNotTakenByAComponentItsPressDestroyed")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto doomed = std::make_unique<PressCallback>();
     doomed->onPress = [&doomed] {
         doomed.reset();
@@ -1977,10 +1977,10 @@ TEST_CASE("Screen.pointerCapture_isNotTakenByAComponentItsPressDestroyed")
 
 TEST_CASE("Screen.destructor_detachesOverlaysStillShown")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
     auto overlay = MouseRecorder {};
     {
-        auto screen = Screen(terminal);
+        auto screen = Screen(surface);
         screen.showOverlay(overlay, Point { .x = 5, .y = 5 });
         screen.draw();
         CHECK(overlay.screen() == &screen);
@@ -1991,8 +1991,8 @@ TEST_CASE("Screen.destructor_detachesOverlaysStillShown")
 
 TEST_CASE("Screen.overlayDestroyedWhileShown_leavesTheOverlayList")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto overlay = std::make_unique<MouseRecorder>();
     screen.showOverlay(*overlay, Point { .x = 5, .y = 2 });
     screen.draw();
@@ -2025,8 +2025,8 @@ struct HoverableRecorder: MouseRecorder
 
 TEST_CASE("Screen.mousePress_endsTheHoverSoNoTooltipOpensMidDrag")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto source = HoverableRecorder {};
     screen.root().addChild(source, LayoutParams { .area = AreaA });
     screen.hoverState().setDelay(std::chrono::milliseconds(0)); // a tick confirms any running timer
@@ -2065,8 +2065,8 @@ TEST_CASE("Screen.mousePress_endsTheHoverSoNoTooltipOpensMidDrag")
 
 TEST_CASE("Screen.pointerCapture_endsAtAReleaseBeforeTheInlineContentIsPlaced")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal, ScreenConfig { .viewport = Viewport::Inline });
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface, ScreenConfig { .viewport = Viewport::Inline });
     auto source = PaintedRecorder {};
     auto other = PaintedRecorder {};
     source.glyph = 'A'; // content, so the inline viewport has a height
@@ -2093,8 +2093,8 @@ TEST_CASE("Screen.pointerCapture_endsAtAReleaseBeforeTheInlineContentIsPlaced")
 
 TEST_CASE("Screen.releasePointer_inAPressHandler")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto panel = MouseRecorder {};
     auto leaf = PressCallback {};
     leaf.onPress = [&screen] {
@@ -2122,8 +2122,8 @@ TEST_CASE("Screen.releasePointer_inAPressHandler")
 
 TEST_CASE("Screen.pointerCapture_aPressThatDestroysTheComponentIgnoringItEndsThere")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto panel = MouseRecorder {};
     auto doomed = std::make_unique<PressCallback>();
     doomed->pressResult = EventResult::Ignored;
@@ -2144,8 +2144,8 @@ TEST_CASE("Screen.pointerCapture_aPressThatDestroysTheComponentIgnoringItEndsThe
 
 TEST_CASE("Screen.pointerCapture_deliversToACapturedOverlayInItsOwnCoordinates")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto tree = MouseRecorder {};
     auto overlay = MouseRecorder {};
     screen.root().addChild(tree, LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 24 } });
@@ -2241,14 +2241,14 @@ class TextPositionMock: public MockTerminalOutput
 struct InlineMarkFixture
 {
     MockTerminalOutput* mock;
-    Terminal terminal;
+    MockScreenSurface surface;
     Screen screen;
     MarkedRowsComponent comp;
 
     explicit InlineMarkFixture(std::unique_ptr<MockTerminalOutput> output):
         mock(output.get()),
-        terminal(std::move(output)),
-        screen(terminal, ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 })
+        surface(std::move(output)),
+        screen(surface, ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 })
     {
     }
 

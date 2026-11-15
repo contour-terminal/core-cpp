@@ -227,6 +227,13 @@ jobs:
           -DWORK_DIR="$RUNNER_TEMP/check-release-selftest"
           -P tests/cmake/check-release-selftest.cmake
 
+      # covers: core-cpp.tui-core-symbols-selftest
+      - name: tui_core symbol-check self-test
+        run: >-
+          cmake -DCHECKER="$GITHUB_WORKSPACE/tests/cmake/check-tui-core-symbols.cmake"
+          -DWORK_DIR="$RUNNER_TEMP/tui-core-symbols-selftest"
+          -P tests/cmake/check-tui-core-symbols-selftest.cmake
+
       # Each case builds a git repository of its own and vendors it; the consumer-smoke job below
       # is where a vendored copy of this tree is configured, built and verified.
       # covers: core-cpp.vendor-selftest
@@ -1095,6 +1102,10 @@ jobs:
   #   tui-output  Lightweight's dbtool links core::tui_output alone, with CORE_CPP_WITH_TUI off and
   #             CORE_CPP_WITH_TUI_OUTPUT on. The project asserts that the leaf exists, that core::tui
   #             does not, and that libunicode was neither found nor fetched.
+  #   tui-core  a program with no terminal (a WebAssembly guest's native twin) links core::tui_core,
+  #             with CORE_CPP_WITH_TUI off and CORE_CPP_WITH_TUI_CORE on. The project asserts that
+  #             core::tui does not exist, that the link closure holds nothing of platform, async or
+  #             net, and renders a component into a string through Screen.
   consumer-smoke:
     name: consumer-smoke (${{ matrix.leg }})
     runs-on: ubuntu-24.04
@@ -1102,7 +1113,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        leg: [cpm, vendored, wasm, tui-output]
+        leg: [cpm, vendored, wasm, tui-output, tui-core]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -1123,7 +1134,7 @@ jobs:
 
       # --- cpm ---------------------------------------------------------------------------------
       - name: Install clang ${{ env.LLVM_VERSION }}
-        if: matrix.leg == 'cpm' || matrix.leg == 'tui-output'
+        if: matrix.leg == 'cpm' || matrix.leg == 'tui-output' || matrix.leg == 'tui-core'
         run: |
           scripts/ci-retry.sh wget -q https://apt.llvm.org/llvm.sh
           scripts/ci-retry.sh sudo bash llvm.sh "$LLVM_VERSION"
@@ -1146,6 +1157,29 @@ jobs:
             -DCORE_CPP_SOURCE_DIR="$GITHUB_WORKSPACE"
           cmake --build "$RUNNER_TEMP/consumer-tui-output"
           ctest --test-dir "$RUNNER_TEMP/consumer-tui-output" --output-on-failure
+
+      # --- tui-core ----------------------------------------------------------------------------
+      - name: A consumer of core::tui_core renders with the terminal half off
+        if: matrix.leg == 'tui-core'
+        run: |
+          cmake -S tests/consumer-tui-core -B "$RUNNER_TEMP/consumer-tui-core" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER="clang++-$LLVM_VERSION" \
+            -DCORE_CPP_SOURCE_DIR="$GITHUB_WORKSPACE"
+          cmake --build "$RUNNER_TEMP/consumer-tui-core"
+          ctest --test-dir "$RUNNER_TEMP/consumer-tui-core" --output-on-failure
+
+      # The headless half's own suite and the archive's symbol check, in a tree where the terminal
+      # half does not exist: what passes here passes without core::tui to lean on.
+      - name: core::tui_core's suite passes with the terminal half off
+        if: matrix.leg == 'tui-core'
+        run: |
+          cmake -S . -B "$RUNNER_TEMP/tui-core-only" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER="clang++-$LLVM_VERSION" \
+            -DCORE_CPP_TESTING=ON -DCORE_CPP_WITH_TUI=OFF -DCORE_CPP_WITH_TUI_CORE=ON
+          cmake --build "$RUNNER_TEMP/tui-core-only" \
+            --target core-cpp-tui_core-test core-cpp-tui_output-test core-cpp-tui_core
+          ctest --test-dir "$RUNNER_TEMP/tui-core-only" --output-on-failure --no-tests=error \
+            -R '^core-cpp\.(tui_core|tui_output|tui-core-symbols)$'
 
       # --- vendored ----------------------------------------------------------------------------
       - name: Export a verbatim copy of this commit

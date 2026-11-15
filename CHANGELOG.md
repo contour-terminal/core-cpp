@@ -23,6 +23,19 @@ workflow refuses one without a section here.
   (constructs `Screen` from a `Terminal` member whose header it includes; compiles unchanged), fastcached (no
   `core::tui` use), Lightweight's `dbtool` (`core::tui_output` only), contour (does not vendor `tui`).
 
+### Added
+
+- **`core::tui_core`, the headless half of the TUI** (option `CORE_CPP_WITH_TUI_CORE`, defaulting to
+  `CORE_CPP_WITH_TUI`, which forces it on): the parser, cells, buffers, canvas, components, widgets, the Markdown
+  renderer and `Screen`, linking `core::base`, `core::tui_output` and libunicode -- nothing of `core::platform`,
+  `core::async` or `core::net`. `core::tui` links it and keeps the terminal, the runtime and the image file loaders.
+  No header moved; a consumer of `core::tui` changes nothing. `CORE_CPP_WITH_TUI` off and `CORE_CPP_WITH_TUI_CORE` on
+  builds it alone. The libunicode dependency now follows `CORE_CPP_WITH_TUI_CORE`. Design:
+  "A headless TUI" among the design notes (`docs/design/tui-headless.md`).
+- **`core-cpp.tui-core-symbols`** reads `core::tui_core`'s archive and fails on any symbol of `core::platform`,
+  `core::async`, `core::net`, `Terminal`, `TerminalInput`, `TerminalChannel` or the runtime;
+  `tests/consumer-tui-core` is a CPM consumer that renders a component with the terminal half off.
+
 ## [0.20.0] - 2026-11-14
 
 ### Added

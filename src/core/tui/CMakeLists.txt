@@ -73,24 +73,20 @@ if(CORE_CPP_WITH_IMAGES)
     endif()
 endif()
 
-# core::tui: the rest of endo's terminal UI. Native only -- there is no terminal under Emscripten,
-# where CORE_CPP_WITH_TUI is forced off -- and, as above, its root holds nothing platform-specific:
-# posix/ has the termios raw mode, the SIGWINCH self-pipe and the clipboard tools, windows/ the
-# console modes, the input records and the resize event.
-#
-# runtime/ is composed on core::net::EventLoop (Task B12), which is why core::net is in PUBLIC_LIBS
-# below: TuiRuntime.hpp names its loop, its awaitables and its handle kinds in its own signatures.
-# That commit also left this module with NO source that chooses its platform with an #ifdef, and no
-# runtime/posix or runtime/windows directory at all -- the multiplexing those two held is the
-# loop's, on every platform.
-core_cpp_add_module(tui KIND STATIC
+# core::tui_core: the headless half of endo's terminal UI -- the parser, cells and buffers, the
+# components and widgets, the Markdown renderer and the frame driver -- which needs no terminal under
+# it (docs/design/tui-headless.md). Screen draws on a ScreenSurface, which core::tui's Terminal
+# implements, so nothing here reads a descriptor, installs a signal handler, waits on a clock or
+# runs an event loop. Its row in cmake/CoreCppModules.cmake says DEPS base tui_output, and libunicode
+# is the one dependency from outside core-cpp. ImageProvider is only the interface MarkdownRenderer
+# takes; what reads a file sits in core::tui below. runtime/ModalComponent.hpp is a pure Component
+# contract and is here, at its path; the rest of runtime/ is core::tui's.
+core_cpp_add_module(tui_core KIND STATIC
     HEADERS
-        ${_coreCppTuiImageHeaders}
         Box.hpp
         Buffer.hpp
         Canvas.hpp
         Cell.hpp
-        ClipboardWriter.hpp
         CommandPalettePopup.hpp
         CommandRegistry.hpp
         CompletionPopup.hpp
@@ -115,6 +111,7 @@ core_cpp_add_module(tui KIND STATIC
         MarkdownInline.hpp
         MarkdownRenderer.hpp
         MarkdownTable.hpp
+        MockScreenSurface.hpp
         MockTerminalOutput.hpp
         Modifier.hpp
         PopupKeyDispatch.hpp
@@ -123,14 +120,10 @@ core_cpp_add_module(tui KIND STATIC
         Screen.hpp
         ScreenSurface.hpp
         ScrollableSelection.hpp
-        SemanticBlockClient.hpp
         Sixel.hpp
         Spinner.hpp
         StatusBar.hpp
         StyledText.hpp
-        Terminal.hpp
-        TerminalChannel.hpp
-        TerminalInput.hpp
         TestHelpers.hpp
         Text.hpp
         TextDecorator.hpp
@@ -145,20 +138,12 @@ core_cpp_add_module(tui KIND STATIC
         completer/CompletionProvider.hpp
         completer/FuzzyMatch.hpp
         completer/SmartCaseMatch.hpp
-        runtime/InputSource.hpp
-        runtime/Modal.hpp
         runtime/ModalComponent.hpp
-        runtime/TerminalInputSource.hpp
-        runtime/TuiRuntime.hpp
-        runtime/testing/ScriptedInputSource.hpp
-        testing/ScriptedTerminalChannel.hpp
     SOURCES
-        ${_coreCppTuiImageSources}
         Box.cpp
         Buffer.cpp
         Canvas.cpp
         Cell.cpp
-        ClipboardWriter.cpp
         CommandPalettePopup.cpp
         CommandRegistry.cpp
         CompletionPopup.cpp
@@ -175,16 +160,14 @@ core_cpp_add_module(tui KIND STATIC
         MarkdownHtml.cpp
         MarkdownRenderer.cpp
         MarkdownTable.cpp
+        MockScreenSurface.cpp
         MockTerminalOutput.cpp
         QuestionComponent.cpp
         Screen.cpp
-        SemanticBlockClient.cpp
         Sixel.cpp
         Spinner.cpp
         StatusBar.cpp
         StyledText.cpp
-        Terminal.cpp
-        TerminalInput.cpp
         Text.cpp
         Theme.cpp
         Tooltip.cpp
@@ -194,6 +177,38 @@ core_cpp_add_module(tui KIND STATIC
         completer/Completer.cpp
         completer/FuzzyMatch.cpp
         completer/SmartCaseMatch.cpp
+    PUBLIC_LIBS core::base core::tui_output unicode::unicode)
+
+# core::tui: the terminal half of endo's terminal UI, on top of core::tui_core. Native only -- there
+# is no terminal under Emscripten, where CORE_CPP_WITH_TUI is forced off -- and, as above, its root
+# holds nothing platform-specific: posix/ has the termios raw mode, the SIGWINCH self-pipe and the
+# clipboard tools, windows/ the console modes, the input records and the resize event.
+#
+# runtime/ is composed on core::net::EventLoop (Task B12), which is why core::net is in PUBLIC_LIBS
+# below: TuiRuntime.hpp names its loop, its awaitables and its handle kinds in its own signatures.
+# That commit also left this module with NO source that chooses its platform with an #ifdef, and no
+# runtime/posix or runtime/windows directory at all -- the multiplexing those two held is the
+# loop's, on every platform.
+core_cpp_add_module(tui KIND STATIC
+    HEADERS
+        ${_coreCppTuiImageHeaders}
+        ClipboardWriter.hpp
+        SemanticBlockClient.hpp
+        Terminal.hpp
+        TerminalChannel.hpp
+        TerminalInput.hpp
+        runtime/InputSource.hpp
+        runtime/Modal.hpp
+        runtime/TerminalInputSource.hpp
+        runtime/TuiRuntime.hpp
+        runtime/testing/ScriptedInputSource.hpp
+        testing/ScriptedTerminalChannel.hpp
+    SOURCES
+        ${_coreCppTuiImageSources}
+        ClipboardWriter.cpp
+        SemanticBlockClient.cpp
+        Terminal.cpp
+        TerminalInput.cpp
         runtime/TuiRuntime.cpp
     SOURCES_POSIX
         ${_coreCppTuiImagePosix}
@@ -206,7 +221,7 @@ core_cpp_add_module(tui KIND STATIC
         windows/Terminal.cpp
         windows/TerminalChannel.cpp
         windows/TerminalInput.cpp
-    PUBLIC_LIBS core::base core::tui_output core::platform core::async core::net unicode::unicode
+    PUBLIC_LIBS core::base core::tui_core core::tui_output core::platform core::async core::net
     PRIVATE_LIBS ${_coreCppTuiImageLibs})
 
 core_cpp_add_test(tui NAME tui_output
@@ -216,14 +231,11 @@ core_cpp_add_test(tui NAME tui_output
         TerminalProtocols_test.cpp
         detail/Utf16ToUtf8_test.cpp)
 
-# One binary for the module. windows/TerminalInput_test.cpp is Windows-only: it drives the console
-# API directly, and serialises its cases on a named mutex because they share the one console the
-# test process has. posix/TerminalHangup_test.cpp and posix/TerminalInput_test.cpp are POSIX-only: one
-# hangs up a pseudo-terminal, the other swaps standard output for a pipe with dup2.
-core_cpp_add_test(tui
+# The headless half's own binary, which builds with the terminal half switched off
+# (CORE_CPP_WITH_TUI off, CORE_CPP_WITH_TUI_CORE on): each case here links core::tui_core and nothing
+# above it, which is what proves the split holds for the code the cases exercise.
+core_cpp_add_test(tui NAME tui_core
     SOURCES
-        ${_coreCppTuiImageTests}
-        ClipboardWriter_test.cpp
         CommandPalettePopup_test.cpp
         CommandRegistry_test.cpp
         Completer_test.cpp
@@ -242,15 +254,26 @@ core_cpp_add_test(tui
         Renderer_test.cpp
         Screen_test.cpp
         ScrollableSelection_test.cpp
-        SemanticBlockClient_test.cpp
         Sixel_test.cpp
         SmartCaseMatch_test.cpp
         StyledText_test.cpp
-        TerminalInput_test.cpp
-        TerminalQuery_test.cpp
         TreeTableView_test.cpp
         Unicode_test.cpp
-        VtParser_test.cpp
+        VtParser_test.cpp)
+
+# The terminal half. Screen_test.cpp is not here: it drives Screen over a MockScreenSurface, so it
+# runs above, with the terminal half off. windows/TerminalInput_test.cpp is Windows-only: it drives
+# the console API directly, and serialises its cases on a named mutex because they share the one
+# console the test process has. posix/TerminalHangup_test.cpp and
+# posix/TerminalInput_test.cpp are POSIX-only: one hangs up a pseudo-terminal, the other swaps
+# standard output for a pipe with dup2.
+core_cpp_add_test(tui
+    SOURCES
+        ${_coreCppTuiImageTests}
+        ClipboardWriter_test.cpp
+        SemanticBlockClient_test.cpp
+        TerminalInput_test.cpp
+        TerminalQuery_test.cpp
         runtime/Modal_test.cpp
         runtime/TuiRuntime_test.cpp
     SOURCES_POSIX

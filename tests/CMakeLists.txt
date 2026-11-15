@@ -101,6 +101,37 @@ add_test(NAME core-cpp.layering
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-layering.cmake")
 set_tests_properties(core-cpp.layering PROPERTIES LABELS "core-cpp;hygiene;tree-level" TIMEOUT 120)
 
+# core::tui_core reaches nothing of platform, async, net or the terminal half of the TUI
+# (docs/design/tui-headless.md), read from two sides because the module table bounds links and every
+# header sits under one include root: the includes of tui_core's own source and header lists, and
+# the archive's symbol table. NOT tree-level: one of its inputs is the archive this toolchain built.
+# Where there is no nm (cl), the symbol half says it did not run and the include half still does.
+# The self-test judges planted listings and trees, so its answer cannot differ between platforms:
+# tree-level, run by the `style` job.
+#
+# Bounds: the check reads one archive and ~90 files in under a second, the self-test runs some twenty
+# cmake -P processes in about two; 60 is the floor the cheapest checks above share.
+if(TARGET core-cpp-tui_core)
+    set(_coreCppTuiCoreFiles
+        "$<JOIN:$<TARGET_PROPERTY:core-cpp-tui_core,SOURCES>;$<TARGET_PROPERTY:core-cpp-tui_core,HEADER_SET>,|>")
+    add_test(NAME core-cpp.tui-core-symbols
+             COMMAND "${CMAKE_COMMAND}"
+                     "-DNM=${CMAKE_NM}"
+                     "-DARCHIVE=$<TARGET_FILE:core-cpp-tui_core>"
+                     "-DSOURCE_DIR=$<TARGET_PROPERTY:core-cpp-tui_core,SOURCE_DIR>"
+                     "-DFILES=${_coreCppTuiCoreFiles}"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-tui-core-symbols.cmake")
+    set_tests_properties(core-cpp.tui-core-symbols PROPERTIES LABELS "core-cpp;hygiene;tui" TIMEOUT 60)
+endif()
+add_test(NAME core-cpp.tui-core-symbols-selftest
+         COMMAND "${CMAKE_COMMAND}"
+                 "-DCHECKER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-tui-core-symbols.cmake"
+                 "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/tui-core-symbols-selftest"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-tui-core-symbols-selftest.cmake")
+set_tests_properties(core-cpp.tui-core-symbols-selftest PROPERTIES
+    LABELS "core-cpp;hygiene;tree-level"
+    TIMEOUT 60)
+
 # "No OpenSSL type appears in any header" (Part I §2 item 8), refused rather than stated: an
 # OpenSSL include outside the units that implement the TLS layer, and an OpenSSL type named in any
 # header, forward declarations included. Registered whether or not CORE_CPP_WITH_TLS is on, because

@@ -73,10 +73,14 @@ src/core/
                             it; IOCP, sockets and dialling (planned, B6-B11)
   tui/                      core::tui_output (endo: TerminalOutput, SyncGuard, SgrBuilder,
                             TerminalProtocols, CursorShape, Error; links base alone; with
-                            CORE_CPP_WITH_TUI_OUTPUT, which the full TUI forces on), and
-                            core::tui (TerminalInput, VtParser, Terminal, Buffer, Canvas,
-                            Screen, the components and popups, completer/, MarkdownRenderer,
-                            GenericSyntaxHighlighter, Sixel, images behind
+                            CORE_CPP_WITH_TUI_OUTPUT, which the full TUI forces on),
+                            core::tui_core (the headless half, CORE_CPP_WITH_TUI_CORE:
+                            VtParser, Buffer, Canvas, Screen over ScreenSurface, the
+                            components and popups, completer/, MarkdownRenderer,
+                            GenericSyntaxHighlighter, Sixel, runtime/ModalComponent; links
+                            base, tui_output and libunicode alone), and
+                            core::tui (TerminalInput, Terminal, TerminalChannel,
+                            ClipboardWriter, SemanticBlockClient, images behind
                             CORE_CPP_WITH_IMAGES, runtime/ with TuiRuntime, InputSource,
                             TerminalInputSource, Modal; native only, and only with
                             CORE_CPP_WITH_TUI, and it links core::net since B12 composed the
@@ -85,7 +89,7 @@ src/core/
                             (console modes, input records, resize event) detail/ are
                             private -- runtime/ has no platform directories at all, because
                             the loop does the waiting on every platform;
-                            MockTerminalOutput, runtime/testing/ScriptedInputSource and
+                            MockTerminalOutput, MockScreenSurface, runtime/testing/ScriptedInputSource and
                             TestHelpers.hpp are the fakes; .clang-tidy is the one directory
                             override (see its own comment)
   testing/                  core::testing: SuppressWindowsDialogs (no test framework needed),

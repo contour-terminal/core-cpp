@@ -1,11 +1,12 @@
 # tui
 
 The terminal UI. Namespace `core::tui`, directory `src/core/tui/`, targets `core::tui_output`
-(with `CORE_CPP_WITH_TUI_OUTPUT`) and `core::tui` (with `CORE_CPP_WITH_TUI`). Both are on by
-default and off under Emscripten; `CORE_CPP_WITH_TUI` forces `CORE_CPP_WITH_TUI_OUTPUT` on, and
-`CORE_CPP_WITH_TUI_OUTPUT` defaults to whatever `CORE_CPP_WITH_TUI` is on a first configure (a
-cache entry keeps its value after that, so turning the TUI off in an existing tree leaves the leaf
-on).
+(with `CORE_CPP_WITH_TUI_OUTPUT`), `core::tui_core` (with `CORE_CPP_WITH_TUI_CORE`) and `core::tui`
+(with `CORE_CPP_WITH_TUI`). All three are on by default and off under Emscripten; each forces the
+one below it on (`CORE_CPP_WITH_TUI` forces `CORE_CPP_WITH_TUI_CORE`, which forces
+`CORE_CPP_WITH_TUI_OUTPUT`), and the two lower options default to whatever `CORE_CPP_WITH_TUI` is on
+a first configure (a cache entry keeps its value after that, so turning the TUI off in an existing
+tree leaves them on).
 
 Imported from endo's `src/tui` at `f774a210`, which includes the coroutine-runtime work fastcached
 upstreamed there. The runtime has since been rewritten onto [`core::net::EventLoop`](net.md).
@@ -49,10 +50,27 @@ which fetches libunicode and, through libunicode's configure, `UCD.zip`.
   between two `MouseTracking` modes, and `parseSixelFromDeviceAttributes()`, which reads a DA1 answer.
 - `Result<T>` and `VoidResult`, the module's `std::expected` aliases.
 
+## `core::tui_core`
+
+The headless half: everything below that needs no terminal under it -- `VtParser` and
+`InputEvent`, `Cell`, `Buffer`, `Canvas`, `Component`, the widgets, the completer, the Markdown
+renderer, `Theme`, `Unicode` and `Screen`. It links `core::base`, `core::tui_output` and libunicode,
+and nothing of [platform](platform.md), [async](async.md) or [net](net.md); configured with
+`CORE_CPP_WITH_TUI` off and `CORE_CPP_WITH_TUI_CORE` on, core-cpp builds it without the terminal
+half. `Screen` draws on a `ScreenSurface` -- a size, a `TerminalOutput` and the one cursor query the
+inline viewport asks -- which `Terminal` implements on a real terminal and a program with none
+implements itself; `MockScreenSurface` is the test double, over a `MockTerminalOutput`. `core-cpp.tui-core-symbols` reads
+tui_core's includes and its archive's symbols for anything it may not reach, and
+`tests/consumer-tui-core` (CI's `consumer-smoke (tui-core)`) renders a component through it with the
+terminal half off. Why it is shaped this way, and what remains before a WebAssembly guest builds
+it: [A headless TUI](../design/tui-headless.md).
+
 ## `core::tui`
 
-The rest, on top of `core::tui_output`, [platform](platform.md), [async](async.md) and libunicode,
-and on stb when `CORE_CPP_WITH_IMAGES` is on. Native only: there is no terminal under Emscripten.
+The rest, on top of `core::tui_core`, [platform](platform.md), [async](async.md) and
+[net](net.md), and on stb when `CORE_CPP_WITH_IMAGES` is on: `Terminal`, `TerminalInput`,
+`TerminalChannel`, `ClipboardWriter`, `SemanticBlockClient`, the image file loaders and the
+runtime. Native only: there is no terminal under Emscripten. The list below covers both halves.
 
 - **Input.** `TerminalInput` puts the terminal in raw mode, enables the protocols above and decodes
   what comes back through `VtParser` into an `InputEvent` — keys (`KeyCode`, `Modifier`), mouse,

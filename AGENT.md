@@ -20,7 +20,7 @@ is [the plan](docs/superpowers/plans/2026-09-18-core-cpp.md).
 | platform | `core::platform` | `core::platform` | base, log |
 | async | `core::async` | `core::async` (INTERFACE) | Threads |
 | net | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | async, platform |
-| tui | `core::tui` | `core::tui_output`, `core::tui` | base (leaf); + platform, async, net, libunicode |
+| tui | `core::tui` | `core::tui_output`, `core::tui_core`, `core::tui` | base (leaf); + tui_output, libunicode (headless `tui_core`); + platform, async, net (`tui`) |
 | testing | `core::testing` | `core::testing`, `core::testing_dialogs`, `core::testing_main` | base; log and Catch2 for `testing_main` |
 
 Every module exists. `Generator` is in base (Task A5b: it needs only std, and

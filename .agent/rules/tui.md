@@ -1,27 +1,40 @@
 # Terminal UI
 
-Rules for `src/core/tui/`: the `core::tui_output` leaf, the full `core::tui`, and its runtime.
+Rules for `src/core/tui/`: the `core::tui_output` leaf, the headless `core::tui_core`, the full
+`core::tui`, and its runtime.
 
 The module arrives in Task A7, from endo's `src/tui` at `f774a210`, and its runtime moved onto
 `core::net::EventLoop` in Task B12 (the design spec,
 [Part I §1 and §2](https://github.com/contour-terminal/core-cpp/blob/master/docs/superpowers/specs/2026-09-18-core-cpp-design.md)).
 Its consumers are endo, tuidu, fastcached's console tools and Lightweight's `dbtool`.
 
-## Two targets, and the leaf stays a leaf
+## Three targets, and each stays below the next
 
 - **`core::tui_output` depends on `core::base` only**: `TerminalOutput`, `SgrBuilder`,
   `SyncGuard`, `TerminalProtocols`, `CursorShape`, `Error`, and the private `posix/PosixIO`
   and `detail/Utf16ToUtf8`. Lightweight's `dbtool` links only this, to draw progress and colour without
   taking an event loop, libunicode or coroutines. An include of libunicode or `core::async` in
   a leaf file is a layering violation even if it links.
+- **`core::tui_core` needs no terminal**: the parser, cells, buffers, components, widgets, the
+  Markdown renderer and `Screen`, on `base`, `tui_output` and libunicode alone. Nothing in it reads
+  a descriptor, installs a signal handler, reads the process's clock through `platform`, or names
+  `Terminal`, `TerminalInput`, `TerminalChannel` or the runtime -- `Screen` draws on a
+  `ScreenSurface`. An include of `core/platform`, `core/async`, `core/net` or a terminal-half
+  header from a `tui_core` file compiles, because every header shares one include root, and is a
+  layering violation all the same; `core-cpp.tui-core-symbols` catches what it leaves in the
+  archive. A WebAssembly guest builds on this target (docs/design/tui-headless.md).
 - **`core::tui` is everything else** and may depend on `platform`, `async`, `net`, libunicode,
   and stb when `CORE_CPP_WITH_IMAGES` is on.
 - **The leaf has an option of its own, `CORE_CPP_WITH_TUI_OUTPUT`, and that is load-bearing.**
   Gated on `CORE_CPP_WITH_TUI` like the libunicode row, the leaf existed only in the configuration
   that fetched libunicode and `UCD.zip`, so dbtool could not have it without what it was split off
   from. `tests/consumer-tui-output` asserts the leaf-only configuration fetches nothing.
-- **The TUI never builds under Emscripten.** `CORE_CPP_WITH_TUI` and `CORE_CPP_WITH_TUI_OUTPUT`
-  are forced off there.
+- **`core::tui_core` has an option of its own too, `CORE_CPP_WITH_TUI_CORE`**, for the same
+  reason: a guest wants the headless half and none of the rest. `tests/consumer-tui-core` asserts
+  the configuration with the terminal half off builds it and links nothing of `platform`, `async`
+  or `net`.
+- **The TUI never builds under Emscripten.** `CORE_CPP_WITH_TUI`, `CORE_CPP_WITH_TUI_CORE` and
+  `CORE_CPP_WITH_TUI_OUTPUT` are forced off there.
 
 ## Output goes through the destination, never to a file descriptor
 

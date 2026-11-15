@@ -14,8 +14,9 @@ core-cpp never writes to the parent's cache.
 | `CORE_CPP_BUILD_EXAMPLES` | ON when top-level | Build the examples |
 | `CORE_CPP_INSTALL` | ON when top-level | Install core-cpp's targets and export them as the CMake package `core-cpp` ([Installing](install.md)). A parent whose own export links core-cpp's targets turns it on |
 | `CORE_CPP_FETCH_DEPS` | ON | Fetch a dependency with CPM when neither the parent project nor `find_package` provides it. OFF stops the configure instead, naming the option that needed it |
-| `CORE_CPP_WITH_TUI` | ON | Build `core::tui`, which needs libunicode. Forces `CORE_CPP_WITH_TUI_OUTPUT` on |
+| `CORE_CPP_WITH_TUI` | ON | Build `core::tui`, which needs libunicode. Forces `CORE_CPP_WITH_TUI_CORE` and `CORE_CPP_WITH_TUI_OUTPUT` on |
 | `CORE_CPP_WITH_TUI_OUTPUT` | `CORE_CPP_WITH_TUI`, on a first configure | Build `core::tui_output`, the styled-output leaf that links `core::base` alone. On with `CORE_CPP_WITH_TUI` off builds the leaf by itself, and fetches no libunicode. The default is taken once, when the cache entry is created: turning `CORE_CPP_WITH_TUI` off in an existing build tree leaves this on |
+| `CORE_CPP_WITH_TUI_CORE` | `CORE_CPP_WITH_TUI`, on a first configure | Build `core::tui_core`, the headless TUI (no terminal, no event loop), which needs libunicode. Forced on by `CORE_CPP_WITH_TUI`; forces `CORE_CPP_WITH_TUI_OUTPUT` on |
 | `CORE_CPP_WITH_IMAGES` | ON, when `CORE_CPP_WITH_TUI` is | Decode images in `core::tui` (stb_image) |
 | `CORE_CPP_WITH_TLS` | OFF | Build `core::net_tls` (OpenSSL, from the system) |
 | `CORE_CPP_WITH_SYSTEMD` | ON | Linux only: notify of system sleep/wake through logind (`libsystemd`, found with pkg-config and linked by value). A configure without its development files stops, naming this option; OFF builds without it and `makeNativeSystemPowerMonitor()` reports `NotImplemented` |
@@ -35,8 +36,8 @@ Every flag these options add is private to core-cpp's own targets.
 
 ## Under Emscripten
 
-Only the WebAssembly subset builds, and `CORE_CPP_WITH_TUI`, `CORE_CPP_WITH_TUI_OUTPUT`,
-`CORE_CPP_WITH_IMAGES` and `CORE_CPP_WITH_TLS` are forced off, by a normal variable that leaves the parent's cache
+Only the WebAssembly subset builds, and `CORE_CPP_WITH_TUI`, `CORE_CPP_WITH_TUI_CORE`,
+`CORE_CPP_WITH_TUI_OUTPUT`, `CORE_CPP_WITH_IMAGES` and `CORE_CPP_WITH_TLS` are forced off, by a normal variable that leaves the parent's cache
 untouched. Without pthreads, Threads is not linked.
 
 ## Compiler-cache options (top-level builds only)

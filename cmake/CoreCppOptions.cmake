@@ -27,6 +27,12 @@ option(CORE_CPP_WITH_TUI "Build core::tui, and core::tui_output with it" ON)
 # off in an existing tree leaves this on, which costs a leaf with no dependency and nothing else.
 option(CORE_CPP_WITH_TUI_OUTPUT "Build core::tui_output, the styled-output leaf that links core::base alone"
        ${CORE_CPP_WITH_TUI})
+# The headless half of the TUI: components, widgets, the frame driver and the parser, with no
+# terminal, no event loop and no platform layer under them (docs/design/tui-headless.md). Its own
+# option for the reason the leaf has one -- a WebAssembly guest wants this and none of the rest --
+# and it defaults to CORE_CPP_WITH_TUI for the same reason the leaf does.
+option(CORE_CPP_WITH_TUI_CORE "Build core::tui_core, the headless TUI that needs no terminal (libunicode)"
+       ${CORE_CPP_WITH_TUI})
 cmake_dependent_option(CORE_CPP_WITH_IMAGES "Decode images in core::tui (stb_image)" ON
                        "CORE_CPP_WITH_TUI" OFF)
 option(CORE_CPP_WITH_TLS "Build core::net_tls (OpenSSL)" OFF)
@@ -52,10 +58,14 @@ if(CORE_CPP_TESTING AND NOT CORE_CPP_CATCH2_MAIN)
     set(CORE_CPP_CATCH2_MAIN ON)
 endif()
 
-# core::tui links core::tui_output, so the full TUI forces the leaf on, the same way testing forces
-# the Catch2 main.
-if(CORE_CPP_WITH_TUI AND NOT CORE_CPP_WITH_TUI_OUTPUT)
-    message(STATUS "[core-cpp] CORE_CPP_WITH_TUI_OUTPUT is ON because CORE_CPP_WITH_TUI is ON")
+# core::tui links core::tui_core, which links core::tui_output, so each forces the one below it on,
+# the same way testing forces the Catch2 main.
+if(CORE_CPP_WITH_TUI AND NOT CORE_CPP_WITH_TUI_CORE)
+    message(STATUS "[core-cpp] CORE_CPP_WITH_TUI_CORE is ON because CORE_CPP_WITH_TUI is ON")
+    set(CORE_CPP_WITH_TUI_CORE ON)
+endif()
+if(CORE_CPP_WITH_TUI_CORE AND NOT CORE_CPP_WITH_TUI_OUTPUT)
+    message(STATUS "[core-cpp] CORE_CPP_WITH_TUI_OUTPUT is ON because CORE_CPP_WITH_TUI_CORE is ON")
     set(CORE_CPP_WITH_TUI_OUTPUT ON)
 endif()
 
@@ -73,8 +83,8 @@ endif()
 # a terminal nor TLS. A normal variable shadows the cache entry for core-cpp's
 # directories and leaves the parent's cache alone.
 if(EMSCRIPTEN)
-    foreach(_coreCppWasmOff IN ITEMS CORE_CPP_WITH_TUI CORE_CPP_WITH_TUI_OUTPUT CORE_CPP_WITH_IMAGES
-                                         CORE_CPP_WITH_TLS)
+    foreach(_coreCppWasmOff IN ITEMS CORE_CPP_WITH_TUI CORE_CPP_WITH_TUI_CORE CORE_CPP_WITH_TUI_OUTPUT
+                                         CORE_CPP_WITH_IMAGES CORE_CPP_WITH_TLS)
         if(${_coreCppWasmOff})
             message(STATUS "[core-cpp] ${_coreCppWasmOff} is OFF under Emscripten (WebAssembly subset only)")
         endif()
