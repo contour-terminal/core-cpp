@@ -222,7 +222,7 @@ not report the tables as found, builds it and runs the module under Node's WASI 
 (`tests/wasi-unicode/run-wasi.mjs`), judged by its output. It also refuses a configure that printed a CPM line or a
 download; run inside a network namespace with no network and an empty `CPM_SOURCE_CACHE`, it passes. Without `WASI_SDK_PREFIX` or node it
 skips and says which; locally, with wasi-sdk 34 and Node 22, it passes, and the release module is
-316 KiB unstripped. CI runs it once U.12's job sets `WASI_SDK_PREFIX`.
+316 KiB unstripped. CI's `wasi` job (U.12) runs it.
 
 ### `IClock` moves into `core::base`
 
@@ -328,6 +328,31 @@ generated. Locally, wasi-sdk 34 and Node 22: it links (the Release module is 3.9
 With no SIMD, libunicode's `scan.cpp` leaves its `ascending()` template unused, which a consumer's `-Werror`
 makes fatal. core-cpp chose no SIMD, so the libunicode row's WRAP turns `-Wunused-template` off on that one
 target, PRIVATE, under WASI only; the source fix belongs in libunicode.
+
+### CI builds the headless target for wasm (U.12)
+
+**As built.** The `wasi` job in `.github/workflows/build.yml` gates `ci-ok`. It downloads wasi-sdk 34.0 and
+wasmtime 50.0.1 from their GitHub releases, each checked against a pinned SHA-256 before it is unpacked (the
+two versions and digests are the job's one matrix row), and takes Node 22 from `actions/setup-node`. A native
+`clang-release` configure and a build of `core-cpp-tui_core` alone are there to generate libunicode's tables;
+every guest build after it takes them from that tree, so no guest downloads UCD.zip or builds the generator.
+Then three checks run, with `WASI_SDK_PREFIX` and `WASMTIME` set, and the job fails unless each is listed as
+passed -- a skip is not a pass:
+
+- `core-cpp.unicode-wasi` (U.7) and `core-cpp.tui-core-wasi` (U.11), under Node's WASI preview 1;
+- `core-cpp.tui-core-reactor` (`tests/cmake/run-tui-core-reactor.cmake`), new here. It configures
+  `tests/wasi-reactor` with `wasi-sdk-p1.cmake` and `-fno-exceptions -fno-rtti`, links `core::tui_core` with
+  `-mexec-model=reactor` into a module that exports `_initialize` and `core_tui_reactor_run` and has no
+  `main()`, and runs it with `wasmtime run --invoke core_tui_reactor_run`. The guest's state -- a `Screen` over a
+  `HeadlessSurface` whose sink collects the frames, a row of an input and a sidebar laid out by flex items, a
+  `VtParser` -- is built by `_initialize`. The function feeds `hi`, CSI D, `!` and CR through `VtParser`,
+  delivers the events to the focused input, reads the frame's bytes, diffs the frame before and after one more
+  key with `diffFrames()`, and checks the tree's areas against `layout::solve()` of the same shape: seven checks,
+  one line each. A failed check traps (`abort()`), so wasmtime exits non-zero; the script also requires the
+  summary line to count every check passed.
+
+wasmtime rather than WAMR: it ships a static Linux binary per release with a published digest, and runs a
+reactor's export from the command line; WAMR's `iwasm` would have to be built in the job.
 
 ## Order
 

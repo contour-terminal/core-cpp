@@ -168,6 +168,26 @@ if(TARGET core-cpp-tui_core)
         LABELS "core-cpp;tui;wasm"
         TIMEOUT 1200)
 endif()
+# U.12: core::tui_core linked into a WASI reactor -- no main(), an exported entry point -- built with
+# -fno-exceptions -fno-rtti and run under wasmtime: VtParser -> Screen -> diffFrames -> solve in a guest.
+# Needs wasi-sdk and wasmtime (WASMTIME or PATH), and skips, saying which, without them.
+if(TARGET core-cpp-tui_core)
+    add_test(NAME core-cpp.tui-core-reactor
+             COMMAND "${CMAKE_COMMAND}"
+                     "-DSOURCE_DIR=${CORE_CPP_SOURCE_DIR}"
+                     "-DLIBUNICODE_SOURCE=${_coreCppLibunicodeSource}"
+                     "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/tui-core-reactor"
+                     "-DCTEST=${CMAKE_CTEST_COMMAND}"
+                     "-DGENERATOR=${CMAKE_GENERATOR}"
+                     "-DSKIP_EXIT_CODE=${CORE_CPP_SKIP_EXIT_CODE}"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/run-tui-core-reactor.cmake")
+    set_tests_properties(core-cpp.tui-core-reactor PROPERTIES
+        SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
+        SKIP_REGULAR_EXPRESSION "run-tui-core-reactor: SKIPPED"
+        FAIL_REGULAR_EXPRESSION "CMake Error"
+        LABELS "core-cpp;tui;wasm"
+        TIMEOUT 1200)
+endif()
 # No widget hard-codes a square corner (U.10): a scan of src/core/tui outside the border helper. It reads
 # files and nothing else, so it is tree-level, and the `style` job runs it.
 add_test(NAME core-cpp.tui-corners

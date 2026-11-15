@@ -189,7 +189,7 @@ core_cpp_hygiene_allow(source-glob tests/cmake/check-tui-corners.cmake
 set(_consumerProjectReason
     "a consumer's own project, not core-cpp's build: these are the flags and variables core-cpp must leave untouched, which is what the project asserts")
 foreach(_consumerProject IN ITEMS consumer-cpm consumer-vendored consumer-wasm consumer-tui-output
-                                   consumer-tui-core)
+                                   consumer-tui-core wasi-reactor)
     core_cpp_hygiene_allow(global-compile-options "tests/${_consumerProject}/CMakeLists.txt" "${_consumerProjectReason}")
     core_cpp_hygiene_allow(global-cmake-variable "tests/${_consumerProject}/CMakeLists.txt" "${_consumerProjectReason}")
 endforeach()

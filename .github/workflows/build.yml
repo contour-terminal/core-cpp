@@ -1002,6 +1002,102 @@ jobs:
         run: ctest --preset emscripten -LE tree-level
 
   # ---------------------------------------------------------------------------------------------
+  # The headless TUI as a WebAssembly guest (docs/design/tui-headless.md, U.12). wasi-sdk builds
+  # core::tui_core for wasm32-wasip1 with -fno-exceptions -fno-rtti, and three checks run what it
+  # built: libunicode's tables under Node's WASI (core-cpp.unicode-wasi), a consumer module under
+  # Node (core-cpp.tui-core-wasi), and a reactor -- VtParser -> Screen -> diffFrames -> solve --
+  # under wasmtime (core-cpp.tui-core-reactor). Everywhere else they skip; here each must run.
+  #
+  # The host build is there for libunicode's generated tables, which every guest build takes from it
+  # rather than downloading UCD.zip or building the generator for wasm. wasi-sdk and wasmtime are
+  # pinned by version and SHA-256; a new version is a change to the four values below.
+  wasi:
+    name: wasi (wasi-sdk ${{ matrix.wasi_sdk }}, wasmtime ${{ matrix.wasmtime }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        include:
+          - wasi_sdk: "34.0"
+            wasi_sdk_sha256: b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4
+            wasmtime: "50.0.1"
+            wasmtime_sha256: 685466455dd42a14774a86c36c8f2e45cbb9bd6d92a850139315df60a75498a5
+    env:
+      WASI_SDK_VERSION: ${{ matrix.wasi_sdk }}
+      WASI_SDK_SHA256: ${{ matrix.wasi_sdk_sha256 }}
+      WASMTIME_VERSION: ${{ matrix.wasmtime }}
+      WASMTIME_SHA256: ${{ matrix.wasmtime_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Cache CPM sources
+        uses: actions/cache@v4
+        with:
+          path: .cache/cpm
+          key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
+          restore-keys: cpm-${{ runner.os }}-
+
+      - name: Install Ninja
+        run: scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build
+
+      - name: Install clang ${{ env.LLVM_VERSION }}
+        run: |
+          scripts/ci-retry.sh wget -q https://apt.llvm.org/llvm.sh
+          scripts/ci-retry.sh sudo bash llvm.sh "$LLVM_VERSION"
+          echo "CXX_COMPILER=clang++-$LLVM_VERSION" >> "$GITHUB_ENV"
+
+      # core-cpp.unicode-wasi and core-cpp.tui-core-wasi run their modules under Node's WASI preview 1.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Checked against the pinned digest before anything is unpacked; a mismatch fails here.
+      - name: Install wasi-sdk ${{ env.WASI_SDK_VERSION }}
+        run: |
+          archive="wasi-sdk-${WASI_SDK_VERSION}-x86_64-linux.tar.gz"
+          scripts/ci-retry.sh curl -sSfL -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION%%.*}/$archive"
+          echo "$WASI_SDK_SHA256  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/wasi-sdk"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/wasi-sdk" --strip-components=1
+          test -f "$RUNNER_TEMP/wasi-sdk/share/cmake/wasi-sdk-p1.cmake"
+          "$RUNNER_TEMP/wasi-sdk/bin/clang++" --version | head -n 1
+          echo "WASI_SDK_PREFIX=$RUNNER_TEMP/wasi-sdk" >> "$GITHUB_ENV"
+
+      - name: Install wasmtime ${{ env.WASMTIME_VERSION }}
+        run: |
+          archive="wasmtime-v${WASMTIME_VERSION}-x86_64-linux.tar.xz"
+          scripts/ci-retry.sh curl -sSfL -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/bytecodealliance/wasmtime/releases/download/v${WASMTIME_VERSION}/$archive"
+          echo "$WASMTIME_SHA256  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/wasmtime"
+          tar -xJf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/wasmtime" --strip-components=1
+          "$RUNNER_TEMP/wasmtime/wasmtime" --version
+          echo "WASMTIME=$RUNNER_TEMP/wasmtime/wasmtime" >> "$GITHUB_ENV"
+
+      # The host build only generates libunicode's tables and registers the guests' checks, so it
+      # needs no libsystemd (core::platform's power source), which this runner does not install.
+      - name: Configure the host build
+        run: cmake --preset clang-release -DCMAKE_CXX_COMPILER="$CXX_COMPILER" -DCORE_CPP_WITH_SYSTEMD=OFF
+
+      # core::tui_core links libunicode, so building it generates the tables the guests take.
+      - name: Generate libunicode's tables
+        run: cmake --build --preset clang-release --target core-cpp-tui_core
+
+      # A check that skipped proved nothing: each of the three must be listed as passed.
+      - name: Build and run the guests
+        run: |
+          ctest --preset clang-release -R '^core-cpp\.(unicode-wasi|tui-core-wasi|tui-core-reactor)$' \
+            --no-tests=error -V | tee "$RUNNER_TEMP/wasi-ctest.log"
+          for check in unicode-wasi tui-core-wasi tui-core-reactor; do
+            grep -Eq "Test +#[0-9]+: core-cpp\.$check \.+ +Passed" "$RUNNER_TEMP/wasi-ctest.log" \
+              || { echo "::error::core-cpp.$check did not run and pass"; exit 1; }
+          done
+          grep -E "(not )?ok - |tui-core-reactor: [0-9]+ of" "$RUNNER_TEMP/wasi-ctest.log"
+
+  # ---------------------------------------------------------------------------------------------
   # Proves core-cpp builds through pace-cc when it is available: the launcher is fetched and a
   # pace-kv daemon started by the verbatim module itself, and the second build must be served from
   # the cache. No other launcher is installed here, so nothing else can win the selection.
@@ -1451,7 +1547,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [style, linux, macos, windows, windows-clang-tidy, sanitizers, clang-tidy, emscripten, consumer-smoke, compile-cache]
+    needs: [style, linux, macos, windows, windows-clang-tidy, sanitizers, clang-tidy, emscripten, wasi, consumer-smoke, compile-cache]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

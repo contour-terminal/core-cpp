@@ -126,6 +126,13 @@ workflow refuses one without a section here.
   `Component` subclass with an `onResize(Size)`, `layoutChildren` or `layoutStyle` member (its `Prompt::onResize()` is
   not a `Component`), and its `endo::dap::Breakpoint` is in its own namespace; fastcached, Lightweight's `dbtool` and
   contour are unaffected (no `core::tui_core` use).
+- **CI builds and runs the headless TUI for `wasm32-wasip1`.** A `wasi` job, required by `ci-ok`, installs wasi-sdk
+  34.0 and wasmtime 50.0.1 (each pinned by SHA-256) and Node 22, generates libunicode's tables in a native build,
+  and fails unless `core-cpp.unicode-wasi`, `core-cpp.tui-core-wasi` and the new `core-cpp.tui-core-reactor` all
+  run and pass. `core-cpp.tui-core-reactor` links `core::tui_core`, built with `-fno-exceptions -fno-rtti`, into a
+  WASI reactor (`tests/wasi-reactor`: no `main()`, an exported `core_tui_reactor_run`) that drives `VtParser` →
+  `Screen` → `diffFrames()` → `layout::solve()`, and runs it under wasmtime (`WASMTIME`, or on `PATH`); without
+  wasi-sdk or wasmtime it skips and says which.
 - **`core-cpp.unicode-wasi`, core::tui's width tables in a WebAssembly guest.** `tests/wasi-unicode` builds libunicode
   for `wasm32-wasip1` from the tables a native configure generated (`CPM_libunicode_SOURCE`; it refuses a tree without
   them, so the guest's build never downloads `UCD.zip` or builds the table generator), with

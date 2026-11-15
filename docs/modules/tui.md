@@ -203,7 +203,12 @@ wasi-sdk's `wasi-sdk-p1.cmake`, core-cpp builds `core::tui_output` and `core::tu
 compiles `portable/` where a native build compiles `posix/` or `windows/`, and builds libunicode with no SIMD.
 `core-cpp.tui-core-wasi` configures it so, builds `core::tui_core` with `-fno-exceptions -fno-rtti` and
 `CORE_CPP_WERROR`, and links `tests/consumer-tui-core` into a `wasm32-wasip1` module that renders, diffs and
-lays out a component tree under Node's WASI.
+lays out a component tree under Node's WASI. `core-cpp.tui-core-reactor` links `tests/wasi-reactor` into a WASI
+*reactor* -- no `main()`, an exported `core_tui_reactor_run` the host calls after `_initialize` -- that parses
+bytes with `VtParser`, delivers them to a `Screen` over a `HeadlessSurface`, diffs two frames with `diffFrames()`
+and checks the tree against `layout::solve()`, and runs it under wasmtime (`WASMTIME`, or on `PATH`). All three
+skip without their toolchain; CI's `wasi` job installs wasi-sdk 34 and wasmtime 50.0.1, each pinned by SHA-256,
+and fails unless every one of them ran and passed.
 
 ## `core::tui`
 
