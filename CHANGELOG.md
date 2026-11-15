@@ -11,6 +11,24 @@ workflow refuses one without a section here.
 
 ### Breaking
 
+- **`core::tui::Component` has a new virtual, `onResize(Size)`** (protected), called when its area's size
+  changes -- through `setArea()` or `addChild()` -- before its flex children are laid out. A subclass that
+  already declares a member `onResize(Size)` now overrides it and is called on every resize; rename it, or mark it
+  `override` if that is what it wants. Consumers grepped: endo's only `onResize()` is `Prompt::onResize()`, which
+  takes no argument and is not a `Component`; fastcached, Lightweight's `dbtool` and contour have no `Component`
+  subclass.
+- **`core::tui::Screen` sizes its root to the viewport**, at every frame and on every `ResizeEvent`:
+  `screen.root().area()` is `{ 0, 0, columns, rows }` (the inline or fixed viewport's size) from the first `draw()`
+  on, where it was an empty `Rect` before. The first frame, and the first after a resize, therefore marks the root
+  for a full redraw (`_needsFullRedraw`), which a size change already did; an unchanged frame does nothing new.
+  Code that read `root().area()` and expected it empty, or used it as "no layout yet", must stop. Consumers
+  grepped: none reads it (endo places its children by hand and never asks the root's area).
+- **A component leaving a `Screen` loses its focus and its hover there.** `Screen` forgets a detached component
+  as the focus of every group (without an `onBlur()`, since it may be mid-destruction) and ends a hover on it,
+  hiding its tooltip -- before, only the pointer capture was forgotten, and a removed focused component kept
+  receiving keys. A consumer that removes the focused component and re-adds it must focus it again. Consumers
+  grepped: endo removes no focused component from a live screen.
+
 - **`core::tui::ScreenConfig`'s two `bool`s are enumerations.** `inhibitReflow` is `reflow`, a `DiffReflow`
   (`Keep`, the default, or `Inhibit`, the frame diff's own option it was always translated into), and
   `alternateScreen` is `screenBuffer`, a new `ScreenBuffer` (`Primary`, the default, or `Alternate`). Each default is
@@ -64,6 +82,21 @@ workflow refuses one without a section here.
   the parent. Sizes and positions are capped at `MaxCells` (2^20), weights at `MaxWeight` (2^16), and a node's
   children past `MaxChildren` (2^20) are not laid out (zero-size at the parent's origin); within these bounds no
   input overflows. Reuses `core::tui::Rect` and `core::tui::Size`.
+- **A layout pass and `Responsive` in the headless TUI** (`core::tui_core`). `LayoutParams` gains `flex`, an
+  optional `layout::Style` whose item half (grow, shrink, basis, min/max size) sizes the child in its parent, with
+  the child's `minSize()` and `preferredSize()` hints joining it; a `Component` lays such children out with
+  `layout::solve()` whenever its size changes and whenever one is added, removed, shown or hidden
+  (`Component::layoutChildren()`, `layoutStyle()`, the protected `Component(layout::Style)` constructor and the
+  `onResize(Size)` hook, see Breaking); a child whose size hints changed calls `hintsChanged()`, and the screen
+  lays its parent out again once before the next frame. `FlexBox` is a container that owns what it lays out. `Responsive` takes a
+  `std::vector<Breakpoint>` (`minColumns`, `minRows`, `make`) at construction and builds the layout of the last
+  breakpoint the size meets, only when that choice changes. `Screen` now sizes its root to the viewport on every
+  frame and `ResizeEvent`, so `screen.root().area()` is the viewport's size at the origin rather than empty.
+  Children added without a `flex` item are untouched, so existing trees lay out as before. `LayoutParams::area` gained
+  a default member initializer, so a designated initializer may now omit it. Consumers grepped: endo has no
+  `Component` subclass with an `onResize(Size)`, `layoutChildren` or `layoutStyle` member (its `Prompt::onResize()` is
+  not a `Component`), and its `endo::dap::Breakpoint` is in its own namespace; fastcached, Lightweight's `dbtool` and
+  contour are unaffected (no `core::tui_core` use).
 - **`core-cpp.unicode-wasi`, core::tui's width tables in a WebAssembly guest.** `tests/wasi-unicode` builds libunicode
   for `wasm32-wasip1` from the tables a native configure generated (`CPM_libunicode_SOURCE`; it refuses a tree without
   them, so the guest's build never downloads `UCD.zip` or builds the table generator), with

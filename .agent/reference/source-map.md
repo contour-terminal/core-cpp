@@ -79,7 +79,7 @@ src/core/
                             core::tui_core (the headless half, CORE_CPP_WITH_TUI_CORE:
                             VtParser, Buffer, Canvas, Screen over ScreenSurface, the
                             components and popups, completer/, layout/ (the flexbox
-                            solve()), MarkdownRenderer, GenericSyntaxHighlighter, Sixel,
+                            solve()), the layout pass, FlexBox and Responsive, MarkdownRenderer, GenericSyntaxHighlighter, Sixel,
                             runtime/ModalComponent; links
                             base, tui_output and libunicode alone), and
                             core::tui (TerminalInput, Terminal, TerminalChannel,

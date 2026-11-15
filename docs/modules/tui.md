@@ -123,7 +123,40 @@ half.
       overflows (a weight total is at most 2^56), and a share's product of deficit and weight is formed exactly
       even past 64 bits, so no input overflows.
 
-    `Responsive` and the layout pass over `Component` trees are not here yet; `solve()` is the core they will call.
+- **The layout pass.** A `Component` lays out its children with `solve()` over its own size: each child added with
+  a `LayoutParams::flex` item -- the item half of a `layout::Style`: `grow`, `shrink`, `basis`, `minSize`,
+  `maxSize` -- has its `area` set by its parent, from that item, the larger of the item's `minSize` and the child's
+  `minSize()` hint, and the child's `preferredSize()` as the basis where the item names none. How a component
+  places those children (direction, wrap, justify, align, gap) is its own `layoutStyle()`, given to its
+  constructor and fixed; a plain `Component()` lays them out in a row. Children added without a flex item keep the
+  `area` they are given and take no room, so a tree mixes both. The pass runs whenever a component's size changes
+  (`setArea()` first calls the new `onResize(Size)` hook) and whenever a flex child is added, removed, shown or
+  hidden. A component whose `preferredSize()` or `minSize()` may have changed calls `hintsChanged()`: its
+  parent is marked, and `Screen` lays every marked component's children out again once, before the next frame
+  is drawn (without a screen, at the parent's next layout pass); `Responsive` does so on every swap. A
+  component that leaves the screen -- a `Responsive`'s old layout among them -- takes its focus, its hover
+  and the pointer capture with it, so nothing is asked of it after it is gone. It solves one level at a time: a child's
+  place depends on its style and hints, not on its own children, and each child that changed size lays out its own.
+  `Screen` sizes its root to the viewport at every frame and on every `ResizeEvent`, so a child of the root with
+  `.flex = layout::Style { .grow = 1 }` fills the screen.
+- **`FlexBox`** (`<core/tui/Component.hpp>`) is the container that draws nothing: `FlexBox(layout::Style)` and
+  `add(std::unique_ptr<Component>, layout::Style item)`, which owns the child, so a layout can be built and
+  returned as one object.
+- **`Responsive`** (`<core/tui/Responsive.hpp>`) shows one of several layouts chosen by its size:
+  `Responsive(std::vector<Breakpoint>)`, each `Breakpoint { minColumns, minRows, make }`, listed narrowest first.
+  On every resize it picks the **last** breakpoint whose minima the size meets (`Responsive::choose()`, a pure
+  function) and calls that breakpoint's `make` only when the choice changes: a resize within a band lays the same
+  layout out again, one across a band destroys it and builds the next. The layout fills the container. Nothing is
+  built before the first non-empty size, nor at a size no breakpoint's minima are met at.
+
+```cpp
+auto dashboard = core::tui::Responsive { {
+    { .minColumns = 0, .minRows = 0, .make = [] { return listOnly(); } },          // < 60 columns
+    { .minColumns = 60, .minRows = 0, .make = [] { return listOverDetails(); } },  // 60-99
+    { .minColumns = 100, .minRows = 0, .make = [] { return sideBySide(); } },      // >= 100
+} };
+screen.root().addChild(dashboard, { .flex = core::tui::layout::Style { .grow = 1 } });
+```
 
 ```cpp
 auto bytes = std::string {};

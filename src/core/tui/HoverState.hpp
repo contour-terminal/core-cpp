@@ -94,6 +94,10 @@ class HoverState
     /// @brief Resets hover state (e.g., when hiding tooltip).
     void reset();
 
+    /// @brief Ends the hover if @p component is its target, as reset() does; keeps any other.
+    /// @param component A component leaving the screen, which must not be pointed at after it goes.
+    void forget(Component const& component);
+
     /// @brief Returns the clock the hover delay is measured on.
     [[nodiscard]] IClock const& clock() const noexcept { return *_clock; }
 

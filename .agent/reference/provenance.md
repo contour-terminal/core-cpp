@@ -659,6 +659,9 @@ others in notes.
 | `src/core/tui/QuestionComponent_test.cpp` | contour-terminal/endo | `src/tui/QuestionComponent_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Rect.hpp` | contour-terminal/endo | `src/tui/Rect.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Renderer_test.cpp` | contour-terminal/endo | `src/tui/Renderer_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the `Buffer.at` cases became `Buffer.cellAt` ones, plus out-of-range writes as no-ops (core-cpp, U.4) |
+| `src/core/tui/Responsive.cpp` | origin: core-cpp | - | - | the container that picks a layout by its size (U.9) |
+| `src/core/tui/Responsive.hpp` | origin: core-cpp | - | - | the container that picks a layout by its size (U.9) |
+| `src/core/tui/Responsive_test.cpp` | origin: core-cpp | - | - | - |
 | `src/core/tui/Screen.cpp` | contour-terminal/endo | `src/tui/Screen.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `flushInline`'s C-style loop is a `while`, with the `++row` written out on each of its three exit paths; the cell loops of `flushArea`/`flushInline` and the row-mark emitter moved to `FrameDiff.cpp`, which both now call (core-cpp, U.3) |
 | `src/core/tui/Screen.hpp` | contour-terminal/endo | `src/tui/Screen.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Screen_test.cpp` | contour-terminal/endo | `src/tui/Screen_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |

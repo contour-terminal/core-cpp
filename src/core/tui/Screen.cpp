@@ -283,6 +283,7 @@ EventResult Screen::dispatchEvent(InputEvent const& event)
         auto const& resize = std::get<ResizeEvent>(event);
         _current.resize(resize.rows, resize.columns);
         _previous.resize(resize.rows, resize.columns);
+        layoutRoot();
         invalidate();
         return EventResult::Handled;
     }
@@ -389,8 +390,36 @@ void Screen::beginFrame()
         _needsFullRedraw = true;
     }
 
+    layoutRoot();
+
     // Clear current buffer
     _current.clear(_theme.textNormal);
+}
+
+void Screen::layoutRoot()
+{
+    // The root's area is the viewport's size at the origin: its children's areas are relative to the
+    // viewport, which renderTree() offsets them by. setArea() lays the tree out only when the size changed.
+    auto const viewport = viewportArea();
+    _root->setArea({ .x = 0, .y = 0, .width = viewport.width, .height = viewport.height });
+
+    // One sweep: a mark made during it (a Responsive the sweep resized swapping its layout) is the next
+    // frame's, so a layout whose hints chase its size settles a frame at a time rather than looping here.
+    if (_layoutRequested == LayoutRequest::Pending)
+    {
+        _layoutRequested = LayoutRequest::None;
+        relayoutMarked(*_root);
+    }
+}
+
+void Screen::relayoutMarked(Component& component)
+{
+    if (component.layoutPending())
+        component.layoutChildren();
+    // A copy: laying a child's children out may rebuild them (Responsive), but not this list.
+    auto const children = std::vector<Component*>(component.children().begin(), component.children().end());
+    for (Component* child: children)
+        relayoutMarked(*child);
 }
 
 namespace
@@ -987,15 +1016,24 @@ EventResult Screen::dispatchPress(Component* target, InputEvent const& event)
     return EventResult::Ignored;
 }
 
-void Screen::componentDetached(Component const& component) noexcept
+void Screen::componentDetached(Component& component) noexcept
 {
     if (_pointerCapture == &component)
         _pointerCapture = nullptr;
     if (_pressTarget == &component)
         _pressTarget = nullptr;
+    // A focused component taken out of the tree -- a Responsive swapping its layout destroys the old one
+    // -- would otherwise be asked for its cursor shape by the same draw() and handed the next key.
+    for (auto& entry: _focusedComponents)
+        if (entry.second == &component)
+            entry.second = nullptr;
+    component._focused = false;
+    // The hover it was under ends, and the tooltip shown for it with it.
+    _hoverState.forget(component);
+    _dirtyComponents.erase(&component);
 }
 
-void Screen::componentDestroyed(Component const& component) noexcept
+void Screen::componentDestroyed(Component& component) noexcept
 {
     componentDetached(component);
     std::erase_if(_overlays,

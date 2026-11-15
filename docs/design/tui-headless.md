@@ -262,6 +262,33 @@ cursor (the terminal does, for the blinking `CursorShape`s), so the clocked beha
 hover delay, the spinner's frame and the two double-click windows. `Terminal` and `ClipboardWriter`
 keep their `core::platform::IClock&` spelling, which is now the same type.
 
+### The layout pass and `Responsive` (U.9)
+
+**As built.** A node's `layout::Style` has two halves, and they are owned by different parties, so they arrive
+in different places. *How a child is sized in its parent* (grow, shrink, basis, min/max) is the parent's call when
+it adds the child -- exactly as the hand-set `area` was -- so it rides on `LayoutParams::flex`. *How a component
+places its own children* (direction, wrap, justify, align, gap) is the component's configuration, so it is a
+constructor argument (`Component(layout::Style)`), fixed thereafter; no setter. A child with no `flex` item is
+not laid out and takes no room, so every existing tree, all of whose children are placed by hand, lays out exactly
+as before, and a view may mix both (a popup over a laid-out body).
+
+The pass solves one level at a time rather than the whole tree in one `solve()` call: a child's rectangle depends
+on its style and hints, never on its grandchildren, so the answers are the same, and each level runs only when
+that component's size, or its set of flex children, changed. `Screen` sizes its root to the viewport at each
+frame and on each `ResizeEvent`; `setArea()` does nothing when the area is unchanged, so an unchanged frame lays
+nothing out.
+
+`Responsive` builds nothing in its constructor: before its first size every breakpoint would be a guess, and the
+first resize would throw the guess away. A size that meets no breakpoint shows nothing. Its layout is added with
+`grow = 1, basis = 0`, so it fills the container whatever its own preferred size. A swap changes the
+container's hints, so it calls `hintsChanged()`: the parent is marked, and `Screen`'s layout pass sweeps the
+tree once per frame for marks, so a sibling gets its share in the same frame. One sweep, not a loop: a mark
+made during the sweep is the next frame's, so a layout whose hints chase its own size settles a frame at a time
+instead of spinning. The old layout leaves the screen when it is destroyed, and `Screen` forgets a detached
+component wherever it held one -- focus, hover, pointer capture -- since the same `draw()` asks the focused
+component for its cursor shape. Breakpoints are constructor input; `Responsive::choose()` is the pure function that picks one, table-tested on its own. `FlexBox::add()` owns
+what it adds, so a breakpoint's `make` returns one object that owns its whole subtree.
+
 ## Order
 
 U.1 (this target), U.2 (OS-free output, no RTTI), U.3 (headless surface, `diffFrames`), U.4 (no

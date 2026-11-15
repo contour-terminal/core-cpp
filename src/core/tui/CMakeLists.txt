@@ -133,6 +133,7 @@ core_cpp_add_module(tui_core KIND STATIC
         PopupKeyDispatch.hpp
         QuestionComponent.hpp
         Rect.hpp
+        Responsive.hpp
         Screen.hpp
         ScreenSurface.hpp
         ScrollableSelection.hpp
@@ -184,6 +185,7 @@ core_cpp_add_module(tui_core KIND STATIC
         MockScreenSurface.cpp
         MockTerminalOutput.cpp
         QuestionComponent.cpp
+        Responsive.cpp
         Screen.cpp
         Sixel.cpp
         Spinner.cpp
@@ -277,6 +279,7 @@ core_cpp_add_test(tui NAME tui_core
         PopupKeyDispatch_test.cpp
         QuestionComponent_test.cpp
         Renderer_test.cpp
+        Responsive_test.cpp
         Screen_test.cpp
         ScrollableSelection_test.cpp
         Sixel_test.cpp

@@ -110,6 +110,10 @@ struct InlineCursorMovement
 /// MyComponent myComp;
 /// screen.root().addChild(myComp, {.area = {0, 0, 40, 10}});
 ///
+/// // Or let the layout pass size it: the root is the viewport, laid out as a row,
+/// // and a child with a flex item that grows fills it on every resize.
+/// screen.root().addChild(myComp, {.flex = layout::Style {.grow = 1}});
+///
 /// // Main loop
 /// while (running) {
 ///     screen.draw();  // Render and flush
@@ -403,6 +407,25 @@ class Screen
     Tooltip _tooltip;
     bool _tooltipVisible = false;
 
+    /// Sizes the root to the viewport, which lays out the children added with a flex item, then lays out
+    /// again the children of every component a child's hintsChanged() marked.
+    void layoutRoot();
+
+    /// Called by a component whose child's hints changed: the next layoutRoot() sweeps the tree for it.
+    void layoutRequested() noexcept { _layoutRequested = LayoutRequest::Pending; }
+
+    /// Lays out again, depth first, the children of each component in @p component's subtree marked by a
+    /// child's hintsChanged().
+    static void relayoutMarked(Component& component);
+
+    /// Whether some component on this screen was marked by a child's hintsChanged().
+    enum class LayoutRequest : std::uint8_t
+    {
+        None,
+        Pending,
+    };
+    LayoutRequest _layoutRequested = LayoutRequest::None;
+
     // Rendering phases
     void beginFrame();
     void renderTree();
@@ -456,15 +479,17 @@ class Screen
     [[nodiscard]] EventResult dispatchPress(Component* target, InputEvent const& event);
 
     /// @brief Called by a component that leaves this screen -- removed from the tree, directly or with
-    /// an ancestor, or hidden as an overlay -- so that no capture outlives its place on the screen.
+    /// an ancestor, or hidden as an overlay -- so that nothing here outlives its place on the screen: the
+    /// pointer capture, the press target, the focus of every group it held and the hover on it. It loses
+    /// its focus without an onBlur(): it may be on its way to destruction, past its own destructor.
     /// @param component The component leaving.
-    void componentDetached(Component const& component) noexcept;
+    void componentDetached(Component& component) noexcept;
 
     /// @brief Called by a component this screen still knows when it is destroyed: what
     /// componentDetached() does, and an overlay that was never hidden leaves the overlay list, so
     /// nothing draws, hit-tests or detaches it after it is gone.
     /// @param component The component being destroyed.
-    void componentDestroyed(Component const& component) noexcept;
+    void componentDestroyed(Component& component) noexcept;
 
     // Focus helpers
     static void updateFocus(Component* oldFocus, Component* newFocus);

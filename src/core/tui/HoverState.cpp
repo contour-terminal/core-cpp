@@ -105,4 +105,10 @@ void HoverState::reset()
     _confirmed = false;
 }
 
+void HoverState::forget(Component const& component)
+{
+    if (_hover && _hover->target == &component)
+        reset();
+}
+
 } // namespace core::tui
