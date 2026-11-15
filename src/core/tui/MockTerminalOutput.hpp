@@ -3,8 +3,10 @@
 
 #include <core/tui/TerminalOutput.hpp>
 
+#include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace core::tui
@@ -88,6 +90,15 @@ class MockTerminalOutput: public TerminalOutput
     [[nodiscard]] auto columns() const noexcept -> int override;
     [[nodiscard]] auto rows() const noexcept -> int override;
     void updateDimensions() override;
+
+    /// @brief A mock is a simulation: no terminal reads what it is given.
+    /// @return @c OutputKind::Simulation.
+    [[nodiscard]] auto kind() const noexcept -> OutputKind override;
+
+    /// @brief Answers from the mock's own cursor.
+    /// @return The cursor as (row, column), both 1-based.
+    [[nodiscard]] auto simulatedCursorPosition() const noexcept
+        -> std::optional<std::pair<int, int>> override;
 
     // --- Test-specific accessors ---
 

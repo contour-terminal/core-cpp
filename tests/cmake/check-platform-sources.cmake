@@ -3,7 +3,8 @@
 # Proves which of a module's source lists core_cpp_add_module() and core_cpp_add_test() compile on
 # each platform (cmake/CoreCppTargets.cmake). Emscripten sets UNIX, but it is not a native POSIX
 # system: it compiles SOURCES_EMSCRIPTEN and never SOURCES_POSIX, and a wasm-subset module compiles
-# nothing but its SOURCES_EMSCRIPTEN there.
+# nothing but its SOURCES_EMSCRIPTEN there. SOURCES_PORTABLE is what a platform that is neither POSIX
+# nor Windows compiles in their place: Emscripten, and one with neither UNIX nor WIN32 set at all.
 #
 # And which table rows build at all (core_cpp_row_builds): a native row builds nowhere under
 # Emscripten, which is what lets a module's header-only target build there while the rest of the
@@ -22,8 +23,9 @@ set(scenarios
     "macos|UNIX,APPLE|any|common.cpp,posix.cpp,bsd.cpp"
     "freebsd|UNIX,BSD|any|common.cpp,posix.cpp,bsd.cpp"
     "windows|WIN32|any|common.cpp,windows.cpp"
-    "emscripten|UNIX,EMSCRIPTEN|any|common.cpp,emscripten.cpp"
-    "emscripten-subset|UNIX,EMSCRIPTEN|wasm-subset|emscripten.cpp"
+    "emscripten|UNIX,EMSCRIPTEN|any|common.cpp,emscripten.cpp,portable.cpp"
+    "emscripten-subset|UNIX,EMSCRIPTEN|wasm-subset|emscripten.cpp,portable.cpp"
+    "neither|none|any|common.cpp,portable.cpp"
     "linux-subset|UNIX,LINUX|wasm-subset|common.cpp,posix.cpp,linux.cpp"
     "windows-subset|WIN32|wasm-subset|common.cpp,windows.cpp"
 )
@@ -74,6 +76,7 @@ if(DEFINED SCENARIO)
     set(arg_SOURCES_BSD bsd.cpp)
     set(arg_SOURCES_WINDOWS windows.cpp)
     set(arg_SOURCES_EMSCRIPTEN emscripten.cpp)
+    set(arg_SOURCES_PORTABLE portable.cpp)
     core_cpp_selected_sources(arg "${PLATFORMS}" selected)
 
     string(REPLACE "," ";" expected "${EXPECTED}")

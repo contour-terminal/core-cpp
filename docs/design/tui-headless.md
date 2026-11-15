@@ -116,6 +116,25 @@ cursor query with `QueryUnanswered` so the inline viewport falls back exactly as
 silent terminal -- and the pure `diffFrames(previous, next, options)` that `Screen`'s three flush
 paths call.
 
+### The output needs no operating system, and no RTTI (U.2)
+
+**As built.** The five members of `TerminalOutput` that had bodies only under `posix/` and `windows/`
+(`initialize`, `detectCapabilities`, `writeToDestination`, `isTerminal`, `updateDimensions`) gained
+a third body in `portable/TerminalOutput.cpp`, on the C++ standard library alone: the C standard
+output, not a terminal, the 80x24 default size, nothing probed. It sits in a new platform source
+list, `SOURCES_PORTABLE`, compiled where the platform is neither POSIX nor Windows -- the same
+injected-implementation shape `posix/` and `windows/` already have, not an `#ifdef` in the base
+output. Native trees also compile it as an unlinked object library, so its body is checked long
+before the first wasm build. `tui_output`'s row says `PLATFORMS any`; the options stay forced off
+under Emscripten until U.11 gives a WebAssembly target a row.
+
+The three `dynamic_cast<MockTerminalOutput*>` in `Terminal.cpp` asked one question -- does a
+terminal stand behind this output, or does the output model the screen itself? -- so the output
+now answers it: `virtual OutputKind kind() const` (`Device`, the default, or `Simulation`) and
+`simulatedCursorPosition()`, which a simulation answers 1-based. An explicit property rather than a
+type test also changes one edge: an output that is not a mock but reports `Simulation` is treated
+as one, and the tests pin both directions.
+
 ### Width tables: libunicode builds for `wasm32-wasip1` from pre-generated tables (U.7 option a)
 
 Measured, not assumed. libunicode v0.9.3 already treats a source tree that carries its nine

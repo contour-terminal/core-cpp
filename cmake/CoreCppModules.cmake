@@ -264,16 +264,19 @@ core_cpp_module(NAME tui KIND STATIC DEPS base platform async net PLATFORMS nati
 # CORE_CPP_WITH_TUI it existed only in the configuration that also fetched libunicode (and, through
 # libunicode's configure, UCD.zip), so the one consumer it was split off for could not have it
 # without everything it was split off from. With CORE_CPP_WITH_TUI off and CORE_CPP_WITH_TUI_OUTPUT
-# on, core_cpp_add_modules() enters this directory for the leaf alone.
+# on, core_cpp_add_modules() enters this directory for the leaf alone. PLATFORMS any: on a platform
+# that is neither POSIX nor Windows its OS-bound members come from portable/, which needs only the C++
+# standard library. Its option stays forced off under Emscripten, as the whole TUI's is, until a
+# WebAssembly target has a row of its own (docs/design/tui-headless.md).
 core_cpp_module_target(NAME tui_output MODULE tui KIND STATIC DEPS base
-                       PLATFORMS native WHEN CORE_CPP_WITH_TUI_OUTPUT)
+                       PLATFORMS any WHEN CORE_CPP_WITH_TUI_OUTPUT)
 #
 # tui_core is the headless half: the parser, cells and buffers, components, widgets and the frame
 # driver, which draws on a ScreenSurface rather than on a Terminal (docs/design/tui-headless.md).
 # It links base, the leaf and libunicode, and nothing of platform, async or net, so a program with
 # no terminal under it -- a WebAssembly guest -- can render. core::tui links it and keeps the
 # terminal, the runtime and the file-system image loaders. PLATFORMS any describes its code; the
-# option is still forced off under Emscripten, because the leaf it links is native until its output
-# has a body that needs no operating system.
+# option is still forced off under Emscripten, with the rest of the TUI's, until a WebAssembly target
+# has a row of its own.
 core_cpp_module_target(NAME tui_core MODULE tui KIND STATIC DEPS base tui_output
                        PLATFORMS any WHEN CORE_CPP_WITH_TUI_CORE)

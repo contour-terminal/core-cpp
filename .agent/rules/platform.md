@@ -15,12 +15,14 @@ project file tree, install paths and the interrupt throttle.
 
 1. **Define an abstract interface** in `src/core/platform/`, or in the module that needs it.
 2. **Implement it per platform** in the module's private `posix/`, `linux/`, `bsd/` (Apple and
-   the BSDs), `darwin/`, `windows/` or `emscripten/` subdirectory, and list each file in the
-   matching `SOURCES_POSIX`, `SOURCES_LINUX`, `SOURCES_BSD`, `SOURCES_WINDOWS` or
-   `SOURCES_EMSCRIPTEN` argument of `core_cpp_add_module`. The table in
+   the BSDs), `darwin/`, `windows/`, `emscripten/` or `portable/` subdirectory, and list each file
+   in the matching `SOURCES_POSIX`, `SOURCES_LINUX`, `SOURCES_BSD`, `SOURCES_WINDOWS`,
+   `SOURCES_EMSCRIPTEN` or `SOURCES_PORTABLE` argument of `core_cpp_add_module`. The table in
    `cmake/CoreCppTargets.cmake` decides which list a platform compiles; `BSD` covers macOS,
    which shares kqueue, and `POSIX` means a native POSIX system, which Emscripten is not,
-   although CMake sets `UNIX` there. `tests/cmake/check-platform-sources.cmake` proves the
+   although CMake sets `UNIX` there. `PORTABLE` is every platform that is neither POSIX nor
+   Windows: what a `posix/` and a `windows/` file supply elsewhere, a `portable/` file supplies
+   there with the C++ standard library alone (`core::tui_output`'s output is the first). `tests/cmake/check-platform-sources.cmake` proves the
    selection for each platform.
    - **A module's own directory holds only platform-independent code.** A source with one
      `#ifdef` branch per platform is split into those subdirectories rather than kept whole:

@@ -9,7 +9,8 @@
 # The module's root holds only platform-independent code. What goes through the operating system --
 # the write, the terminal's size, the XTVERSION probe, the terminal test -- is in posix/ and
 # windows/, and the source lists below choose it, so no file there guards itself with an #ifdef of
-# its platform. In endo those two files each carried a full copy of the byte composition as well
+# its platform. On a platform that is neither (a WebAssembly guest), portable/ supplies the same five
+# members with the C++ standard library alone, so the base output needs no operating system. In endo those two files each carried a full copy of the byte composition as well
 # (`platform/TerminalOutput.cpp`, `platform/TerminalOutputWin32.cpp`); here it is shared, and what
 # is left is only what actually differs.
 core_cpp_add_module(tui_output KIND STATIC
@@ -32,7 +33,19 @@ core_cpp_add_module(tui_output KIND STATIC
         posix/TerminalOutput.cpp
     SOURCES_WINDOWS
         windows/TerminalOutput.cpp
+    SOURCES_PORTABLE
+        portable/TerminalOutput.cpp
     PRIVATE_LIBS core::base)
+
+# portable/ is compiled only where neither POSIX nor Windows is, and no such platform builds the TUI
+# yet, so a native tree would never see its body. With tests on it is compiled here as well, as an
+# object library nothing links, under the module's toolchain policy: an error in it then fails the
+# native build rather than waiting for the first WebAssembly one.
+if(CORE_CPP_TESTING AND NOT CORE_CPP_PLATFORM_PORTABLE AND TARGET core-cpp-tui_output)
+    add_library(core-cpp-tui_output-portable-check OBJECT portable/TerminalOutput.cpp)
+    target_link_libraries(core-cpp-tui_output-portable-check PRIVATE core::base)
+    core_cpp_apply_toolchain(core-cpp-tui_output-portable-check)
+endif()
 
 # Image decoding is the one part with an option of its own: stb is fetched only with
 # CORE_CPP_WITH_IMAGES, so the files that decode or scale an image are built only there. What stays
@@ -249,6 +262,7 @@ core_cpp_add_test(tui NAME tui_core
         MarkdownHtml_test.cpp
         MarkdownRenderer_test.cpp
         MarkdownTable_test.cpp
+        MockTerminalOutput_test.cpp
         PopupKeyDispatch_test.cpp
         QuestionComponent_test.cpp
         Renderer_test.cpp

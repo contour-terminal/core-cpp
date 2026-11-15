@@ -25,7 +25,7 @@
 # HEADERS are the public headers; they form the target's HEADERS file
 # set, based at src/ or, for a header CMake generates, at the generated include
 # root, so the target is install-ready. Private headers (detail/, posix/, linux/,
-# bsd/, darwin/, windows/, emscripten/) go in a SOURCES list and are in no file
+# bsd/, darwin/, windows/, emscripten/, portable/) go in a SOURCES list and are in no file
 # set.
 #
 # SOURCES is compiled everywhere the module builds, and each platform list where the
@@ -65,10 +65,17 @@ set(CORE_CPP_SKIP_EXIT_CODE 77)
 # when <variable> is true. BSD includes macOS, which shares its kqueue. POSIX means a
 # native POSIX system: Emscripten sets UNIX and its libc emulates much of POSIX, but
 # it has no pipes, signals, sockets or processes to speak of, so a SOURCES_POSIX file
-# is not compiled there; SOURCES_EMSCRIPTEN is.
+# is not compiled there; SOURCES_EMSCRIPTEN is. PORTABLE is every platform that is
+# neither a native POSIX system nor Windows -- Emscripten today, WASI once it has a row
+# of its own -- where a SOURCES_PORTABLE file supplies, with the C++ standard library
+# alone, what the posix/ and windows/ halves supply elsewhere.
 set(CORE_CPP_PLATFORM_POSIX OFF)
 if(UNIX AND NOT EMSCRIPTEN)
     set(CORE_CPP_PLATFORM_POSIX ON)
+endif()
+set(CORE_CPP_PLATFORM_PORTABLE OFF)
+if(NOT CORE_CPP_PLATFORM_POSIX AND NOT WIN32)
+    set(CORE_CPP_PLATFORM_PORTABLE ON)
 endif()
 set(CORE_CPP_PLATFORM_BSD OFF)
 if(APPLE OR BSD)
@@ -80,6 +87,7 @@ set(CORE_CPP_PLATFORM_SOURCE_TABLE
     "SOURCES_BSD|CORE_CPP_PLATFORM_BSD"
     "SOURCES_WINDOWS|WIN32"
     "SOURCES_EMSCRIPTEN|EMSCRIPTEN"
+    "SOURCES_PORTABLE|CORE_CPP_PLATFORM_PORTABLE"
 )
 set(CORE_CPP_SOURCE_KEYWORDS SOURCES)
 

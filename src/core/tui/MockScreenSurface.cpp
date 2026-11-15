@@ -29,7 +29,7 @@ auto MockScreenSurface::output() noexcept -> TerminalOutput&
 
 auto MockScreenSurface::queryCursorPosition() -> std::expected<std::pair<int, int>, QueryUnanswered>
 {
-    return std::pair { _output->cursorRow() + 1, _output->cursorCol() + 1 }; // 0-based to 1-based
+    return *_output->simulatedCursorPosition(); // A mock always knows its cursor.
 }
 
 } // namespace core::tui

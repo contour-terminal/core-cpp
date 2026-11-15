@@ -3,7 +3,6 @@
 
 #include <core/platform/Clock.hpp>
 #include <core/tui/InputEvent.hpp>
-#include <core/tui/MockTerminalOutput.hpp>
 
 #include <chrono>
 #include <tuple>
@@ -37,7 +36,7 @@ Terminal::Terminal():
 Terminal::Terminal(std::unique_ptr<TerminalOutput> output):
     _output(std::move(output)),
     _clock(core::platform::defaultSteadyClock()),
-    _mockMode(dynamic_cast<MockTerminalOutput*>(_output.get()) != nullptr)
+    _mockMode(_output->kind() == OutputKind::Simulation)
 {
 }
 
@@ -47,7 +46,7 @@ Terminal::Terminal(std::unique_ptr<TerminalOutput> output,
     _output(std::move(output)),
     _clock(clock),
     _queryInput(&queryInput),
-    _mockMode(dynamic_cast<MockTerminalOutput*>(_output.get()) != nullptr)
+    _mockMode(_output->kind() == OutputKind::Simulation)
 {
 }
 
@@ -114,8 +113,8 @@ auto Terminal::queryCursorPosition() -> std::expected<std::pair<int, int>, Query
 {
     if (!canQuery())
     {
-        if (auto* mock = dynamic_cast<MockTerminalOutput*>(_output.get()))
-            return std::pair { mock->cursorRow() + 1, mock->cursorCol() + 1 }; // Convert 0-based to 1-based
+        if (auto const simulated = _output->simulatedCursorPosition())
+            return *simulated;
         return std::unexpected(QueryUnanswered::NotAsked);
     }
 

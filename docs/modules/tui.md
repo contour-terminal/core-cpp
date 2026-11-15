@@ -34,7 +34,13 @@ which fetches libunicode and, through libunicode's configure, `UCD.zip`.
 - `writeToDestination()` is the one seam every byte goes through. Override it to retarget the
   stream — a capture buffer in a test, a pipe, a second terminal — without reimplementing any of
   the composition. `isTerminal()` answers for that same destination: the default asks the
-  operating system about the process's standard output, and a subclass answers for its own.
+  operating system about the process's standard output, and a subclass answers for its own. On a
+  platform that is neither POSIX nor Windows the default destination is the C standard output
+  stream (`portable/`, the `SOURCES_PORTABLE` list), which is not a terminal and has no size to ask.
+- `kind()` says what stands behind an output: `OutputKind::Device` (a terminal, or a pipe, a file or
+  a capture standing in for one) or `OutputKind::Simulation`, which `MockTerminalOutput` reports and
+  which answers its cursor itself through `simulatedCursorPosition()`. `Terminal` reads it to decide
+  whether to set up input and ask questions; the TUI uses no RTTI.
 - `SyncGuard` brackets a frame in DEC mode 2026 so a terminal does not paint a half-drawn one. It
   writes through the `TerminalOutput` it was made from, so a retargeted output is bracketed on its
   own stream, and only when that output's `isTerminal()` is true: on any other destination it

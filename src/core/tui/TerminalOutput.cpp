@@ -6,6 +6,7 @@
 #include <core/tui/TerminalProtocols.hpp>
 
 #include <format>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -13,7 +14,9 @@
 /// Every @c TerminalOutput member that only composes bytes into the buffer. What
 /// touches the operating system — the write itself, the terminal's size, the
 /// capability probe and the terminal test — is in `posix/TerminalOutput.cpp` and
-/// `windows/TerminalOutput.cpp`, which is all that differs between the two. In
+/// `windows/TerminalOutput.cpp`, which is all that differs between the two, and on a
+/// platform that is neither in `portable/TerminalOutput.cpp`, which needs no operating
+/// system. In
 /// endo those two files each carried a full copy of this composition (`platform/
 /// TerminalOutput.cpp` and `platform/TerminalOutputWin32.cpp`, f774a210), so an
 /// escape sequence had to be changed twice.
@@ -264,6 +267,16 @@ void TerminalOutput::flush()
         writeToDestination(_buffer);
         _buffer.clear();
     }
+}
+
+auto TerminalOutput::kind() const noexcept -> OutputKind
+{
+    return OutputKind::Device;
+}
+
+auto TerminalOutput::simulatedCursorPosition() const noexcept -> std::optional<std::pair<int, int>>
+{
+    return std::nullopt;
 }
 
 auto TerminalOutput::columns() const noexcept -> int

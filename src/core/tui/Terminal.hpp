@@ -252,7 +252,7 @@ class Terminal: public ScreenSurface
     core::platform::IClock& _clock;            ///< The clock query timeouts are measured on.
     TerminalQueryInput* _queryInput = nullptr; ///< Where queries read replies, or nullptr for _input.
     bool _initialized = false;
-    bool _mockMode = false; ///< True when using a mock output (skip input/signal init).
+    bool _mockMode = false; ///< Output is OutputKind::Simulation: no input, raw mode or signals.
     ColorScheme _colorScheme = ColorScheme::Unknown;
     std::vector<std::function<void(ColorScheme)>> _colorSchemeCallbacks;
     bool _focused = true;       ///< Whether the terminal window has focus (assume focused on startup).

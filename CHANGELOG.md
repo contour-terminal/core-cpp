@@ -35,6 +35,22 @@ workflow refuses one without a section here.
 - **`core-cpp.tui-core-symbols`** reads `core::tui_core`'s archive and fails on any symbol of `core::platform`,
   `core::async`, `core::net`, `Terminal`, `TerminalInput`, `TerminalChannel` or the runtime;
   `tests/consumer-tui-core` is a CPM consumer that renders a component with the terminal half off.
+  It also refuses `ClipboardWriter`, `SemanticBlockClient`, `FilesystemImageProvider` and `ImageLoader.hpp`'s
+  functions, and its include scan reads quoted includes as well as `<core/...>` ones.
+- **`core::tui::OutputKind` and `TerminalOutput::kind()` / `simulatedCursorPosition()`.** An output says whether a
+  terminal stands behind it (`Device`, the default) or whether it models the screen itself (`Simulation`, which
+  `MockTerminalOutput` reports, answering its cursor 1-based). `Terminal` reads these where it used to
+  `dynamic_cast` to `MockTerminalOutput`, so the TUI no longer needs RTTI; a subclass of the mock stays a
+  simulation, as it was. A consumer's own output that is not a mock and wants to be treated as one now overrides
+  `kind()`; no known consumer has one. Consumers grepped: Lightweight's `dbtool` derives `OStreamTerminalOutput` from
+  `TerminalOutput` and stays a `Device` by default, unchanged; endo and fastcached derive no output; contour does not
+  vendor `tui`. A subclass with a member of its own named `kind` or `simulatedCursorPosition` now hides or overrides
+  the new virtual and must rename it; none was found.
+- **`SOURCES_PORTABLE`, a platform source list for a platform that is neither POSIX nor Windows**, and
+  `core::tui_output`'s `portable/TerminalOutput.cpp` in it: the output's five OS-bound members (`initialize`,
+  `detectCapabilities`, `writeToDestination`, `isTerminal`, `updateDimensions`) with the C++ standard library alone,
+  so the base output needs no operating system. `core::tui_output`'s row says `PLATFORMS any`; the TUI options stay
+  forced off under Emscripten until a WebAssembly target has a row of its own. Native platforms are unchanged.
 
 ## [0.20.0] - 2026-11-14
 

@@ -4,6 +4,7 @@
 #include <core/tui/MockTerminalOutput.hpp>
 #include <core/tui/Terminal.hpp>
 #include <core/tui/TerminalInput.hpp>
+#include <core/tui/TerminalOutput.hpp>
 #include <core/tui/VtParser.hpp>
 #include <core/tui/runtime/TerminalInputSource.hpp>
 
@@ -13,6 +14,9 @@
 #include <deque>
 #include <iterator>
 #include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <variant>
@@ -210,6 +214,80 @@ TEST_CASE("A mock terminal with no query input answers the cursor position from 
     REQUIRE(cursor.has_value());
     CHECK(cursor->first == 1);
     CHECK(cursor->second == 1);
+}
+
+namespace
+{
+
+/// An output that is not a MockTerminalOutput but says it is a simulation: what the terminal reads
+/// now is that property, not the output's type.
+class SimulatedOutput final: public core::tui::TerminalOutput
+{
+  public:
+    [[nodiscard]] auto kind() const noexcept -> core::tui::OutputKind override
+    {
+        return core::tui::OutputKind::Simulation;
+    }
+
+    [[nodiscard]] auto simulatedCursorPosition() const noexcept -> std::optional<std::pair<int, int>> override
+    {
+        return std::pair { 4, 9 };
+    }
+
+    /// @return Every byte that reached the destination.
+    [[nodiscard]] auto captured() const noexcept -> std::string const& { return _captured; }
+
+  protected:
+    void writeToDestination(std::string_view bytes) override { _captured.append(bytes); }
+
+  private:
+    std::string _captured;
+};
+
+/// A device output whose destination is a string: a terminal stands behind it, so it is asked.
+class DeviceOutput final: public core::tui::TerminalOutput
+{
+  public:
+    /// @param captured Where every byte that reaches the destination is appended; must outlive this.
+    explicit DeviceOutput(std::string& captured) noexcept: _captured(captured) {}
+
+  protected:
+    void writeToDestination(std::string_view bytes) override { _captured.append(bytes); }
+
+  private:
+    std::string& _captured;
+};
+
+} // namespace
+
+TEST_CASE("An output that says it is a simulation is not asked, whatever its type", "[TerminalQuery]")
+{
+    auto output = std::make_unique<SimulatedOutput>();
+    auto const& written = output->captured();
+    auto terminal = Terminal { std::move(output) };
+
+    // Site 3: the cursor comes from the simulation, without a query on the wire.
+    auto const cursor = terminal.queryCursorPosition();
+    REQUIRE(cursor.has_value());
+    CHECK(*cursor == std::pair { 4, 9 });
+    // Sites 1 and 2: no query input and a simulation, so nothing is asked at all.
+    CHECK(terminal.queryCellSize().error() == QueryUnanswered::NotAsked);
+    CHECK(written.empty());
+}
+
+TEST_CASE("A device output is asked, and answers from the reply rather than a model", "[TerminalQuery]")
+{
+    auto clock = ManualClock {};
+    auto input = ScriptedQueryInput { clock };
+    input.pushRead({ CursorPositionReport { .row = 12, .column = 34 } });
+    auto written = std::string {};
+    auto terminal = Terminal { std::make_unique<DeviceOutput>(written), input, clock };
+
+    auto const cursor = terminal.queryCursorPosition();
+
+    REQUIRE(cursor.has_value());
+    CHECK(*cursor == std::pair { 12, 34 });
+    CHECK(written.contains("\033[6n")); // The DSR went out.
 }
 
 TEST_CASE("A color scheme report read during a query is dispatched, not handed back", "[TerminalQuery]")

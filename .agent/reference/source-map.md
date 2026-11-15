@@ -86,8 +86,9 @@ src/core/
                             CORE_CPP_WITH_TUI, and it links core::net since B12 composed the
                             runtime on core::net::EventLoop);
                             posix/ (termios, SIGWINCH, poll, clipboard tools) windows/
-                            (console modes, input records, resize event) detail/ are
-                            private -- runtime/ has no platform directories at all, because
+                            (console modes, input records, resize event) portable/ (the
+                            output's OS-bound members on neither, C++ standard library
+                            alone) detail/ are private -- runtime/ has no platform directories at all, because
                             the loop does the waiting on every platform;
                             MockTerminalOutput, MockScreenSurface, runtime/testing/ScriptedInputSource and
                             TestHelpers.hpp are the fakes; .clang-tidy is the one directory

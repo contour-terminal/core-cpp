@@ -2,7 +2,9 @@
 #include <core/tui/MockTerminalOutput.hpp>
 
 #include <algorithm>
+#include <optional>
 #include <string>
+#include <utility>
 
 namespace core::tui
 {
@@ -336,6 +338,16 @@ int MockTerminalOutput::cursorRow() const noexcept
 int MockTerminalOutput::cursorCol() const noexcept
 {
     return _cursorCol;
+}
+
+auto MockTerminalOutput::kind() const noexcept -> OutputKind
+{
+    return OutputKind::Simulation;
+}
+
+auto MockTerminalOutput::simulatedCursorPosition() const noexcept -> std::optional<std::pair<int, int>>
+{
+    return std::pair { _cursorRow + 1, _cursorCol + 1 };
 }
 
 bool MockTerminalOutput::cursorVisible() const noexcept

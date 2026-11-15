@@ -5,8 +5,10 @@
 #include <core/tui/Error.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 
 namespace core::tui
@@ -125,6 +127,18 @@ class SyncGuard
 
     TerminalOutput* _output = nullptr; ///< The guarded output, or nullptr for a no-op guard.
     bool _bracketed = false;           ///< Whether the destination is a terminal, so the mode was begun.
+};
+
+/// @brief What is behind a @c TerminalOutput.
+///
+/// A terminal reads what is written and can answer a query; a simulation (@c MockTerminalOutput)
+/// keeps its own model of the screen and answers nothing. @c Terminal reads this to decide whether
+/// to set up its input and ask questions -- it used to tell by RTTI, which a guest built with
+/// `-fno-rtti` does not have.
+enum class OutputKind : std::uint8_t
+{
+    Device,     ///< Bytes reach a terminal, or whatever stands in for one: a pipe, a file, a capture.
+    Simulation, ///< The output models the screen itself, and no terminal reads its bytes.
 };
 
 /// @brief Handles styled terminal output, cursor control, and screen management.
@@ -350,6 +364,17 @@ class TerminalOutput
     ///
     /// @return true when the destination is a terminal.
     [[nodiscard]] virtual bool isTerminal() const noexcept;
+
+    /// @brief What is behind this output.
+    ///
+    /// @return @c OutputKind::Device, unless a subclass models the screen itself.
+    [[nodiscard]] virtual auto kind() const noexcept -> OutputKind;
+
+    /// @brief Where a simulation's cursor is, which it can say without being asked over the wire.
+    ///
+    /// @return The cursor as (row, column), both 1-based, as a cursor position report has them; or
+    ///         nothing, for an output with a terminal behind it, whose cursor only that terminal knows.
+    [[nodiscard]] virtual auto simulatedCursorPosition() const noexcept -> std::optional<std::pair<int, int>>;
 
     /// @brief Returns the terminal width in columns.
     [[nodiscard]] virtual auto columns() const noexcept -> int;
