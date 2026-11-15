@@ -7,6 +7,22 @@ release may break the API; every break is listed under **Breaking** with a migra
 release tag `vX.Y.Z` equals the version in `project(core-cpp VERSION X.Y.Z)`, and the release
 workflow refuses one without a section here.
 
+## [Unreleased]
+
+### Breaking
+
+- **`core::tui::Screen` draws on a `ScreenSurface`, not a `Terminal`.** The constructor takes `ScreenSurface&`, which
+  `Terminal` now implements, so `Screen(terminal, config)` compiles unchanged. `Screen::terminal()` is gone; it is
+  `Screen::surface()`, returning the `ScreenSurface&`. A caller that reached `Terminal`-only members through it keeps
+  its own `Terminal&` instead. No known consumer called it. `QueryUnanswered` moved from `<core/tui/Terminal.hpp>` to
+  `<core/tui/ScreenSurface.hpp>`, which `Terminal.hpp` includes.
+- **`core::tui::Terminal` is polymorphic now.** It derives from `ScreenSurface`, so `rows()`, `columns()`, `output()`
+  and `queryCursorPosition()` are virtual and `Terminal` has a vtable; its destructor is an override. Building a
+  `Screen` from a `Terminal&` converts derived to base, which needs `Terminal`'s complete type: include
+  `<core/tui/Terminal.hpp>` where a `Screen` is made from a forward-declared `Terminal`. Consumers grepped: endo
+  (constructs `Screen` from a `Terminal` member whose header it includes; compiles unchanged), fastcached (no
+  `core::tui` use), Lightweight's `dbtool` (`core::tui_output` only), contour (does not vendor `tui`).
+
 ## [0.20.0] - 2026-11-14
 
 ### Added

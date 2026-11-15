@@ -3,8 +3,6 @@
 
 #include <core/tui/Canvas.hpp>
 #include <core/tui/EditAction.hpp>
-#include <core/tui/Screen.hpp>
-#include <core/tui/Terminal.hpp>
 #include <core/tui/Theme.hpp>
 #include <core/tui/Unicode.hpp>
 

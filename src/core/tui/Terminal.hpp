@@ -5,6 +5,7 @@
 #include <core/tui/Error.hpp>
 #include <core/tui/InputEvent.hpp>
 #include <core/tui/MouseTracking.hpp>
+#include <core/tui/ScreenSurface.hpp>
 #include <core/tui/TerminalInput.hpp>
 #include <core/tui/TerminalOutput.hpp>
 
@@ -59,17 +60,6 @@ enum class DecModeStatus : std::uint8_t
     }
 }
 
-/// @brief Why a terminal query has no answer.
-///
-/// Returned in place of a value that used to stand in for "nothing" -- `(0, 0)` for a cursor
-/// position, which is not even a legal one. A query nobody sent and a terminal that stayed silent
-/// are different facts, and a caller deciding what to do next needs to know which it has.
-enum class QueryUnanswered : std::uint8_t
-{
-    NotAsked, ///< No query was sent: this terminal has no input to read a reply from (mock output).
-    NoReply,  ///< The query was sent and nothing answered before the timeout.
-};
-
 /// @brief The input a terminal query reads its reply through.
 ///
 /// @c Terminal's own @c TerminalInput is the production implementation. Tests script one, so a
@@ -99,7 +89,7 @@ class TerminalQueryInput
 ///
 /// Manages initialization order, cleanup, and SIGWINCH handler installation.
 /// Provides convenience methods that delegate to TerminalInput and TerminalOutput.
-class Terminal
+class Terminal: public ScreenSurface
 {
   public:
     /// @brief Constructs a Terminal with the default real TerminalOutput.
@@ -118,7 +108,7 @@ class Terminal
              TerminalQueryInput& queryInput,
              core::platform::IClock& clock);
 
-    ~Terminal();
+    ~Terminal() override;
 
     Terminal(Terminal const&) = delete;
     auto operator=(Terminal const&) -> Terminal& = delete;
@@ -136,7 +126,7 @@ class Terminal
     [[nodiscard]] auto input() noexcept -> TerminalInput&;
 
     /// @brief Returns a reference to the output subsystem.
-    [[nodiscard]] auto output() noexcept -> TerminalOutput&;
+    [[nodiscard]] auto output() noexcept -> TerminalOutput& override;
 
     /// @brief Convenience: polls for input events with the given timeout.
     /// @param timeoutMs -1 = block, 0 = non-blocking, >0 = timeout in ms.
@@ -144,10 +134,10 @@ class Terminal
     [[nodiscard]] auto poll(int timeoutMs = -1) -> std::vector<InputEvent>;
 
     /// @brief Returns terminal width in columns.
-    [[nodiscard]] auto columns() const noexcept -> int;
+    [[nodiscard]] auto columns() const noexcept -> int override;
 
     /// @brief Returns terminal height in rows.
-    [[nodiscard]] auto rows() const noexcept -> int;
+    [[nodiscard]] auto rows() const noexcept -> int override;
 
     /// @brief Suspends terminal protocols and raw mode for external command execution.
     ///
@@ -176,7 +166,7 @@ class Terminal
     ///
     /// On a mock output with no query input, the mock's own cursor is the answer.
     /// @return Pair of (row, column), both 1-based, or why there is none.
-    [[nodiscard]] auto queryCursorPosition() -> std::expected<std::pair<int, int>, QueryUnanswered>;
+    [[nodiscard]] auto queryCursorPosition() -> std::expected<std::pair<int, int>, QueryUnanswered> override;
 
     /// @brief Queries the cell size in pixels from the terminal via CSI 16 t.
     /// @return Pair of (width, height) in pixels, or why there is none.

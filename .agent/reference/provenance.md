@@ -648,6 +648,7 @@ others in notes.
 | `src/core/tui/Screen.cpp` | contour-terminal/endo | `src/tui/Screen.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | `flushInline`'s C-style loop is a `while`, with the `++row` written out on each of its three exit paths |
 | `src/core/tui/Screen.hpp` | contour-terminal/endo | `src/tui/Screen.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/Screen_test.cpp` | contour-terminal/endo | `src/tui/Screen_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
+| `src/core/tui/ScreenSurface.hpp` | origin: core-cpp | - | - | what `Screen` draws on, split off `Terminal` for `core::tui_core` (docs/design/tui-headless.md) |
 | `src/core/tui/ScrollableSelection.hpp` | contour-terminal/endo | `src/tui/ScrollableSelection.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/ScrollableSelection_test.cpp` | contour-terminal/endo | `src/tui/ScrollableSelection_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |
 | `src/core/tui/SemanticBlockClient.cpp` | contour-terminal/endo | `src/tui/SemanticBlockClient.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | - |

@@ -15,7 +15,7 @@
 namespace core::tui
 {
 
-class Terminal;
+class ScreenSurface;
 
 /// Viewport mode for the screen.
 enum class Viewport : uint8_t
@@ -106,10 +106,10 @@ struct InlineCursorMovement
 class Screen
 {
   public:
-    /// Constructs a Screen attached to the given terminal.
-    /// @param terminal The terminal for input/output.
+    /// Constructs a Screen that draws on the given surface.
+    /// @param surface What the screen draws on (a @c Terminal on a real terminal); must outlive it.
     /// @param config Optional configuration.
-    explicit Screen(Terminal& terminal, ScreenConfig config = {});
+    explicit Screen(ScreenSurface& surface, ScreenConfig config = {});
 
     ~Screen();
 
@@ -230,12 +230,12 @@ class Screen
     /// Moves focus to the previous focusable component in the active group.
     void focusPrev();
 
-    // --- Terminal Access ---
+    // --- Surface Access ---
 
-    /// Returns the terminal.
-    [[nodiscard]] Terminal& terminal() noexcept { return _terminal; }
+    /// Returns the surface this screen draws on.
+    [[nodiscard]] ScreenSurface& surface() noexcept { return _surface; }
 
-    [[nodiscard]] Terminal const& terminal() const noexcept { return _terminal; }
+    [[nodiscard]] ScreenSurface const& surface() const noexcept { return _surface; }
 
     // --- Overlay System ---
 
@@ -334,7 +334,7 @@ class Screen
   private:
     friend class Component;
 
-    Terminal& _terminal;
+    ScreenSurface& _surface;
     ScreenConfig _config;
     Theme _theme;
     RenderMode _renderMode = RenderMode::Diff;

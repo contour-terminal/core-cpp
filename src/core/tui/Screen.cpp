@@ -3,7 +3,7 @@
 
 #include <core/tui/Canvas.hpp>
 #include <core/tui/HyperlinkEmitter.hpp>
-#include <core/tui/Terminal.hpp>
+#include <core/tui/ScreenSurface.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -44,14 +44,14 @@ InlineCursorMovement calculateInlineCursorMovement(int previousContentHeight,
     return result;
 }
 
-Screen::Screen(Terminal& terminal, ScreenConfig config):
-    _terminal(terminal), _config(config), _theme(currentTheme()), _root(std::make_unique<RootComponent>())
+Screen::Screen(ScreenSurface& surface, ScreenConfig config):
+    _surface(surface), _config(config), _theme(currentTheme()), _root(std::make_unique<RootComponent>())
 {
     _root->setScreen(this);
 
     // Initialize buffers based on terminal size
-    auto const termRows = _terminal.rows();
-    auto const termCols = _terminal.columns();
+    auto const termRows = _surface.rows();
+    auto const termCols = _surface.columns();
     _current.resize(termRows, termCols);
     _previous.resize(termRows, termCols);
 
@@ -89,8 +89,8 @@ Screen::Screen(Terminal& terminal, ScreenConfig config):
     // fresh screen and the user's scrollback is preserved; restored in the destructor.
     if (_config.alternateScreen)
     {
-        _terminal.output().writeRaw("\033[?1049h");
-        _terminal.output().flush();
+        _surface.output().writeRaw("\033[?1049h");
+        _surface.output().flush();
         _enteredAlternateScreen = true;
     }
 }
@@ -109,7 +109,7 @@ Screen::~Screen()
 
     if (_enteredAlternateScreen)
     {
-        auto& out = _terminal.output();
+        auto& out = _surface.output();
         out.showCursor();
         out.writeRaw("\033[?1049l"); // leave the alternate screen, restoring the primary buffer
         out.flush();
@@ -190,7 +190,7 @@ void Screen::releaseCursor()
 
 void Screen::clearAndRelease()
 {
-    auto& out = _terminal.output();
+    auto& out = _surface.output();
 
     // Move up from the tracked cursor row to the top of the content region.
     if (_previousCursorRow > 0)
@@ -221,23 +221,22 @@ int Screen::rows() const noexcept
 {
     switch (_config.viewport)
     {
-        case Viewport::Fullscreen: return _terminal.rows();
-        case Viewport::Inline:
-            return _config.inlineMaxHeight > 0 ? _config.inlineMaxHeight : _terminal.rows();
+        case Viewport::Fullscreen: return _surface.rows();
+        case Viewport::Inline: return _config.inlineMaxHeight > 0 ? _config.inlineMaxHeight : _surface.rows();
         case Viewport::Fixed: return _config.fixedArea.height;
     }
-    return _terminal.rows();
+    return _surface.rows();
 }
 
 int Screen::cols() const noexcept
 {
     switch (_config.viewport)
     {
-        case Viewport::Fullscreen: return _terminal.columns();
-        case Viewport::Inline: return _terminal.columns();
+        case Viewport::Fullscreen: return _surface.columns();
+        case Viewport::Inline: return _surface.columns();
         case Viewport::Fixed: return _config.fixedArea.width;
     }
-    return _terminal.columns();
+    return _surface.columns();
 }
 
 Size Screen::size() const noexcept
@@ -263,17 +262,17 @@ Rect Screen::viewportArea() const noexcept
     switch (_config.viewport)
     {
         case Viewport::Fullscreen:
-            return { .x = 0, .y = 0, .width = _terminal.columns(), .height = _terminal.rows() };
+            return { .x = 0, .y = 0, .width = _surface.columns(), .height = _surface.rows() };
         case Viewport::Inline: {
             // For inline mode, the viewport area is the maximum area available for rendering.
             // We use inlineMaxHeight if set, otherwise the full terminal height.
             // The actual content height (_previousContentHeight) is only used for flush positioning.
-            int const maxHeight = _config.inlineMaxHeight > 0 ? _config.inlineMaxHeight : _terminal.rows();
-            return { .x = 0, .y = 0, .width = _terminal.columns(), .height = maxHeight };
+            int const maxHeight = _config.inlineMaxHeight > 0 ? _config.inlineMaxHeight : _surface.rows();
+            return { .x = 0, .y = 0, .width = _surface.columns(), .height = maxHeight };
         }
         case Viewport::Fixed: return _config.fixedArea;
     }
-    return { .x = 0, .y = 0, .width = _terminal.columns(), .height = _terminal.rows() };
+    return { .x = 0, .y = 0, .width = _surface.columns(), .height = _surface.rows() };
 }
 
 EventResult Screen::dispatchEvent(InputEvent const& event)
@@ -380,8 +379,8 @@ void Screen::focusPrev()
 void Screen::beginFrame()
 {
     // Resize buffers if terminal size changed
-    auto const termRows = _terminal.rows();
-    auto const termCols = _terminal.columns();
+    auto const termRows = _surface.rows();
+    auto const termCols = _surface.columns();
 
     if (_current.rows() != termRows || _current.cols() != termCols)
     {
@@ -550,15 +549,15 @@ void Screen::flush()
     {
         // First inline render: skip SyncGuard — no previous content to tear against,
         // and avoids SIGCHLD-interrupted write leaving the terminal in sync-buffer mode.
-        _terminal.output().flush();
+        _surface.output().flush();
         flushInline();
         applyCursorShape();
-        _terminal.output().flush();
+        _surface.output().flush();
     }
     else
     {
         // Use synchronized output to prevent tearing
-        auto syncGuard = _terminal.output().syncGuard();
+        auto syncGuard = _surface.output().syncGuard();
 
         switch (_config.viewport)
         {
@@ -579,7 +578,7 @@ void Screen::flush()
 
 void Screen::flushArea(Rect area)
 {
-    auto& out = _terminal.output();
+    auto& out = _surface.output();
     bool const useDiff = (_renderMode == RenderMode::Diff) && !_needsFullRedraw;
 
     auto links = FlushLinks { out, _current, useDiff ? &_previous : nullptr };
@@ -743,7 +742,7 @@ namespace
 
 void Screen::flushInline()
 {
-    auto& out = _terminal.output();
+    auto& out = _surface.output();
 
     // Calculate content height (find last non-empty row)
     int contentHeight = 0;
@@ -797,9 +796,9 @@ void Screen::flushInline()
                 out.restoreCursor(); // DECRC: anchor to exact saved position
 
                 // Query cursor position after DECRC to know where content starts.
-                auto const cursor = _terminal.queryCursorPosition();
+                auto const cursor = _surface.queryCursorPosition();
                 auto const startRow =
-                    (cursor && cursor->first > 0) ? (cursor->first - 1) : (_terminal.rows() - 1);
+                    (cursor && cursor->first > 0) ? (cursor->first - 1) : (_surface.rows() - 1);
 
                 if (reservedRoom >= contentHeight)
                 {
@@ -819,15 +818,15 @@ void Screen::flushInline()
                 }
 
                 // Content start: min(cursor row, bottom-aligned position).
-                _inlineContentStartRow = std::min(startRow, _terminal.rows() - contentHeight);
+                _inlineContentStartRow = std::min(startRow, _surface.rows() - contentHeight);
             }
             else
             {
                 // Very first render (no previous Screen) — reserve room with LFs.
                 // Query actual cursor position to compute _inlineContentStartRow accurately.
-                auto const cursor = _terminal.queryCursorPosition();
+                auto const cursor = _surface.queryCursorPosition();
                 auto const startRow =
-                    (cursor && cursor->first > 0) ? (cursor->first - 1) : (_terminal.rows() - 1);
+                    (cursor && cursor->first > 0) ? (cursor->first - 1) : (_surface.rows() - 1);
 
                 // Emit contentHeight-1 newlines (enough to ensure room without overshooting).
                 auto const newLines = std::max(0, contentHeight - 1);
@@ -841,14 +840,14 @@ void Screen::flushInline()
                 // Content start: min(cursor row, bottom-aligned position).
                 // Cursor near top (row 5, rows=50, height=5): start = min(5, 45) = 5
                 // Cursor at bottom (row 49, rows=50, height=5): start = min(49, 45) = 45
-                _inlineContentStartRow = std::min(startRow, _terminal.rows() - contentHeight);
+                _inlineContentStartRow = std::min(startRow, _surface.rows() - contentHeight);
             }
         }
         else
         {
             // Content grew — emit LFs for the growth and adjust start row only for actual scrolls.
             auto const growth = contentHeight - _peakContentHeight;
-            auto const scrollsNeeded = std::max(0, _inlineContentStartRow + contentHeight - _terminal.rows());
+            auto const scrollsNeeded = std::max(0, _inlineContentStartRow + contentHeight - _surface.rows());
 
             for ([[maybe_unused]] auto _: std::views::iota(0, growth))
                 out.linefeed();
@@ -863,7 +862,7 @@ void Screen::flushInline()
     else if (_inlineContentStartRow < 0)
     {
         // Haven't set start row yet but peak is already set (shouldn't happen, but handle it)
-        _inlineContentStartRow = _terminal.rows() - _mainContentHeight - _totalNewlinesEmitted;
+        _inlineContentStartRow = _surface.rows() - _mainContentHeight - _totalNewlinesEmitted;
     }
 
     // Track how many rows to clear if content shrank
@@ -1047,7 +1046,7 @@ void Screen::applyCursorShape()
 
     if (desiredShape != _currentCursorShape)
     {
-        _terminal.output().setCursorShape(desiredShape);
+        _surface.output().setCursorShape(desiredShape);
         _currentCursorShape = desiredShape;
     }
 }

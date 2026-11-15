@@ -121,6 +121,7 @@ core_cpp_add_module(tui KIND STATIC
         QuestionComponent.hpp
         Rect.hpp
         Screen.hpp
+        ScreenSurface.hpp
         ScrollableSelection.hpp
         SemanticBlockClient.hpp
         Sixel.hpp
