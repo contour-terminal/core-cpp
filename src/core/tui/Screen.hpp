@@ -357,6 +357,19 @@ class Screen
     /// Returns the last-rendered buffer (for testing). Valid after draw().
     [[nodiscard]] Buffer const& renderedBuffer() const noexcept { return _previous; }
 
+    /// The most frames in a row whose layout sweep only the previous frame's sweep asked for. Settling takes
+    /// a frame per level of Responsive whose hints its own size moves; a chain longer than this is
+    /// breakpoints whose choices flip each other (see Responsive), which would swap once per frame forever.
+    static constexpr int MaxChainedLayoutSweeps = 8;
+
+    /// Whether the layout stopped re-laying a chain of sweeps past MaxChainedLayoutSweeps: the tree is left
+    /// as the last sweep put it. A resize, or a hint changed from outside a sweep, takes it up again.
+    /// @return True from the frame the chain was abandoned until the next such change.
+    [[nodiscard]] bool layoutAbandoned() const noexcept
+    {
+        return _chainedLayoutSweeps > MaxChainedLayoutSweeps;
+    }
+
   private:
     friend class Component;
 
@@ -404,6 +417,55 @@ class Screen
 
     std::vector<OverlayEntry> _overlays;
 
+    // Deferred blurs. A component that leaves this screen focused hears onBlur() -- but not from inside
+    // the detach: the detach runs in loops over a parent's children (setScreen(), clearChildren(), a
+    // layout pass), where a handler that adds or removes a sibling would reallocate the vector being
+    // walked. Every such loop holds a TreeChange open; the components that lost their focus wait in
+    // _pendingBlurs, and the outermost TreeChange to close calls them, then destroys what was retired.
+
+    /// Holds a tree change on @p screen open for its lifetime; the outermost one to close delivers the
+    /// deferred blurs. A null screen holds nothing.
+    class TreeChange
+    {
+      public:
+        explicit TreeChange(Screen* screen) noexcept: _screen(screen)
+        {
+            if (_screen)
+                ++_screen->_treeChanges;
+        }
+        ~TreeChange()
+        {
+            if (_screen)
+                _screen->endTreeChange();
+        }
+        TreeChange(TreeChange const&) = delete;
+        TreeChange& operator=(TreeChange const&) = delete;
+        TreeChange(TreeChange&&) = delete;
+        TreeChange& operator=(TreeChange&&) = delete;
+
+      private:
+        Screen* _screen;
+    };
+
+    /// Closes one tree change; the outermost calls onBlur() of each component in _pendingBlurs, in the
+    /// order they left, and then destroys what retire() was handed -- until neither has anything left.
+    void endTreeChange();
+
+    /// Forgets a component waiting for its onBlur(): it is being destroyed, or is being focused again
+    /// and hears it now.
+    /// @param component The component waiting.
+    void forgetQueuedBlur(Component& component) noexcept;
+
+    /// Keeps a component that left the tree alive until the open tree change closes, so that a blur
+    /// queued for it, or for one of its children, reaches a living object. Destroys it at once when no
+    /// change is open.
+    /// @param component The component, already removed from its parent.
+    void retire(std::unique_ptr<Component> component);
+
+    int _treeChanges = 0;                             ///< How many TreeChange are open.
+    std::vector<Component*> _pendingBlurs;            ///< Left focused, onBlur() not yet called.
+    std::vector<std::unique_ptr<Component>> _retired; ///< Destroyed when the tree change closes.
+
     // Hover and Tooltip state
     HoverState _hoverState;
     Tooltip _tooltip;
@@ -414,19 +476,37 @@ class Screen
     void layoutRoot();
 
     /// Called by a component whose child's hints changed: the next layoutRoot() sweeps the tree for it.
-    void layoutRequested() noexcept { _layoutRequested = LayoutRequest::Pending; }
+    /// A mark made while a sweep runs is that sweep's consequence, and is counted as such.
+    void layoutRequested() noexcept
+    {
+        _layoutRequested =
+            _layoutSweep == LayoutSweep::Running ? LayoutRequest::Chained : LayoutRequest::Pending;
+    }
 
     /// Lays out again, depth first, the children of each component in @p component's subtree marked by a
     /// child's hintsChanged().
     static void relayoutMarked(Component& component);
 
-    /// Whether some component on this screen was marked by a child's hintsChanged().
+    /// Whether some component on this screen was marked by a child's hintsChanged(), and by what.
     enum class LayoutRequest : std::uint8_t
     {
-        None,
-        Pending,
+        None,    ///< Nothing marked.
+        Pending, ///< Marked from outside a sweep: a resize, a component changing its own hints.
+        Chained, ///< Marked by the previous frame's sweep alone, as a Responsive it resized swapped.
     };
     LayoutRequest _layoutRequested = LayoutRequest::None;
+
+    /// Whether layoutRoot() is sweeping the tree, so that a mark made now is known as the sweep's own.
+    enum class LayoutSweep : std::uint8_t
+    {
+        Idle,
+        Running,
+    };
+    LayoutSweep _layoutSweep = LayoutSweep::Idle;
+
+    /// How many frames in a row have swept for a Chained request alone; past MaxChainedLayoutSweeps, the
+    /// chain was abandoned, until a resize or a mark from outside a sweep sets it back to zero.
+    int _chainedLayoutSweeps = 0;
 
     // Rendering phases
     void beginFrame();
@@ -482,10 +562,19 @@ class Screen
 
     /// @brief Called by a component that leaves this screen -- removed from the tree, directly or with
     /// an ancestor, or hidden as an overlay -- so that nothing here outlives its place on the screen: the
-    /// pointer capture, the press target, the focus of every group it held and the hover on it. It loses
-    /// its focus without an onBlur(): it may be on its way to destruction, past its own destructor.
+    /// pointer capture, the press target, the focus of every group it held and the hover on it. A focused
+    /// one is queued for its onBlur(), delivered when the open tree change closes (endTreeChange()).
+    ///
+    /// Not noexcept: queueing the blur may allocate. It queues before it forgets anything, so a throw
+    /// leaves the screen and the component as they were (Component::setScreen() then leaves _screen as
+    /// it was, too).
     /// @param component The component leaving.
-    void componentDetached(Component& component) noexcept;
+    void componentDetached(Component& component);
+
+    /// @brief What componentDetached() does but queue a blur: forgets every reference this screen holds
+    /// to @p component and clears its focus. Allocates nothing, so a destructor may call it.
+    /// @param component The component leaving or being destroyed.
+    void forgetComponent(Component& component) noexcept;
 
     /// @brief Called by a component this screen still knows when it is destroyed: what
     /// componentDetached() does, and an overlay that was never hidden leaves the overlay list, so

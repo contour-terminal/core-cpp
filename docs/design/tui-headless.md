@@ -284,7 +284,14 @@ first resize would throw the guess away. A size that meets no breakpoint shows n
 container's hints, so it calls `hintsChanged()`: the parent is marked, and `Screen`'s layout pass sweeps the
 tree once per frame for marks, so a sibling gets its share in the same frame. One sweep, not a loop: a mark
 made during the sweep is the next frame's, so a layout whose hints chase its own size settles a frame at a time
-instead of spinning. The old layout leaves the screen when it is destroyed, and `Screen` forgets a detached
+instead of spinning. A chain that does not settle -- breakpoints whose layouts' hints choose each other -- is a
+broken precondition `Responsive` documents; `Screen` counts the frames in a row whose sweep only the previous
+sweep asked for, and past eight leaves the marks and the layout as they are until a mark from outside the sweep
+(a resize, a changed hint) restarts it; `Screen::layoutAbandoned()` reports the stop (tui_core links no logger).
+A focused component that leaves the tree alive hears `onBlur()`, deferred: every loop over a parent's children
+holds a `Screen::TreeChange` open, the blurs wait in the screen, and the outermost change to close delivers them
+and only then destroys the layouts `Responsive` retired, so a handler may add or remove siblings and still finds
+its old parent alive. The old layout leaves the screen when it is destroyed, and `Screen` forgets a detached
 component wherever it held one -- focus, hover, pointer capture -- since the same `draw()` asks the focused
 component for its cursor shape. Breakpoints are constructor input; `Responsive::choose()` is the pure function that picks one, table-tested on its own. `FlexBox::add()` owns
 what it adds, so a breakpoint's `make` returns one object that owns its whole subtree.

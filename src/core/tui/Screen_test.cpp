@@ -2144,6 +2144,142 @@ TEST_CASE("Screen.overlayDestroyedWhileShown_leavesTheOverlayList")
 namespace
 {
 
+/// @brief An input that commits what was typed when it loses the focus, and counts its commits.
+class CommitOnBlur final: public Component
+{
+  public:
+    explicit CommitOnBlur(int& commits): _commits(&commits) {}
+
+    void render(Canvas& /*canvas*/) override {}
+    [[nodiscard]] bool focusable() const override { return true; }
+    [[nodiscard]] Size preferredSize() const override { return { .width = 10, .height = 1 }; }
+    void onBlur() override { ++*_commits; }
+
+  private:
+    int* _commits;
+};
+
+} // namespace
+
+namespace
+{
+
+/// @brief A focusable component whose onBlur() adds a component to its parent: a handler that changes
+/// the tree it is leaving.
+class GrowsParentOnBlur final: public Component
+{
+  public:
+    GrowsParentOnBlur(Component& extra, int& blurs): _extra(&extra), _blurs(&blurs) {}
+
+    void render(Canvas& /*canvas*/) override {}
+    [[nodiscard]] bool focusable() const override { return true; }
+    void onBlur() override
+    {
+        ++*_blurs;
+        if (parent())
+            parent()->addChild(*_extra, { .area = { .x = 0, .y = 1, .width = 4, .height = 1 } });
+    }
+
+  private:
+    Component* _extra;
+    int* _blurs;
+};
+
+} // namespace
+
+TEST_CASE("Screen.onBlurThatChangesTheTree_runsAfterTheDetachLoop")
+{
+    // Run under ASan: delivered inside setScreen()'s loop over the parent's children, the handler's
+    // addChild() reallocated the vector being walked -- a heap-use-after-free.
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
+    auto blurs = 0;
+    auto extra = RootComponent {};
+    auto panel = RootComponent {};
+    auto input = GrowsParentOnBlur { extra, blurs };
+    auto sibling = RootComponent {};
+    // Two children, so the vector is full and the loop goes on reading it after the first.
+    panel.addChild(input, { .area = { .x = 0, .y = 0, .width = 10, .height = 1 } });
+    panel.addChild(sibling, { .area = { .x = 10, .y = 0, .width = 10, .height = 1 } });
+    screen.root().addChild(panel, { .area = { .x = 0, .y = 0, .width = 20, .height = 2 } });
+    screen.setFocus(&input);
+    REQUIRE(panel.children().size() == 2);
+
+    screen.root().removeChild(panel);
+    CHECK(blurs == 1);
+    CHECK(extra.parent() == &panel);
+    CHECK(panel.children().size() == 3);
+    CHECK(screen.focusedComponent() == nullptr);
+    panel.removeChild(extra);
+}
+
+TEST_CASE("Screen.focusedComponentLeavingAlive_hearsOnBlur")
+{
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
+    auto commits = 0;
+
+    SECTION("an overlay hidden while focused")
+    {
+        auto input = CommitOnBlur { commits };
+        screen.showOverlay(input, Point { .x = 5, .y = 5 });
+        screen.setFocus(&input);
+        REQUIRE(screen.focusedComponent() == &input);
+        REQUIRE(commits == 0);
+
+        screen.hideOverlay(input);
+        CHECK(commits == 1);
+        CHECK_FALSE(input.focused());
+        CHECK(screen.focusedComponent() == nullptr);
+        CHECK(input.screen() == nullptr);
+    }
+
+    SECTION("a child removed from the tree with its parent")
+    {
+        auto panel = RootComponent {};
+        auto input = CommitOnBlur { commits };
+        panel.addChild(input, { .area = { .x = 0, .y = 0, .width = 10, .height = 1 } });
+        screen.root().addChild(panel, { .area = { .x = 0, .y = 0, .width = 20, .height = 2 } });
+        screen.setFocus(&input);
+        REQUIRE(screen.focusedComponent() == &input);
+
+        screen.root().removeChild(panel);
+        CHECK(commits == 1);
+        CHECK(screen.focusedComponent() == nullptr);
+    }
+
+    SECTION("a child left behind by a parent destroyed around it")
+    {
+        auto input = CommitOnBlur { commits };
+        {
+            auto panel = RootComponent {};
+            panel.addChild(input, { .area = { .x = 0, .y = 0, .width = 10, .height = 1 } });
+            screen.root().addChild(panel, { .area = { .x = 0, .y = 0, .width = 20, .height = 2 } });
+            screen.setFocus(&input);
+            REQUIRE(screen.focusedComponent() == &input);
+        }
+        CHECK(commits == 1);
+        CHECK(input.parent() == nullptr);
+        CHECK(input.screen() == nullptr);
+        CHECK(screen.focusedComponent() == nullptr);
+    }
+
+    SECTION("not a focused component destroyed: it loses its focus with no call into it")
+    {
+        {
+            auto input = CommitOnBlur { commits };
+            screen.root().addChild(input, { .area = { .x = 0, .y = 0, .width = 10, .height = 1 } });
+            screen.setFocus(&input);
+            REQUIRE(screen.focusedComponent() == &input);
+        }
+        CHECK(commits == 0);
+        CHECK(screen.focusedComponent() == nullptr);
+    }
+}
+
+namespace
+{
+
 /// @brief A mouse recorder that offers a tooltip at every cell.
 struct HoverableRecorder: MouseRecorder
 {

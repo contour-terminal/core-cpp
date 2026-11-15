@@ -60,6 +60,7 @@ struct LayoutParams
     FocusGroupId focusGroup = std::string(DefaultFocusGroup); ///< Focus group this component belongs to.
 
     /// How the parent's layout pass sizes this child; absent, the child keeps the @c area it is given.
+    /// Present, @c area is not read: the child keeps the area it had until the parent's pass places it.
     ///
     /// Only the item half is read -- @c grow, @c shrink, @c basis, @c minSize and @c maxSize -- and the
     /// child's own @c minSize() and @c preferredSize() hints join it: the larger of the two minima
@@ -239,6 +240,11 @@ class Component
     ///        how a component is sized in its parent is the parent's @c LayoutParams.
     explicit Component(layout::Style style);
 
+    /// Removes @p child, one of this component's children, and destroys it -- on a screen, once the tree
+    /// change under way closes, so that a focused component in it still hears its onBlur(); off one, now.
+    /// @param child The child, owned by the caller until now.
+    void retireChild(std::unique_ptr<Component> child);
+
     /// Called when this component's size changes, before its children are laid out.
     /// @param size The new size.
     virtual void onResize([[maybe_unused]] Size size) {}
@@ -264,6 +270,7 @@ class Component
     Rect _screenBounds; ///< Absolute screen position (computed during render)
     Screen* _screen = nullptr;
     bool _focused = false;
+    Screen* _blurQueuedOn = nullptr; ///< The screen holding this component's deferred onBlur(), if any.
 
     /// Called by Screen to set the parent.
     void setParent(Component* parent);

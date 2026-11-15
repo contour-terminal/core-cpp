@@ -20,17 +20,26 @@ Component::Component(layout::Style style): _style(style)
 
 Component::~Component()
 {
+    // A blur still waiting for it would reach a destroyed object.
+    if (_blurQueuedOn)
+        _blurQueuedOn->forgetQueuedBlur(*this);
+
+    // The children this component still holds outlive it -- whoever owned them as members is gone
+    // already -- so they leave first, while it is still their parent's screen's: each that was focused
+    // hears onBlur() once they have all left, and finds no parent to call back into.
+    clearChildren();
+
     // A component the screen still knows when it dies -- an overlay never hidden, say -- tells the
-    // screen first, so that neither the pointer capture nor the overlay list outlives it.
+    // screen next, so that neither the pointer capture nor the overlay list outlives it, and it loses
+    // its own focus without an onBlur(): its derived part is gone.
     if (_screen)
         _screen->componentDestroyed(*this);
+    _screen = nullptr;
+    _focused = false;
 
-    // Remove from parent if attached
+    // Remove from parent if attached; with no screen left, that leaving calls nothing virtual.
     if (_parent)
         _parent->removeChild(*this);
-
-    // Clear children (sets their parent to nullptr)
-    clearChildren();
 }
 
 EventResult Component::onEvent([[maybe_unused]] InputEvent const& event)
@@ -58,6 +67,7 @@ void Component::setArea(Rect area)
     if (_layout.area == area)
         return;
 
+    auto const change = Screen::TreeChange { _screen };
     auto const previous = _layout.area;
     _layout.area = area;
     invalidate();
@@ -86,6 +96,9 @@ void Component::layoutChildren()
     // One level of the tree at a time: a child's place in this component depends on its style and its
     // hints, never on its own children, so solving this level alone gives what solving the whole
     // subtree would. Each child that changes size then lays out its own children through setArea().
+    // Held over the loop below: a child resized in it may swap its own children out (Responsive), and
+    // a blur that causes is delivered once the loop is done.
+    auto const change = Screen::TreeChange { _screen };
     _layoutState = LayoutState::Clean;
     auto placed = std::vector<Component*> {};
     auto root = layout::Node { .style = _style, .children = {}, .preferred = {} };
@@ -128,13 +141,21 @@ void Component::setZIndex(int z)
 
 void Component::addChild(Component& child, LayoutParams params)
 {
+    auto const change = Screen::TreeChange { _screen };
+
     // Remove from previous parent if any
     if (child._parent)
         child._parent->removeChild(child);
 
-    // Set layout parameters; a new size runs what setArea() runs for one.
+    // Set layout parameters; a new size runs what setArea() runs for one. A flex child's area is this
+    // component's layout pass to give: it keeps the one it has until relayoutParent() below, so a sized
+    // child moving between parents is resized once, to its new place, and never to an empty area first.
+    // A hidden one takes no part in that pass, so it takes an empty area at the new parent's origin
+    // rather than keep its old parent's.
     auto const previousArea = child._layout.area;
     child._layout = std::move(params);
+    if (child._layout.flex)
+        child._layout.area = child._layout.visible ? previousArea : Rect {};
 
     // Add to our children
     _children.push_back(&child);
@@ -151,6 +172,7 @@ void Component::addChild(Component& child, LayoutParams params)
 
 void Component::removeChild(Component& child)
 {
+    auto const change = Screen::TreeChange { _screen };
     auto it = std::ranges::find(_children, &child);
     if (it != _children.end())
     {
@@ -165,6 +187,7 @@ void Component::removeChild(Component& child)
 
 void Component::clearChildren()
 {
+    auto const change = Screen::TreeChange { _screen };
     for (Component* child: _children)
     {
         child->setParent(nullptr);
@@ -172,6 +195,15 @@ void Component::clearChildren()
     }
     _children.clear();
     invalidate();
+}
+
+void Component::retireChild(std::unique_ptr<Component> child)
+{
+    removeChild(*child);
+    // On a screen, kept alive until its tree change closes, so a blur queued for it is delivered;
+    // off one, nothing is queued and it is destroyed here.
+    if (_screen)
+        _screen->retire(std::move(child));
 }
 
 std::span<Component* const> Component::children() const noexcept
@@ -198,7 +230,11 @@ void Component::setParent(Component* parent)
 void Component::setScreen(Screen* screen)
 {
     // Leaving a screen -- removed from its tree, directly or with an ancestor, or hidden as an overlay --
-    // ends that screen's pointer capture on this component.
+    // ends that screen's pointer capture on this component, and its focus there. A living component that
+    // left focused hears onBlur(), as one whose focus moved does, so an input that commits on blur
+    // commits -- but only when the change this leaving belongs to closes (Screen::TreeChange), with the
+    // whole subtree gone and no loop over children running.
+    auto const change = Screen::TreeChange { _screen };
     if (_screen && _screen != screen)
         _screen->componentDetached(*this);
 
@@ -211,6 +247,12 @@ void Component::setScreen(Screen* screen)
 
 void Component::setFocused(bool focused)
 {
+    // Focused again before the blur of its leaving was delivered: that blur comes first.
+    if (focused && _blurQueuedOn)
+    {
+        _blurQueuedOn->forgetQueuedBlur(*this);
+        onBlur();
+    }
     if (_focused != focused)
     {
         _focused = focused;

@@ -136,7 +136,10 @@ half.
   parent is marked, and `Screen` lays every marked component's children out again once, before the next frame
   is drawn (without a screen, at the parent's next layout pass); `Responsive` does so on every swap. A
   component that leaves the screen -- a `Responsive`'s old layout among them -- takes its focus, its hover
-  and the pointer capture with it, so nothing is asked of it after it is gone. It solves one level at a time: a child's
+  and the pointer capture with it, so nothing is asked of it after it is gone; one that is still alive -- a hidden
+  overlay, a removed child, a swapped-out layout before it is destroyed -- hears `onBlur()` once the change it
+  left in is over (never inside a loop over children, so the handler may change the tree). A flex child added to
+  a new parent keeps its area until that parent's pass places it; a hidden one takes an empty area. It solves one level at a time: a child's
   place depends on its style and hints, not on its own children, and each child that changed size lays out its own.
   `Screen` sizes its root to the viewport at every frame and on every `ResizeEvent`, so a child of the root with
   `.flex = layout::Style { .grow = 1 }` fills the screen.
@@ -148,7 +151,10 @@ half.
   On every resize it picks the **last** breakpoint whose minima the size meets (`Responsive::choose()`, a pure
   function) and calls that breakpoint's `make` only when the choice changes: a resize within a band lays the same
   layout out again, one across a band destroys it and builds the next. The layout fills the container. Nothing is
-  built before the first non-empty size, nor at a size no breakpoint's minima are met at.
+  built before the first non-empty size, nor at a size no breakpoint's minima are met at. A layout's hints must
+  not size the container into another band: breakpoints that choose each other would swap once per frame, and
+  the screen stops re-laying such a chain after eight frames (`Screen::layoutAbandoned()` says so), until a
+  resize or a changed hint asks again.
 
 ```cpp
 auto dashboard = core::tui::Responsive { {

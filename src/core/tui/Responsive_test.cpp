@@ -601,3 +601,197 @@ TEST_CASE("Layout pass: a sibling gets the right share after a Responsive swaps,
     CHECK_FALSE(box.layoutPending());
     CHECK(standalone.area() == Rect { .x = 0, .y = 0, .width = 10, .height = 2 });
 }
+
+TEST_CASE("Layout pass: a sized Responsive moved to a new parent builds once, for its new place")
+{
+    auto builds = std::array<int, 2> {};
+    auto responsive = Responsive { {
+        Breakpoint { .minColumns = 0,
+                     .minRows = 0,
+                     .make =
+                         [&builds] {
+                             ++builds[0];
+                             return std::make_unique<Panel>("Narrow");
+                         } },
+        Breakpoint { .minColumns = 60,
+                     .minRows = 0,
+                     .make =
+                         [&builds] {
+                             ++builds[1];
+                             return std::make_unique<Panel>("Wide");
+                         } },
+    } };
+    auto first = FlexBox { layout::Style {} };
+    first.setArea({ .x = 0, .y = 0, .width = 80, .height = 24 });
+    first.addChild(responsive, { .flex = layout::Style { .grow = 1 } });
+    REQUIRE(responsive.breakpoint() == 1);
+    REQUIRE(builds == std::array { 0, 1 });
+
+    SECTION("to a parent of another band: the layout of that band, and no other on the way")
+    {
+        auto second = FlexBox { layout::Style {} };
+        second.setArea({ .x = 0, .y = 0, .width = 40, .height = 10 });
+        second.addChild(responsive, { .flex = layout::Style { .grow = 1 } });
+        CHECK(responsive.breakpoint() == 0);
+        CHECK(builds == std::array { 1, 1 });
+        CHECK(responsive.area() == Rect { .x = 0, .y = 0, .width = 40, .height = 10 });
+    }
+
+    SECTION("to a parent of the same band: the layout it has, rebuilt not at all")
+    {
+        auto const* const wide = responsive.current();
+        auto second = FlexBox { layout::Style {} };
+        second.setArea({ .x = 0, .y = 0, .width = 100, .height = 30 });
+        second.addChild(responsive, { .flex = layout::Style { .grow = 1 } });
+        CHECK(responsive.current() == wide);
+        CHECK(builds == std::array { 0, 1 });
+        CHECK(responsive.area() == Rect { .x = 0, .y = 0, .width = 100, .height = 30 });
+    }
+}
+
+TEST_CASE("Layout pass: breakpoints whose layouts flip each other stop swapping after a bounded run")
+{
+    // A row: the Responsive takes its layout's preferred width. Narrow, its layout prefers 70 columns,
+    // which choose the wide breakpoint; wide, its layout prefers 30, which choose the narrow one -- the
+    // precondition Responsive documents, broken. Each frame's sweep swaps it once more.
+    auto builds = 0;
+    auto surface = HeadlessSurface { { .width = 80, .height = 10 }, [](std::string_view) {} };
+    auto screen = Screen { surface };
+    auto row = FlexBox { layout::Style {} };
+    auto responsive = Responsive { {
+        Breakpoint { .minColumns = 0,
+                     .minRows = 0,
+                     .make =
+                         [&builds] {
+                             ++builds;
+                             return std::make_unique<Panel>("Narrow", Size { .width = 70, .height = 0 });
+                         } },
+        Breakpoint { .minColumns = 60,
+                     .minRows = 0,
+                     .make =
+                         [&builds] {
+                             ++builds;
+                             return std::make_unique<Panel>("Wide", Size { .width = 30, .height = 0 });
+                         } },
+    } };
+    row.addChild(responsive, { .flex = layout::Style { .shrink = 0 } });
+    screen.root().addChild(row, { .flex = layout::Style { .grow = 1 } });
+
+    auto const drawFrames = [&screen](int count) {
+        for ([[maybe_unused]] auto const frame: std::views::iota(0, count))
+            screen.draw();
+    };
+
+    screen.draw();
+    CHECK_FALSE(screen.layoutAbandoned());
+    drawFrames(30);
+    auto const settled = builds;
+    // The first frame builds twice (its resize, then its sweep); every chained sweep after it once more.
+    CHECK(settled > 2);
+    CHECK(settled <= 2 + Screen::MaxChainedLayoutSweeps + 1);
+    CHECK(screen.layoutAbandoned());
+    drawFrames(30);
+    CHECK(builds == settled);
+    CHECK(screen.layoutAbandoned());
+
+    // Something from outside asks again: the chain runs again, and stops again.
+    surface.resize({ .width = 90, .height = 10 });
+    screen.draw();
+    CHECK_FALSE(screen.layoutAbandoned());
+    drawFrames(30);
+    auto const resettled = builds;
+    CHECK(resettled > settled);
+    CHECK(screen.layoutAbandoned());
+    drawFrames(30);
+    CHECK(builds == resettled);
+
+    // A hint changed from outside a sweep asks again too, with the viewport's size unchanged.
+    responsive.hintsChanged();
+    screen.draw();
+    CHECK_FALSE(screen.layoutAbandoned());
+    drawFrames(30);
+    auto const rehinted = builds;
+    CHECK(rehinted > resettled);
+    CHECK(screen.layoutAbandoned());
+    drawFrames(30);
+    CHECK(builds == rehinted);
+}
+
+namespace
+{
+
+/// A focusable field that counts its blurs and, in one, adds a component to its parent.
+class BlurGrowsParent final: public Component
+{
+  public:
+    BlurGrowsParent(Component& extra, int& blurs): _extra(&extra), _blurs(&blurs) {}
+
+    void render(Canvas& /*canvas*/) override {}
+    [[nodiscard]] bool focusable() const override { return true; }
+    void onBlur() override
+    {
+        ++*_blurs;
+        if (parent())
+            parent()->addChild(*_extra, { .area = { .x = 0, .y = 1, .width = 4, .height = 1 } });
+    }
+
+  private:
+    Component* _extra;
+    int* _blurs;
+};
+
+} // namespace
+
+TEST_CASE("Responsive: a swap tells the old layout's focused component it lost the focus, after the swap")
+{
+    // Run under ASan: the blur used to run inside the detach's loop over the old layout's children, where
+    // the handler's addChild() reallocated the vector being walked, and the old layout is destroyed in the
+    // same swap -- so it is retired until the layout pass is over, and the blur reaches it alive.
+    auto blurs = 0;
+    auto extra = Panel { "Extra" };
+    auto surface = HeadlessSurface { { .width = 80, .height = 24 }, [](std::string_view) {} };
+    auto screen = Screen { surface };
+    auto responsive = Responsive { {
+        Breakpoint {
+            .minColumns = 0, .minRows = 0, .make = [] { return std::make_unique<Panel>("Narrow"); } },
+        Breakpoint { .minColumns = 60,
+                     .minRows = 0,
+                     .make =
+                         [&] {
+                             auto view = std::make_unique<FlexBox>(layout::Style {});
+                             view->add(std::make_unique<BlurGrowsParent>(extra, blurs), { .grow = 1 });
+                             // A second child: the old loop read on past the first.
+                             view->add(std::make_unique<Panel>("Side"), { .grow = 1 });
+                             return view;
+                         } },
+    } };
+    screen.root().addChild(responsive, { .flex = layout::Style { .grow = 1 } });
+    screen.draw();
+    REQUIRE(responsive.breakpoint() == 1);
+    auto* const field = responsive.current()->children()[0];
+    screen.setFocus(field);
+    REQUIRE(screen.focusedComponent() == field);
+
+    surface.resize({ .width = 50, .height = 20 });
+    screen.draw();
+    CHECK(responsive.breakpoint() == 0);
+    CHECK(blurs == 1);
+    CHECK(screen.focusedComponent() == nullptr);
+    // The handler added it to the old layout, which is gone now and let it go.
+    CHECK(extra.parent() == nullptr);
+    CHECK(extra.screen() == nullptr);
+}
+
+TEST_CASE("Layout pass: a hidden flex child moved to a new parent takes an empty area at its origin")
+{
+    auto first = FlexBox { layout::Style {} };
+    first.setArea({ .x = 0, .y = 0, .width = 40, .height = 10 });
+    auto panel = Panel { "P" };
+    first.addChild(panel, { .flex = layout::Style { .grow = 1 } });
+    REQUIRE(panel.area() == Rect { .x = 0, .y = 0, .width = 40, .height = 10 });
+
+    auto second = FlexBox { layout::Style {} };
+    second.setArea({ .x = 0, .y = 0, .width = 30, .height = 5 });
+    second.addChild(panel, { .visible = false, .flex = layout::Style { .grow = 1 } });
+    CHECK(panel.area() == Rect {});
+}

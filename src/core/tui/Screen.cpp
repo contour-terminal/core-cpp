@@ -119,12 +119,18 @@ Screen::~Screen()
     // Overlays and the tree's components belong to the caller and may outlive this screen. Each
     // forgets it here, while every member is alive, so that no teardown -- theirs later, or the root's
     // among this screen's members -- reaches a destroyed screen.
-    for (auto const& entry: _overlays)
-        entry.component->setScreen(nullptr);
-    _overlays.clear();
-    // _root is declared before _overlays and the other containers, so it is destroyed after them;
-    // still attached, ~RootComponent would call back into those destroyed members.
-    _root->setScreen(nullptr);
+    // Every component that leaves focused hears onBlur() when this change closes, while every member
+    // is still alive; each has forgotten this screen by then. An onBlur() handler must not re-attach a
+    // component to this screen during that final flush (showOverlay() on it, say):
+    // the screen is being destroyed, and what it re-attached would point at a dead screen.
+    {
+        auto const change = TreeChange { this };
+        for (auto const& entry: std::exchange(_overlays, {}))
+            entry.component->setScreen(nullptr);
+        _root->setScreen(nullptr);
+    }
+    // (_root is declared before _overlays and the other containers, so it is destroyed after them;
+    // still attached, ~RootComponent would have called back into those destroyed members.)
 
     if (_enteredAlternateScreen)
     {
@@ -399,18 +405,41 @@ void Screen::beginFrame()
 
 void Screen::layoutRoot()
 {
+    // One tree change for the whole pass: a blur a swap queues is delivered after it, not inside a loop.
+    auto const change = TreeChange { this };
+
     // The root's area is the viewport's size at the origin: its children's areas are relative to the
     // viewport, which renderTree() offsets them by. setArea() lays the tree out only when the size changed.
+    // A resize takes up a chain that was abandoned.
     auto const viewport = viewportArea();
-    _root->setArea({ .x = 0, .y = 0, .width = viewport.width, .height = viewport.height });
+    auto const rootArea = Rect { .x = 0, .y = 0, .width = viewport.width, .height = viewport.height };
+    if (_root->area() != rootArea)
+        _chainedLayoutSweeps = 0;
+    _root->setArea(rootArea);
 
     // One sweep: a mark made during it (a Responsive the sweep resized swapping its layout) is the next
     // frame's, so a layout whose hints chase its size settles a frame at a time rather than looping here.
-    if (_layoutRequested == LayoutRequest::Pending)
+    switch (_layoutRequested)
     {
-        _layoutRequested = LayoutRequest::None;
-        relayoutMarked(*_root);
+        case LayoutRequest::None:
+            if (!layoutAbandoned())
+                _chainedLayoutSweeps = 0;
+            return;
+        case LayoutRequest::Pending: _chainedLayoutSweeps = 0; break;
+        case LayoutRequest::Chained:
+            // Past the bound the chain does not settle: the marks stay where they are, and the layout as
+            // it is, until something from outside -- a resize, a hint changed -- asks again.
+            if (++_chainedLayoutSweeps > MaxChainedLayoutSweeps)
+            {
+                _layoutRequested = LayoutRequest::None;
+                return;
+            }
+            break;
     }
+    _layoutRequested = LayoutRequest::None;
+    _layoutSweep = LayoutSweep::Running;
+    relayoutMarked(*_root);
+    _layoutSweep = LayoutSweep::Idle;
 }
 
 void Screen::relayoutMarked(Component& component)
@@ -544,9 +573,9 @@ void Screen::hideOverlay(Component& overlay)
 
     if (it != _overlays.end())
     {
-        it->component->setScreen(nullptr);
         _overlays.erase(it);
         invalidate();
+        overlay.setScreen(nullptr);
     }
 }
 
@@ -1017,7 +1046,19 @@ EventResult Screen::dispatchPress(Component* target, InputEvent const& event)
     return EventResult::Ignored;
 }
 
-void Screen::componentDetached(Component& component) noexcept
+void Screen::componentDetached(Component& component)
+{
+    // A focused component hears onBlur() once the tree change it leaves in closes (endTreeChange()).
+    // Queued first: push_back() may throw, and then nothing here has changed yet.
+    if (component._focused && !component._blurQueuedOn)
+    {
+        _pendingBlurs.push_back(&component);
+        component._blurQueuedOn = this;
+    }
+    forgetComponent(component);
+}
+
+void Screen::forgetComponent(Component& component) noexcept
 {
     if (_pointerCapture == &component)
         _pointerCapture = nullptr;
@@ -1036,9 +1077,45 @@ void Screen::componentDetached(Component& component) noexcept
 
 void Screen::componentDestroyed(Component& component) noexcept
 {
-    componentDetached(component);
+    // Its derived part is gone: it loses its focus with no blur queued, so nothing here allocates.
+    forgetComponent(component);
     std::erase_if(_overlays,
                   [&component](OverlayEntry const& entry) { return entry.component == &component; });
+}
+
+void Screen::endTreeChange()
+{
+    if (--_treeChanges > 0)
+        return;
+    // Held open while the blurs run: what a handler changes queues behind them rather than recursing.
+    ++_treeChanges;
+    while (!_pendingBlurs.empty() || !_retired.empty())
+    {
+        // One at a time from the front: a handler may destroy a component still waiting, which takes it
+        // out of the list (forgetQueuedBlur()).
+        while (!_pendingBlurs.empty())
+        {
+            auto* const component = _pendingBlurs.front();
+            _pendingBlurs.erase(_pendingBlurs.begin());
+            component->_blurQueuedOn = nullptr;
+            component->onBlur();
+        }
+        // Retired components have left every screen, so destroying them queues nothing here.
+        std::exchange(_retired, {}).clear();
+    }
+    --_treeChanges;
+}
+
+void Screen::forgetQueuedBlur(Component& component) noexcept
+{
+    std::erase(_pendingBlurs, &component);
+    component._blurQueuedOn = nullptr;
+}
+
+void Screen::retire(std::unique_ptr<Component> component)
+{
+    auto const change = TreeChange { this };
+    _retired.push_back(std::move(component));
 }
 
 int Screen::pollTimeoutMs() const

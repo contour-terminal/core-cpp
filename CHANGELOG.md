@@ -24,10 +24,14 @@ workflow refuses one without a section here.
   Code that read `root().area()` and expected it empty, or used it as "no layout yet", must stop. Consumers
   grepped: none reads it (endo places its children by hand and never asks the root's area).
 - **A component leaving a `Screen` loses its focus and its hover there.** `Screen` forgets a detached component
-  as the focus of every group (without an `onBlur()`, since it may be mid-destruction) and ends a hover on it,
-  hiding its tooltip -- before, only the pointer capture was forgotten, and a removed focused component kept
-  receiving keys. A consumer that removes the focused component and re-adds it must focus it again. Consumers
-  grepped: endo removes no focused component from a live screen.
+  as the focus of every group and ends a hover on it, hiding its tooltip -- before, only the pointer capture was
+  forgotten, and a removed focused component kept receiving keys. A living component that leaves focused --
+  `hideOverlay()`, `removeChild()`, an ancestor removed or destroyed around it, a `Responsive` swapping its layout
+  out -- hears `onBlur()`, so an input that commits on blur commits; one being destroyed does not, its derived part
+  being gone. The call is deferred until the change it left in is over (the outermost `removeChild()`,
+  `clearChildren()`, `hideOverlay()` or layout pass), never inside a loop over a parent's children, so a handler
+  may change the tree; a `Responsive` keeps its old layout alive until then. A consumer that removes the focused component and re-adds it must focus it again.
+  Consumers grepped: endo removes no focused component from a live screen.
 
 - **`core::tui::ScreenConfig`'s two `bool`s are enumerations.** `inhibitReflow` is `reflow`, a `DiffReflow`
   (`Keep`, the default, or `Inhibit`, the frame diff's own option it was always translated into), and
@@ -111,7 +115,11 @@ workflow refuses one without a section here.
   `onResize(Size)` hook, see Breaking); a child whose size hints changed calls `hintsChanged()`, and the screen
   lays its parent out again once before the next frame. `FlexBox` is a container that owns what it lays out. `Responsive` takes a
   `std::vector<Breakpoint>` (`minColumns`, `minRows`, `make`) at construction and builds the layout of the last
-  breakpoint the size meets, only when that choice changes. `Screen` now sizes its root to the viewport on every
+  breakpoint the size meets, only when that choice changes; its layouts' hints must not size it into another band,
+  and the screen stops re-laying a chain of such swaps after `Screen::MaxChainedLayoutSweeps` (8) frames rather
+  than swapping once per frame for ever, which `Screen::layoutAbandoned()` reports until a resize or a changed
+  hint. A flex child added to a parent keeps its area until that parent's pass places it, so a sized `Responsive`
+  moved to a new parent builds only for its new size; a hidden one takes an empty area at the new parent's origin. `Screen` now sizes its root to the viewport on every
   frame and `ResizeEvent`, so `screen.root().area()` is the viewport's size at the origin rather than empty.
   Children added without a `flex` item are untouched, so existing trees lay out as before. `LayoutParams::area` gained
   a default member initializer, so a designated initializer may now omit it. Consumers grepped: endo has no

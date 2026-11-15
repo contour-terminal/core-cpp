@@ -33,6 +33,13 @@ struct Breakpoint
 ///
 /// Nothing is built before the container has a size other than 0×0, and nothing is shown at a size no
 /// breakpoint's minima are met at.
+///
+/// **Precondition:** a layout's hints must not size the container into another band. The container's
+/// size comes from its parent, which reads the layout's preferredSize() and minSize(); a narrow layout
+/// that prefers to be wide, while the wide one prefers to be narrow, would swap the two once per frame
+/// for ever. The screen stops re-laying such a chain after a bounded number of frames
+/// (Screen's MaxChainedLayoutSweeps), leaving whichever layout it reached, until a resize or a changed
+/// hint asks again. A chain that settles, one Responsive's swap resizing another once, ends long before.
 class Responsive final: public Component
 {
   public:

@@ -54,11 +54,10 @@ void Responsive::onResize(Size size)
         return;
 
     _chosen = next;
+    // Retired rather than destroyed here: a focused component in it hears onBlur() once the change
+    // closes, while it is still alive.
     if (_current)
-    {
-        removeChild(*_current);
-        _current.reset();
-    }
+        retireChild(std::move(_current));
     if (next && _breakpoints[*next].make)
         _current = _breakpoints[*next].make();
     // Basis 0 and grow 1: the layout fills the container whatever its own preferred size.
