@@ -40,6 +40,19 @@ that found Catch2, and nothing that links Tracy unless Tracy was found. A distri
 core-cpp provides these through `find_package()` (`CMAKE_PREFIX_PATH`), and `CORE_CPP_FETCH_DEPS=OFF`
 makes a missing one a configure error rather than a smaller install.
 
+## Shared libraries
+
+A build configured with `CORE_CPP_BUILD_SHARED=ON` installs shared libraries (`.so`, `.dylib`, DLLs and
+their import libraries), and the installed package is shared: `core::net` is the library, and a
+consumer's DLL and its executable that both link it share one copy of core-cpp's process and thread
+state. Each library's headers include a generated `<Name>Export.hpp` (`core/BaseExport.hpp`,
+`core/log/LogExport.hpp`, ...) that says whether the symbols it marks are exported or imported, so a
+consumer defines nothing. A static build installs static libraries, and its headers mark nothing.
+`core::testing` and `core::testing_main` are static in either.
+
+On Windows the DLLs are installed to `${CMAKE_INSTALL_BINDIR}`, which the consumer's executable must
+find at run time: next to it, or on `PATH`.
+
 ## What the package re-finds
 
 `core-cppConfig.cmake` calls `find_dependency()` for each row of

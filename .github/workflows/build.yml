@@ -365,6 +365,11 @@ jobs:
       matrix:
         include:
           - { name: clang-22, os: ubuntu-24.04, preset: clang-debug, compiler: clang }
+          # core-cpp built as shared libraries (CORE_CPP_BUILD_SHARED), hidden visibility: a function
+          # or a piece of state a module forgot to export fails to link here, not only on Windows.
+          # Its own cases (core-cpp.shared-state) prove one copy of the per-process and per-thread
+          # state across a shared-library boundary, which no static leg can.
+          - { name: clang-22-shared, os: ubuntu-24.04, preset: clang-debug-shared, compiler: clang }
           - { name: gcc-14, os: ubuntu-24.04, preset: gcc-release, compiler: gcc, gcc: "14" }
           # GCC with assertions ON. clang-debug covers Linux Debug for clang and gcc-release covers
           # GCC's codegen, but neither covers their intersection -- and the intersection is where a
@@ -573,7 +578,11 @@ jobs:
         # clang-cl defines `__clang__` without `__GNUC__`, and its depfile path is the one
         # fastcached#1531 breaks. An assertion reachable only under clang-cl's codegen was
         # compiled out of clangcl-release and never compiled by cl-debug.
-        preset: [cl-release, clangcl-release, cl-debug, clangcl-debug, cl-release-tls]
+        #
+        # cl-release-shared builds core-cpp as DLLs (CORE_CPP_BUILD_SHARED): the platform where an
+        # unexported symbol is a link error by default, and where a DLL and its executable each get
+        # their own copy of any state a header defines inline.
+        preset: [cl-release, clangcl-release, cl-debug, clangcl-debug, cl-release-tls, cl-release-shared]
         # cl-release-arm64 is here because it is the only place one miscompile can be seen
         # (fastcached#1546): MSVC 19.44's ARM64 code generator drops the enclosing `try` of a
         # `co_await` on a temporary awaiter whose `await_ready` makes a call, so an
