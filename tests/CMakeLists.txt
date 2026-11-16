@@ -698,7 +698,9 @@ set_tests_properties(core-cpp.format-scripts-selftest PROPERTIES
 #
 # Bounds: the mismatch builds one translation unit and fails at link, 10s measured on cl-debug; the
 # smoke is a loopback round trip, well under a second. 300 and 120 leave room for a cold runner.
-if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+# Static libraries only: a program linking core-cpp's DLLs links their import libraries, which record
+# no C runtime, so there is no mismatch to refuse (and CORE_CPP_BUILD_SHARED refuses the twins).
+if((MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC") AND NOT CORE_CPP_BUILD_SHARED)
     set(_coreCppStaticCrt "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
     add_executable(core-cpp-static-crt-mismatch EXCLUDE_FROM_ALL StaticCrtSmoke.cpp)
