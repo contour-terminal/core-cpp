@@ -52,9 +52,11 @@ others in notes.
 | `cmake/FetchTransferBound.cmake` | LASTRADA-Software/fastcached | `cmake/FetchTransferBound.cmake` | `892df2b1b79134a02bf3925cb7a2cc251eb35822` | verbatim; re-synced together with `CompileCache.cmake` (`cmake/portable/README.md`) |
 | `cmake/portable/CompileCache.cmake` | LASTRADA-Software/fastcached | `cmake/portable/CompileCache.cmake` | `46b563b064fcdc1650f547b52f083bdb5089f871` | verbatim; the repository is now LASTRADA-Software/pace (renamed in v0.6.0), which GitHub redirects to |
 | `cmake/portable/README.md` | origin: core-cpp | - | - | documents the two verbatim files above |
+| `src/core/Assert.cpp` | origin: core-cpp | - | - | the process-wide fail handler, out of line so that a shared build has one for every image that links it |
 | `src/core/Assert.hpp` | contour-terminal/contour | `src/crispy/Assert.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | `Require`/`Guarantee`/`todo`/`unreachable`/`setFailHandler`; `fatal`/`SoftRequire` split out to `src/core/log/Assert.hpp` to close a base→log layering cycle; `fail()` has no try block (noexcept already ends the process on a throwing handler) and `throwOrFail()` is added, so the header compiles with exceptions off (core-cpp, U.4) |
 | `src/core/Base64.hpp` | contour-terminal/contour | `src/crispy/Base64.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | post-import fix (Task A9): `decodeLength()` stops at the table's 64 sentinel rather than at its size, so it measures the base64 prefix; `decode()`'s index lambda no longer copies the 256-byte table per call |
 | `src/core/Base64_test.cpp` | contour-terminal/contour | `src/crispy/Base64_test.cpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | post-import additions (Task A9): `decodeLength()`'s cases |
+| `src/core/Clock.cpp` | origin: core-cpp | - | - | `defaultSteadyClock()`'s instance, out of line for the same reason |
 | `src/core/Clock.hpp` | contour-terminal/endo | `src/platform/Clock.hpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the steady half of `src/core/platform/Clock.hpp` (`IClock`, `SteadyClock`, `ManualClock`, `defaultSteadyClock()`, the steady time types), moved into `core::base` in U.5 so the headless TUI takes the same seam; `core/platform/Clock.hpp` names them by using-declarations |
 | `src/core/Clock_test.cpp` | contour-terminal/endo | `src/platform/Clock_test.cpp` | `f774a210ce989e5947b8f61d715068b1dc96088c` | the steady-clock cases of `src/core/platform/Clock_test.cpp`, moved with the header (U.5) |
 | `src/core/CMakeLists.txt` | origin: core-cpp | - | - | - |
@@ -201,6 +203,7 @@ others in notes.
 | `src/core/net/SshKeys.cpp` | origin: core-cpp | - | - | OpenSSH public keys, `authorized_keys` lines and SSHSIG verification over OpenSSL EVP (PROTOCOL.sshsig, PROTOCOL.u2f, RFC 8709, RFC 5656) |
 | `src/core/net/SshKeys.hpp` | origin: core-cpp | - | - | the OpenSSH key and SSHSIG vocabulary, with no OpenSSL type |
 | `src/core/net/SshKeys_test.cpp` | origin: core-cpp | - | - | held against `ssh-keygen`-made fixtures in `testdata/ssh/` and, for `sk-` keys, `testing::SoftwareSecurityKey`; truncated and oversized length fields |
+| `src/core/net/detail/ReadyBatch.cpp` | origin: core-cpp | - | - | the per-thread readiness-dispatch depth, defined once in the library |
 | `src/core/net/detail/SshAgentEndpoint.hpp` | origin: core-cpp | - | - | the platform half of the ssh-agent client: dialling an endpoint |
 | `src/core/net/detail/SshWire.hpp` | origin: core-cpp | - | - | the bounds-checked SSH wire reader and writer (RFC 4251 §5) `SshKeys.cpp` and the software security key share |
 | `src/core/net/posix/SshAgentEndpoint.cpp` | origin: core-cpp | - | - | the ssh-agent endpoint on POSIX: SSH_AUTH_SOCK, dialled as a Unix socket |
@@ -220,6 +223,7 @@ others in notes.
 | `src/core/net/windows/SshAgentEndpoint.cpp` | origin: core-cpp | - | - | the ssh-agent endpoint on Windows: the Win32-OpenSSH pipe, dialled with connectNamedPipe |
 | `src/core/net/windows/SshAgentEndpoint_test.cpp` | origin: core-cpp | - | - | defaultSshAgentEndpoint naming the Win32-OpenSSH pipe |
 | `src/core/PosixRandom.cpp` | origin: core-cpp | - | - | `getentropy()` in chunks of at most 256 bytes: Linux, Apple, the BSDs, illumos and Emscripten; its header is chosen by `__has_include(<sys/random.h>)` (Apple, illumos), else `<unistd.h>` |
+| `src/core/platform/Clock.cpp` | origin: core-cpp | - | - | `defaultSystemWallClock()`'s instance, out of line so that a shared build has one |
 | `src/core/testing/windows/SuppressWindowsDialogs_test.cpp` | origin: core-cpp | - | - | 0.3.0: reads back from WerGetFlags that suppressWindowsDialogs() asked Windows Error Reporting for no UI |
 | `src/core/net/CallbackAllocation_test.cpp` | origin: core-cpp | - | - | 0.3.0 review: a drain-step callback that queues nothing costs no allocation, measured by replacing the global allocation functions, which is why it is a binary of its own |
 | `src/core/net/CompletionClaim_test.cpp` | origin: core-cpp | - | - | 0.4.0: the claim a frame-free completion queues for a chain nobody owns -- counted, armed, holding no reference -- and its free at teardown and take-back; a `[bench]` case for the completion path |

@@ -53,6 +53,7 @@ set(_coreCppNetSubset
     detail/CompletionHook.hpp
     detail/ParkId.hpp
     detail/ParkTable.hpp
+    detail/ReadyBatch.cpp
     detail/ReadyBatch.hpp
     detail/RingQueue.hpp
     detail/ScopeGuard.hpp
