@@ -302,13 +302,6 @@ function(core_cpp_make_shared target exportMacro)
         VERSION "${core-cpp_VERSION}"
         SOVERSION "${core-cpp_VERSION_MAJOR}.${core-cpp_VERSION_MINOR}")
     target_compile_definitions(${target} PRIVATE "${exportMacro}_BUILDING")
-    if(CORE_CPP_MSVC_DRIVER)
-        # C4251 and C4275: a standard-library member of an exported class has no DLL interface of
-        # its own. Every consumer of this DLL links the one standard library the DLL does -- the
-        # shared CRT, which is the only one a DLL boundary can carry safely -- so the warning names
-        # a hazard that does not exist here.
-        target_compile_options(${target} PRIVATE /wd4251 /wd4275)
-    endif()
 endfunction()
 
 ## @brief Generates the export header of the compiled target @p name of module @p module and sets

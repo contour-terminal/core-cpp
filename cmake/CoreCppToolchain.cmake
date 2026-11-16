@@ -77,10 +77,17 @@ set(CORE_CPP_WINDOWS_DEFINITIONS NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A0
 #       clang 22 classifies as a C2y extension under -Wpedantic. The expansion lands
 #       in the test's own source, so Catch2 being a SYSTEM include does not hide it.
 #       fastcached measured the same finding (PedanticCompiler.cmake at eb9c9c68).
+#   /wd4251 /wd4275: a standard-library member, or an unexported base, of a class exported
+#       from a CORE_CPP_BUILD_SHARED DLL has no DLL interface of its own. Every image on either
+#       side of the boundary links the one shared CRT the DLL does -- the only standard library a
+#       DLL boundary can carry safely -- so the warning names a hazard that does not exist here.
+#       It fires in every translation unit that includes such a class, not only in the DLL's.
 set(CORE_CPP_PEDANTIC_TABLE
     "CORE_CPP_GNU_DRIVER|-Wall"
     "CORE_CPP_MSVC_DRIVER|/W4"
     "CORE_CPP_MSVC_DRIVER|/Zc:inline"
+    "CORE_CPP_MSVC_DRIVER|/wd4251"
+    "CORE_CPP_MSVC_DRIVER|/wd4275"
     "CORE_CPP_GCC_OR_CLANG|-Wextra"
     "CORE_CPP_GCC_OR_CLANG|-Wpedantic"
     "CORE_CPP_GCC_OR_CLANG|-Wconversion"
