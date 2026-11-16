@@ -51,8 +51,9 @@ src/core/
                             detail/ posix/ linux/ windows/ are private; testing/ holds the fakes
                             (InMemoryFileSystem, MockFileInfoProvider, TestProcessEnvironment,
                             TestWorkingDirectory)
-  async/                    core::async, header-only: StopToken (std:: or the fallback); Task,
-                            UniqueCoroHandle, Cancellation, Awaitable, whenAll/whenAny (contour);
+  async/                    core::async, headers but for two sources that own thread-local state:
+                            StopToken (std:: or the fallback); Task, UniqueCoroHandle,
+                            Cancellation, Awaitable, whenAll/whenAny (contour);
                             executors, AsyncQueue (planned, B1)
   net/                      core::net_types (NetError, IoResult; header-only, everywhere),
                             core::net (EventLoop over IoBackend, which DISPATCHES readiness to

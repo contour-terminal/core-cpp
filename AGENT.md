@@ -18,7 +18,7 @@ is [the plan](docs/superpowers/plans/2026-09-18-core-cpp.md).
 | cli | `core::cli` | `core::cli` | base, log |
 | codec | `core::codec` | `core::codec` | base |
 | platform | `core::platform` | `core::platform` | base, log |
-| async | `core::async` | `core::async` (INTERFACE) | Threads |
+| async | `core::async` | `core::async` (headers, and two sources for thread-local state) | Threads |
 | net | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | async, platform |
 | tui | `core::tui` | `core::tui_output`, `core::tui_core`, `core::tui` | base (leaf); + tui_output, libunicode (headless `tui_core`); + platform, async, net (`tui`) |
 | testing | `core::testing` | `core::testing`, `core::testing_dialogs`, `core::testing_main` | base; log and Catch2 for `testing_main` |

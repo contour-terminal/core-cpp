@@ -12,7 +12,7 @@ namespace is its directory (`src/core/net/` is `core::net`; headers directly in 
 | [cli](cli.md) | `core::cli` | `core::cli` | static | base, log | available |
 | [codec](codec.md) | `core::codec` | `core::codec` | static | base | available |
 | [platform](platform.md) | `core::platform` | `core::platform` | static | base, log | available |
-| [async](async.md) | `core::async` | `core::async` | header-only | Threads | `StopToken`, `Task`, `whenAll`, `whenAny`, `DetachedTask`, `syncRun`, `ParkedWork`, `IExecutor`, `ResumeOn`, `ThreadPoolExecutor` and `AsyncQueue` |
+| [async](async.md) | `core::async` | `core::async` | static (shared with `CORE_CPP_BUILD_SHARED`); nearly all headers | Threads | `StopToken`, `Task`, `whenAll`, `whenAny`, `DetachedTask`, `syncRun`, `ParkedWork`, `IExecutor`, `ResumeOn`, `ThreadPoolExecutor` and `AsyncQueue` |
 | [net](net.md) | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | header-only, static, static | async, platform; OpenSSL for `net_tls` | contour's event loop, sockets, TLS and HTTP server available; the merge with fastcached's: Tasks B2 to B11 |
 | [tui](tui.md) | `core::tui` | `core::tui_output`, `core::tui` | static | `tui_output`: base; `tui`: also platform, async, net, libunicode, stb (optional) | endo's terminal UI available, native only; its runtime is composed on `core::net::EventLoop` (Task B12) |
 | [testing](testing.md) | `core::testing` | `core::testing`, `core::testing_dialogs`, `core::testing_main` | static, object, static | base; log and Catch2 for `testing_main` | available |
