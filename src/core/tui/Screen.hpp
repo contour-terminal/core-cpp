@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <core/Clock.hpp>
+#include <core/Defines.hpp>
+#include <core/tui/Box.hpp>
 #include <core/tui/Buffer.hpp>
 #include <core/tui/Component.hpp>
 #include <core/tui/CursorShape.hpp>
+#include <core/tui/FrameDiff.hpp>
 #include <core/tui/HoverState.hpp>
 #include <core/tui/Theme.hpp>
 #include <core/tui/Tooltip.hpp>
@@ -15,7 +19,7 @@
 namespace core::tui
 {
 
-class Terminal;
+class ScreenSurface;
 
 /// Viewport mode for the screen.
 enum class Viewport : uint8_t
@@ -44,19 +48,31 @@ enum class UnscrollMode : uint8_t
     Disabled, ///< Never use unscroll (fallback to clearing rows).
 };
 
+/// Which of the terminal's screen buffers a Screen draws on.
+enum class ScreenBuffer : uint8_t
+{
+    Primary, ///< The buffer the shell was on, scrollback and all (default).
+    /// The alternate screen buffer (DEC private mode 1049), entered for the lifetime of the Screen
+    /// and left on destruction, which restores the primary buffer and the user's scrollback.
+    /// Intended for full-screen apps with @c Viewport::Fullscreen.
+    Alternate,
+};
+
 /// Configuration for the Screen.
+///
+/// Every enumeration here is zero for its default, so a zero-initialized configuration is the
+/// default one.
 struct ScreenConfig
 {
     Viewport viewport = Viewport::Fullscreen;
     Rect fixedArea {};                              ///< For Viewport::Fixed.
     int inlineMaxHeight = 0;                        ///< For Viewport::Inline (0 = no limit).
     UnscrollMode unscrollMode = UnscrollMode::Auto; ///< Unscroll behavior for inline mode.
-    bool inhibitReflow = false;                     ///< Disable text reflow (DEC 2028) on rendered lines.
-
-    /// Switch to the terminal's alternate screen buffer (DEC private mode 1049) for the
-    /// lifetime of the Screen, restoring the primary buffer (and the user's scrollback) on
-    /// destruction. Intended for full-screen apps with @c Viewport::Fullscreen.
-    bool alternateScreen = false;
+    /// Whether rendered lines turn text reflow (DEC 2028) off: @c DiffReflow::Inhibit writes the
+    /// reset at the start of each row the inline viewport draws. The frame diff's own option.
+    DiffReflow reflow = DiffReflow::Keep;
+    ScreenBuffer screenBuffer = ScreenBuffer::Primary; ///< The terminal buffer drawn on.
+    BorderStyle tooltipBorder = BorderStyle::Single;   ///< The frame of the hover tooltip the screen shows.
 };
 
 /// Cursor movement calculations for inline rendering.
@@ -96,6 +112,10 @@ struct InlineCursorMovement
 /// MyComponent myComp;
 /// screen.root().addChild(myComp, {.area = {0, 0, 40, 10}});
 ///
+/// // Or let the layout pass size it: the root is the viewport, laid out as a row,
+/// // and a child with a flex item that grows fills it on every resize.
+/// screen.root().addChild(myComp, {.flex = layout::Style {.grow = 1}});
+///
 /// // Main loop
 /// while (running) {
 ///     screen.draw();  // Render and flush
@@ -106,10 +126,16 @@ struct InlineCursorMovement
 class Screen
 {
   public:
-    /// Constructs a Screen attached to the given terminal.
-    /// @param terminal The terminal for input/output.
+    /// Constructs a Screen that draws on the given surface.
+    /// @param surface What the screen draws on (a @c Terminal on a real terminal); must outlive it.
     /// @param config Optional configuration.
-    explicit Screen(Terminal& terminal, ScreenConfig config = {});
+    /// @param clock The clock hover delays are measured on (not owned; must outlive the screen).
+    explicit Screen(ScreenSurface& surface,
+                    ScreenConfig config = {},
+                    IClock const& clock CORE_LIFETIMEBOUND = defaultSteadyClock());
+
+    /// A clock is kept, not copied: a temporary would dangle, so an rvalue clock is refused.
+    Screen(ScreenSurface& surface, ScreenConfig config, IClock const&& clock) = delete;
 
     ~Screen();
 
@@ -230,12 +256,12 @@ class Screen
     /// Moves focus to the previous focusable component in the active group.
     void focusPrev();
 
-    // --- Terminal Access ---
+    // --- Surface Access ---
 
-    /// Returns the terminal.
-    [[nodiscard]] Terminal& terminal() noexcept { return _terminal; }
+    /// Returns the surface this screen draws on.
+    [[nodiscard]] ScreenSurface& surface() noexcept { return _surface; }
 
-    [[nodiscard]] Terminal const& terminal() const noexcept { return _terminal; }
+    [[nodiscard]] ScreenSurface const& surface() const noexcept { return _surface; }
 
     // --- Overlay System ---
 
@@ -331,10 +357,23 @@ class Screen
     /// Returns the last-rendered buffer (for testing). Valid after draw().
     [[nodiscard]] Buffer const& renderedBuffer() const noexcept { return _previous; }
 
+    /// The most frames in a row whose layout sweep only the previous frame's sweep asked for. Settling takes
+    /// a frame per level of Responsive whose hints its own size moves; a chain longer than this is
+    /// breakpoints whose choices flip each other (see Responsive), which would swap once per frame forever.
+    static constexpr int MaxChainedLayoutSweeps = 8;
+
+    /// Whether the layout stopped re-laying a chain of sweeps past MaxChainedLayoutSweeps: the tree is left
+    /// as the last sweep put it. A resize, or a hint changed from outside a sweep, takes it up again.
+    /// @return True from the frame the chain was abandoned until the next such change.
+    [[nodiscard]] bool layoutAbandoned() const noexcept
+    {
+        return _chainedLayoutSweeps > MaxChainedLayoutSweeps;
+    }
+
   private:
     friend class Component;
 
-    Terminal& _terminal;
+    ScreenSurface& _surface;
     ScreenConfig _config;
     Theme _theme;
     RenderMode _renderMode = RenderMode::Diff;
@@ -378,10 +417,96 @@ class Screen
 
     std::vector<OverlayEntry> _overlays;
 
+    // Deferred blurs. A component that leaves this screen focused hears onBlur() -- but not from inside
+    // the detach: the detach runs in loops over a parent's children (setScreen(), clearChildren(), a
+    // layout pass), where a handler that adds or removes a sibling would reallocate the vector being
+    // walked. Every such loop holds a TreeChange open; the components that lost their focus wait in
+    // _pendingBlurs, and the outermost TreeChange to close calls them, then destroys what was retired.
+
+    /// Holds a tree change on @p screen open for its lifetime; the outermost one to close delivers the
+    /// deferred blurs. A null screen holds nothing.
+    class TreeChange
+    {
+      public:
+        explicit TreeChange(Screen* screen) noexcept: _screen(screen)
+        {
+            if (_screen)
+                ++_screen->_treeChanges;
+        }
+        ~TreeChange()
+        {
+            if (_screen)
+                _screen->endTreeChange();
+        }
+        TreeChange(TreeChange const&) = delete;
+        TreeChange& operator=(TreeChange const&) = delete;
+        TreeChange(TreeChange&&) = delete;
+        TreeChange& operator=(TreeChange&&) = delete;
+
+      private:
+        Screen* _screen;
+    };
+
+    /// Closes one tree change; the outermost calls onBlur() of each component in _pendingBlurs, in the
+    /// order they left, and then destroys what retire() was handed -- until neither has anything left.
+    void endTreeChange();
+
+    /// Forgets a component waiting for its onBlur(): it is being destroyed, or is being focused again
+    /// and hears it now.
+    /// @param component The component waiting.
+    void forgetQueuedBlur(Component& component) noexcept;
+
+    /// Keeps a component that left the tree alive until the open tree change closes, so that a blur
+    /// queued for it, or for one of its children, reaches a living object. Destroys it at once when no
+    /// change is open.
+    /// @param component The component, already removed from its parent.
+    void retire(std::unique_ptr<Component> component);
+
+    int _treeChanges = 0;                             ///< How many TreeChange are open.
+    std::vector<Component*> _pendingBlurs;            ///< Left focused, onBlur() not yet called.
+    std::vector<std::unique_ptr<Component>> _retired; ///< Destroyed when the tree change closes.
+
     // Hover and Tooltip state
     HoverState _hoverState;
     Tooltip _tooltip;
     bool _tooltipVisible = false;
+
+    /// Sizes the root to the viewport, which lays out the children added with a flex item, then lays out
+    /// again the children of every component a child's hintsChanged() marked.
+    void layoutRoot();
+
+    /// Called by a component whose child's hints changed: the next layoutRoot() sweeps the tree for it.
+    /// A mark made while a sweep runs is that sweep's consequence, and is counted as such.
+    void layoutRequested() noexcept
+    {
+        _layoutRequested =
+            _layoutSweep == LayoutSweep::Running ? LayoutRequest::Chained : LayoutRequest::Pending;
+    }
+
+    /// Lays out again, depth first, the children of each component in @p component's subtree marked by a
+    /// child's hintsChanged().
+    static void relayoutMarked(Component& component);
+
+    /// Whether some component on this screen was marked by a child's hintsChanged(), and by what.
+    enum class LayoutRequest : std::uint8_t
+    {
+        None,    ///< Nothing marked.
+        Pending, ///< Marked from outside a sweep: a resize, a component changing its own hints.
+        Chained, ///< Marked by the previous frame's sweep alone, as a Responsive it resized swapped.
+    };
+    LayoutRequest _layoutRequested = LayoutRequest::None;
+
+    /// Whether layoutRoot() is sweeping the tree, so that a mark made now is known as the sweep's own.
+    enum class LayoutSweep : std::uint8_t
+    {
+        Idle,
+        Running,
+    };
+    LayoutSweep _layoutSweep = LayoutSweep::Idle;
+
+    /// How many frames in a row have swept for a Chained request alone; past MaxChainedLayoutSweeps, the
+    /// chain was abandoned, until a resize or a mark from outside a sweep sets it back to zero.
+    int _chainedLayoutSweeps = 0;
 
     // Rendering phases
     void beginFrame();
@@ -436,15 +561,26 @@ class Screen
     [[nodiscard]] EventResult dispatchPress(Component* target, InputEvent const& event);
 
     /// @brief Called by a component that leaves this screen -- removed from the tree, directly or with
-    /// an ancestor, or hidden as an overlay -- so that no capture outlives its place on the screen.
+    /// an ancestor, or hidden as an overlay -- so that nothing here outlives its place on the screen: the
+    /// pointer capture, the press target, the focus of every group it held and the hover on it. A focused
+    /// one is queued for its onBlur(), delivered when the open tree change closes (endTreeChange()).
+    ///
+    /// Not noexcept: queueing the blur may allocate. It queues before it forgets anything, so a throw
+    /// leaves the screen and the component as they were (Component::setScreen() then leaves _screen as
+    /// it was, too).
     /// @param component The component leaving.
-    void componentDetached(Component const& component) noexcept;
+    void componentDetached(Component& component);
+
+    /// @brief What componentDetached() does but queue a blur: forgets every reference this screen holds
+    /// to @p component and clears its focus. Allocates nothing, so a destructor may call it.
+    /// @param component The component leaving or being destroyed.
+    void forgetComponent(Component& component) noexcept;
 
     /// @brief Called by a component this screen still knows when it is destroyed: what
     /// componentDetached() does, and an overlay that was never hidden leaves the overlay list, so
     /// nothing draws, hit-tests or detaches it after it is gone.
     /// @param component The component being destroyed.
-    void componentDestroyed(Component const& component) noexcept;
+    void componentDestroyed(Component& component) noexcept;
 
     // Focus helpers
     static void updateFocus(Component* oldFocus, Component* newFocus);

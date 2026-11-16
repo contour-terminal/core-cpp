@@ -131,7 +131,7 @@ set(CORE_CPP_HYGIENE_namespace-directory_REASON
     "a source's first namespace is the one its whole directory path names, in lowercase: src/core/<dir>/ is core::<dir> and src/core/<dir>/<sub>/ is core::<dir>::<sub>, bar the platform and detail directories, which are layout; src/core/ is core (Part I §1)")
 set(CORE_CPP_HYGIENE_NAMESPACE_REGEX "^[ \t]*(inline[ \t]+)?namespace[ \t]+([A-Za-z_][A-Za-z0-9_:]*)([ \t{/].*)?$")
 set(CORE_CPP_HYGIENE_NAMESPACE_ALIAS_REGEX "^[ \t]*namespace[ \t]+[A-Za-z0-9_:]+[ \t]*=")
-set(CORE_CPP_HYGIENE_PRIVATE_DIRECTORIES bsd darwin detail emscripten linux posix windows)
+set(CORE_CPP_HYGIENE_PRIVATE_DIRECTORIES bsd darwin detail emscripten linux portable posix windows)
 # One forward declaration, as a namespace-directory forward block may hold only these.
 set(CORE_CPP_HYGIENE_FORWARD_DECLARATION_REGEX
     "(class|struct|union|enum([ \t]+(class|struct))?)[ \t]+[A-Za-z_][A-Za-z0-9_]*([ \t]*:[ \t]*[A-Za-z_][A-Za-z0-9_:]*)?[ \t]*;")
@@ -178,6 +178,8 @@ core_cpp_hygiene_allow(source-glob tests/cmake/check-install.cmake
     "enumerates the headers an install produced, to resolve their includes; it is not a source list")
 core_cpp_hygiene_allow(source-glob tests/cmake/check-read-buffer-guard.cmake
     "derives the set of ISocket::read definitions from the tree it scans; it is not a source list")
+core_cpp_hygiene_allow(source-glob tests/cmake/check-tui-corners.cmake
+    "enumerates the TUI sources it scans for a square corner; it is not a source list")
 
 # The consumer smoke projects under tests/ are not core-cpp's build: each is a project of its own,
 # written the way the consumer it stands for writes one. These rules say what core-cpp may do
@@ -186,10 +188,14 @@ core_cpp_hygiene_allow(source-glob tests/cmake/check-read-buffer-guard.cmake
 # prove core-cpp leaves alone. Their C++ is core-cpp's own and is held to every rule.
 set(_consumerProjectReason
     "a consumer's own project, not core-cpp's build: these are the flags and variables core-cpp must leave untouched, which is what the project asserts")
-foreach(_consumerProject IN ITEMS consumer-cpm consumer-vendored consumer-wasm consumer-tui-output)
+foreach(_consumerProject IN ITEMS consumer-cpm consumer-vendored consumer-wasm consumer-tui-output
+                                   consumer-tui-core wasi-reactor)
     core_cpp_hygiene_allow(global-compile-options "tests/${_consumerProject}/CMakeLists.txt" "${_consumerProjectReason}")
     core_cpp_hygiene_allow(global-cmake-variable "tests/${_consumerProject}/CMakeLists.txt" "${_consumerProjectReason}")
 endforeach()
+# tests/wasi-unicode is the same kind of project for a WebAssembly guest: it sets the guest's
+# language mode (-fno-exceptions -fno-rtti) over everything it builds, libunicode included.
+core_cpp_hygiene_allow(global-cmake-variable tests/wasi-unicode/CMakeLists.txt "${_consumerProjectReason}")
 core_cpp_hygiene_allow(unprefixed-function tests/consumer-cpm/CMakeLists.txt "${_consumerProjectReason}")
 core_cpp_hygiene_allow(unprefixed-function tests/consumer-wasm/CMakeLists.txt "${_consumerProjectReason}")
 core_cpp_hygiene_allow(diagnostic-pragma src/core/testing/SuppressWindowsDialogsAtStartup.cpp

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/Clock.hpp>
 #include <core/tui/Buffer.hpp>
 #include <core/tui/Canvas.hpp>
+#include <core/tui/CellTestSupport.hpp>
 #include <core/tui/InputField.hpp>
 #include <core/tui/TextDecorator.hpp>
 #include <core/tui/Theme.hpp>
@@ -9,6 +11,10 @@
 
 #include <algorithm>
 #include <ranges>
+#include <type_traits>
+
+using core::ManualClock;
+using core::tui::test::requireCell;
 
 using namespace core::tui;
 
@@ -911,7 +917,8 @@ TEST_CASE("InputField.mouse_drag_creates_selection")
 
 TEST_CASE("InputField.double_click_selects_word")
 {
-    InputField field;
+    auto const clock = ManualClock {}; // Frozen: every click lands inside the multi-click window.
+    auto field = InputField { clock };
     field.setText("hello world");
 
     // First click
@@ -927,7 +934,8 @@ TEST_CASE("InputField.double_click_selects_word")
 
 TEST_CASE("InputField.double_click_on_path_selects_component")
 {
-    InputField field;
+    auto const clock = ManualClock {}; // Frozen: every click lands inside the multi-click window.
+    auto field = InputField { clock };
     field.setText("/home/user/file.txt");
 
     // First click on "user"
@@ -943,7 +951,8 @@ TEST_CASE("InputField.double_click_on_path_selects_component")
 
 TEST_CASE("InputField.triple_click_selects_line")
 {
-    InputField field;
+    auto const clock = ManualClock {}; // Frozen: every click lands inside the multi-click window.
+    auto field = InputField { clock };
     field.setMultiline(true);
     field.setText("first line\nsecond line\nthird line");
 
@@ -962,9 +971,10 @@ TEST_CASE("InputField.triple_click_selects_line")
     CHECK(field.selectedText() == "second line\n");
 }
 
-TEST_CASE("InputField.click_count_resets_after_timeout")
+TEST_CASE("InputField.click_count_resets_after_moving_away")
 {
-    InputField field;
+    auto const clock = ManualClock {};
+    auto field = InputField { clock };
     field.setText("hello world");
 
     // First click
@@ -972,10 +982,54 @@ TEST_CASE("InputField.click_count_resets_after_timeout")
     (void) field.handleMouse(MouseEvent::Type::Release, 0, 5, Modifier::None);
     CHECK(!field.hasSelection());
 
-    // Wait... (simulated by just doing another single click at different position)
-    // Click at different position should reset click count
+    // A click at a different position, no time later, starts a new count.
     (void) field.handleMouse(MouseEvent::Type::Press, 0, 0, Modifier::None);
     CHECK(!field.hasSelection()); // Single click, no selection
+}
+
+TEST_CASE("InputField.double_click_is_timed_on_the_injected_clock")
+{
+    auto clock = ManualClock {};
+    auto field = InputField { clock };
+    field.setText("hello world");
+    auto const click = [&field] {
+        auto const action = field.handleMouse(MouseEvent::Type::Press, 0, 7, Modifier::None);
+        (void) field.handleMouse(MouseEvent::Type::Release, 0, 7, Modifier::None);
+        return action;
+    };
+
+    SECTION("a second click 399 ms later is a double-click")
+    {
+        (void) click();
+        clock.advance(std::chrono::milliseconds(399));
+        CHECK(click() == InputFieldAction::Changed);
+        CHECK(field.selectedText() == "world");
+    }
+
+    SECTION("a second click 400 ms later is a new single click")
+    {
+        (void) click();
+        clock.advance(std::chrono::milliseconds(400));
+        (void) click();
+        CHECK_FALSE(field.hasSelection());
+    }
+
+    SECTION("a third click inside the window of the second is a triple-click")
+    {
+        field.setMultiline(true);
+        field.setText("first line\nsecond line");
+        auto const press = [&field] {
+            auto const action = field.handleMouse(MouseEvent::Type::Press, 1, 3, Modifier::None);
+            (void) field.handleMouse(MouseEvent::Type::Release, 1, 3, Modifier::None);
+            return action;
+        };
+        (void) press();
+        clock.advance(std::chrono::milliseconds(300));
+        (void) press();
+        clock.advance(std::chrono::milliseconds(300)); // 600 ms after the first, 300 after the second
+        CHECK(press() == InputFieldAction::Changed);
+        CHECK(field.selectedText() == "second line");
+    }
 }
 
 TEST_CASE("InputField.select_word_fish_style")
@@ -1330,12 +1384,12 @@ TEST_CASE("InputField.multiline_render_basic")
     field.render(canvas);
 
     // Row 0 should contain "aaa", row 1 should contain "bbb"
-    CHECK(buf.at(0, 0).grapheme == "a");
-    CHECK(buf.at(0, 1).grapheme == "a");
-    CHECK(buf.at(0, 2).grapheme == "a");
-    CHECK(buf.at(1, 0).grapheme == "b");
-    CHECK(buf.at(1, 1).grapheme == "b");
-    CHECK(buf.at(1, 2).grapheme == "b");
+    CHECK(requireCell(buf, { .x = 0, .y = 0 }).grapheme == "a");
+    CHECK(requireCell(buf, { .x = 1, .y = 0 }).grapheme == "a");
+    CHECK(requireCell(buf, { .x = 2, .y = 0 }).grapheme == "a");
+    CHECK(requireCell(buf, { .x = 0, .y = 1 }).grapheme == "b");
+    CHECK(requireCell(buf, { .x = 1, .y = 1 }).grapheme == "b");
+    CHECK(requireCell(buf, { .x = 2, .y = 1 }).grapheme == "b");
 }
 
 TEST_CASE("InputField.multiline_render_with_prompt")
@@ -1353,13 +1407,13 @@ TEST_CASE("InputField.multiline_render_with_prompt")
     field.render(canvas);
 
     // Row 0: "> " prompt then "aaa"
-    CHECK(buf.at(0, 0).grapheme == ">");
-    CHECK(buf.at(0, 1).grapheme == " ");
-    CHECK(buf.at(0, 2).grapheme == "a");
+    CHECK(requireCell(buf, { .x = 0, .y = 0 }).grapheme == ">");
+    CHECK(requireCell(buf, { .x = 1, .y = 0 }).grapheme == " ");
+    CHECK(requireCell(buf, { .x = 2, .y = 0 }).grapheme == "a");
     // Row 1: "  " continuation then "bbb"
-    CHECK(buf.at(1, 0).grapheme == " ");
-    CHECK(buf.at(1, 1).grapheme == " ");
-    CHECK(buf.at(1, 2).grapheme == "b");
+    CHECK(requireCell(buf, { .x = 0, .y = 1 }).grapheme == " ");
+    CHECK(requireCell(buf, { .x = 1, .y = 1 }).grapheme == " ");
+    CHECK(requireCell(buf, { .x = 2, .y = 1 }).grapheme == "b");
 }
 
 TEST_CASE("InputField.multiline_render_ghost_text_on_last_line")
@@ -1376,9 +1430,9 @@ TEST_CASE("InputField.multiline_render_ghost_text_on_last_line")
     field.render(canvas);
 
     // Ghost text appears after "bbb" on row 1 (last line)
-    CHECK(buf.at(1, 3).grapheme == "c");
-    CHECK(buf.at(1, 4).grapheme == "c");
-    CHECK(buf.at(1, 5).grapheme == "c");
+    CHECK(requireCell(buf, { .x = 3, .y = 1 }).grapheme == "c");
+    CHECK(requireCell(buf, { .x = 4, .y = 1 }).grapheme == "c");
+    CHECK(requireCell(buf, { .x = 5, .y = 1 }).grapheme == "c");
 }
 
 TEST_CASE("InputField.multiline_continuation_prompt")
@@ -1409,16 +1463,16 @@ TEST_CASE("InputField.multiline_auto_continuation_alignment")
     field.render(canvas);
 
     // Row 0: "> aaa" — text starts at col 2
-    CHECK(buf.at(0, 0).grapheme == ">");
-    CHECK(buf.at(0, 2).grapheme == "a");
+    CHECK(requireCell(buf, { .x = 0, .y = 0 }).grapheme == ">");
+    CHECK(requireCell(buf, { .x = 2, .y = 0 }).grapheme == "a");
     // Row 1: "  bbb" — auto-continuation: 2 spaces, text at col 2
-    CHECK(buf.at(1, 0).grapheme == " ");
-    CHECK(buf.at(1, 1).grapheme == " ");
-    CHECK(buf.at(1, 2).grapheme == "b");
+    CHECK(requireCell(buf, { .x = 0, .y = 1 }).grapheme == " ");
+    CHECK(requireCell(buf, { .x = 1, .y = 1 }).grapheme == " ");
+    CHECK(requireCell(buf, { .x = 2, .y = 1 }).grapheme == "b");
     // Row 2: "  ccc" — same alignment
-    CHECK(buf.at(2, 0).grapheme == " ");
-    CHECK(buf.at(2, 1).grapheme == " ");
-    CHECK(buf.at(2, 2).grapheme == "c");
+    CHECK(requireCell(buf, { .x = 0, .y = 2 }).grapheme == " ");
+    CHECK(requireCell(buf, { .x = 1, .y = 2 }).grapheme == " ");
+    CHECK(requireCell(buf, { .x = 2, .y = 2 }).grapheme == "c");
 }
 
 TEST_CASE("InputField.decorator_foreground_applied")
@@ -1456,8 +1510,8 @@ TEST_CASE("InputField.decorator_foreground_applied")
     CHECK(decorator.queriedIndices[2] == 2);
 
     // First grapheme should have red foreground
-    CHECK(std::holds_alternative<RgbColor>(buf.at(0, 0).style.fg));
-    auto const& fg = std::get<RgbColor>(buf.at(0, 0).style.fg);
+    CHECK(std::holds_alternative<RgbColor>(requireCell(buf, { .x = 0, .y = 0 }).style.fg));
+    auto const& fg = std::get<RgbColor>(requireCell(buf, { .x = 0, .y = 0 }).style.fg);
     CHECK(fg.r == 255);
     CHECK(fg.g == 0);
     CHECK(fg.b == 0);
@@ -1492,8 +1546,8 @@ TEST_CASE("InputField.decorator_background_applied")
     CHECK(decorator.callCount > 0);
 
     // Text cells should have the decorator background
-    CHECK(std::holds_alternative<RgbColor>(buf.at(0, 0).style.bg));
-    auto const& bg = std::get<RgbColor>(buf.at(0, 0).style.bg);
+    CHECK(std::holds_alternative<RgbColor>(requireCell(buf, { .x = 0, .y = 0 }).style.bg));
+    auto const& bg = std::get<RgbColor>(requireCell(buf, { .x = 0, .y = 0 }).style.bg);
     CHECK(bg.r == 42);
 }
 
@@ -1593,9 +1647,9 @@ TEST_CASE("InputField.ghost_text_decorator_background_per_column")
 
     // Ghost text starts at column 2 (after "ab").
     // Each ghost character should have its own per-column background.
-    auto const& bgX = std::get<RgbColor>(buf.at(0, 2).style.bg);
-    auto const& bgY = std::get<RgbColor>(buf.at(0, 3).style.bg);
-    auto const& bgZ = std::get<RgbColor>(buf.at(0, 4).style.bg);
+    auto const& bgX = std::get<RgbColor>(requireCell(buf, { .x = 2, .y = 0 }).style.bg);
+    auto const& bgY = std::get<RgbColor>(requireCell(buf, { .x = 3, .y = 0 }).style.bg);
+    auto const& bgZ = std::get<RgbColor>(requireCell(buf, { .x = 4, .y = 0 }).style.bg);
 
     // Verify each ghost char got a distinct background matching its column
     CHECK(bgX.r == 20); // col 2 * 10
@@ -1638,8 +1692,8 @@ TEST_CASE("InputField.multiline_ghost_text_decorator_background_per_column")
     field.render(canvas);
 
     // Ghost text on row 1 (last line), starting at column 3 (after "bbb").
-    auto const& bgX = std::get<RgbColor>(buf.at(1, 3).style.bg);
-    auto const& bgY = std::get<RgbColor>(buf.at(1, 4).style.bg);
+    auto const& bgX = std::get<RgbColor>(requireCell(buf, { .x = 3, .y = 1 }).style.bg);
+    auto const& bgY = std::get<RgbColor>(requireCell(buf, { .x = 4, .y = 1 }).style.bg);
 
     // Each ghost char should get its own column's gradient background
     CHECK(bgX.r == 30); // col 3 * 10
@@ -2397,7 +2451,7 @@ std::string rowText(Buffer const& buffer)
     std::string out;
     for (auto const c: std::views::iota(0, std::max(0, buffer.cols())))
     {
-        auto const& cell = buffer.at(0, c);
+        auto const& cell = requireCell(buffer, { .x = c, .y = 0 });
         out += cell.grapheme.empty() ? std::string(" ") : cell.grapheme;
     }
     return out;
@@ -2553,4 +2607,10 @@ TEST_CASE("InputField.hscroll_resets_on_clear_and_setText")
     buffer = renderSingleLine(field, 10);
     CHECK(rowText(buffer).substr(0, 3) == "abc");
     CHECK(buffer.cursor().x == 3);
+}
+
+TEST_CASE("InputField.a_temporary_clock_is_refused")
+{
+    STATIC_CHECK(std::is_constructible_v<InputField, ManualClock&>);
+    STATIC_CHECK_FALSE(std::is_constructible_v<InputField, ManualClock>);
 }

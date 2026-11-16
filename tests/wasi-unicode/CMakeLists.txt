@@ -1,0 +1,112 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# core::tui's width and grapheme tables in a WebAssembly guest: libunicode built for wasm32-wasip1
+# from tables a native build generated, and a table test (main.cpp) that runs under a WASI runtime.
+# The recipe is the decision record's option (a) (docs/design/tui-headless.md, "Width tables"):
+#
+#   cmake -S tests/wasi-unicode -B out/wasi-unicode -G Ninja \
+#         -DCMAKE_TOOLCHAIN_FILE=$WASI_SDK_PREFIX/share/cmake/wasi-sdk-p1.cmake \
+#         -DCPM_libunicode_SOURCE=<a libunicode tree a native configure generated its tables into> \
+#         -DCORE_CPP_SOURCE_DIR=<core-cpp>
+#   cmake --build out/wasi-unicode
+#   ctest --test-dir out/wasi-unicode --output-on-failure
+#
+# The libunicode tree is REQUIRED, and must hold the nine generated files: libunicode skips its
+# UCD.zip download and its table generator exactly when they are all there, so refusing anything
+# less here is what keeps libunicode from downloading anything or building a host tool for the
+# guest. libunicode is added with add_subdirectory(), not CPM, so nothing else is fetched either
+# (the variable keeps CPM's name, the one the recipe and the consumer projects already pass):
+# this project configures and builds with no network.
+# core-cpp's own build fetches and generates such a tree whenever core::tui_core is on
+# (libunicode_SOURCE_DIR in its cache); core-cpp.unicode-wasi (tests/cmake/run-wasi-unicode.cmake)
+# drives this project against it.
+#
+# Without a toolchain file this builds natively and runs the same table, which is how the table
+# itself is checked against the host.
+cmake_minimum_required(VERSION 3.25...3.31)
+project(core-cpp-wasi-unicode VERSION 1.0.0 LANGUAGES CXX)
+
+if(NOT DEFINED CORE_CPP_SOURCE_DIR)
+    get_filename_component(CORE_CPP_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+endif()
+if(NOT EXISTS "${CORE_CPP_SOURCE_DIR}/src/core/tui/Unicode.cpp")
+    message(FATAL_ERROR "wasi-unicode: CORE_CPP_SOURCE_DIR ('${CORE_CPP_SOURCE_DIR}') is not a core-cpp source tree.")
+endif()
+
+# What libunicode 0.9.3 generates (src/libunicode/CMakeLists.txt); with all of them present it says
+# "All generated source files found; skipping UCD download and code generation".
+set(_generated
+    ucd.h ucd.cpp ucd_enums.h ucd_fmt.h ucd_ostream.h case_normalization_data.h
+    codepoint_properties_data.h codepoint_properties_data.cpp codepoint_properties_names.cpp)
+if(NOT DEFINED CPM_libunicode_SOURCE OR CPM_libunicode_SOURCE STREQUAL "")
+    message(FATAL_ERROR
+        "wasi-unicode: CPM_libunicode_SOURCE is not set. Point it at a libunicode 0.9.3 tree a native "
+        "configure has generated its tables into; this build generates none and downloads nothing.")
+endif()
+foreach(file IN LISTS _generated)
+    if(NOT EXISTS "${CPM_libunicode_SOURCE}/src/libunicode/${file}")
+        message(FATAL_ERROR
+            "wasi-unicode: '${CPM_libunicode_SOURCE}' has no generated src/libunicode/${file}, so libunicode would "
+            "download UCD.zip and build its table generator for the guest. Configure it natively first.")
+    endif()
+endforeach()
+
+enable_testing()
+
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+set(_wasi OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
+    set(_wasi ON)
+    # The guest's language mode, over libunicode too: no exceptions and no RTTI anywhere it links.
+    string(APPEND CMAKE_CXX_FLAGS " -fno-exceptions -fno-rtti")
+endif()
+
+# libunicode is added straight from the given tree: no CPM, which would download its own bootstrap
+# from GitHub on a configure with no CPM cache, and no package manager of any kind. With tests,
+# benchmarks, tools and examples off, libunicode's own configure looks for nothing either, so this
+# project reaches no network at all.
+#
+# LIBUNICODE_SIMD_IMPLEMENTATION none: libunicode's default for a processor it does not know is
+# std::experimental::simd, which wasi-sdk's libc++ does not provide. The options are plain variables,
+# which libunicode's option() calls honour under CMP0077, set NEW for its directory here.
+set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+set(LIBUNICODE_TESTING OFF)
+set(LIBUNICODE_BENCHMARK OFF)
+set(LIBUNICODE_TOOLS OFF)
+set(LIBUNICODE_EXAMPLES OFF)
+set(LIBUNICODE_BUILD_STATIC ON)
+set(LIBUNICODE_SIMD_IMPLEMENTATION none)
+set(PEDANTIC_COMPILER OFF)
+set(PEDANTIC_COMPILER_WERROR OFF)
+set(BUILD_SHARED_LIBS OFF)
+add_subdirectory("${CPM_libunicode_SOURCE}" "${CMAKE_CURRENT_BINARY_DIR}/libunicode" EXCLUDE_FROM_ALL SYSTEM)
+
+# core::tui's own measuring code, compiled for the guest from the tree under test. It needs nothing
+# of core-cpp but its header, which is what makes it buildable here before the WASI row exists.
+add_executable(unicode-table main.cpp "${CORE_CPP_SOURCE_DIR}/src/core/tui/Unicode.cpp")
+target_include_directories(unicode-table PRIVATE "${CORE_CPP_SOURCE_DIR}/src")
+target_link_libraries(unicode-table PRIVATE unicode::unicode)
+if(MSVC)
+    target_compile_options(unicode-table PRIVATE /W4 /WX /utf-8)
+else()
+    target_compile_options(unicode-table PRIVATE -Wall -Wextra -Werror)
+endif()
+
+if(_wasi)
+    find_program(CORE_CPP_WASI_UNICODE_NODE NAMES node nodejs REQUIRED)
+    add_test(NAME wasi-unicode.table
+             COMMAND "${CORE_CPP_WASI_UNICODE_NODE}" "${CMAKE_CURRENT_SOURCE_DIR}/run-wasi.mjs"
+                     "$<TARGET_FILE:unicode-table>")
+else()
+    add_test(NAME wasi-unicode.table COMMAND unicode-table)
+endif()
+# Judged by what it printed, not by an exit code alone: a runtime that loses the exit code, or a
+# module that never reached main(), must not read as a pass. The summary line proves the table ran;
+# a FAIL row refuses it even though the summary is there.
+set_tests_properties(wasi-unicode.table PROPERTIES
+    PASS_REGULAR_EXPRESSION "rows as expected"
+    FAIL_REGULAR_EXPRESSION "^FAIL|\nFAIL"
+    TIMEOUT 60)

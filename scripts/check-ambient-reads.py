@@ -37,16 +37,10 @@ READS = {
 
 # path -> reason. The seams themselves, and the reads that are debt on purpose.
 ALLOWED: dict[str, str] = {
-    "src/core/platform/Clock.hpp": "the seam: SteadyClock and SystemWallClock are the production IClock and IWallClock",
+    "src/core/Clock.hpp": "the seam: SteadyClock is the production IClock",
+    "src/core/platform/Clock.hpp": "the seam: SystemWallClock is the production IWallClock",
     "src/core/log/LogSink.cpp": "debt: a log line's timestamp is the wall clock; LogSink predates IWallClock (contour)",
     "src/core/net/windows/IocpBackend.cpp": "a real-time budget for the destructor's drain of the port, which must bound in wall time whatever clock the loop was given",
-    "src/core/tui/HoverState.cpp": "debt imported from endo f774a210: tui widgets read the clock directly",
-    "src/core/tui/InputField.cpp": "debt imported from endo f774a210: tui widgets read the clock directly",
-    "src/core/tui/Screen.cpp": "debt imported from endo f774a210: tui widgets read the clock directly",
-    "src/core/tui/SemanticBlockClient.cpp": "debt imported from endo f774a210: tui widgets read the clock directly",
-    "src/core/tui/Spinner.cpp": "debt imported from endo f774a210: tui widgets read the clock directly",
-    "src/core/tui/TimerUtils.hpp": "debt imported from endo f774a210: tui widgets read the clock directly",
-    "src/core/tui/TreeTableView.cpp": "debt imported from endo f774a210: tui widgets read the clock directly",
 }
 
 

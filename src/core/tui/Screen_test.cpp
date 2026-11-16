@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/Clock.hpp>
+#include <core/tui/CellTestSupport.hpp>
+#include <core/tui/HeadlessSurface.hpp>
 #include <core/tui/HoverState.hpp>
+#include <core/tui/MockScreenSurface.hpp>
 #include <core/tui/MockTerminalOutput.hpp>
 #include <core/tui/Screen.hpp>
-#include <core/tui/Terminal.hpp>
 #include <core/tui/TestHelpers.hpp>
 #include <core/tui/Tooltip.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <functional>
 #include <iterator>
@@ -16,9 +20,13 @@
 #include <ranges>
 #include <string>
 #include <string_view>
-#include <thread>
+#include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
+
+using core::ManualClock;
+using core::tui::test::requireCell;
 
 using namespace core::tui;
 
@@ -208,6 +216,86 @@ TEST_CASE("Screen.unscrollMode_enumValues")
     CHECK(static_cast<int>(UnscrollMode::Disabled) == 2);
 }
 
+TEST_CASE("Screen.screenConfig_defaultsAreTheZeroOfEachEnumeration")
+{
+    // The bools ScreenConfig had are enumerations now; this pins that the defaults did not move,
+    // and that each default is its enumeration's zero, so a zero-initialized field means "off".
+    auto const config = ScreenConfig {};
+    struct Row
+    {
+        std::string_view field;
+        bool isDefault;
+        bool isZero;
+    };
+    auto const rows = std::array {
+        Row { .field = "viewport",
+              .isDefault = config.viewport == Viewport::Fullscreen,
+              .isZero = std::to_underlying(config.viewport) == 0 },
+        Row { .field = "unscrollMode",
+              .isDefault = config.unscrollMode == UnscrollMode::Auto,
+              .isZero = std::to_underlying(config.unscrollMode) == 0 },
+        Row { .field = "reflow",
+              .isDefault = config.reflow == DiffReflow::Keep,
+              .isZero = std::to_underlying(config.reflow) == 0 },
+        Row { .field = "screenBuffer",
+              .isDefault = config.screenBuffer == ScreenBuffer::Primary,
+              .isZero = std::to_underlying(config.screenBuffer) == 0 },
+        Row { .field = "inlineMaxHeight", .isDefault = config.inlineMaxHeight == 0, .isZero = true },
+        Row { .field = "fixedArea", .isDefault = config.fixedArea == Rect {}, .isZero = true },
+    };
+    for (auto const& row: rows)
+    {
+        INFO(row.field);
+        CHECK(row.isDefault);
+        CHECK(row.isZero);
+    }
+}
+
+TEST_CASE("Screen.screenConfig_alternateScreenBufferIsEnteredAndLeft")
+{
+    auto mockOutput = std::make_unique<MockTerminalOutput>(20, 4);
+    auto* mock = mockOutput.get();
+    auto surface = MockScreenSurface(std::move(mockOutput));
+    auto const wrote = [mock](std::string_view sequence) {
+        return std::ranges::any_of(mock->rawWrites(),
+                                   [sequence](auto const& write) { return write.text == sequence; });
+    };
+
+    {
+        auto const primary = Screen(surface);
+        CHECK_FALSE(wrote("\033[?1049h"));
+    }
+    CHECK_FALSE(wrote("\033[?1049l"));
+
+    {
+        auto const alternate = Screen(surface, ScreenConfig { .screenBuffer = ScreenBuffer::Alternate });
+        CHECK(wrote("\033[?1049h"));
+        CHECK_FALSE(wrote("\033[?1049l"));
+    }
+    CHECK(wrote("\033[?1049l"));
+}
+
+TEST_CASE("Screen.screenConfig_reflowInhibitionReachesTheInlineFrame")
+{
+    auto const frameWith = [](DiffReflow reflow) {
+        auto bytes = std::string {};
+        auto surface = HeadlessSurface { Size { .width = 10, .height = 4 },
+                                         [&bytes](std::string_view chunk) { bytes += chunk; } };
+        auto screen = Screen(surface, ScreenConfig { .viewport = Viewport::Inline, .reflow = reflow });
+        struct Painter: Component
+        {
+            void render(Canvas& canvas) override { canvas.putString(0, 0, "RRR", {}); }
+        };
+        auto painter = Painter {};
+        screen.root().addChild(painter, LayoutParams { .area = { .x = 0, .y = 0, .width = 3, .height = 1 } });
+        screen.draw();
+        return bytes;
+    };
+
+    CHECK_FALSE(frameWith(DiffReflow::Keep).contains("\033[?2028l"));
+    CHECK(frameWith(DiffReflow::Inhibit).contains("\033[?2028l"));
+}
+
 TEST_CASE("Screen.screenConfig_defaultUnscrollMode")
 {
     // Verify default unscroll mode is Auto
@@ -242,7 +330,8 @@ TEST_CASE("HoverState.initialState")
 
 TEST_CASE("HoverState.onMouseMove_startsHover")
 {
-    HoverState hover(std::chrono::milliseconds(100));
+    auto clock = ManualClock {};
+    HoverState hover(std::chrono::milliseconds(100), clock);
 
     hover.onMouseMove(10, 20, nullptr);
 
@@ -250,50 +339,51 @@ TEST_CASE("HoverState.onMouseMove_startsHover")
     CHECK(hover.currentHover().has_value());
     CHECK(hover.currentHover()->x == 10);
     CHECK(hover.currentHover()->y == 20);
-    CHECK(hover.timeoutMs() > 0); // Timeout active
-    CHECK(hover.timeoutMs() <= 100);
+    CHECK(hover.timeoutMs() == 100); // The whole delay: no time has passed on the clock.
 }
 
 TEST_CASE("HoverState.onMouseMove_samePosition_noReset")
 {
-    HoverState hover(std::chrono::milliseconds(100));
+    auto clock = ManualClock {};
+    HoverState hover(std::chrono::milliseconds(100), clock);
 
     hover.onMouseMove(10, 20, nullptr);
     auto const initialTimeout = hover.timeoutMs();
 
-    // Small delay
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    clock.advance(std::chrono::milliseconds(10));
 
     // Same position - should NOT reset the timer
     hover.onMouseMove(10, 20, nullptr);
     auto const secondTimeout = hover.timeoutMs();
 
-    // Timer should have progressed (second timeout should be less)
-    CHECK(secondTimeout < initialTimeout);
+    // The timer kept running from the first move.
+    CHECK(initialTimeout == 100);
+    CHECK(secondTimeout == 90);
 }
 
 TEST_CASE("HoverState.onMouseMove_differentPosition_resetsTimer")
 {
-    HoverState hover(std::chrono::milliseconds(100));
+    auto clock = ManualClock {};
+    HoverState hover(std::chrono::milliseconds(100), clock);
 
     hover.onMouseMove(10, 20, nullptr);
 
-    // Wait a bit
-    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    clock.advance(std::chrono::milliseconds(30));
 
     // Move to different position - should reset the timer
     hover.onMouseMove(15, 25, nullptr);
     auto const timeout = hover.timeoutMs();
 
-    // Timer should be close to full delay again
-    CHECK(timeout > 80); // Allowing some tolerance
+    // The timer restarted at the new position.
+    CHECK(timeout == 100);
     CHECK(hover.currentHover()->x == 15);
     CHECK(hover.currentHover()->y == 25);
 }
 
 TEST_CASE("HoverState.tick_triggersCallback")
 {
-    HoverState hover(std::chrono::milliseconds(10));
+    auto clock = ManualClock {};
+    HoverState hover(std::chrono::milliseconds(10), clock);
 
     bool callbackCalled = false;
     HoverInfo capturedInfo;
@@ -305,10 +395,9 @@ TEST_CASE("HoverState.tick_triggersCallback")
 
     hover.onMouseMove(50, 60, nullptr);
 
-    // Wait for hover delay to expire
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    clock.advance(std::chrono::milliseconds(20));
 
-    hover.tick(std::chrono::steady_clock::now());
+    hover.tick(clock.now());
 
     CHECK(callbackCalled);
     CHECK(hover.isHoverConfirmed());
@@ -316,9 +405,33 @@ TEST_CASE("HoverState.tick_triggersCallback")
     CHECK(capturedInfo.y == 60);
 }
 
+TEST_CASE("HoverState.delay_confirmsOnTheMillisecondItElapses")
+{
+    auto clock = ManualClock {};
+    auto hover = HoverState(std::chrono::milliseconds(500), clock);
+    auto confirmations = 0;
+    hover.setOnHoverConfirmed([&](HoverInfo const&) { ++confirmations; });
+
+    hover.onMouseMove(3, 4, nullptr);
+    clock.advance(std::chrono::milliseconds(499));
+    CHECK(hover.timeoutMs() == 1);
+    hover.tick(clock.now());
+    CHECK_FALSE(hover.isHoverConfirmed());
+
+    clock.advance(std::chrono::milliseconds(1));
+    CHECK(hover.timeoutMs() == 0);
+    hover.tick(clock.now());
+    CHECK(hover.isHoverConfirmed());
+    CHECK(hover.timeoutMs() == -1); // Nothing left to wait for.
+
+    hover.tick(clock.now()); // Confirmed once, not on every tick after.
+    CHECK(confirmations == 1);
+}
+
 TEST_CASE("HoverState.onMouseLeave_triggersCallback")
 {
-    HoverState hover(std::chrono::milliseconds(10));
+    auto clock = ManualClock {};
+    HoverState hover(std::chrono::milliseconds(10), clock);
 
     bool leaveCallbackCalled = false;
 
@@ -328,8 +441,8 @@ TEST_CASE("HoverState.onMouseLeave_triggersCallback")
     hover.onMouseMove(10, 20, nullptr);
 
     // Confirm hover
-    std::this_thread::sleep_for(std::chrono::milliseconds(15));
-    hover.tick(std::chrono::steady_clock::now());
+    clock.advance(std::chrono::milliseconds(15));
+    hover.tick(clock.now());
     CHECK(hover.isHoverConfirmed());
 
     // Leave
@@ -342,14 +455,15 @@ TEST_CASE("HoverState.onMouseLeave_triggersCallback")
 
 TEST_CASE("HoverState.reset_clearsState")
 {
-    HoverState hover(std::chrono::milliseconds(10));
+    auto clock = ManualClock {};
+    HoverState hover(std::chrono::milliseconds(10), clock);
 
     bool leaveCallbackCalled = false;
     hover.setOnHoverLeave([&]() { leaveCallbackCalled = true; });
 
     hover.onMouseMove(10, 20, nullptr);
-    std::this_thread::sleep_for(std::chrono::milliseconds(15));
-    hover.tick(std::chrono::steady_clock::now());
+    clock.advance(std::chrono::milliseconds(15));
+    hover.tick(clock.now());
     CHECK(hover.isHoverConfirmed());
 
     hover.reset();
@@ -362,7 +476,8 @@ TEST_CASE("HoverState.reset_clearsState")
 
 TEST_CASE("HoverState.mouseMove_whileConfirmed_triggersLeaveAndRestart")
 {
-    HoverState hover(std::chrono::milliseconds(10));
+    auto clock = ManualClock {};
+    HoverState hover(std::chrono::milliseconds(10), clock);
 
     int leaveCount = 0;
 
@@ -371,8 +486,8 @@ TEST_CASE("HoverState.mouseMove_whileConfirmed_triggersLeaveAndRestart")
     hover.onMouseMove(10, 20, nullptr);
 
     // Confirm hover
-    std::this_thread::sleep_for(std::chrono::milliseconds(15));
-    hover.tick(std::chrono::steady_clock::now());
+    clock.advance(std::chrono::milliseconds(15));
+    hover.tick(clock.now());
     CHECK(hover.isHoverConfirmed());
 
     // Move to different position - should trigger leave and restart
@@ -485,15 +600,16 @@ TEST_CASE("HoverState.confirmedCallback_receivesTarget")
         }
     };
 
-    HoverState hover(std::chrono::milliseconds(10));
+    auto clock = ManualClock {};
+    HoverState hover(std::chrono::milliseconds(10), clock);
     MockComponent comp;
     HoverInfo captured {};
 
     hover.setOnHoverConfirmed([&](HoverInfo const& info) { captured = info; });
     hover.onMouseMove(15, 20, &comp);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    hover.tick(std::chrono::steady_clock::now());
+    clock.advance(std::chrono::milliseconds(20));
+    hover.tick(clock.now());
 
     CHECK(hover.isHoverConfirmed());
     CHECK(captured.target == &comp);
@@ -508,14 +624,15 @@ TEST_CASE("HoverState.confirmedCallback_receivesTarget")
 
 TEST_CASE("HoverState.leave_afterConfirm_clearsState")
 {
-    HoverState hover(std::chrono::milliseconds(10));
+    auto clock = ManualClock {};
+    HoverState hover(std::chrono::milliseconds(10), clock);
     bool leaveCalled = false;
     hover.setOnHoverConfirmed([](HoverInfo const&) {});
     hover.setOnHoverLeave([&]() { leaveCalled = true; });
 
     hover.onMouseMove(10, 20, nullptr);
-    std::this_thread::sleep_for(std::chrono::milliseconds(15));
-    hover.tick(std::chrono::steady_clock::now());
+    clock.advance(std::chrono::milliseconds(15));
+    hover.tick(clock.now());
     CHECK(hover.isHoverConfirmed());
 
     // Move to different position triggers leave + restart
@@ -602,8 +719,9 @@ struct HoverableTestComp: Component
 
 TEST_CASE("Screen.hoverToTooltip_callbackFires")
 {
-    Terminal terminal;
-    Screen screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    MockScreenSurface surface;
+    auto clock = ManualClock {};
+    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen }, clock);
 
     HoverableTestComp comp;
     auto const compLayout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 3 } };
@@ -628,8 +746,14 @@ TEST_CASE("Screen.hoverToTooltip_callbackFires")
     CHECK(hover->y == 1);
     CHECK(hover->target == &comp);
 
-    // Wait and tick
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    // The Screen's hover delay runs on the clock it was given, to the millisecond.
+    clock.advance(HoverState::DefaultHoverDelay - std::chrono::milliseconds(1));
+    screen.tickHover();
+    CHECK_FALSE(screen.hoverState().isHoverConfirmed());
+    CHECK_FALSE(screen.isTooltipVisible());
+    CHECK(screen.pollTimeoutMs() == 1);
+
+    clock.advance(std::chrono::milliseconds(1));
     screen.tickHover();
 
     CHECK(screen.hoverState().isHoverConfirmed());
@@ -638,8 +762,9 @@ TEST_CASE("Screen.hoverToTooltip_callbackFires")
 
 TEST_CASE("Screen.hoverToTooltip_fullFlow")
 {
-    Terminal terminal; // uninitialized = 80x24 defaults
-    Screen screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    MockScreenSurface surface; // uninitialized = 80x24 defaults
+    auto clock = ManualClock {};
+    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen }, clock);
 
     HoverableTestComp comp;
     auto const compLayout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 3 } };
@@ -650,8 +775,7 @@ TEST_CASE("Screen.hoverToTooltip_fullFlow")
     // Mouse move over error text (1-based terminal coordinates)
     (void) screen.dispatchEvent(test::mouseMove(5, 1));
 
-    // Wait for hover delay + margin, then tick
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
 
     CHECK(screen.isTooltipVisible());
@@ -664,8 +788,9 @@ TEST_CASE("Screen.hoverToTooltip_fullFlow")
 
 TEST_CASE("Screen.hoverToTooltip_mouseMovesAway_hidesTooltip")
 {
-    Terminal terminal;
-    Screen screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    MockScreenSurface surface;
+    auto clock = ManualClock {};
+    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen }, clock);
 
     HoverableTestComp comp;
     auto const compLayout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 3 } };
@@ -675,7 +800,7 @@ TEST_CASE("Screen.hoverToTooltip_mouseMovesAway_hidesTooltip")
 
     // Trigger hover
     (void) screen.dispatchEvent(test::mouseMove(5, 1));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
     REQUIRE(screen.isTooltipVisible());
 
@@ -687,8 +812,9 @@ TEST_CASE("Screen.hoverToTooltip_mouseMovesAway_hidesTooltip")
 
 TEST_CASE("Screen.hoverToTooltip_keyEvent_hidesTooltip")
 {
-    Terminal terminal;
-    Screen screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    MockScreenSurface surface;
+    auto clock = ManualClock {};
+    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen }, clock);
 
     HoverableTestComp comp;
     auto const compLayout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 3 } };
@@ -698,7 +824,7 @@ TEST_CASE("Screen.hoverToTooltip_keyEvent_hidesTooltip")
 
     // Trigger hover
     (void) screen.dispatchEvent(test::mouseMove(5, 1));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
     REQUIRE(screen.isTooltipVisible());
 
@@ -710,8 +836,9 @@ TEST_CASE("Screen.hoverToTooltip_keyEvent_hidesTooltip")
 
 TEST_CASE("Screen.hoverToTooltip_nulloptHover_noTooltip")
 {
-    Terminal terminal;
-    Screen screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    MockScreenSurface surface;
+    auto clock = ManualClock {};
+    Screen screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen }, clock);
 
     HoverableTestComp comp;
     auto const compLayout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 3 } };
@@ -722,7 +849,7 @@ TEST_CASE("Screen.hoverToTooltip_nulloptHover_noTooltip")
     // Mouse over region where onHover returns nullopt (column 50, row 2)
     (void) screen.dispatchEvent(test::mouseMove(50, 3));
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
 
     CHECK_FALSE(screen.isTooltipVisible());
@@ -730,8 +857,9 @@ TEST_CASE("Screen.hoverToTooltip_nulloptHover_noTooltip")
 
 TEST_CASE("Screen.hoverToTooltip_inlineMode")
 {
-    Terminal terminal; // 80x24 defaults
-    Screen screen(terminal, ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 });
+    MockScreenSurface surface; // 80x24 defaults
+    auto clock = ManualClock {};
+    Screen screen(surface, ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 }, clock);
 
     HoverableTestComp comp;
     auto const compLayout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 3 } };
@@ -746,10 +874,10 @@ TEST_CASE("Screen.hoverToTooltip_inlineMode")
     // content height is 1 (just "error text here" on row 0, rows 1-2 are
     // empty spaces), _inlineContentStartRow ≈ 24 - 1 = 23.
     // We use row 24 (1-based) = terminal row 23 (0-based) = content row 0.
-    auto const terminalRow = terminal.rows(); // bottom of terminal, 1-based
+    auto const terminalRow = surface.rows(); // bottom of terminal, 1-based
     (void) screen.dispatchEvent(test::mouseMove(5, terminalRow));
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
 
     // The hover may or may not trigger a tooltip depending on exact inline
@@ -795,10 +923,10 @@ TEST_CASE("Screen.inlineCursor_releaseCursorCycle_noDrift")
 {
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 24);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(terminal, screenConfig);
+    auto screen = Screen(surface, screenConfig);
 
     auto comp = FixedContentComponent {};
     comp.contentRows = 4;
@@ -852,10 +980,10 @@ TEST_CASE("Screen.inlineCursor_heightChangeAfterClearAndRelease_drift")
 {
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 24);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(terminal, screenConfig);
+    auto screen = Screen(surface, screenConfig);
 
     auto comp = VariableHeightComponent {};
     comp.height = 2;
@@ -892,10 +1020,10 @@ TEST_CASE("Screen.inlineCursor_twoComponentSwap_noDrift")
 {
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 24);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(terminal, screenConfig);
+    auto screen = Screen(surface, screenConfig);
 
     // "Shell" component: height 3, cursor at row 1
     auto shellComp = VariableHeightComponent {};
@@ -946,7 +1074,7 @@ TEST_CASE("Screen.inline_toggle_no_drift")
 
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 24);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto const screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
     auto const layout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 12 } };
@@ -962,7 +1090,7 @@ TEST_CASE("Screen.inline_toggle_no_drift")
     agentComp.cursorRow = 0;
 
     // --- Shell Screen: first render (baseline) ---
-    auto shellScreen = std::make_unique<Screen>(terminal, screenConfig);
+    auto shellScreen = std::make_unique<Screen>(surface, screenConfig);
     shellScreen->root().addChild(shellComp, layout);
     shellScreen->setFocus(&shellComp);
     shellScreen->draw();
@@ -977,7 +1105,7 @@ TEST_CASE("Screen.inline_toggle_no_drift")
         shellScreen->root().removeChild(shellComp);
         shellScreen.reset(); // Destroy shell screen
 
-        auto agentScreen = std::make_unique<Screen>(terminal, screenConfig);
+        auto agentScreen = std::make_unique<Screen>(surface, screenConfig);
         agentScreen->root().addChild(agentComp, layout);
         agentScreen->setFocus(&agentComp);
         agentScreen->draw();
@@ -987,7 +1115,7 @@ TEST_CASE("Screen.inline_toggle_no_drift")
         agentScreen->root().removeChild(agentComp);
         agentScreen.reset(); // Destroy agent screen
 
-        shellScreen = std::make_unique<Screen>(terminal, screenConfig);
+        shellScreen = std::make_unique<Screen>(surface, screenConfig);
         shellScreen->root().addChild(shellComp, layout);
         shellScreen->setFocus(&shellComp);
         shellScreen->draw();
@@ -1008,7 +1136,7 @@ TEST_CASE("Screen.inline_toggle_different_heights_no_drift")
 
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 24);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto const screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
     auto const layout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 12 } };
@@ -1024,7 +1152,7 @@ TEST_CASE("Screen.inline_toggle_different_heights_no_drift")
     agentComp.cursorRow = 0;
 
     // --- Shell first render (baseline) ---
-    auto shellScreen = std::make_unique<Screen>(terminal, screenConfig);
+    auto shellScreen = std::make_unique<Screen>(surface, screenConfig);
     shellScreen->root().addChild(shellComp, layout);
     shellScreen->setFocus(&shellComp);
     shellScreen->draw();
@@ -1037,7 +1165,7 @@ TEST_CASE("Screen.inline_toggle_different_heights_no_drift")
         shellScreen->root().removeChild(shellComp);
         shellScreen.reset();
 
-        auto agentScreen = std::make_unique<Screen>(terminal, screenConfig);
+        auto agentScreen = std::make_unique<Screen>(surface, screenConfig);
         agentScreen->root().addChild(agentComp, layout);
         agentScreen->setFocus(&agentComp);
         agentScreen->draw();
@@ -1047,7 +1175,7 @@ TEST_CASE("Screen.inline_toggle_different_heights_no_drift")
         agentScreen->root().removeChild(agentComp);
         agentScreen.reset();
 
-        shellScreen = std::make_unique<Screen>(terminal, screenConfig);
+        shellScreen = std::make_unique<Screen>(surface, screenConfig);
         shellScreen->root().addChild(shellComp, layout);
         shellScreen->setFocus(&shellComp);
         shellScreen->draw();
@@ -1067,7 +1195,7 @@ TEST_CASE("Screen.inline_toggle_shell4_agent2_no_drift")
 
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 24);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto const screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
     auto const layout = LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 12 } };
@@ -1083,7 +1211,7 @@ TEST_CASE("Screen.inline_toggle_shell4_agent2_no_drift")
     agentComp.cursorRow = 0;
 
     // --- Shell first render (baseline) ---
-    auto shellScreen = std::make_unique<Screen>(terminal, screenConfig);
+    auto shellScreen = std::make_unique<Screen>(surface, screenConfig);
     shellScreen->root().addChild(shellComp, layout);
     shellScreen->setFocus(&shellComp);
     shellScreen->draw();
@@ -1096,7 +1224,7 @@ TEST_CASE("Screen.inline_toggle_shell4_agent2_no_drift")
         shellScreen->root().removeChild(shellComp);
         shellScreen.reset();
 
-        auto agentScreen = std::make_unique<Screen>(terminal, screenConfig);
+        auto agentScreen = std::make_unique<Screen>(surface, screenConfig);
         agentScreen->root().addChild(agentComp, layout);
         agentScreen->setFocus(&agentComp);
         agentScreen->draw();
@@ -1107,7 +1235,7 @@ TEST_CASE("Screen.inline_toggle_shell4_agent2_no_drift")
         agentScreen->root().removeChild(agentComp);
         agentScreen.reset();
 
-        shellScreen = std::make_unique<Screen>(terminal, screenConfig);
+        shellScreen = std::make_unique<Screen>(surface, screenConfig);
         shellScreen->root().addChild(shellComp, layout);
         shellScreen->setFocus(&shellComp);
         shellScreen->draw();
@@ -1123,10 +1251,10 @@ TEST_CASE("Screen.inlineCursor_clearAndReleaseCycle_noDrift")
 {
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 24);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(terminal, screenConfig);
+    auto screen = Screen(surface, screenConfig);
 
     auto comp = FixedContentComponent {};
     comp.contentRows = 4;
@@ -1191,10 +1319,12 @@ TEST_CASE("Screen.inlineHover_cursorAtTop_correctMapping")
     // Cursor starts at row 0 (top of terminal) — content should be at top,
     // and hovering at content rows should produce correct component-relative coordinates.
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 50);
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(terminal, screenConfig);
+
+    auto clock = ManualClock {};
+    auto screen = Screen(surface, screenConfig, clock);
 
     auto comp = RowReportingComponent {};
     comp.contentRows = 3;
@@ -1206,7 +1336,7 @@ TEST_CASE("Screen.inlineHover_cursorAtTop_correctMapping")
     // Content starts at row 0 (mock cursor starts at 0).
     // Terminal mouse coordinates are 1-based, so row 1 = content row 0.
     (void) screen.dispatchEvent(test::mouseMove(5, 1)); // row 1 in 1-based = content row 0
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
 
     CHECK(screen.isTooltipVisible());
@@ -1237,10 +1367,12 @@ TEST_CASE("Screen.inlineHover_cursorInMiddle_correctMapping")
     mock->linefeed(); // row 9
     mock->linefeed(); // row 10 — content starts here
 
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(terminal, screenConfig);
+
+    auto clock = ManualClock {};
+    auto screen = Screen(surface, screenConfig, clock);
 
     auto comp = RowReportingComponent {};
     comp.contentRows = 3;
@@ -1251,14 +1383,14 @@ TEST_CASE("Screen.inlineHover_cursorInMiddle_correctMapping")
 
     // Hover above content area (terminal row 5, 1-based = row 4 0-based, content starts at 10)
     (void) screen.dispatchEvent(test::mouseMove(5, 5));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
     CHECK_FALSE(screen.isTooltipVisible());
 
     // Hover at first content row (terminal row 11 in 1-based = row 10 0-based = content row 0)
     screen.hoverState().reset();
     (void) screen.dispatchEvent(test::mouseMove(5, 11));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
 
     CHECK(screen.isTooltipVisible());
@@ -1272,7 +1404,7 @@ TEST_CASE("Screen.inlineHover_cursorInMiddle_correctMapping")
     // Hover at second content row (terminal row 12 in 1-based = content row 1)
     screen.hoverState().reset();
     (void) screen.dispatchEvent(test::mouseMove(5, 12));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
 
     CHECK(screen.isTooltipVisible());
@@ -1286,7 +1418,7 @@ TEST_CASE("Screen.inlineHover_cursorInMiddle_correctMapping")
     // Hover below content area (terminal row 20 in 1-based)
     screen.hoverState().reset();
     (void) screen.dispatchEvent(test::mouseMove(5, 20));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
     CHECK_FALSE(screen.isTooltipVisible());
 }
@@ -1302,10 +1434,12 @@ TEST_CASE("Screen.inlineHover_cursorAtBottom_correctMapping")
     for ([[maybe_unused]] auto const i: std::views::iota(0, 23))
         mock->linefeed();
 
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(terminal, screenConfig);
+
+    auto clock = ManualClock {};
+    auto screen = Screen(surface, screenConfig, clock);
 
     auto comp = RowReportingComponent {};
     comp.contentRows = 3;
@@ -1317,7 +1451,7 @@ TEST_CASE("Screen.inlineHover_cursorAtBottom_correctMapping")
     // Content starts at row 21 (24 - 3 = 21, 0-based), so terminal row 22 in 1-based = content row 0.
     // With scrolling from LFs, the content is at the bottom.
     (void) screen.dispatchEvent(test::mouseMove(5, 22));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
 
     CHECK(screen.isTooltipVisible());
@@ -1333,10 +1467,12 @@ TEST_CASE("Screen.inlineHover_contentGrowth_correctMapping")
 {
     // Content starts small (1 row), then grows to 3 rows. Hover should still map correctly.
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 50);
-    auto terminal = Terminal(std::move(mockOutput));
+    auto surface = MockScreenSurface(std::move(mockOutput));
 
     auto screenConfig = ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 };
-    auto screen = Screen(terminal, screenConfig);
+
+    auto clock = ManualClock {};
+    auto screen = Screen(surface, screenConfig, clock);
 
     auto comp = RowReportingComponent {};
     comp.contentRows = 1;
@@ -1352,7 +1488,7 @@ TEST_CASE("Screen.inlineHover_contentGrowth_correctMapping")
 
     // Content starts at row 0 (cursor at top). Hover at row 1 (1-based) = content row 0.
     (void) screen.dispatchEvent(test::mouseMove(5, 1));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
 
     CHECK(screen.isTooltipVisible());
@@ -1366,7 +1502,7 @@ TEST_CASE("Screen.inlineHover_contentGrowth_correctMapping")
     // Hover at row 3 (1-based) = content row 2.
     screen.hoverState().reset();
     (void) screen.dispatchEvent(test::mouseMove(5, 3));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    clock.advance(std::chrono::milliseconds(600));
     screen.tickHover();
 
     CHECK(screen.isTooltipVisible());
@@ -1420,8 +1556,8 @@ TEST_CASE("Screen.hyperlink_emittedOnceAcrossPerCellWrites_andClosed")
 {
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 4);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
-    auto screen = Screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    auto surface = MockScreenSurface(std::move(mockOutput));
+    auto screen = Screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
 
     auto comp = LinkedTextComponent {};
     attachSingleRow(screen, comp);
@@ -1442,8 +1578,8 @@ TEST_CASE("Screen.hyperlink_absentWhenNoRegionRegistered")
 {
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 4);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
-    auto screen = Screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    auto surface = MockScreenSurface(std::move(mockOutput));
+    auto screen = Screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
 
     auto comp = LinkedTextComponent {};
     comp.linked = false;
@@ -1461,8 +1597,8 @@ TEST_CASE("Screen.hyperlink_uriChangeWithIdenticalCells_forcesRewrite")
     // repainted and the terminal would keep opening the stale target forever.
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 4);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
-    auto screen = Screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    auto surface = MockScreenSurface(std::move(mockOutput));
+    auto screen = Screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
 
     auto comp = LinkedTextComponent {};
     comp.uri = "file://box/before";
@@ -1488,8 +1624,8 @@ TEST_CASE("Screen.hyperlink_unchangedFrameEmitsNoFraming")
     // no framing bytes at all.
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 4);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
-    auto screen = Screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    auto surface = MockScreenSurface(std::move(mockOutput));
+    auto screen = Screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
 
     auto comp = LinkedTextComponent {};
     attachSingleRow(screen, comp);
@@ -1506,8 +1642,8 @@ TEST_CASE("Screen.hyperlink_idIsStableAcrossRedrawsOfSameUri")
     // would otherwise treat each repaint as a brand-new link.
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 4);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
-    auto screen = Screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    auto surface = MockScreenSurface(std::move(mockOutput));
+    auto screen = Screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
 
     auto comp = LinkedTextComponent {};
     attachSingleRow(screen, comp);
@@ -1526,8 +1662,8 @@ TEST_CASE("Screen.fixedViewport_repaintsItsAreaAndClosesFraming")
     // painted, the link inside it is emitted once, and no framing leaks past the flush.
     auto mockOutput = std::make_unique<MockTerminalOutput>(80, 4);
     auto* mock = mockOutput.get();
-    auto terminal = Terminal(std::move(mockOutput));
-    auto screen = Screen(terminal, ScreenConfig { .viewport = Viewport::Fullscreen });
+    auto surface = MockScreenSurface(std::move(mockOutput));
+    auto screen = Screen(surface, ScreenConfig { .viewport = Viewport::Fullscreen });
     screen.setViewport(Rect { .x = 0, .y = 0, .width = 80, .height = 1 });
 
     auto comp = LinkedTextComponent {};
@@ -1604,8 +1740,8 @@ constexpr auto AreaB = Rect { .x = 20, .y = 1, .width = 10, .height = 3 };
 
 TEST_CASE("Screen.componentAt_findsTheDeepestVisibleComponent")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto panel = MouseRecorder {};
     auto leaf = MouseRecorder {};
     auto hidden = MouseRecorder {};
@@ -1623,8 +1759,8 @@ TEST_CASE("Screen.componentAt_findsTheDeepestVisibleComponent")
 
 TEST_CASE("Screen.componentAt_prefersTheHigherZIndex")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto high = MouseRecorder {};
     auto low = MouseRecorder {};
     // Added first, so insertion order alone would put it underneath.
@@ -1639,8 +1775,8 @@ TEST_CASE("Screen.componentAt_prefersTheHigherZIndex")
 
 TEST_CASE("Screen.componentAt_findsOverlaysBeforeTheTree")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto tree = MouseRecorder {};
     auto first = MouseRecorder {};
     auto second = MouseRecorder {};
@@ -1661,8 +1797,8 @@ TEST_CASE("Screen.componentAt_findsOverlaysBeforeTheTree")
 
 TEST_CASE("Screen.componentAt_neverReturnsTheTooltip")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto tree = MouseRecorder {};
     screen.root().addChild(tree, LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 10 } });
     screen.showTooltip("a tooltip", Point { .x = 0, .y = 0 }); // drawn from row 1 down
@@ -1674,8 +1810,8 @@ TEST_CASE("Screen.componentAt_neverReturnsTheTooltip")
 
 TEST_CASE("Screen.mousePress_overAnOverlayGoesToTheOverlay")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto tree = MouseRecorder {};
     auto overlay = MouseRecorder {};
     screen.root().addChild(tree, LayoutParams { .area = { .x = 0, .y = 0, .width = 40, .height = 10 } });
@@ -1710,8 +1846,8 @@ struct PaintedRecorder: MouseRecorder
 
 TEST_CASE("Screen.componentAt_agreesWithPaintingWhenZIndicesTie")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     constexpr auto Count = 40; // enough siblings that an unstable sort would reorder ties
     auto siblings = std::vector<PaintedRecorder>(Count);
     for (auto const i: std::views::iota(size_t { 0 }, siblings.size()))
@@ -1723,7 +1859,7 @@ TEST_CASE("Screen.componentAt_agreesWithPaintingWhenZIndicesTie")
     screen.draw();
 
     // Whichever sibling is painted last covers the cell; that one must be the hit-test answer.
-    auto const painted = screen.renderedBuffer().at(0, 0).grapheme;
+    auto const painted = requireCell(screen.renderedBuffer(), { .x = 0, .y = 0 }).grapheme;
     auto* const hit = screen.componentAt(0, 0);
     REQUIRE(hit != nullptr);
     auto const* const hitSibling = static_cast<PaintedRecorder const*>(hit);
@@ -1738,14 +1874,14 @@ TEST_CASE("Screen.componentAt_agreesWithPaintingWhenZIndicesTie")
     screen.root().addChild(first, LayoutParams { .area = { .x = 10, .y = 0, .width = 5, .height = 2 } });
     screen.root().addChild(second, LayoutParams { .area = { .x = 10, .y = 0, .width = 5, .height = 2 } });
     screen.draw();
-    CHECK(screen.renderedBuffer().at(0, 10).grapheme == "2");
+    CHECK(requireCell(screen.renderedBuffer(), { .x = 10, .y = 0 }).grapheme == "2");
     CHECK(screen.componentAt(0, 10) == &second);
 }
 
 TEST_CASE("Screen.componentAt_agreesWithPaintingForAnOverlaysChildren")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto overlay = MouseRecorder {};
     auto high = PaintedRecorder {};
     auto low = PaintedRecorder {};
@@ -1757,14 +1893,14 @@ TEST_CASE("Screen.componentAt_agreesWithPaintingForAnOverlaysChildren")
     screen.showOverlay(overlay, Point { .x = 5, .y = 2 });
     screen.draw();
 
-    CHECK(screen.renderedBuffer().at(2, 5).grapheme == "H");
+    CHECK(requireCell(screen.renderedBuffer(), { .x = 5, .y = 2 }).grapheme == "H");
     CHECK(screen.componentAt(2, 5) == &high);
 }
 
 TEST_CASE("Screen.pointerCapture_followsTheDragOutsideThePressedComponent")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto source = MouseRecorder {};
     auto other = MouseRecorder {};
     screen.root().addChild(source, LayoutParams { .area = AreaA });
@@ -1792,8 +1928,8 @@ TEST_CASE("Screen.pointerCapture_followsTheDragOutsideThePressedComponent")
 
 TEST_CASE("Screen.pointerCapture_isTakenByTheAncestorThatHandledThePress")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto panel = MouseRecorder {};
     auto leaf = MouseRecorder {};
     leaf.pressResult = EventResult::Ignored;
@@ -1820,8 +1956,8 @@ TEST_CASE("Screen.pointerCapture_isTakenByTheAncestorThatHandledThePress")
 
 TEST_CASE("Screen.pointerCapture_isNotTakenByAPressNobodyHandled")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto source = MouseRecorder {};
     auto other = MouseRecorder {};
     source.pressResult = EventResult::Ignored;
@@ -1838,8 +1974,8 @@ TEST_CASE("Screen.pointerCapture_isNotTakenByAPressNobodyHandled")
 
 TEST_CASE("Screen.pointerCapture_endsWhenTheTargetIsDestroyed")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto source = std::make_unique<MouseRecorder>();
     auto other = MouseRecorder {};
     screen.root().addChild(*source, LayoutParams { .area = AreaA });
@@ -1858,8 +1994,8 @@ TEST_CASE("Screen.pointerCapture_endsWhenTheTargetIsDestroyed")
 
 TEST_CASE("Screen.pointerCapture_endsWhenTheTargetOrItsAncestorLeavesTheTree")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto panel = MouseRecorder {};
     auto source = MouseRecorder {};
     panel.pressResult = EventResult::Ignored;
@@ -1885,8 +2021,8 @@ TEST_CASE("Screen.pointerCapture_endsWhenTheTargetOrItsAncestorLeavesTheTree")
 
 TEST_CASE("Screen.pointerCapture_endsWhenTheOverlayHoldingItIsHidden")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto overlay = MouseRecorder {};
     screen.showOverlay(overlay, Point { .x = 5, .y = 2 });
     screen.draw();
@@ -1899,8 +2035,8 @@ TEST_CASE("Screen.pointerCapture_endsWhenTheOverlayHoldingItIsHidden")
 
 TEST_CASE("Screen.releasePointer_endsTheCapture")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto source = MouseRecorder {};
     auto other = MouseRecorder {};
     screen.root().addChild(source, LayoutParams { .area = AreaA });
@@ -1917,8 +2053,8 @@ TEST_CASE("Screen.releasePointer_endsTheCapture")
 
 TEST_CASE("Screen.pointerCapture_neverTakesScrollEvents")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto source = MouseRecorder {};
     auto other = MouseRecorder {};
     screen.root().addChild(source, LayoutParams { .area = AreaA });
@@ -1940,8 +2076,8 @@ TEST_CASE("Screen.pointerCapture_movesToTheComponentOfTheNextPress")
 {
     // A release the terminal never delivered -- the window lost focus mid-drag -- holds the pointer
     // only until the next press.
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto source = MouseRecorder {};
     auto other = MouseRecorder {};
     screen.root().addChild(source, LayoutParams { .area = AreaA });
@@ -1959,8 +2095,8 @@ TEST_CASE("Screen.pointerCapture_movesToTheComponentOfTheNextPress")
 
 TEST_CASE("Screen.pointerCapture_isNotTakenByAComponentItsPressDestroyed")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto doomed = std::make_unique<PressCallback>();
     doomed->onPress = [&doomed] {
         doomed.reset();
@@ -1977,10 +2113,10 @@ TEST_CASE("Screen.pointerCapture_isNotTakenByAComponentItsPressDestroyed")
 
 TEST_CASE("Screen.destructor_detachesOverlaysStillShown")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
     auto overlay = MouseRecorder {};
     {
-        auto screen = Screen(terminal);
+        auto screen = Screen(surface);
         screen.showOverlay(overlay, Point { .x = 5, .y = 5 });
         screen.draw();
         CHECK(overlay.screen() == &screen);
@@ -1991,8 +2127,8 @@ TEST_CASE("Screen.destructor_detachesOverlaysStillShown")
 
 TEST_CASE("Screen.overlayDestroyedWhileShown_leavesTheOverlayList")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto overlay = std::make_unique<MouseRecorder>();
     screen.showOverlay(*overlay, Point { .x = 5, .y = 2 });
     screen.draw();
@@ -2003,6 +2139,142 @@ TEST_CASE("Screen.overlayDestroyedWhileShown_leavesTheOverlayList")
     // heap-use-after-free.
     screen.draw();
     CHECK(screen.componentAt(3, 6) == nullptr);
+}
+
+namespace
+{
+
+/// @brief An input that commits what was typed when it loses the focus, and counts its commits.
+class CommitOnBlur final: public Component
+{
+  public:
+    explicit CommitOnBlur(int& commits): _commits(&commits) {}
+
+    void render(Canvas& /*canvas*/) override {}
+    [[nodiscard]] bool focusable() const override { return true; }
+    [[nodiscard]] Size preferredSize() const override { return { .width = 10, .height = 1 }; }
+    void onBlur() override { ++*_commits; }
+
+  private:
+    int* _commits;
+};
+
+} // namespace
+
+namespace
+{
+
+/// @brief A focusable component whose onBlur() adds a component to its parent: a handler that changes
+/// the tree it is leaving.
+class GrowsParentOnBlur final: public Component
+{
+  public:
+    GrowsParentOnBlur(Component& extra, int& blurs): _extra(&extra), _blurs(&blurs) {}
+
+    void render(Canvas& /*canvas*/) override {}
+    [[nodiscard]] bool focusable() const override { return true; }
+    void onBlur() override
+    {
+        ++*_blurs;
+        if (parent())
+            parent()->addChild(*_extra, { .area = { .x = 0, .y = 1, .width = 4, .height = 1 } });
+    }
+
+  private:
+    Component* _extra;
+    int* _blurs;
+};
+
+} // namespace
+
+TEST_CASE("Screen.onBlurThatChangesTheTree_runsAfterTheDetachLoop")
+{
+    // Run under ASan: delivered inside setScreen()'s loop over the parent's children, the handler's
+    // addChild() reallocated the vector being walked -- a heap-use-after-free.
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
+    auto blurs = 0;
+    auto extra = RootComponent {};
+    auto panel = RootComponent {};
+    auto input = GrowsParentOnBlur { extra, blurs };
+    auto sibling = RootComponent {};
+    // Two children, so the vector is full and the loop goes on reading it after the first.
+    panel.addChild(input, { .area = { .x = 0, .y = 0, .width = 10, .height = 1 } });
+    panel.addChild(sibling, { .area = { .x = 10, .y = 0, .width = 10, .height = 1 } });
+    screen.root().addChild(panel, { .area = { .x = 0, .y = 0, .width = 20, .height = 2 } });
+    screen.setFocus(&input);
+    REQUIRE(panel.children().size() == 2);
+
+    screen.root().removeChild(panel);
+    CHECK(blurs == 1);
+    CHECK(extra.parent() == &panel);
+    CHECK(panel.children().size() == 3);
+    CHECK(screen.focusedComponent() == nullptr);
+    panel.removeChild(extra);
+}
+
+TEST_CASE("Screen.focusedComponentLeavingAlive_hearsOnBlur")
+{
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
+    auto commits = 0;
+
+    SECTION("an overlay hidden while focused")
+    {
+        auto input = CommitOnBlur { commits };
+        screen.showOverlay(input, Point { .x = 5, .y = 5 });
+        screen.setFocus(&input);
+        REQUIRE(screen.focusedComponent() == &input);
+        REQUIRE(commits == 0);
+
+        screen.hideOverlay(input);
+        CHECK(commits == 1);
+        CHECK_FALSE(input.focused());
+        CHECK(screen.focusedComponent() == nullptr);
+        CHECK(input.screen() == nullptr);
+    }
+
+    SECTION("a child removed from the tree with its parent")
+    {
+        auto panel = RootComponent {};
+        auto input = CommitOnBlur { commits };
+        panel.addChild(input, { .area = { .x = 0, .y = 0, .width = 10, .height = 1 } });
+        screen.root().addChild(panel, { .area = { .x = 0, .y = 0, .width = 20, .height = 2 } });
+        screen.setFocus(&input);
+        REQUIRE(screen.focusedComponent() == &input);
+
+        screen.root().removeChild(panel);
+        CHECK(commits == 1);
+        CHECK(screen.focusedComponent() == nullptr);
+    }
+
+    SECTION("a child left behind by a parent destroyed around it")
+    {
+        auto input = CommitOnBlur { commits };
+        {
+            auto panel = RootComponent {};
+            panel.addChild(input, { .area = { .x = 0, .y = 0, .width = 10, .height = 1 } });
+            screen.root().addChild(panel, { .area = { .x = 0, .y = 0, .width = 20, .height = 2 } });
+            screen.setFocus(&input);
+            REQUIRE(screen.focusedComponent() == &input);
+        }
+        CHECK(commits == 1);
+        CHECK(input.parent() == nullptr);
+        CHECK(input.screen() == nullptr);
+        CHECK(screen.focusedComponent() == nullptr);
+    }
+
+    SECTION("not a focused component destroyed: it loses its focus with no call into it")
+    {
+        {
+            auto input = CommitOnBlur { commits };
+            screen.root().addChild(input, { .area = { .x = 0, .y = 0, .width = 10, .height = 1 } });
+            screen.setFocus(&input);
+            REQUIRE(screen.focusedComponent() == &input);
+        }
+        CHECK(commits == 0);
+        CHECK(screen.focusedComponent() == nullptr);
+    }
 }
 
 namespace
@@ -2025,8 +2297,8 @@ struct HoverableRecorder: MouseRecorder
 
 TEST_CASE("Screen.mousePress_endsTheHoverSoNoTooltipOpensMidDrag")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto source = HoverableRecorder {};
     screen.root().addChild(source, LayoutParams { .area = AreaA });
     screen.hoverState().setDelay(std::chrono::milliseconds(0)); // a tick confirms any running timer
@@ -2065,8 +2337,8 @@ TEST_CASE("Screen.mousePress_endsTheHoverSoNoTooltipOpensMidDrag")
 
 TEST_CASE("Screen.pointerCapture_endsAtAReleaseBeforeTheInlineContentIsPlaced")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal, ScreenConfig { .viewport = Viewport::Inline });
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface, ScreenConfig { .viewport = Viewport::Inline });
     auto source = PaintedRecorder {};
     auto other = PaintedRecorder {};
     source.glyph = 'A'; // content, so the inline viewport has a height
@@ -2093,8 +2365,8 @@ TEST_CASE("Screen.pointerCapture_endsAtAReleaseBeforeTheInlineContentIsPlaced")
 
 TEST_CASE("Screen.releasePointer_inAPressHandler")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto panel = MouseRecorder {};
     auto leaf = PressCallback {};
     leaf.onPress = [&screen] {
@@ -2122,8 +2394,8 @@ TEST_CASE("Screen.releasePointer_inAPressHandler")
 
 TEST_CASE("Screen.pointerCapture_aPressThatDestroysTheComponentIgnoringItEndsThere")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto panel = MouseRecorder {};
     auto doomed = std::make_unique<PressCallback>();
     doomed->pressResult = EventResult::Ignored;
@@ -2144,8 +2416,8 @@ TEST_CASE("Screen.pointerCapture_aPressThatDestroysTheComponentIgnoringItEndsThe
 
 TEST_CASE("Screen.pointerCapture_deliversToACapturedOverlayInItsOwnCoordinates")
 {
-    auto terminal = Terminal(std::make_unique<MockTerminalOutput>(80, 24));
-    auto screen = Screen(terminal);
+    auto surface = MockScreenSurface(std::make_unique<MockTerminalOutput>(80, 24));
+    auto screen = Screen(surface);
     auto tree = MouseRecorder {};
     auto overlay = MouseRecorder {};
     screen.root().addChild(tree, LayoutParams { .area = { .x = 0, .y = 0, .width = 80, .height = 24 } });
@@ -2241,14 +2513,14 @@ class TextPositionMock: public MockTerminalOutput
 struct InlineMarkFixture
 {
     MockTerminalOutput* mock;
-    Terminal terminal;
+    MockScreenSurface surface;
     Screen screen;
     MarkedRowsComponent comp;
 
     explicit InlineMarkFixture(std::unique_ptr<MockTerminalOutput> output):
         mock(output.get()),
-        terminal(std::move(output)),
-        screen(terminal, ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 })
+        surface(std::move(output)),
+        screen(surface, ScreenConfig { .viewport = Viewport::Inline, .inlineMaxHeight = 12 })
     {
     }
 
@@ -2457,4 +2729,51 @@ TEST_CASE("TerminalOutput.deleteLines_writesDL")
     CHECK(mock.deletedLines() == 0);
     mock.deleteLines(1);
     CHECK(mock.deletedLines() == 1);
+}
+
+TEST_CASE("Screen.fixedViewport_pastTheScreensEdge_drawsWithoutWritingOutsideIt")
+{
+    // Pins the CHANGELOG's fix: a fixed area below or right of the screen made the flush build a
+    // row range that ran backwards, which a hardened standard library (_GLIBCXX_ASSERTIONS) aborts
+    // on. Drawn once, it must write none of the component's cells.
+    auto bytes = std::string {};
+    auto surface = HeadlessSurface { Size { .width = 20, .height = 4 },
+                                     [&bytes](std::string_view chunk) { bytes += chunk; } };
+    auto screen = Screen(surface);
+    screen.setViewport(Rect { .x = 25, .y = 6, .width = 10, .height = 2 });
+    auto painter = PaintedRecorder {};
+    painter.glyph = 'Z';
+    screen.root().addChild(painter, LayoutParams { .area = { .x = 0, .y = 0, .width = 10, .height = 2 } });
+
+    screen.draw();
+
+    CHECK_FALSE(bytes.contains('Z'));
+}
+
+TEST_CASE("Screen.fixedViewport_partlyPastTheScreensEdge_writesOnlyWhatIsOnScreen")
+{
+    // The same area straddling the bottom-right corner: the part on screen is painted, the rest
+    // clipped rather than written past the edge.
+    auto bytes = std::string {};
+    auto surface = HeadlessSurface { Size { .width = 20, .height = 4 },
+                                     [&bytes](std::string_view chunk) { bytes += chunk; } };
+    auto screen = Screen(surface);
+    screen.setViewport(Rect { .x = 15, .y = 2, .width = 10, .height = 5 });
+    auto painter = PaintedRecorder {};
+    painter.glyph = 'Z';
+    screen.root().addChild(painter, LayoutParams { .area = { .x = 0, .y = 0, .width = 10, .height = 5 } });
+
+    screen.draw();
+
+    // Columns 15..19 of rows 2..3: five cells on each of two rows.
+    CHECK(std::ranges::count(bytes, 'Z') == 10);
+}
+
+TEST_CASE("Screen.aTemporaryClockIsRefused")
+{
+    // Screen and HoverState keep the clock they are given; a temporary one would dangle.
+    STATIC_CHECK(std::is_constructible_v<Screen, ScreenSurface&, ScreenConfig, ManualClock&>);
+    STATIC_CHECK_FALSE(std::is_constructible_v<Screen, ScreenSurface&, ScreenConfig, ManualClock>);
+    STATIC_CHECK(std::is_constructible_v<HoverState, std::chrono::milliseconds, ManualClock&>);
+    STATIC_CHECK_FALSE(std::is_constructible_v<HoverState, std::chrono::milliseconds, ManualClock>);
 }

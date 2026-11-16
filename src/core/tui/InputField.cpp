@@ -3,8 +3,6 @@
 
 #include <core/tui/Canvas.hpp>
 #include <core/tui/EditAction.hpp>
-#include <core/tui/Screen.hpp>
-#include <core/tui/Terminal.hpp>
 #include <core/tui/Theme.hpp>
 #include <core/tui/Unicode.hpp>
 
@@ -172,6 +170,14 @@ namespace
         return ghost;
     }
 } // namespace
+
+InputField::InputField(): InputField(defaultSteadyClock())
+{
+}
+
+InputField::InputField(IClock const& clock): _clock(clock)
+{
+}
 
 auto InputField::processEvent(InputEvent const& event) -> InputFieldAction
 {
@@ -2233,7 +2239,7 @@ auto InputField::handleMouse(MouseEvent::Type type, int line, int column, Modifi
 
 auto InputField::detectClickCount(int line, int column) -> int
 {
-    auto const now = std::chrono::steady_clock::now();
+    auto const now = _clock.now();
     auto const elapsed = now - _lastClickTime;
 
     // Check if this is a continuation of multi-click sequence

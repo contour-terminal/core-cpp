@@ -2,17 +2,12 @@
 #include <core/tui/Screen.hpp>
 
 #include <core/tui/Canvas.hpp>
-#include <core/tui/HyperlinkEmitter.hpp>
-#include <core/tui/Terminal.hpp>
+#include <core/tui/FrameDiff.hpp>
+#include <core/tui/ScreenSurface.hpp>
 
 #include <algorithm>
 #include <chrono>
-#include <cstddef>
-#include <iterator>
-#include <optional>
 #include <ranges>
-#include <span>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -44,14 +39,38 @@ InlineCursorMovement calculateInlineCursorMovement(int previousContentHeight,
     return result;
 }
 
-Screen::Screen(Terminal& terminal, ScreenConfig config):
-    _terminal(terminal), _config(config), _theme(currentTheme()), _root(std::make_unique<RootComponent>())
+namespace
+{
+
+    /// @brief The number of rows from the top of @p frame down to its last row holding anything
+    /// but blanks: how much of an inline frame there is to show.
+    [[nodiscard]] int contentHeightOf(Buffer const& frame) noexcept
+    {
+        auto const blank = [](Cell const* cell) {
+            return cell == nullptr || cell->grapheme.empty() || cell->grapheme == " ";
+        };
+        for (auto const row: std::views::iota(0, frame.rows()) | std::views::reverse)
+            for (auto const col: std::views::iota(0, frame.cols()))
+                if (!blank(frame.cellAt({ .x = col, .y = row })))
+                    return row + 1;
+        return 0;
+    }
+
+} // namespace
+
+Screen::Screen(ScreenSurface& surface, ScreenConfig config, IClock const& clock):
+    _surface(surface),
+    _config(config),
+    _theme(currentTheme()),
+    _root(std::make_unique<RootComponent>()),
+    _hoverState(HoverState::DefaultHoverDelay, clock),
+    _tooltip(_config.tooltipBorder)
 {
     _root->setScreen(this);
 
     // Initialize buffers based on terminal size
-    auto const termRows = _terminal.rows();
-    auto const termCols = _terminal.columns();
+    auto const termRows = _surface.rows();
+    auto const termCols = _surface.columns();
     _current.resize(termRows, termCols);
     _previous.resize(termRows, termCols);
 
@@ -87,10 +106,10 @@ Screen::Screen(Terminal& terminal, ScreenConfig config):
 
     // Switch to the alternate screen buffer (DEC private mode 1049) so the app paints on a
     // fresh screen and the user's scrollback is preserved; restored in the destructor.
-    if (_config.alternateScreen)
+    if (_config.screenBuffer == ScreenBuffer::Alternate)
     {
-        _terminal.output().writeRaw("\033[?1049h");
-        _terminal.output().flush();
+        _surface.output().writeRaw("\033[?1049h");
+        _surface.output().flush();
         _enteredAlternateScreen = true;
     }
 }
@@ -100,16 +119,22 @@ Screen::~Screen()
     // Overlays and the tree's components belong to the caller and may outlive this screen. Each
     // forgets it here, while every member is alive, so that no teardown -- theirs later, or the root's
     // among this screen's members -- reaches a destroyed screen.
-    for (auto const& entry: _overlays)
-        entry.component->setScreen(nullptr);
-    _overlays.clear();
-    // _root is declared before _overlays and the other containers, so it is destroyed after them;
-    // still attached, ~RootComponent would call back into those destroyed members.
-    _root->setScreen(nullptr);
+    // Every component that leaves focused hears onBlur() when this change closes, while every member
+    // is still alive; each has forgotten this screen by then. An onBlur() handler must not re-attach a
+    // component to this screen during that final flush (showOverlay() on it, say):
+    // the screen is being destroyed, and what it re-attached would point at a dead screen.
+    {
+        auto const change = TreeChange { this };
+        for (auto const& entry: std::exchange(_overlays, {}))
+            entry.component->setScreen(nullptr);
+        _root->setScreen(nullptr);
+    }
+    // (_root is declared before _overlays and the other containers, so it is destroyed after them;
+    // still attached, ~RootComponent would have called back into those destroyed members.)
 
     if (_enteredAlternateScreen)
     {
-        auto& out = _terminal.output();
+        auto& out = _surface.output();
         out.showCursor();
         out.writeRaw("\033[?1049l"); // leave the alternate screen, restoring the primary buffer
         out.flush();
@@ -135,25 +160,7 @@ void Screen::draw()
     if (_config.viewport == Viewport::Inline)
     {
         _previousMainContentHeight = _mainContentHeight;
-        _mainContentHeight = 0;
-        for (auto const row: std::views::iota(0, _current.rows()) | std::views::reverse)
-        {
-            bool hasContent = false;
-            for (auto const col: std::views::iota(0, _current.cols()))
-            {
-                Cell const& cell = _current.at(row, col);
-                if (!cell.grapheme.empty() && cell.grapheme != " ")
-                {
-                    hasContent = true;
-                    break;
-                }
-            }
-            if (hasContent)
-            {
-                _mainContentHeight = row + 1;
-                break;
-            }
-        }
+        _mainContentHeight = contentHeightOf(_current);
     }
 
     renderOverlays();
@@ -190,7 +197,7 @@ void Screen::releaseCursor()
 
 void Screen::clearAndRelease()
 {
-    auto& out = _terminal.output();
+    auto& out = _surface.output();
 
     // Move up from the tracked cursor row to the top of the content region.
     if (_previousCursorRow > 0)
@@ -221,23 +228,22 @@ int Screen::rows() const noexcept
 {
     switch (_config.viewport)
     {
-        case Viewport::Fullscreen: return _terminal.rows();
-        case Viewport::Inline:
-            return _config.inlineMaxHeight > 0 ? _config.inlineMaxHeight : _terminal.rows();
+        case Viewport::Fullscreen: return _surface.rows();
+        case Viewport::Inline: return _config.inlineMaxHeight > 0 ? _config.inlineMaxHeight : _surface.rows();
         case Viewport::Fixed: return _config.fixedArea.height;
     }
-    return _terminal.rows();
+    return _surface.rows();
 }
 
 int Screen::cols() const noexcept
 {
     switch (_config.viewport)
     {
-        case Viewport::Fullscreen: return _terminal.columns();
-        case Viewport::Inline: return _terminal.columns();
+        case Viewport::Fullscreen: return _surface.columns();
+        case Viewport::Inline: return _surface.columns();
         case Viewport::Fixed: return _config.fixedArea.width;
     }
-    return _terminal.columns();
+    return _surface.columns();
 }
 
 Size Screen::size() const noexcept
@@ -263,17 +269,17 @@ Rect Screen::viewportArea() const noexcept
     switch (_config.viewport)
     {
         case Viewport::Fullscreen:
-            return { .x = 0, .y = 0, .width = _terminal.columns(), .height = _terminal.rows() };
+            return { .x = 0, .y = 0, .width = _surface.columns(), .height = _surface.rows() };
         case Viewport::Inline: {
             // For inline mode, the viewport area is the maximum area available for rendering.
             // We use inlineMaxHeight if set, otherwise the full terminal height.
             // The actual content height (_previousContentHeight) is only used for flush positioning.
-            int const maxHeight = _config.inlineMaxHeight > 0 ? _config.inlineMaxHeight : _terminal.rows();
-            return { .x = 0, .y = 0, .width = _terminal.columns(), .height = maxHeight };
+            int const maxHeight = _config.inlineMaxHeight > 0 ? _config.inlineMaxHeight : _surface.rows();
+            return { .x = 0, .y = 0, .width = _surface.columns(), .height = maxHeight };
         }
         case Viewport::Fixed: return _config.fixedArea;
     }
-    return { .x = 0, .y = 0, .width = _terminal.columns(), .height = _terminal.rows() };
+    return { .x = 0, .y = 0, .width = _surface.columns(), .height = _surface.rows() };
 }
 
 EventResult Screen::dispatchEvent(InputEvent const& event)
@@ -284,6 +290,7 @@ EventResult Screen::dispatchEvent(InputEvent const& event)
         auto const& resize = std::get<ResizeEvent>(event);
         _current.resize(resize.rows, resize.columns);
         _previous.resize(resize.rows, resize.columns);
+        layoutRoot();
         invalidate();
         return EventResult::Handled;
     }
@@ -380,8 +387,8 @@ void Screen::focusPrev()
 void Screen::beginFrame()
 {
     // Resize buffers if terminal size changed
-    auto const termRows = _terminal.rows();
-    auto const termCols = _terminal.columns();
+    auto const termRows = _surface.rows();
+    auto const termCols = _surface.columns();
 
     if (_current.rows() != termRows || _current.cols() != termCols)
     {
@@ -390,8 +397,59 @@ void Screen::beginFrame()
         _needsFullRedraw = true;
     }
 
+    layoutRoot();
+
     // Clear current buffer
     _current.clear(_theme.textNormal);
+}
+
+void Screen::layoutRoot()
+{
+    // One tree change for the whole pass: a blur a swap queues is delivered after it, not inside a loop.
+    auto const change = TreeChange { this };
+
+    // The root's area is the viewport's size at the origin: its children's areas are relative to the
+    // viewport, which renderTree() offsets them by. setArea() lays the tree out only when the size changed.
+    // A resize takes up a chain that was abandoned.
+    auto const viewport = viewportArea();
+    auto const rootArea = Rect { .x = 0, .y = 0, .width = viewport.width, .height = viewport.height };
+    if (_root->area() != rootArea)
+        _chainedLayoutSweeps = 0;
+    _root->setArea(rootArea);
+
+    // One sweep: a mark made during it (a Responsive the sweep resized swapping its layout) is the next
+    // frame's, so a layout whose hints chase its size settles a frame at a time rather than looping here.
+    switch (_layoutRequested)
+    {
+        case LayoutRequest::None:
+            if (!layoutAbandoned())
+                _chainedLayoutSweeps = 0;
+            return;
+        case LayoutRequest::Pending: _chainedLayoutSweeps = 0; break;
+        case LayoutRequest::Chained:
+            // Past the bound the chain does not settle: the marks stay where they are, and the layout as
+            // it is, until something from outside -- a resize, a hint changed -- asks again.
+            if (++_chainedLayoutSweeps > MaxChainedLayoutSweeps)
+            {
+                _layoutRequested = LayoutRequest::None;
+                return;
+            }
+            break;
+    }
+    _layoutRequested = LayoutRequest::None;
+    _layoutSweep = LayoutSweep::Running;
+    relayoutMarked(*_root);
+    _layoutSweep = LayoutSweep::Idle;
+}
+
+void Screen::relayoutMarked(Component& component)
+{
+    if (component.layoutPending())
+        component.layoutChildren();
+    // A copy: laying a child's children out may rebuild them (Responsive), but not this list.
+    auto const children = std::vector<Component*>(component.children().begin(), component.children().end());
+    for (Component* child: children)
+        relayoutMarked(*child);
 }
 
 namespace
@@ -515,9 +573,9 @@ void Screen::hideOverlay(Component& overlay)
 
     if (it != _overlays.end())
     {
-        it->component->setScreen(nullptr);
         _overlays.erase(it);
         invalidate();
+        overlay.setScreen(nullptr);
     }
 }
 
@@ -550,15 +608,15 @@ void Screen::flush()
     {
         // First inline render: skip SyncGuard — no previous content to tear against,
         // and avoids SIGCHLD-interrupted write leaving the terminal in sync-buffer mode.
-        _terminal.output().flush();
+        _surface.output().flush();
         flushInline();
         applyCursorShape();
-        _terminal.output().flush();
+        _surface.output().flush();
     }
     else
     {
         // Use synchronized output to prevent tearing
-        auto syncGuard = _terminal.output().syncGuard();
+        auto syncGuard = _surface.output().syncGuard();
 
         switch (_config.viewport)
         {
@@ -579,52 +637,19 @@ void Screen::flush()
 
 void Screen::flushArea(Rect area)
 {
-    auto& out = _terminal.output();
+    auto& out = _surface.output();
     bool const useDiff = (_renderMode == RenderMode::Diff) && !_needsFullRedraw;
-
-    auto links = FlushLinks { out, _current, useDiff ? &_previous : nullptr };
 
     // Hide cursor during update
     out.hideCursor();
 
-    auto const lastRow = std::min(area.bottom(), _current.rows());
-    auto const lastCol = std::min(area.right(), _current.cols());
-
-    for (auto const row: std::views::iota(std::max(0, area.y), std::max(0, lastRow)))
-    {
-        auto col = std::max(0, area.x);
-        while (col < lastCol)
-        {
-            Cell const& cell = _current.at(row, col);
-
-            // Skip continuation cells
-            if (cell.isContinuation())
-            {
-                ++col;
-                continue;
-            }
-
-            // Check if cell changed (when using diff)
-            bool needsUpdate = !useDiff;
-            if (useDiff && _previous.inBounds(row, col))
-            {
-                Cell const& prevCell = _previous.at(row, col);
-                needsUpdate = (cell != prevCell) || links.retargeted(row, col);
-            }
-
-            if (needsUpdate)
-            {
-                out.moveTo(row + 1, col + 1); // Terminal is 1-based
-                links.emitter.beforeWrite(row, col);
-                out.writeText(cell.grapheme, cell.style);
-            }
-
-            col += std::max(1, static_cast<int>(cell.width));
-        }
-        // Never hold framing open across a row boundary: the next row's cells are reached by
-        // absolute cursor motion, which the terminal does not treat as ending a link.
-        links.emitter.close();
-    }
+    writeFrameDiff(out,
+                   _previous,
+                   _current,
+                   DiffOptions { .addressing = DiffAddressing::Absolute,
+                                 .repaint = useDiff ? DiffRepaint::Changed : DiffRepaint::All,
+                                 .area = area,
+                                 .hyperlinks = DiffHyperlinks::Emit });
 
     // Restore cursor
     if (_current.cursorVisible())
@@ -642,129 +667,11 @@ void Screen::flushFullscreen()
     flushArea(Rect { .x = 0, .y = 0, .width = _current.cols(), .height = _current.rows() });
 }
 
-namespace
-{
-
-    /// @brief A frame's emittable row marks, grouped by row and sorted by column.
-    ///
-    /// Marks the inline flush can never reach are left out: those outside the buffer and those on
-    /// a wide character's continuation column, which no cell write starts at.
-    class RowMarkIndex
-    {
-      public:
-        /// @param buffer The frame whose marks to index. Must outlive this object.
-        explicit RowMarkIndex(Buffer const& buffer)
-        {
-            _sorted.reserve(buffer.marks().size());
-            for (auto const& mark: buffer.marks())
-            {
-                auto const* cell = buffer.tryAt(mark.row, mark.column);
-                if (cell != nullptr && !cell->isContinuation())
-                    _sorted.push_back(&mark);
-            }
-            std::ranges::stable_sort(_sorted, [](RowMark const* a, RowMark const* b) {
-                return std::pair { a->row, a->column } < std::pair { b->row, b->column };
-            });
-        }
-
-        /// @brief Returns @p row's marks, sorted by column (registration order among equals).
-        [[nodiscard]] std::span<RowMark const* const> row(int row) const
-        {
-            auto const range = std::ranges::equal_range(_sorted, row, {}, &RowMark::row);
-            return { range.begin(), range.end() };
-        }
-
-        /// @brief Whether @p row's marks (column and sequence, in order) differ from @p other's.
-        [[nodiscard]] bool rowDiffers(int row, RowMarkIndex const& other) const
-        {
-            return !std::ranges::equal(
-                this->row(row), other.row(row), [](RowMark const* a, RowMark const* b) {
-                    return a->column == b->column && a->sequence == b->sequence;
-                });
-        }
-
-      private:
-        std::vector<RowMark const*> _sorted;
-    };
-
-    /// @brief Emits a frame's row marks ahead of the inline cells they govern.
-    ///
-    /// A row's marks, sorted by column, split it into segments `[mark.column, next.column)`.
-    /// Before a repainted cell is written, the mark of the segment holding it is written at the
-    /// mark's own column, unless that segment's mark was already the last one written on this
-    /// row. Marks are zero-width, so the cursor is moved to the mark's column and back.
-    class RowMarkEmitter
-    {
-      public:
-        /// @param out Sink receiving the marks. Must outlive this object.
-        /// @param index The marks of the frame being flushed. Must outlive this object.
-        RowMarkEmitter(TerminalOutput& out, RowMarkIndex const& index): _out(out), _index(index) {}
-
-        /// @brief Selects @p row's marks and forgets the last segment written.
-        void beginRow(int row)
-        {
-            _row = _index.row(row);
-            _lastSegment.reset();
-        }
-
-        /// @brief Writes the mark governing column @p col if it is not already in force.
-        /// @param col The column of the cell about to be written; the cursor is there.
-        void beforeWrite(int col)
-        {
-            if (_row.empty())
-                return;
-
-            auto const next = std::ranges::upper_bound(_row, col, {}, &RowMark::column);
-            if (next == _row.begin())
-                return; // Left of the row's first mark: no segment, nothing to establish.
-
-            auto const segment = static_cast<std::size_t>(std::distance(_row.begin(), next) - 1);
-            if (_lastSegment == segment)
-                return;
-
-            auto const& mark = *_row[segment];
-            auto const distance = col - mark.column;
-            if (distance > 0)
-                _out.moveLeft(distance);
-            _out.writeRaw(mark.sequence);
-            if (distance > 0)
-                _out.moveRight(distance);
-            _lastSegment = segment;
-        }
-
-      private:
-        TerminalOutput& _out;
-        RowMarkIndex const& _index;
-        std::span<RowMark const* const> _row;
-        std::optional<std::size_t> _lastSegment;
-    };
-
-} // namespace
-
 void Screen::flushInline()
 {
-    auto& out = _terminal.output();
+    auto& out = _surface.output();
 
-    // Calculate content height (find last non-empty row)
-    int contentHeight = 0;
-    for (auto const row: std::views::iota(0, _current.rows()) | std::views::reverse)
-    {
-        bool hasContent = false;
-        for (auto const col: std::views::iota(0, _current.cols()))
-        {
-            Cell const& cell = _current.at(row, col);
-            if (!cell.grapheme.empty() && cell.grapheme != " ")
-            {
-                hasContent = true;
-                break;
-            }
-        }
-        if (hasContent)
-        {
-            contentHeight = row + 1;
-            break;
-        }
-    }
+    int const contentHeight = contentHeightOf(_current);
 
     // Move cursor to start of content region (row 0)
     // The cursor is currently at _previousCursorRow from the last render
@@ -797,9 +704,9 @@ void Screen::flushInline()
                 out.restoreCursor(); // DECRC: anchor to exact saved position
 
                 // Query cursor position after DECRC to know where content starts.
-                auto const cursor = _terminal.queryCursorPosition();
+                auto const cursor = _surface.queryCursorPosition();
                 auto const startRow =
-                    (cursor && cursor->first > 0) ? (cursor->first - 1) : (_terminal.rows() - 1);
+                    (cursor && cursor->first > 0) ? (cursor->first - 1) : (_surface.rows() - 1);
 
                 if (reservedRoom >= contentHeight)
                 {
@@ -819,15 +726,15 @@ void Screen::flushInline()
                 }
 
                 // Content start: min(cursor row, bottom-aligned position).
-                _inlineContentStartRow = std::min(startRow, _terminal.rows() - contentHeight);
+                _inlineContentStartRow = std::min(startRow, _surface.rows() - contentHeight);
             }
             else
             {
                 // Very first render (no previous Screen) — reserve room with LFs.
                 // Query actual cursor position to compute _inlineContentStartRow accurately.
-                auto const cursor = _terminal.queryCursorPosition();
+                auto const cursor = _surface.queryCursorPosition();
                 auto const startRow =
-                    (cursor && cursor->first > 0) ? (cursor->first - 1) : (_terminal.rows() - 1);
+                    (cursor && cursor->first > 0) ? (cursor->first - 1) : (_surface.rows() - 1);
 
                 // Emit contentHeight-1 newlines (enough to ensure room without overshooting).
                 auto const newLines = std::max(0, contentHeight - 1);
@@ -841,14 +748,14 @@ void Screen::flushInline()
                 // Content start: min(cursor row, bottom-aligned position).
                 // Cursor near top (row 5, rows=50, height=5): start = min(5, 45) = 5
                 // Cursor at bottom (row 49, rows=50, height=5): start = min(49, 45) = 45
-                _inlineContentStartRow = std::min(startRow, _terminal.rows() - contentHeight);
+                _inlineContentStartRow = std::min(startRow, _surface.rows() - contentHeight);
             }
         }
         else
         {
             // Content grew — emit LFs for the growth and adjust start row only for actual scrolls.
             auto const growth = contentHeight - _peakContentHeight;
-            auto const scrollsNeeded = std::max(0, _inlineContentStartRow + contentHeight - _terminal.rows());
+            auto const scrollsNeeded = std::max(0, _inlineContentStartRow + contentHeight - _surface.rows());
 
             for ([[maybe_unused]] auto _: std::views::iota(0, growth))
                 out.linefeed();
@@ -863,7 +770,7 @@ void Screen::flushInline()
     else if (_inlineContentStartRow < 0)
     {
         // Haven't set start row yet but peak is already set (shouldn't happen, but handle it)
-        _inlineContentStartRow = _terminal.rows() - _mainContentHeight - _totalNewlinesEmitted;
+        _inlineContentStartRow = _surface.rows() - _mainContentHeight - _totalNewlinesEmitted;
     }
 
     // Track how many rows to clear if content shrank
@@ -873,128 +780,22 @@ void Screen::flushInline()
 
     _previousContentHeight = contentHeight;
 
-    // Now render each line
+    // Now render each line, from row 0 of the content, where the cursor is.
     bool const useDiff = (_renderMode == RenderMode::Diff) && !_needsFullRedraw;
-
-    auto links = FlushLinks { out, _current, useDiff ? &_previous : nullptr };
-    auto const currentMarks = RowMarkIndex { _current };
-    auto const previousMarks = RowMarkIndex { _previous };
-    auto marks = RowMarkEmitter { out, currentMarks };
 
     out.hideCursor();
 
-    // Build image row coverage: for each row, the image (if any) that starts there
-    auto imageAtRow = std::unordered_map<int, ImageRegion const*> {};
-    for (auto const& img: _current.images())
-        imageAtRow[img.cellArea.y] = &img;
-
-    // Build previous image lookup for diffing — skip sixel re-emission when unchanged
-    auto previousImageAtRow = std::unordered_map<int, ImageRegion const*> {};
-    if (useDiff)
-    {
-        for (auto const& img: _previous.images())
-            previousImageAtRow[img.cellArea.y] = &img;
-    }
-
-    auto row = 0;
-    while (row < contentHeight)
-    {
-        out.carriageReturn(); // Move to start of line
-
-        // Check if an image starts at this row
-        if (auto it = imageAtRow.find(row); it != imageAtRow.end())
-        {
-            auto const& img = *it->second;
-
-            // Only emit sixel when the image actually changed from the previous frame.
-            auto needsEmit = !useDiff;
-            if (!needsEmit)
-            {
-                auto const prevIt = previousImageAtRow.find(row);
-                needsEmit = (prevIt == previousImageAtRow.end() || prevIt->second->cellArea != img.cellArea
-                             || prevIt->second->contentHash != img.contentHash);
-            }
-
-            if (needsEmit && !img.encodedSixel.empty())
-            {
-                // Save cursor before sixel — the terminal may advance the cursor
-                // below the image (DECSIXEL mode 80 set), which would corrupt
-                // our cursor tracking. DECSC/DECRC restores the exact position.
-                out.saveCursor();
-                if (img.cellArea.x > 0)
-                    out.moveRight(img.cellArea.x);
-                out.writeSixel(img.encodedSixel);
-                out.restoreCursor();
-            }
-
-            // Skip cell rendering for all rows covered by this image.
-            // Don't clearToEndOfLine — the sixel covers the visual area and
-            // clearing might erase the pixel data in some terminals.
-            auto const skipRows = img.cellArea.height - 1;
-            auto skipped = 0;
-            while (skipped < skipRows && row + 1 < contentHeight)
-            {
-                out.linefeed();
-                ++row;
-                ++skipped;
-            }
-            if (row < contentHeight - 1)
-                out.linefeed();
-            ++row;
-            continue;
-        }
-
-        if (_config.inhibitReflow)
-            out.disableReflow();
-
-        marks.beginRow(row);
-        // Marks are diffed the way hyperlinks are: they live beside the cells, so Cell equality
-        // cannot see a changed one. A row whose marks changed repaints whole, which re-emits each.
-        bool const rowMarksChanged = useDiff && currentMarks.rowDiffers(row, previousMarks);
-        auto col = 0;
-        while (col < _current.cols())
-        {
-            Cell const& cell = _current.at(row, col);
-
-            if (cell.isContinuation())
-            {
-                ++col;
-                continue;
-            }
-
-            bool needsUpdate = !useDiff || rowMarksChanged;
-            if (!needsUpdate && _previous.inBounds(row, col))
-            {
-                Cell const& prevCell = _previous.at(row, col);
-                needsUpdate = (cell != prevCell) || links.retargeted(row, col);
-            }
-
-            if (needsUpdate)
-            {
-                // For inline mode, we render sequentially
-                marks.beforeWrite(col);
-                links.emitter.beforeWrite(row, col);
-                out.writeText(cell.grapheme, cell.style);
-            }
-            else
-            {
-                // Move cursor past unchanged cells. Cursor motion does not carry the link
-                // attribute, and skipped cells already hold the link recorded when they were
-                // last written — which is the link we would otherwise have re-emitted.
-                out.moveRight(cell.width > 0 ? cell.width : 1);
-            }
-
-            col += std::max(1, static_cast<int>(cell.width));
-        }
-
-        // Close before the erase so the cleared tail is not attributed to the link.
-        links.emitter.close();
-        out.clearToEndOfLine();
-
-        if (row < contentHeight - 1)
-            out.linefeed();
-        ++row;
-    }
+    writeFrameDiff(
+        out,
+        _previous,
+        _current,
+        DiffOptions { .addressing = DiffAddressing::Relative,
+                      .repaint = useDiff ? DiffRepaint::Changed : DiffRepaint::All,
+                      .area = Rect { .x = 0, .y = 0, .width = _current.cols(), .height = contentHeight },
+                      .hyperlinks = DiffHyperlinks::Emit,
+                      .images = DiffImages::Emit,
+                      .rowMarks = DiffRowMarks::Emit,
+                      .reflow = _config.reflow });
 
     // Clear excess rows when content shrank (to avoid leaving garbage on screen)
     if (rowsToClear > 0)
@@ -1047,7 +848,7 @@ void Screen::applyCursorShape()
 
     if (desiredShape != _currentCursorShape)
     {
-        _terminal.output().setCursorShape(desiredShape);
+        _surface.output().setCursorShape(desiredShape);
         _currentCursorShape = desiredShape;
     }
 }
@@ -1245,19 +1046,76 @@ EventResult Screen::dispatchPress(Component* target, InputEvent const& event)
     return EventResult::Ignored;
 }
 
-void Screen::componentDetached(Component const& component) noexcept
+void Screen::componentDetached(Component& component)
+{
+    // A focused component hears onBlur() once the tree change it leaves in closes (endTreeChange()).
+    // Queued first: push_back() may throw, and then nothing here has changed yet.
+    if (component._focused && !component._blurQueuedOn)
+    {
+        _pendingBlurs.push_back(&component);
+        component._blurQueuedOn = this;
+    }
+    forgetComponent(component);
+}
+
+void Screen::forgetComponent(Component& component) noexcept
 {
     if (_pointerCapture == &component)
         _pointerCapture = nullptr;
     if (_pressTarget == &component)
         _pressTarget = nullptr;
+    // A focused component taken out of the tree -- a Responsive swapping its layout destroys the old one
+    // -- would otherwise be asked for its cursor shape by the same draw() and handed the next key.
+    for (auto& entry: _focusedComponents)
+        if (entry.second == &component)
+            entry.second = nullptr;
+    component._focused = false;
+    // The hover it was under ends, and the tooltip shown for it with it.
+    _hoverState.forget(component);
+    _dirtyComponents.erase(&component);
 }
 
-void Screen::componentDestroyed(Component const& component) noexcept
+void Screen::componentDestroyed(Component& component) noexcept
 {
-    componentDetached(component);
+    // Its derived part is gone: it loses its focus with no blur queued, so nothing here allocates.
+    forgetComponent(component);
     std::erase_if(_overlays,
                   [&component](OverlayEntry const& entry) { return entry.component == &component; });
+}
+
+void Screen::endTreeChange()
+{
+    if (--_treeChanges > 0)
+        return;
+    // Held open while the blurs run: what a handler changes queues behind them rather than recursing.
+    ++_treeChanges;
+    while (!_pendingBlurs.empty() || !_retired.empty())
+    {
+        // One at a time from the front: a handler may destroy a component still waiting, which takes it
+        // out of the list (forgetQueuedBlur()).
+        while (!_pendingBlurs.empty())
+        {
+            auto* const component = _pendingBlurs.front();
+            _pendingBlurs.erase(_pendingBlurs.begin());
+            component->_blurQueuedOn = nullptr;
+            component->onBlur();
+        }
+        // Retired components have left every screen, so destroying them queues nothing here.
+        std::exchange(_retired, {}).clear();
+    }
+    --_treeChanges;
+}
+
+void Screen::forgetQueuedBlur(Component& component) noexcept
+{
+    std::erase(_pendingBlurs, &component);
+    component._blurQueuedOn = nullptr;
+}
+
+void Screen::retire(std::unique_ptr<Component> component)
+{
+    auto const change = TreeChange { this };
+    _retired.push_back(std::move(component));
 }
 
 int Screen::pollTimeoutMs() const
@@ -1267,7 +1125,7 @@ int Screen::pollTimeoutMs() const
 
 void Screen::tickHover()
 {
-    _hoverState.tick(std::chrono::steady_clock::now());
+    _hoverState.tick(_hoverState.clock().now());
 }
 
 void Screen::showTooltip(std::string_view text, Point position, TooltipContentType contentType)

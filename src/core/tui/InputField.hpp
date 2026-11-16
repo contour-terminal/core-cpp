@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <core/Clock.hpp>
+#include <core/Defines.hpp>
 #include <core/tui/CompletionPopup.hpp>
 #include <core/tui/Component.hpp>
 #include <core/tui/InputEvent.hpp>
@@ -69,8 +71,21 @@ enum class InputFieldAction : std::uint8_t
 class InputField: public Component
 {
   public:
-    InputField() = default;
+    /// @brief Constructs an empty field timed by the process's steady clock.
+    InputField();
+
+    /// @brief Constructs an empty field whose multi-clicks are timed by @p clock.
+    /// @param clock The clock double- and triple-clicks are measured on (not owned; must outlive
+    ///        the field).
+    explicit InputField(IClock const& clock CORE_LIFETIMEBOUND);
+
+    /// A clock is kept, not copied: a temporary would dangle, so an rvalue clock is refused.
+    explicit InputField(IClock const&& clock) = delete;
+
     ~InputField() override = default;
+
+    /// @brief Returns the clock multi-clicks are measured on.
+    [[nodiscard]] IClock const& clock() const noexcept { return _clock; }
 
     // --- Component Interface ---
 
@@ -362,7 +377,8 @@ class InputField: public Component
 
     // Mouse state
     bool _dragging = false; ///< True during click-and-drag selection
-    std::chrono::steady_clock::time_point _lastClickTime;
+    IClock const& _clock;   ///< The clock multi-clicks are timed on.
+    SteadyTimePoint _lastClickTime;
     int _lastClickLine = -1;
     int _lastClickColumn = -1;
     int _clickCount = 0; ///< 1=single, 2=double, 3=triple

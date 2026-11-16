@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <core/tui/Box.hpp>
 #include <core/tui/Component.hpp>
 #include <core/tui/InputEvent.hpp>
 #include <core/tui/ScrollableSelection.hpp>
@@ -49,8 +50,15 @@ enum class CompletionAction : std::uint8_t
 class CompletionPopup: public Component
 {
   public:
-    /// @brief Constructs an initially hidden completion popup.
+    /// @brief Constructs an initially hidden completion popup framed in single lines.
     CompletionPopup() = default;
+
+    /// @brief Constructs an initially hidden completion popup framed in @p border.
+    /// @param border The frame's style; its T-junctions join the detail panel's frame to the menu's.
+    explicit CompletionPopup(BorderStyle border);
+
+    /// @brief Returns the style the popup is framed in.
+    [[nodiscard]] BorderStyle border() const noexcept { return _border; }
     ~CompletionPopup() override = default;
 
     // --- Component Interface ---
@@ -168,6 +176,7 @@ class CompletionPopup: public Component
     [[nodiscard]] int renderedWidth() const noexcept;
 
   private:
+    BorderStyle _border = BorderStyle::Single;
     std::vector<completer::CompletionItem> _items;
     ScrollableSelection _selection { 10 }; ///< Selection and scroll state.
     int _renderedHeight = 0;

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <core/Clock.hpp>
+#include <core/Defines.hpp>
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -53,7 +56,13 @@ class SemanticBlockClient
     /// @brief Constructs a SemanticBlockClient with the given terminal I/O handles.
     /// @param output Terminal output for sending escape sequences.
     /// @param input Terminal input for receiving responses.
-    SemanticBlockClient(TerminalOutput& output, TerminalInput& input);
+    /// @param clock The clock reply deadlines are measured on (not owned; must outlive the client).
+    SemanticBlockClient(TerminalOutput& output,
+                        TerminalInput& input,
+                        IClock const& clock CORE_LIFETIMEBOUND = defaultSteadyClock());
+
+    /// A clock is kept, not copied: a temporary would dangle, so an rvalue clock is refused.
+    SemanticBlockClient(TerminalOutput& output, TerminalInput& input, IClock const&& clock) = delete;
 
     /// @brief Enables DEC mode 2034 and retrieves the session token.
     ///
@@ -81,6 +90,7 @@ class SemanticBlockClient
   private:
     TerminalOutput& _output; ///< Terminal output handle.
     TerminalInput& _input;   ///< Terminal input handle.
+    IClock const& _clock;    ///< The clock reply deadlines are measured on.
     std::string _token;      ///< Session token from the enable response.
 
     /// @brief Polls for a DCS response with deadline-based timeout.

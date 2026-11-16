@@ -37,12 +37,14 @@ src/core/
   *.hpp, *.cpp              core::base (crispy, fastcached Core): Assert, Defines, Environment,
                             Escape, FNV, Flags, Times, UserInfo, Utils, Overloaded, Deferred,
                             Base64, Generator (endo), Profiling, Ranges, Sha256, Utf8Path,
-                            WideString (Windows only: UTF-8 and UTF-16 for the wide Win32 API)
+                            WideString (Windows only: UTF-8 and UTF-16 for the wide Win32 API),
+                            Clock (IClock, SteadyClock, ManualClock; moved from platform in U.5)
   log/                      core::log (crispy): LogStore, LogSink; Assert (fatal, SoftRequire)
   cli/                      core::cli (crispy): CLI, App
   codec/                    core::codec (contour vtbackend state codec): Writer, Reader (varint streams, frames),
                             FieldEncoder, FieldDecoder (tolerant `visitFields` structs), DecodeError
-  platform/                 core::platform (endo platform, one merged Clock): Clock, Types,
+  platform/                 core::platform (endo platform, one merged Clock): Clock (re-exports
+                            core/Clock.hpp; CachedClock, the wall clocks), Types,
                             PlatformError, Wakeup, SignalHandler, SystemPipe, WinsockInit,
                             MessageQueue, FileSystem, FileInfoProvider, ProcessEnvironment,
                             UserPaths, PathUtils, GlobMatch, FileUri, SystemInfo, StringUtils;
@@ -73,19 +75,25 @@ src/core/
                             it; IOCP, sockets and dialling (planned, B6-B11)
   tui/                      core::tui_output (endo: TerminalOutput, SyncGuard, SgrBuilder,
                             TerminalProtocols, CursorShape, Error; links base alone; with
-                            CORE_CPP_WITH_TUI_OUTPUT, which the full TUI forces on), and
-                            core::tui (TerminalInput, VtParser, Terminal, Buffer, Canvas,
-                            Screen, the components and popups, completer/, MarkdownRenderer,
-                            GenericSyntaxHighlighter, Sixel, images behind
+                            CORE_CPP_WITH_TUI_OUTPUT, which the full TUI forces on),
+                            core::tui_core (the headless half, CORE_CPP_WITH_TUI_CORE:
+                            VtParser, Buffer, Canvas, Screen over ScreenSurface, the
+                            components and popups, completer/, layout/ (the flexbox
+                            solve()), the layout pass, FlexBox and Responsive, MarkdownRenderer, GenericSyntaxHighlighter, Sixel,
+                            runtime/ModalComponent; links
+                            base, tui_output and libunicode alone), and
+                            core::tui (TerminalInput, Terminal, TerminalChannel,
+                            ClipboardWriter, SemanticBlockClient, images behind
                             CORE_CPP_WITH_IMAGES, runtime/ with TuiRuntime, InputSource,
                             TerminalInputSource, Modal; native only, and only with
                             CORE_CPP_WITH_TUI, and it links core::net since B12 composed the
                             runtime on core::net::EventLoop);
                             posix/ (termios, SIGWINCH, poll, clipboard tools) windows/
-                            (console modes, input records, resize event) detail/ are
-                            private -- runtime/ has no platform directories at all, because
+                            (console modes, input records, resize event) portable/ (the
+                            output's OS-bound members on neither, C++ standard library
+                            alone) detail/ are private -- runtime/ has no platform directories at all, because
                             the loop does the waiting on every platform;
-                            MockTerminalOutput, runtime/testing/ScriptedInputSource and
+                            MockTerminalOutput, MockScreenSurface, runtime/testing/ScriptedInputSource and
                             TestHelpers.hpp are the fakes; .clang-tidy is the one directory
                             override (see its own comment)
   testing/                  core::testing: SuppressWindowsDialogs (no test framework needed),

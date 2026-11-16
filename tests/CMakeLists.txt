@@ -101,6 +101,111 @@ add_test(NAME core-cpp.layering
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-layering.cmake")
 set_tests_properties(core-cpp.layering PROPERTIES LABELS "core-cpp;hygiene;tree-level" TIMEOUT 120)
 
+# core::tui_core reaches nothing of platform, async, net or the terminal half of the TUI
+# (docs/design/tui-headless.md), read from two sides because the module table bounds links and every
+# header sits under one include root: the includes of tui_core's own source and header lists, and
+# the archive's symbol table. NOT tree-level: one of its inputs is the archive this toolchain built.
+# Where there is no nm (cl), the symbol half says it did not run and the include half still does.
+# The self-test judges planted listings and trees, so its answer cannot differ between platforms:
+# tree-level, run by the `style` job.
+#
+# Bounds: the check reads one archive and ~90 files in under a second, the self-test runs some twenty
+# cmake -P processes in about two; 60 is the floor the cheapest checks above share.
+if(TARGET core-cpp-tui_core)
+    set(_coreCppTuiCoreFiles
+        "$<JOIN:$<TARGET_PROPERTY:core-cpp-tui_core,SOURCES>;$<TARGET_PROPERTY:core-cpp-tui_core,HEADER_SET>,|>")
+    add_test(NAME core-cpp.tui-core-symbols
+             COMMAND "${CMAKE_COMMAND}"
+                     "-DNM=${CMAKE_NM}"
+                     "-DARCHIVE=$<TARGET_FILE:core-cpp-tui_core>"
+                     "-DSOURCE_DIR=$<TARGET_PROPERTY:core-cpp-tui_core,SOURCE_DIR>"
+                     "-DFILES=${_coreCppTuiCoreFiles}"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-tui-core-symbols.cmake")
+    set_tests_properties(core-cpp.tui-core-symbols PROPERTIES LABELS "core-cpp;hygiene;tui" TIMEOUT 60)
+endif()
+# The guest's width tables (docs/design/tui-headless.md, "Width tables", option a): libunicode
+# built for wasm32-wasip1 from the tables this build generated, and core::tui's width and grapheme
+# table run under Node's WASI. It needs wasi-sdk (WASI_SDK_PREFIX in the test's environment) and
+# node, and skips, saying which, without them. Per leg: it compiles and runs.
+if(TARGET core-cpp-tui_core)
+    set(_coreCppLibunicodeSource "")
+    if(DEFINED libunicode_SOURCE_DIR)
+        set(_coreCppLibunicodeSource "${libunicode_SOURCE_DIR}")
+    endif()
+    add_test(NAME core-cpp.unicode-wasi
+             COMMAND "${CMAKE_COMMAND}"
+                     "-DSOURCE_DIR=${CORE_CPP_SOURCE_DIR}"
+                     "-DLIBUNICODE_SOURCE=${_coreCppLibunicodeSource}"
+                     "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/unicode-wasi"
+                     "-DCTEST=${CMAKE_CTEST_COMMAND}"
+                     "-DGENERATOR=${CMAKE_GENERATOR}"
+                     "-DSKIP_EXIT_CODE=${CORE_CPP_SKIP_EXIT_CODE}"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/run-wasi-unicode.cmake")
+    set_tests_properties(core-cpp.unicode-wasi PROPERTIES
+        SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
+        SKIP_REGULAR_EXPRESSION "run-wasi-unicode: SKIPPED"
+        FAIL_REGULAR_EXPRESSION "CMake Error"
+        LABELS "core-cpp;tui;wasm"
+        TIMEOUT 900)
+endif()
+# WASI's row (U.11): core-cpp configured for wasm32-wasip1 lists core::tui_core and not core::tui,
+# builds it with -fno-exceptions -fno-rtti, and a consumer of it links and runs under Node's WASI.
+# Needs wasi-sdk and node as core-cpp.unicode-wasi does, and skips the same way without them.
+if(TARGET core-cpp-tui_core)
+    add_test(NAME core-cpp.tui-core-wasi
+             COMMAND "${CMAKE_COMMAND}"
+                     "-DSOURCE_DIR=${CORE_CPP_SOURCE_DIR}"
+                     "-DLIBUNICODE_SOURCE=${_coreCppLibunicodeSource}"
+                     "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/tui-core-wasi"
+                     "-DCTEST=${CMAKE_CTEST_COMMAND}"
+                     "-DGENERATOR=${CMAKE_GENERATOR}"
+                     "-DSKIP_EXIT_CODE=${CORE_CPP_SKIP_EXIT_CODE}"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/run-tui-core-wasi.cmake")
+    set_tests_properties(core-cpp.tui-core-wasi PROPERTIES
+        SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
+        SKIP_REGULAR_EXPRESSION "run-tui-core-wasi: SKIPPED"
+        FAIL_REGULAR_EXPRESSION "CMake Error"
+        LABELS "core-cpp;tui;wasm"
+        TIMEOUT 1200)
+endif()
+# U.12: core::tui_core linked into a WASI reactor -- no main(), an exported entry point -- built with
+# -fno-exceptions -fno-rtti and run under wasmtime: VtParser -> Screen -> diffFrames -> solve in a guest.
+# Needs wasi-sdk and wasmtime (WASMTIME or PATH), and skips, saying which, without them.
+if(TARGET core-cpp-tui_core)
+    add_test(NAME core-cpp.tui-core-reactor
+             COMMAND "${CMAKE_COMMAND}"
+                     "-DSOURCE_DIR=${CORE_CPP_SOURCE_DIR}"
+                     "-DLIBUNICODE_SOURCE=${_coreCppLibunicodeSource}"
+                     "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/tui-core-reactor"
+                     "-DCTEST=${CMAKE_CTEST_COMMAND}"
+                     "-DGENERATOR=${CMAKE_GENERATOR}"
+                     "-DSKIP_EXIT_CODE=${CORE_CPP_SKIP_EXIT_CODE}"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/run-tui-core-reactor.cmake")
+    set_tests_properties(core-cpp.tui-core-reactor PROPERTIES
+        SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
+        SKIP_REGULAR_EXPRESSION "run-tui-core-reactor: SKIPPED"
+        FAIL_REGULAR_EXPRESSION "CMake Error"
+        LABELS "core-cpp;tui;wasm"
+        TIMEOUT 1200)
+endif()
+# No widget hard-codes a square corner (U.10): a scan of src/core/tui outside the border helper. It reads
+# files and nothing else, so it is tree-level, and the `style` job runs it.
+add_test(NAME core-cpp.tui-corners
+         COMMAND "${CMAKE_COMMAND}" "-DROOT=${CORE_CPP_SOURCE_DIR}"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-tui-corners.cmake")
+set_tests_properties(core-cpp.tui-corners PROPERTIES
+    FAIL_REGULAR_EXPRESSION "CMake Error"
+    LABELS "core-cpp;hygiene;tree-level"
+    TIMEOUT 60)
+add_test(NAME core-cpp.tui-core-symbols-selftest
+         COMMAND "${CMAKE_COMMAND}"
+                 "-DCHECKER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-tui-core-symbols.cmake"
+                 "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/tui-core-symbols-selftest"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-tui-core-symbols-selftest.cmake")
+set_tests_properties(core-cpp.tui-core-symbols-selftest PROPERTIES
+    LABELS "core-cpp;hygiene;tree-level"
+    TIMEOUT 60)
+
 # "No OpenSSL type appears in any header" (Part I §2 item 8), refused rather than stated: an
 # OpenSSL include outside the units that implement the TLS layer, and an OpenSSL type named in any
 # header, forward declarations included. Registered whether or not CORE_CPP_WITH_TLS is on, because

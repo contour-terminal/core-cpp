@@ -1,11 +1,13 @@
 # tui
 
 The terminal UI. Namespace `core::tui`, directory `src/core/tui/`, targets `core::tui_output`
-(with `CORE_CPP_WITH_TUI_OUTPUT`) and `core::tui` (with `CORE_CPP_WITH_TUI`). Both are on by
-default and off under Emscripten; `CORE_CPP_WITH_TUI` forces `CORE_CPP_WITH_TUI_OUTPUT` on, and
-`CORE_CPP_WITH_TUI_OUTPUT` defaults to whatever `CORE_CPP_WITH_TUI` is on a first configure (a
-cache entry keeps its value after that, so turning the TUI off in an existing tree leaves the leaf
-on).
+(with `CORE_CPP_WITH_TUI_OUTPUT`), `core::tui_core` (with `CORE_CPP_WITH_TUI_CORE`) and `core::tui`
+(with `CORE_CPP_WITH_TUI`). All three are on by default and off under Emscripten; under WASI
+(`wasm32-wasip1`) `core::tui` is off and the other two build. Each forces the
+one below it on (`CORE_CPP_WITH_TUI` forces `CORE_CPP_WITH_TUI_CORE`, which forces
+`CORE_CPP_WITH_TUI_OUTPUT`), and the two lower options default to whatever `CORE_CPP_WITH_TUI` is on
+a first configure (a cache entry keeps its value after that, so turning the TUI off in an existing
+tree leaves them on).
 
 Imported from endo's `src/tui` at `f774a210`, which includes the coroutine-runtime work fastcached
 upstreamed there. The runtime has since been rewritten onto [`core::net::EventLoop`](net.md).
@@ -33,7 +35,13 @@ which fetches libunicode and, through libunicode's configure, `UCD.zip`.
 - `writeToDestination()` is the one seam every byte goes through. Override it to retarget the
   stream — a capture buffer in a test, a pipe, a second terminal — without reimplementing any of
   the composition. `isTerminal()` answers for that same destination: the default asks the
-  operating system about the process's standard output, and a subclass answers for its own.
+  operating system about the process's standard output, and a subclass answers for its own. On a
+  platform that is neither POSIX nor Windows the default destination is the C standard output
+  stream (`portable/`, the `SOURCES_PORTABLE` list), which is not a terminal and has no size to ask.
+- `kind()` says what stands behind an output: `OutputKind::Device` (a terminal, or a pipe, a file or
+  a capture standing in for one) or `OutputKind::Simulation`, which `MockTerminalOutput` reports and
+  which answers its cursor itself through `simulatedCursorPosition()`. `Terminal` reads it to decide
+  whether to set up input and ask questions; the TUI uses no RTTI.
 - `SyncGuard` brackets a frame in DEC mode 2026 so a terminal does not paint a half-drawn one. It
   writes through the `TerminalOutput` it was made from, so a retargeted output is bracketed on its
   own stream, and only when that output's `isTerminal()` is true: on any other destination it
@@ -49,10 +57,165 @@ which fetches libunicode and, through libunicode's configure, `UCD.zip`.
   between two `MouseTracking` modes, and `parseSixelFromDeviceAttributes()`, which reads a DA1 answer.
 - `Result<T>` and `VoidResult`, the module's `std::expected` aliases.
 
+## `core::tui_core`
+
+The headless half: everything below that needs no terminal under it -- `VtParser` and
+`InputEvent`, `Cell`, `Buffer`, `Canvas`, `Component`, the widgets, the completer, the Markdown
+renderer, `Theme`, `Unicode` and `Screen`. It links `core::base`, `core::tui_output` and libunicode,
+and nothing of [platform](platform.md), [async](async.md) or [net](net.md); configured with
+`CORE_CPP_WITH_TUI` off and `CORE_CPP_WITH_TUI_CORE` on, core-cpp builds it without the terminal
+half.
+
+- **The surface.** `Screen` draws on a `ScreenSurface` -- a size, a `TerminalOutput` and the one
+  cursor query the inline viewport asks -- which `Terminal` implements on a real terminal.
+  `HeadlessSurface(Size, ByteSink)` is the surface for a program with no terminal at all: its output
+  is a `ByteSinkOutput`, which hands every flushed byte to the sink and asks the operating system
+  nothing (no size, no probe, no terminal test), so it behaves the same natively and in a guest.
+  Its cursor query answers `QueryUnanswered::NotAsked`, so it is meant for the fullscreen and fixed
+  viewports; an inline viewport on it falls back as on a silent terminal. `SinkDestination` says
+  whether a terminal stands past the sink (frames bracketed in DEC mode 2026) or not, and
+  `resize()` takes the host's new size. `MockScreenSurface` is the test double, over a
+  `MockTerminalOutput`.
+- **The diff.** `diffFrames(previous, next, DiffOptions)` returns the bytes that turn one `Buffer`
+  into the other; `writeFrameDiff(out, previous, next, options)` writes the same bytes into a
+  `TerminalOutput`, and is what every `Screen` flush path and `Buffer::writeTo()` call. Both are
+  pure in their frames. `DiffOptions` holds what the flush paths differed in: `DiffAddressing`
+  (`Absolute`, cursor-addressed, for fullscreen and fixed; `Relative`, row by row from column 0,
+  for inline), `DiffRepaint` (`Changed` cells or `All`), the `area` covered, and, each off by
+  default, `DiffHyperlinks`, `DiffImages`, `DiffRowMarks` and `DiffReflow`. The cursor is not the
+  diff's: hiding, placing and showing it stay `Screen`'s, so identical frames diff to nothing.
+- **No exceptions, no RTTI.** A cell is reached through `Buffer::cellAt(Point)`, which is null
+  outside the buffer, so an out-of-range read or write is a null check; nothing in the headless
+  half throws or asks for a type at run time. The one throw `core::base` keeps on this path,
+  `pathFromTrustedUtf8()`'s, goes through `core::throwOrFail()`, which fails as `Require()` does
+  when exceptions are compiled out.
+- **Time is injected.** Nothing in the headless half reads `std::chrono::steady_clock` itself: the
+  hover delay (`HoverState`, and so `Screen`), a `Spinner`'s frames, `InputField`'s and
+  `TreeTableView`'s multi-click windows and `remainingMs()` (`<core/tui/TimerUtils.hpp>`) all measure
+  on a `core::IClock` (`<core/Clock.hpp>`, [base](base.md)) passed to their constructor, by default
+  `core::defaultSteadyClock()`. A test passes a `core::ManualClock` and advances it, so no case
+  sleeps. `SemanticBlockClient`, in the terminal half, takes one the same way.
+
+- **Layout.** `core::tui::layout::solve(root, available)` (`<core/tui/layout/Solve.hpp>`) is a flexbox
+  layout as a pure function: a tree of `Node`s -- each a `Style`, its children and a preferred `Size` -- and a
+  `Rect` in, one `Rect` per node out, in depth-first pre-order with the root first. A `Style` holds the container's
+  `Direction` (`Row`, `Column`), `Wrap`, `Justify` (`Start`, `Center`, `End`, `SpaceBetween`), `Align` (`Stretch`,
+  the default, `Start`, `Center`, `End`) and `gap`, and the item's `grow`, `shrink` (1 by default), `basis` (the
+  preferred main size when absent) and `minSize`/`maxSize` (0 is unbounded). Everything is integer cells, with no
+  floating point, so equal input lays out identically everywhere:
+    - a line's `gap`s are subtracted first;
+    - leftover cells go to the growing children in proportion to `grow`, each taking the whole part of its share
+      and the cells that remain going one at a time to the earliest growing children (10 over three equal growers
+      is 4/3/3, over `grow` 1:2 it is 4/6);
+    - a deficit is taken from the shrinking children in proportion to `shrink` times the basis, the cells that
+      remain one at a time from the latest;
+    - a child pushed past its `minSize` or `maxSize` is frozen there and the rest shared again among the others,
+      pass after pass, until no limit is crossed or no child can take more;
+    - a line's leftover is placed by `justify` (`Center` puts the odd cell after the children, `SpaceBetween` gives
+      the odd cells to the earliest gaps), each child across the line by `align`;
+    - with `Wrap::Wrap` a child whose basis would not fit after the line's starts the next line; lines are as tall
+      as their tallest child's preferred cross size, and the container's leftover cross space is shared among them
+      one cell at a time from the first;
+    - what still does not fit is clipped to the parent: the last children lose cells first, and no size is ever
+      negative -- a container with no width gives every node in it a width of 0.
+    - sizes, gaps and positions above `MaxCells` (2^20) are capped to it, `grow`/`shrink` above `MaxWeight`
+      (2^16) likewise, and a node's children past `MaxChildren` (2^20) are not laid out -- each of them, and every
+      node beneath it, gets a zero-size rectangle at the parent's origin. Within these three bounds no sum
+      overflows (a weight total is at most 2^56), and a share's product of deficit and weight is formed exactly
+      even past 64 bits, so no input overflows.
+
+- **The layout pass.** A `Component` lays out its children with `solve()` over its own size: each child added with
+  a `LayoutParams::flex` item -- the item half of a `layout::Style`: `grow`, `shrink`, `basis`, `minSize`,
+  `maxSize` -- has its `area` set by its parent, from that item, the larger of the item's `minSize` and the child's
+  `minSize()` hint, and the child's `preferredSize()` as the basis where the item names none. How a component
+  places those children (direction, wrap, justify, align, gap) is its own `layoutStyle()`, given to its
+  constructor and fixed; a plain `Component()` lays them out in a row. Children added without a flex item keep the
+  `area` they are given and take no room, so a tree mixes both. The pass runs whenever a component's size changes
+  (`setArea()` first calls the new `onResize(Size)` hook) and whenever a flex child is added, removed, shown or
+  hidden. A component whose `preferredSize()` or `minSize()` may have changed calls `hintsChanged()`: its
+  parent is marked, and `Screen` lays every marked component's children out again once, before the next frame
+  is drawn (without a screen, at the parent's next layout pass); `Responsive` does so on every swap. A
+  component that leaves the screen -- a `Responsive`'s old layout among them -- takes its focus, its hover
+  and the pointer capture with it, so nothing is asked of it after it is gone; one that is still alive -- a hidden
+  overlay, a removed child, a swapped-out layout before it is destroyed -- hears `onBlur()` once the change it
+  left in is over (never inside a loop over children, so the handler may change the tree). A flex child added to
+  a new parent keeps its area until that parent's pass places it; a hidden one takes an empty area. It solves one level at a time: a child's
+  place depends on its style and hints, not on its own children, and each child that changed size lays out its own.
+  `Screen` sizes its root to the viewport at every frame and on every `ResizeEvent`, so a child of the root with
+  `.flex = layout::Style { .grow = 1 }` fills the screen.
+- **`FlexBox`** (`<core/tui/Component.hpp>`) is the container that draws nothing: `FlexBox(layout::Style)` and
+  `add(std::unique_ptr<Component>, layout::Style item)`, which owns the child, so a layout can be built and
+  returned as one object.
+- **`Responsive`** (`<core/tui/Responsive.hpp>`) shows one of several layouts chosen by its size:
+  `Responsive(std::vector<Breakpoint>)`, each `Breakpoint { minColumns, minRows, make }`, listed narrowest first.
+  On every resize it picks the **last** breakpoint whose minima the size meets (`Responsive::choose()`, a pure
+  function) and calls that breakpoint's `make` only when the choice changes: a resize within a band lays the same
+  layout out again, one across a band destroys it and builds the next. The layout fills the container. Nothing is
+  built before the first non-empty size, nor at a size no breakpoint's minima are met at. A layout's hints must
+  not size the container into another band: breakpoints that choose each other would swap once per frame, and
+  the screen stops re-laying such a chain after eight frames (`Screen::layoutAbandoned()` says so), until a
+  resize or a changed hint asks again.
+
+```cpp
+auto dashboard = core::tui::Responsive { {
+    { .minColumns = 0, .minRows = 0, .make = [] { return listOnly(); } },          // < 60 columns
+    { .minColumns = 60, .minRows = 0, .make = [] { return listOverDetails(); } },  // 60-99
+    { .minColumns = 100, .minRows = 0, .make = [] { return sideBySide(); } },      // >= 100
+} };
+screen.root().addChild(dashboard, { .flex = core::tui::layout::Style { .grow = 1 } });
+```
+
+- **Borders.** Every widget that draws a frame takes a `BorderStyle` (`<core/tui/Box.hpp>`: `None`, `Single`,
+  `Double`, `Rounded` -- `╭ ╮ ╰ ╯` --, `Heavy`, `Dashed`) and draws its corners, lines and junctions from
+  `BorderChars::fromStyle()` of it, never from a literal: `Box` and the three dialogs through their config's
+  `border`, `QuestionComponent` (its left bar) through `QuestionConfig::border`, `CompletionPopup(BorderStyle)`,
+  `CommandPalettePopup(BorderStyle, clock)`, `FuzzyPickerPopup(BorderStyle, clock)`, `Tooltip(BorderStyle)`, and
+  the tooltip a `Screen` shows through `ScreenConfig::tooltipBorder`. Each default is the frame the widget drew
+  before: `Single` for the completion popup and the tooltip, `Rounded` for the others. `Borders_test.cpp` renders
+  each of them in every style with corners and refuses a corner of any other style, so a widget that hard-codes
+  one fails there.
+
+```cpp
+auto bytes = std::string {};
+auto surface = core::tui::HeadlessSurface { core::tui::Size { .width = 80, .height = 24 },
+                                            [&bytes](std::string_view chunk) { bytes += chunk; } };
+auto screen = core::tui::Screen { surface };
+screen.root().addChild(view, { .area = { .x = 0, .y = 0, .width = 80, .height = 24 } });
+screen.draw(); // bytes now holds the frame; the next draw() appends only what changed
+```
+
+Two checks keep the half headless. `core-cpp.tui-core-symbols` reads tui_core's includes and its
+archive's symbols for anything of the terminal half, `platform`, `async` or `net`.
+`tests/consumer-tui-core` is a CPM consumer that renders a component through `HeadlessSurface` with
+the terminal half off; CI's `consumer-smoke (tui-core)` builds and runs it twice, the second time
+with `-fno-exceptions -fno-rtti` across the whole build (`core::base`, `core::tui_output`,
+`core::tui_core` and libunicode), which is the language mode a WebAssembly guest compiles in. Why it
+is shaped this way, and what remains before a WebAssembly guest builds it:
+[A headless TUI](../design/tui-headless.md).
+
+A guest measures text with the same libunicode tables, built for `wasm32-wasip1` from a tree a native
+configure generated them into (`CPM_libunicode_SOURCE`), so the guest's build downloads nothing.
+`tests/wasi-unicode` is that build, and `core-cpp.unicode-wasi` runs its width and grapheme table
+under Node's WASI wherever `WASI_SDK_PREFIX` names a wasi-sdk.
+
+WASI has a platform row of its own ([options](../getting-started/options.md#under-wasi)): configured with
+wasi-sdk's `wasi-sdk-p1.cmake`, core-cpp builds `core::tui_output` and `core::tui_core` and not `core::tui`,
+compiles `portable/` where a native build compiles `posix/` or `windows/`, and builds libunicode with no SIMD.
+`core-cpp.tui-core-wasi` configures it so, builds `core::tui_core` with `-fno-exceptions -fno-rtti` and
+`CORE_CPP_WERROR`, and links `tests/consumer-tui-core` into a `wasm32-wasip1` module that renders, diffs and
+lays out a component tree under Node's WASI. `core-cpp.tui-core-reactor` links `tests/wasi-reactor` into a WASI
+*reactor* -- no `main()`, an exported `core_tui_reactor_run` the host calls after `_initialize` -- that parses
+bytes with `VtParser`, delivers them to a `Screen` over a `HeadlessSurface`, diffs two frames with `diffFrames()`
+and checks the tree against `layout::solve()`, and runs it under wasmtime (`WASMTIME`, or on `PATH`). All three
+skip without their toolchain; CI's `wasi` job installs wasi-sdk 34 and wasmtime 50.0.1, each pinned by SHA-256,
+and fails unless every one of them ran and passed.
+
 ## `core::tui`
 
-The rest, on top of `core::tui_output`, [platform](platform.md), [async](async.md) and libunicode,
-and on stb when `CORE_CPP_WITH_IMAGES` is on. Native only: there is no terminal under Emscripten.
+The rest, on top of `core::tui_core`, [platform](platform.md), [async](async.md) and
+[net](net.md), and on stb when `CORE_CPP_WITH_IMAGES` is on: `Terminal`, `TerminalInput`,
+`TerminalChannel`, `ClipboardWriter`, `SemanticBlockClient`, the image file loaders and the
+runtime. Native only: there is no terminal under Emscripten or WASI. The list below covers both halves.
 
 - **Input.** `TerminalInput` puts the terminal in raw mode, enables the protocols above and decodes
   what comes back through `VtParser` into an `InputEvent` — keys (`KeyCode`, `Modifier`), mouse,
@@ -94,7 +257,8 @@ and on stb when `CORE_CPP_WITH_IMAGES` is on. Native only: there is no terminal 
   mid-drag.
 - **Drawing.** `Buffer` is a grid of `Cell`s, `Canvas` a clipped view of one, and `Screen` the
   renderer that diffs a frame against the last and writes only what changed, inline, full-screen or
-  in a fixed area. `Theme`, `StyledText`, `Text`, `Box`, `Rect` and `HyperlinkEmitter` sit under it.
+  in a fixed area. A cell is reached through `Buffer::cellAt(Point)`, null outside the buffer.
+  `Theme`, `StyledText`, `Text`, `Box`, `Rect` and `HyperlinkEmitter` sit under it.
 - **Components.** `Component` and the widgets over it: `InputField` (multi-line editing, undo, kill
   ring, ghost text, selection), `List`, `TreeTableView`, `Dialog`, `StatusBar`, `LogPanel`,
   `Spinner`, `ProgressBar`, `Tooltip`, `QuestionComponent`, and the popups `CompletionPopup`,

@@ -98,6 +98,11 @@ rather than from the backend it wraps.
 Logic that schedules against a deadline takes an `IClock&` rather than calling
 `std::chrono::steady_clock::now()`, so a test can drive time.
 
+`IClock`, `SteadyClock`, `ManualClock`, `defaultSteadyClock()` and the steady time types are
+[base](base.md)'s, in `<core/Clock.hpp>` and namespace `core`; this header includes it and names
+them in `core::platform` by using-declarations, so either spelling is one type. A using-declaration
+is not a class: forward-declare `core::IClock`, not `core::platform::IClock`.
+
 - **`IClock`** answers `now()`, a `SteadyTimePoint`. Its virtual `refresh()` does nothing by
   default; an event loop calls it at fixed points of each turn (after the blocking wait returns,
   and before it computes the next timeout), which is what makes a caching clock correct.

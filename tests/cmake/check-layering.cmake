@@ -104,6 +104,10 @@ set(scenarios
     # CoreCppDependencies.cmake and is already used as a WHEN there, so an option()-only rule would
     # refuse a condition this codebase uses today -- born needing the workaround that stops a rule
     # being read. A typo is undefined by construction, which is exactly and only what is refused.
+    # PLATFORMS takes a trailing wasi, and only after any (cmake/CoreCppModules.cmake).
+    "platforms-any-wasi|configures|core_cpp_module_target(NAME net_x MODULE net KIND INTERFACE PLATFORMS any wasi)"
+    "platforms-native-wasi|core_cpp_module_target\\(net_x\\): PLATFORMS must be any, native or wasm-subset|core_cpp_module_target(NAME net_x MODULE net KIND INTERFACE PLATFORMS native wasi)"
+    "platforms-wasi-alone|core_cpp_module\\(demo\\): PLATFORMS must be any, native or wasm-subset|core_cpp_module(NAME demo KIND INTERFACE DEPS base PLATFORMS wasi)"
     "when-names-an-undeclared-option|core_cpp_module_target\\(net_x\\): WHEN names 'CORE_CPP_WITH_TSL'|core_cpp_module_target(NAME net_x MODULE net KIND INTERFACE PLATFORMS any WHEN CORE_CPP_WITH_TSL)"
     "when-names-a-declared-option|configures|option(CORE_CPP_SCENARIO_OPT \"\" OFF)\ncore_cpp_module_target(NAME net_x MODULE net KIND INTERFACE PLATFORMS any WHEN CORE_CPP_SCENARIO_OPT)"
     "when-names-a-plain-variable|configures|set(CORE_CPP_SCENARIO_FLAG ON)\ncore_cpp_module_target(NAME net_x MODULE net KIND INTERFACE PLATFORMS any WHEN CORE_CPP_SCENARIO_FLAG)"

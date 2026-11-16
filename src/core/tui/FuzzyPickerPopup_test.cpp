@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <core/Clock.hpp>
 #include <core/tui/FuzzyPickerPopup.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+
+#include <type_traits>
 
 using namespace core::tui;
 using namespace core::tui::completer;
@@ -319,4 +322,15 @@ TEST_CASE("FuzzyPickerPopup.preferredSize_when_hidden")
 
     CHECK(size.width == 0);
     CHECK(size.height == 0);
+}
+
+TEST_CASE("FuzzyPickerPopup.injectedClockReachesTheFilterField")
+{
+    auto const clock = core::ManualClock {};
+    auto const picker = FuzzyPickerPopup { clock };
+    CHECK(&picker.clock() == &clock);
+    CHECK_FALSE(picker.visible()); // Hidden from the start, as with the default constructor.
+    CHECK(&FuzzyPickerPopup {}.clock() == &core::defaultSteadyClock());
+
+    STATIC_CHECK_FALSE(std::is_constructible_v<FuzzyPickerPopup, core::ManualClock>);
 }

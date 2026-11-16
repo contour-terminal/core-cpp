@@ -2717,26 +2717,26 @@
     {
       "kind": "symbol",
       "from": "endo::platform::IClock",
-      "to": "core::platform::IClock",
+      "to": "core::IClock",
       "profiles": [
         "endo"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::IClock",
+        "header": "core/Clock.hpp",
+        "symbol": "core::IClock",
         "public": true
       }
     },
     {
       "kind": "symbol",
       "from": "platform::IClock",
-      "to": "core::platform::IClock",
+      "to": "core::IClock",
       "profiles": [
         "endo"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::IClock",
+        "header": "core/Clock.hpp",
+        "symbol": "core::IClock",
         "public": true
       }
     },
@@ -2799,26 +2799,26 @@
     {
       "kind": "symbol",
       "from": "endo::platform::ManualClock",
-      "to": "core::platform::ManualClock",
+      "to": "core::ManualClock",
       "profiles": [
         "endo"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::ManualClock",
+        "header": "core/Clock.hpp",
+        "symbol": "core::ManualClock",
         "public": true
       }
     },
     {
       "kind": "symbol",
       "from": "platform::ManualClock",
-      "to": "core::platform::ManualClock",
+      "to": "core::ManualClock",
       "profiles": [
         "endo"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::ManualClock",
+        "header": "core/Clock.hpp",
+        "symbol": "core::ManualClock",
         "public": true
       }
     },
@@ -3019,52 +3019,52 @@
     {
       "kind": "symbol",
       "from": "endo::platform::SteadyClock",
-      "to": "core::platform::SteadyClock",
+      "to": "core::SteadyClock",
       "profiles": [
         "endo"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::SteadyClock",
+        "header": "core/Clock.hpp",
+        "symbol": "core::SteadyClock",
         "public": true
       }
     },
     {
       "kind": "symbol",
       "from": "platform::SteadyClock",
-      "to": "core::platform::SteadyClock",
+      "to": "core::SteadyClock",
       "profiles": [
         "endo"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::SteadyClock",
+        "header": "core/Clock.hpp",
+        "symbol": "core::SteadyClock",
         "public": true
       }
     },
     {
       "kind": "symbol",
       "from": "endo::platform::SteadyTimePoint",
-      "to": "core::platform::SteadyTimePoint",
+      "to": "core::SteadyTimePoint",
       "profiles": [
         "endo"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::SteadyTimePoint",
+        "header": "core/Clock.hpp",
+        "symbol": "core::SteadyTimePoint",
         "public": true
       }
     },
     {
       "kind": "symbol",
       "from": "platform::SteadyTimePoint",
-      "to": "core::platform::SteadyTimePoint",
+      "to": "core::SteadyTimePoint",
       "profiles": [
         "endo"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::SteadyTimePoint",
+        "header": "core/Clock.hpp",
+        "symbol": "core::SteadyTimePoint",
         "public": true
       }
     },
@@ -3281,26 +3281,26 @@
     {
       "kind": "symbol",
       "from": "endo::platform::defaultSteadyClock",
-      "to": "core::platform::defaultSteadyClock",
+      "to": "core::defaultSteadyClock",
       "profiles": [
         "endo"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::defaultSteadyClock",
+        "header": "core/Clock.hpp",
+        "symbol": "core::defaultSteadyClock",
         "public": true
       }
     },
     {
       "kind": "symbol",
       "from": "platform::defaultSteadyClock",
-      "to": "core::platform::defaultSteadyClock",
+      "to": "core::defaultSteadyClock",
       "profiles": [
         "endo"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::defaultSteadyClock",
+        "header": "core/Clock.hpp",
+        "symbol": "core::defaultSteadyClock",
         "public": true
       }
     },
@@ -4447,73 +4447,73 @@
     {
       "kind": "symbol",
       "from": "net::IClock",
-      "to": "core::platform::IClock",
+      "to": "core::IClock",
       "profiles": [
         "contour"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::IClock"
+        "header": "core/Clock.hpp",
+        "symbol": "core::IClock"
       }
     },
     {
       "kind": "symbol",
       "from": "net::SteadyClock",
-      "to": "core::platform::SteadyClock",
+      "to": "core::SteadyClock",
       "profiles": [
         "contour"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::SteadyClock"
+        "header": "core/Clock.hpp",
+        "symbol": "core::SteadyClock"
       }
     },
     {
       "kind": "symbol",
       "from": "net::ManualClock",
-      "to": "core::platform::ManualClock",
+      "to": "core::ManualClock",
       "profiles": [
         "contour"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::ManualClock"
+        "header": "core/Clock.hpp",
+        "symbol": "core::ManualClock"
       }
     },
     {
       "kind": "symbol",
       "from": "net::defaultSteadyClock",
-      "to": "core::platform::defaultSteadyClock",
+      "to": "core::defaultSteadyClock",
       "profiles": [
         "contour"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::defaultSteadyClock"
+        "header": "core/Clock.hpp",
+        "symbol": "core::defaultSteadyClock"
       }
     },
     {
       "kind": "symbol",
       "from": "net::SteadyTimePoint",
-      "to": "core::platform::SteadyTimePoint",
+      "to": "core::SteadyTimePoint",
       "profiles": [
         "contour"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::SteadyTimePoint"
+        "header": "core/Clock.hpp",
+        "symbol": "core::SteadyTimePoint"
       }
     },
     {
       "kind": "symbol",
       "from": "net::SteadyDuration",
-      "to": "core::platform::SteadyDuration",
+      "to": "core::SteadyDuration",
       "profiles": [
         "contour"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::SteadyDuration"
+        "header": "core/Clock.hpp",
+        "symbol": "core::SteadyDuration"
       }
     },
     {
@@ -5153,25 +5153,25 @@
     {
       "kind": "symbol",
       "from": "FastCache::IClock",
-      "to": "core::platform::IClock",
+      "to": "core::IClock",
       "profiles": [
         "fastcached"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::IClock"
+        "header": "core/Clock.hpp",
+        "symbol": "core::IClock"
       }
     },
     {
       "kind": "symbol",
       "from": "FastCache::SteadyClock",
-      "to": "core::platform::SteadyClock",
+      "to": "core::SteadyClock",
       "profiles": [
         "fastcached"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::SteadyClock"
+        "header": "core/Clock.hpp",
+        "symbol": "core::SteadyClock"
       }
     },
     {
@@ -5189,13 +5189,13 @@
     {
       "kind": "symbol",
       "from": "FastCache::ManualClock",
-      "to": "core::platform::ManualClock",
+      "to": "core::ManualClock",
       "profiles": [
         "fastcached"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::ManualClock"
+        "header": "core/Clock.hpp",
+        "symbol": "core::ManualClock"
       }
     },
     {
@@ -5261,25 +5261,25 @@
     {
       "kind": "symbol",
       "from": "FastCache::TimePoint",
-      "to": "core::platform::SteadyTimePoint",
+      "to": "core::SteadyTimePoint",
       "profiles": [
         "fastcached"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::SteadyTimePoint"
+        "header": "core/Clock.hpp",
+        "symbol": "core::SteadyTimePoint"
       }
     },
     {
       "kind": "symbol",
       "from": "FastCache::Duration",
-      "to": "core::platform::SteadyDuration",
+      "to": "core::SteadyDuration",
       "profiles": [
         "fastcached"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::SteadyDuration"
+        "header": "core/Clock.hpp",
+        "symbol": "core::SteadyDuration"
       }
     },
     {
@@ -5364,8 +5364,8 @@
         "fastcached"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::IClock::now"
+        "header": "core/Clock.hpp",
+        "symbol": "core::IClock::now"
       }
     },
     {
@@ -5378,8 +5378,8 @@
         "fastcached"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::IClock::refresh"
+        "header": "core/Clock.hpp",
+        "symbol": "core::IClock::refresh"
       }
     },
     {
@@ -5392,8 +5392,8 @@
         "fastcached"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::ManualClock::advance"
+        "header": "core/Clock.hpp",
+        "symbol": "core::ManualClock::advance"
       }
     },
     {
@@ -5406,8 +5406,8 @@
         "fastcached"
       ],
       "target": {
-        "header": "core/platform/Clock.hpp",
-        "symbol": "core::platform::ManualClock::setNow"
+        "header": "core/Clock.hpp",
+        "symbol": "core::ManualClock::setNow"
       }
     },
     {

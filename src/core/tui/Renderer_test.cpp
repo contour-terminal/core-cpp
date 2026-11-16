@@ -2,12 +2,17 @@
 #include <core/tui/Buffer.hpp>
 #include <core/tui/Canvas.hpp>
 #include <core/tui/Cell.hpp>
+#include <core/tui/CellTestSupport.hpp>
 #include <core/tui/Rect.hpp>
+#include <core/tui/TestHelpers.hpp>
 #include <core/tui/Theme.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <limits>
 #include <ranges>
+
+using core::tui::test::requireCell;
 
 using namespace core::tui;
 
@@ -453,42 +458,86 @@ TEST_CASE("Buffer.inBounds")
     CHECK_FALSE(buf.inBounds(0, 20));
 }
 
-TEST_CASE("Buffer.at")
+TEST_CASE("Buffer.cellAt")
 {
     Buffer buf(10, 20);
 
-    Cell& cell = buf.at(5, 10);
-    cell.grapheme = "X";
+    Cell* cell = buf.cellAt({ .x = 10, .y = 5 });
+    REQUIRE(cell != nullptr);
+    cell->grapheme = "X";
 
-    CHECK(buf.at(5, 10).grapheme == "X");
+    Buffer const& view = buf;
+    REQUIRE(view.cellAt({ .x = 10, .y = 5 }) != nullptr);
+    CHECK(requireCell(view, { .x = 10, .y = 5 }).grapheme == "X");
 }
 
-TEST_CASE("Buffer.at_throws_out_of_range")
+TEST_CASE("Buffer.cellAt is null outside the buffer, on every side")
 {
     Buffer buf(10, 20);
-    CHECK_THROWS_AS(buf.at(-1, 0), std::out_of_range);
-    CHECK_THROWS_AS(buf.at(10, 0), std::out_of_range);
-    CHECK_THROWS_AS(buf.at(0, 20), std::out_of_range);
+    Buffer const& view = buf;
+
+    for (auto const position:
+         { Point { .x = -1, .y = 0 },
+           Point { .x = 0, .y = -1 },
+           Point { .x = 20, .y = 0 },
+           Point { .x = 0, .y = 10 },
+           Point { .x = std::numeric_limits<int>::min(), .y = std::numeric_limits<int>::max() } })
+    {
+        CHECK(buf.cellAt(position) == nullptr);
+        CHECK(view.cellAt(position) == nullptr);
+    }
+    CHECK(buf.cellAt({ .x = 19, .y = 9 }) != nullptr);
+    CHECK(Buffer {}.cellAt({ .x = 0, .y = 0 }) == nullptr);
 }
 
-TEST_CASE("Buffer.tryAt")
+TEST_CASE("Buffer: writes outside the buffer are no-ops")
 {
-    Buffer buf(10, 20);
+    Buffer buf(4, 6);
+    buf.putString(1, 1, "ab", {});
+    auto const before = buf.cells();
 
-    CHECK(buf.tryAt(5, 10) != nullptr);
-    CHECK(buf.tryAt(-1, 0) == nullptr);
-    CHECK(buf.tryAt(10, 0) == nullptr);
+    CHECK(buf.putString(-1, 0, "lost", {}) == 0);
+    CHECK(buf.putString(4, 0, "lost", {}) == 0);
+    CHECK(buf.putString(0, 6, "lost", {}) == 0);
+    buf.fill(Rect { .x = 6, .y = 0, .width = 3, .height = 3 }, '#', {});
+    buf.fill(Rect { .x = -5, .y = -5, .width = 3, .height = 3 }, '#', {});
+    buf.clearRect(Rect { .x = 0, .y = 4, .width = 6, .height = 2 });
+
+    CHECK(buf.cells() == before);
+}
+
+TEST_CASE("Buffer: a write that straddles the edge keeps what is inside, drops the rest")
+{
+    Buffer buf(2, 4);
+
+    buf.fill(Rect { .x = 2, .y = 1, .width = 5, .height = 5 }, '#', {});
+
+    CHECK(test::canvasToString(buf) == "    \n  ##");
+}
+
+TEST_CASE("Canvas: a put outside the buffer is a no-op")
+{
+    Buffer buf(2, 3);
+    auto const before = buf.cells();
+    Theme const theme;
+    Canvas canvas(buf, Rect { .x = 0, .y = 0, .width = 3, .height = 2 }, theme);
+
+    canvas.put(-1, 0, "x", {});
+    canvas.put(0, 3, "x", {});
+    canvas.put(2, 0, "x", {});
+
+    CHECK(buf.cells() == before);
 }
 
 TEST_CASE("Buffer.resize")
 {
     Buffer buf(10, 20);
-    buf.at(5, 10).grapheme = "X";
+    requireCell(buf, { .x = 10, .y = 5 }).grapheme = "X";
 
     buf.resize(15, 25);
     CHECK(buf.rows() == 15);
     CHECK(buf.cols() == 25);
-    CHECK(buf.at(5, 10).grapheme == "X"); // Preserved
+    CHECK(requireCell(buf, { .x = 10, .y = 5 }).grapheme == "X"); // Preserved
 
     buf.resize(3, 5);
     CHECK(buf.rows() == 3);
@@ -499,16 +548,16 @@ TEST_CASE("Buffer.resize")
 TEST_CASE("Buffer.clear")
 {
     Buffer buf(10, 20);
-    buf.at(5, 10).grapheme = "X";
-    buf.at(5, 10).width = 2;
+    requireCell(buf, { .x = 10, .y = 5 }).grapheme = "X";
+    requireCell(buf, { .x = 10, .y = 5 }).width = 2;
 
     Style style;
     style.bold = true;
     buf.clear(style);
 
-    CHECK(buf.at(5, 10).grapheme == " ");
-    CHECK(buf.at(5, 10).width == 1);
-    CHECK(buf.at(5, 10).style.bold == true);
+    CHECK(requireCell(buf, { .x = 10, .y = 5 }).grapheme == " ");
+    CHECK(requireCell(buf, { .x = 10, .y = 5 }).width == 1);
+    CHECK(requireCell(buf, { .x = 10, .y = 5 }).style.bold == true);
 }
 
 TEST_CASE("Buffer.clearRect")
@@ -518,18 +567,18 @@ TEST_CASE("Buffer.clearRect")
     // Fill entire buffer with 'X'
     for (auto const r: std::views::iota(0, 10))
         for (auto const c: std::views::iota(0, 20))
-            buf.at(r, c).grapheme = "X";
+            requireCell(buf, { .x = c, .y = r }).grapheme = "X";
 
     // Clear a region
     buf.clearRect(Rect { .x = 5, .y = 2, .width = 10, .height = 3 });
 
     // Check cleared region
-    CHECK(buf.at(2, 5).grapheme == " ");
-    CHECK(buf.at(4, 14).grapheme == " ");
+    CHECK(requireCell(buf, { .x = 5, .y = 2 }).grapheme == " ");
+    CHECK(requireCell(buf, { .x = 14, .y = 4 }).grapheme == " ");
 
     // Check outside region still has 'X'
-    CHECK(buf.at(0, 0).grapheme == "X");
-    CHECK(buf.at(5, 0).grapheme == "X");
+    CHECK(requireCell(buf, { .x = 0, .y = 0 }).grapheme == "X");
+    CHECK(requireCell(buf, { .x = 0, .y = 5 }).grapheme == "X");
 }
 
 TEST_CASE("Buffer.putString")
@@ -538,11 +587,11 @@ TEST_CASE("Buffer.putString")
 
     int const consumed = buf.putString(5, 3, "hello", Style {});
     CHECK(consumed == 5);
-    CHECK(buf.at(5, 3).grapheme == "h");
-    CHECK(buf.at(5, 4).grapheme == "e");
-    CHECK(buf.at(5, 5).grapheme == "l");
-    CHECK(buf.at(5, 6).grapheme == "l");
-    CHECK(buf.at(5, 7).grapheme == "o");
+    CHECK(requireCell(buf, { .x = 3, .y = 5 }).grapheme == "h");
+    CHECK(requireCell(buf, { .x = 4, .y = 5 }).grapheme == "e");
+    CHECK(requireCell(buf, { .x = 5, .y = 5 }).grapheme == "l");
+    CHECK(requireCell(buf, { .x = 6, .y = 5 }).grapheme == "l");
+    CHECK(requireCell(buf, { .x = 7, .y = 5 }).grapheme == "o");
 }
 
 TEST_CASE("Buffer.putString_with_style")
@@ -553,8 +602,8 @@ TEST_CASE("Buffer.putString_with_style")
 
     buf.putString(5, 3, "hi", style);
 
-    CHECK(buf.at(5, 3).style.bold == true);
-    CHECK(buf.at(5, 4).style.bold == true);
+    CHECK(requireCell(buf, { .x = 3, .y = 5 }).style.bold == true);
+    CHECK(requireCell(buf, { .x = 4, .y = 5 }).style.bold == true);
 }
 
 TEST_CASE("Buffer.putString_clipping")
@@ -566,9 +615,9 @@ TEST_CASE("Buffer.putString_clipping")
 
     // Should only write 3 characters (columns 17, 18, 19)
     CHECK(consumed == 3);
-    CHECK(buf.at(5, 17).grapheme == "h");
-    CHECK(buf.at(5, 18).grapheme == "e");
-    CHECK(buf.at(5, 19).grapheme == "l");
+    CHECK(requireCell(buf, { .x = 17, .y = 5 }).grapheme == "h");
+    CHECK(requireCell(buf, { .x = 18, .y = 5 }).grapheme == "e");
+    CHECK(requireCell(buf, { .x = 19, .y = 5 }).grapheme == "l");
 }
 
 TEST_CASE("Buffer.fill")
@@ -580,13 +629,13 @@ TEST_CASE("Buffer.fill")
     buf.fill(Rect { .x = 2, .y = 3, .width = 5, .height = 4 }, '*', style);
 
     // Check filled region
-    CHECK(buf.at(3, 2).grapheme == "*");
-    CHECK(buf.at(3, 2).style.bold == true);
-    CHECK(buf.at(6, 6).grapheme == "*");
+    CHECK(requireCell(buf, { .x = 2, .y = 3 }).grapheme == "*");
+    CHECK(requireCell(buf, { .x = 2, .y = 3 }).style.bold == true);
+    CHECK(requireCell(buf, { .x = 6, .y = 6 }).grapheme == "*");
 
     // Check outside region (cells are initialized to space by Buffer constructor)
-    CHECK(buf.at(0, 0).grapheme == " ");
-    CHECK(buf.at(0, 0).style.bold == false);
+    CHECK(requireCell(buf, { .x = 0, .y = 0 }).grapheme == " ");
+    CHECK(requireCell(buf, { .x = 0, .y = 0 }).style.bold == false);
 }
 
 TEST_CASE("Buffer.cursor")
@@ -636,8 +685,8 @@ TEST_CASE("Canvas.put")
     canvas.put(2, 3, "A", style);
 
     // Canvas coordinates (2, 3) should map to buffer coordinates (5+2, 10+3) = (7, 13)
-    CHECK(buf.at(7, 13).grapheme == "A");
-    CHECK(buf.at(7, 13).style.bold == true);
+    CHECK(requireCell(buf, { .x = 13, .y = 7 }).grapheme == "A");
+    CHECK(requireCell(buf, { .x = 13, .y = 7 }).style.bold == true);
 }
 
 TEST_CASE("Canvas.put_clipping")
@@ -656,14 +705,14 @@ TEST_CASE("Canvas.put_clipping")
     canvas.put(0, 0, "Y", Style {});
 
     // Verify valid position was written (canvas (0,0) = buffer (5, 10))
-    CHECK(buf.at(5, 10).grapheme == "Y");
+    CHECK(requireCell(buf, { .x = 10, .y = 5 }).grapheme == "Y");
 
     // Verify nothing was written to buffer positions that would correspond to
     // out-of-bounds canvas coordinates (they should still be the default space)
-    CHECK(buf.at(4, 10).grapheme == " ");  // Canvas row -1 would be buffer row 4
-    CHECK(buf.at(5, 9).grapheme == " ");   // Canvas col -1 would be buffer col 9
-    CHECK(buf.at(15, 10).grapheme == " "); // Canvas row 10 would be buffer row 15
-    CHECK(buf.at(5, 40).grapheme == " ");  // Canvas col 30 would be buffer col 40
+    CHECK(requireCell(buf, { .x = 10, .y = 4 }).grapheme == " ");  // Canvas row -1 would be buffer row 4
+    CHECK(requireCell(buf, { .x = 9, .y = 5 }).grapheme == " ");   // Canvas col -1 would be buffer col 9
+    CHECK(requireCell(buf, { .x = 10, .y = 15 }).grapheme == " "); // Canvas row 10 would be buffer row 15
+    CHECK(requireCell(buf, { .x = 40, .y = 5 }).grapheme == " ");  // Canvas col 30 would be buffer col 40
 }
 
 TEST_CASE("Canvas.putString")
@@ -676,8 +725,8 @@ TEST_CASE("Canvas.putString")
     CHECK(consumed == 5);
 
     // Canvas (2, 3) = Buffer (7, 13)
-    CHECK(buf.at(7, 13).grapheme == "h");
-    CHECK(buf.at(7, 17).grapheme == "o");
+    CHECK(requireCell(buf, { .x = 13, .y = 7 }).grapheme == "h");
+    CHECK(requireCell(buf, { .x = 17, .y = 7 }).grapheme == "o");
 }
 
 TEST_CASE("Canvas.putString_clipping")
@@ -707,14 +756,16 @@ TEST_CASE("Canvas.putString_wide_cluster_right_edge")
     CHECK(consumed == 0); // Did not fit within the area.
 
     // Canvas col 9 = buffer col 19; the out-of-area cell is buffer col 20.
-    CHECK(buf.at(5, 19).grapheme == " "); // Last canvas cell untouched (cluster dropped).
-    CHECK(buf.at(5, 20).grapheme == " "); // Cell outside the canvas area must be untouched.
+    CHECK(requireCell(buf, { .x = 19, .y = 5 }).grapheme
+          == " "); // Last canvas cell untouched (cluster dropped).
+    CHECK(requireCell(buf, { .x = 20, .y = 5 }).grapheme
+          == " "); // Cell outside the canvas area must be untouched.
 
     // A width-2 cluster that fully fits (canvas cols 8..9 = buffer cols 18..19) is written.
     consumed = canvas.putString(0, 8, "界", Style {});
     CHECK(consumed == 2);
-    CHECK(buf.at(5, 18).grapheme == "界");
-    CHECK(buf.at(5, 20).grapheme == " "); // Still nothing outside the area.
+    CHECK(requireCell(buf, { .x = 18, .y = 5 }).grapheme == "界");
+    CHECK(requireCell(buf, { .x = 20, .y = 5 }).grapheme == " "); // Still nothing outside the area.
 }
 
 TEST_CASE("Canvas.fill")
@@ -728,11 +779,11 @@ TEST_CASE("Canvas.fill")
     canvas.fill(Rect { .x = 2, .y = 1, .width = 5, .height = 3 }, '#', style);
 
     // Canvas (1, 2) = Buffer (6, 12)
-    CHECK(buf.at(6, 12).grapheme == "#");
-    CHECK(buf.at(6, 12).style.bold == true);
+    CHECK(requireCell(buf, { .x = 12, .y = 6 }).grapheme == "#");
+    CHECK(requireCell(buf, { .x = 12, .y = 6 }).style.bold == true);
 
     // Canvas (3, 6) = Buffer (8, 16)
-    CHECK(buf.at(8, 16).grapheme == "#");
+    CHECK(requireCell(buf, { .x = 16, .y = 8 }).grapheme == "#");
 }
 
 TEST_CASE("Canvas.clear")
@@ -749,8 +800,8 @@ TEST_CASE("Canvas.clear")
     canvas.clear(clearStyle);
 
     // Check that the canvas area is cleared
-    CHECK(buf.at(5, 10).grapheme == " ");
-    CHECK(buf.at(5, 10).style.dim == true);
+    CHECK(requireCell(buf, { .x = 10, .y = 5 }).grapheme == " ");
+    CHECK(requireCell(buf, { .x = 10, .y = 5 }).style.dim == true);
 }
 
 TEST_CASE("Canvas.setCursor")
@@ -791,7 +842,7 @@ TEST_CASE("Canvas.subcanvas")
     sub.put(1, 2, "X", Style {});
 
     // Subcanvas (1, 2) relative to canvas (5, 2) = canvas (3, 7) = buffer (8, 17)
-    CHECK(buf.at(8, 17).grapheme == "X");
+    CHECK(requireCell(buf, { .x = 17, .y = 8 }).grapheme == "X");
 }
 
 TEST_CASE("Canvas.subcanvas_clipping")
@@ -819,7 +870,7 @@ TEST_CASE("Canvas.drawBox")
 
     // Check corners (using Unicode box characters)
     // Top-left at (2, 5)
-    CHECK(buf.at(2, 5).grapheme.empty() == false);
+    CHECK(requireCell(buf, { .x = 5, .y = 2 }).grapheme.empty() == false);
 
     // Just verify the box was drawn (specific characters depend on implementation)
     // The important thing is that the buffer was modified
@@ -833,8 +884,8 @@ TEST_CASE("Canvas.drawHLine")
 
     canvas.drawHLine(5, 10, 15, "-", Style {});
 
-    CHECK(buf.at(5, 10).grapheme == "-");
-    CHECK(buf.at(5, 24).grapheme == "-");
+    CHECK(requireCell(buf, { .x = 10, .y = 5 }).grapheme == "-");
+    CHECK(requireCell(buf, { .x = 24, .y = 5 }).grapheme == "-");
 }
 
 TEST_CASE("Canvas.drawVLine")
@@ -845,6 +896,6 @@ TEST_CASE("Canvas.drawVLine")
 
     canvas.drawVLine(10, 5, 8, "|", Style {});
 
-    CHECK(buf.at(5, 10).grapheme == "|");
-    CHECK(buf.at(12, 10).grapheme == "|");
+    CHECK(requireCell(buf, { .x = 10, .y = 5 }).grapheme == "|");
+    CHECK(requireCell(buf, { .x = 10, .y = 12 }).grapheme == "|");
 }

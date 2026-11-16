@@ -273,7 +273,7 @@ target_link_libraries(myapp PRIVATE core::async core::net core::tui)
 | `<testing/ScopedTempDir.hpp>`, `<testing/ScopedWorkingDirectory.hpp>`, `<testing/EnvHelper.hpp>` | `<core/testing/...>` |
 | the compatibility aliases in `namespace endo` (`endo::NativeHandle`, `endo::FileSystem`, `endo::SignalHandler`, `endo::TestEnvironment`, ...) | the `core::platform::` names; `endo::TestEnvironment` is `core::platform::testing::TestProcessEnvironment`, and its working directory `core::platform::testing::TestWorkingDirectory` (core-cpp 0.5.0) |
 | `endo::containsGlobChars`, `endo::globMatchFilename` | `core::platform::containsGlobChars`, `core::platform::globMatchFilename` |
-| `net::IClock`, `net::SteadyClock`, `net::ManualClock`, `net::defaultSteadyClock`, `net::SteadyTimePoint`, `net::SteadyDuration`, `<net/platform/Clock.hpp>` | the same names in `core::platform`, `<core/platform/Clock.hpp>` |
+| `net::IClock`, `net::SteadyClock`, `net::ManualClock`, `net::defaultSteadyClock`, `net::SteadyTimePoint`, `net::SteadyDuration`, `<net/platform/Clock.hpp>` | the same names in `core` (`<core/Clock.hpp>`), which `<core/platform/Clock.hpp>` includes and also names in `core::platform` |
 | `net::NativeHandle`, `net::InvalidHandle`, `net::platformRead`/`platformWrite`/`platformClose`, `<net/platform/NativeHandle.hpp>` | the same names in `core::platform`, `<core/platform/Types.hpp>` (there is no `NativeHandle.hpp`) |
 | `net::ensureWinsockInitialized`, `<net/platform/WinsockInit.hpp>` | `core::platform::ensureWinsockInitialized`, `<core/platform/WinsockInit.hpp>` |
 | `net::createSystemPipe`, `net::SystemPipe`, `<net/platform/SystemPipe.hpp>` | `core::platform::createSystemPipe`, `core::platform::SystemPipe`, `<core/platform/SystemPipe.hpp>` (see the `read()` delta below) |
@@ -289,7 +289,7 @@ target_link_libraries(myapp PRIVATE core::async core::net core::tui)
 
 | From | To |
 |---|---|
-| `net::IClock` | `core::platform::IClock` |
+| `net::IClock` | `core::IClock` (also spelled `core::platform::IClock`) |
 | contour's `net` target, which built `Tls.hpp`/`Tls.cpp` into itself and always required OpenSSL | `<core/net/Tls.hpp>` is `core::net_tls`, a target of its own that exists only with `CORE_CPP_WITH_TLS`: configure core-cpp with `CORE_CPP_WITH_TLS ON` (the CPM snippet above has it OFF) and link `core::net_tls`, which links `core::net`, and OpenSSL PRIVATE |
 | `IListener::localPort` | `boundPort` |
 | `NetErrorCode::Other` | `SystemError` |

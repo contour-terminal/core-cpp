@@ -227,6 +227,13 @@ jobs:
           -DWORK_DIR="$RUNNER_TEMP/check-release-selftest"
           -P tests/cmake/check-release-selftest.cmake
 
+      # covers: core-cpp.tui-core-symbols-selftest
+      - name: tui_core symbol-check self-test
+        run: >-
+          cmake -DCHECKER="$GITHUB_WORKSPACE/tests/cmake/check-tui-core-symbols.cmake"
+          -DWORK_DIR="$RUNNER_TEMP/tui-core-symbols-selftest"
+          -P tests/cmake/check-tui-core-symbols-selftest.cmake
+
       # Each case builds a git repository of its own and vendors it; the consumer-smoke job below
       # is where a vendored copy of this tree is configured, built and verified.
       # covers: core-cpp.vendor-selftest
@@ -236,12 +243,17 @@ jobs:
           -DWORK_DIR="$RUNNER_TEMP/vendor-selftest"
           -P tests/cmake/check-vendor-selftest.cmake
 
-      # Emscripten sets UNIX; it must still compile no SOURCES_POSIX file.
+      # Emscripten sets UNIX, and a WASI toolchain may; neither must compile a SOURCES_POSIX file.
       # covers: core-cpp.platform-sources
       - name: Platform source selection
         run: >-
           cmake -DTARGETS="$GITHUB_WORKSPACE/cmake/CoreCppTargets.cmake"
           -P tests/cmake/check-platform-sources.cmake
+
+      # A frame's corners come from its BorderStyle; no widget source spells a square one (U.10).
+      # covers: core-cpp.tui-corners
+      - name: No widget hard-codes a square corner
+        run: cmake -DROOT="$GITHUB_WORKSPACE" -P tests/cmake/check-tui-corners.cmake
 
       # Each scenario configures a project with no language enabled, so the default generator will do.
       # covers: core-cpp.layering
@@ -990,6 +1002,102 @@ jobs:
         run: ctest --preset emscripten -LE tree-level
 
   # ---------------------------------------------------------------------------------------------
+  # The headless TUI as a WebAssembly guest (docs/design/tui-headless.md, U.12). wasi-sdk builds
+  # core::tui_core for wasm32-wasip1 with -fno-exceptions -fno-rtti, and three checks run what it
+  # built: libunicode's tables under Node's WASI (core-cpp.unicode-wasi), a consumer module under
+  # Node (core-cpp.tui-core-wasi), and a reactor -- VtParser -> Screen -> diffFrames -> solve --
+  # under wasmtime (core-cpp.tui-core-reactor). Everywhere else they skip; here each must run.
+  #
+  # The host build is there for libunicode's generated tables, which every guest build takes from it
+  # rather than downloading UCD.zip or building the generator for wasm. wasi-sdk and wasmtime are
+  # pinned by version and SHA-256; a new version is a change to the four values below.
+  wasi:
+    name: wasi (wasi-sdk ${{ matrix.wasi_sdk }}, wasmtime ${{ matrix.wasmtime }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        include:
+          - wasi_sdk: "34.0"
+            wasi_sdk_sha256: b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4
+            wasmtime: "50.0.1"
+            wasmtime_sha256: 685466455dd42a14774a86c36c8f2e45cbb9bd6d92a850139315df60a75498a5
+    env:
+      WASI_SDK_VERSION: ${{ matrix.wasi_sdk }}
+      WASI_SDK_SHA256: ${{ matrix.wasi_sdk_sha256 }}
+      WASMTIME_VERSION: ${{ matrix.wasmtime }}
+      WASMTIME_SHA256: ${{ matrix.wasmtime_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Cache CPM sources
+        uses: actions/cache@v4
+        with:
+          path: .cache/cpm
+          key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
+          restore-keys: cpm-${{ runner.os }}-
+
+      - name: Install Ninja
+        run: scripts/ci-retry.sh sudo apt-get update -q && scripts/ci-retry.sh sudo apt-get install -y -q ninja-build
+
+      - name: Install clang ${{ env.LLVM_VERSION }}
+        run: |
+          scripts/ci-retry.sh wget -q https://apt.llvm.org/llvm.sh
+          scripts/ci-retry.sh sudo bash llvm.sh "$LLVM_VERSION"
+          echo "CXX_COMPILER=clang++-$LLVM_VERSION" >> "$GITHUB_ENV"
+
+      # core-cpp.unicode-wasi and core-cpp.tui-core-wasi run their modules under Node's WASI preview 1.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Checked against the pinned digest before anything is unpacked; a mismatch fails here.
+      - name: Install wasi-sdk ${{ env.WASI_SDK_VERSION }}
+        run: |
+          archive="wasi-sdk-${WASI_SDK_VERSION}-x86_64-linux.tar.gz"
+          scripts/ci-retry.sh curl -sSfL -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION%%.*}/$archive"
+          echo "$WASI_SDK_SHA256  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/wasi-sdk"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/wasi-sdk" --strip-components=1
+          test -f "$RUNNER_TEMP/wasi-sdk/share/cmake/wasi-sdk-p1.cmake"
+          "$RUNNER_TEMP/wasi-sdk/bin/clang++" --version | head -n 1
+          echo "WASI_SDK_PREFIX=$RUNNER_TEMP/wasi-sdk" >> "$GITHUB_ENV"
+
+      - name: Install wasmtime ${{ env.WASMTIME_VERSION }}
+        run: |
+          archive="wasmtime-v${WASMTIME_VERSION}-x86_64-linux.tar.xz"
+          scripts/ci-retry.sh curl -sSfL -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/bytecodealliance/wasmtime/releases/download/v${WASMTIME_VERSION}/$archive"
+          echo "$WASMTIME_SHA256  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/wasmtime"
+          tar -xJf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/wasmtime" --strip-components=1
+          "$RUNNER_TEMP/wasmtime/wasmtime" --version
+          echo "WASMTIME=$RUNNER_TEMP/wasmtime/wasmtime" >> "$GITHUB_ENV"
+
+      # The host build only generates libunicode's tables and registers the guests' checks, so it
+      # needs no libsystemd (core::platform's power source), which this runner does not install.
+      - name: Configure the host build
+        run: cmake --preset clang-release -DCMAKE_CXX_COMPILER="$CXX_COMPILER" -DCORE_CPP_WITH_SYSTEMD=OFF
+
+      # core::tui_core links libunicode, so building it generates the tables the guests take.
+      - name: Generate libunicode's tables
+        run: cmake --build --preset clang-release --target core-cpp-tui_core
+
+      # A check that skipped proved nothing: each of the three must be listed as passed.
+      - name: Build and run the guests
+        run: |
+          ctest --preset clang-release -R '^core-cpp\.(unicode-wasi|tui-core-wasi|tui-core-reactor)$' \
+            --no-tests=error -V | tee "$RUNNER_TEMP/wasi-ctest.log"
+          for check in unicode-wasi tui-core-wasi tui-core-reactor; do
+            grep -Eq "Test +#[0-9]+: core-cpp\.$check \.+ +Passed" "$RUNNER_TEMP/wasi-ctest.log" \
+              || { echo "::error::core-cpp.$check did not run and pass"; exit 1; }
+          done
+          grep -E "(not )?ok - |tui-core-reactor: [0-9]+ of" "$RUNNER_TEMP/wasi-ctest.log"
+
+  # ---------------------------------------------------------------------------------------------
   # Proves core-cpp builds through pace-cc when it is available: the launcher is fetched and a
   # pace-kv daemon started by the verbatim module itself, and the second build must be served from
   # the cache. No other launcher is installed here, so nothing else can win the selection.
@@ -1095,6 +1203,12 @@ jobs:
   #   tui-output  Lightweight's dbtool links core::tui_output alone, with CORE_CPP_WITH_TUI off and
   #             CORE_CPP_WITH_TUI_OUTPUT on. The project asserts that the leaf exists, that core::tui
   #             does not, and that libunicode was neither found nor fetched.
+  #   tui-core  a program with no terminal (a WebAssembly guest's native twin) links core::tui_core,
+  #             with CORE_CPP_WITH_TUI off and CORE_CPP_WITH_TUI_CORE on. The project asserts that
+  #             core::tui does not exist, that the link closure holds nothing of platform, async or
+  #             net, and renders a component into a string through Screen. It is built a second
+  #             time with -fno-exceptions -fno-rtti, everything in it included -- core::base,
+  #             core::tui_output, core::tui_core and libunicode -- as a WebAssembly guest builds them.
   consumer-smoke:
     name: consumer-smoke (${{ matrix.leg }})
     runs-on: ubuntu-24.04
@@ -1102,7 +1216,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        leg: [cpm, vendored, wasm, tui-output]
+        leg: [cpm, vendored, wasm, tui-output, tui-core]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -1123,7 +1237,7 @@ jobs:
 
       # --- cpm ---------------------------------------------------------------------------------
       - name: Install clang ${{ env.LLVM_VERSION }}
-        if: matrix.leg == 'cpm' || matrix.leg == 'tui-output'
+        if: matrix.leg == 'cpm' || matrix.leg == 'tui-output' || matrix.leg == 'tui-core'
         run: |
           scripts/ci-retry.sh wget -q https://apt.llvm.org/llvm.sh
           scripts/ci-retry.sh sudo bash llvm.sh "$LLVM_VERSION"
@@ -1146,6 +1260,52 @@ jobs:
             -DCORE_CPP_SOURCE_DIR="$GITHUB_WORKSPACE"
           cmake --build "$RUNNER_TEMP/consumer-tui-output"
           ctest --test-dir "$RUNNER_TEMP/consumer-tui-output" --output-on-failure
+
+      # --- tui-core ----------------------------------------------------------------------------
+      - name: A consumer of core::tui_core renders with the terminal half off
+        if: matrix.leg == 'tui-core'
+        run: |
+          cmake -S tests/consumer-tui-core -B "$RUNNER_TEMP/consumer-tui-core" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER="clang++-$LLVM_VERSION" \
+            -DCORE_CPP_SOURCE_DIR="$GITHUB_WORKSPACE"
+          cmake --build "$RUNNER_TEMP/consumer-tui-core"
+          ctest --test-dir "$RUNNER_TEMP/consumer-tui-core" --output-on-failure
+
+      # The guest's language mode, natively: no exceptions and no RTTI anywhere in the build, so a
+      # throw, a try block, a dynamic_cast or a typeid reaching core::tui_core's closure fails here
+      # rather than in the first wasm build. The same consumer, so the same assertions run.
+      # libunicode's table generator is a host tool that throws, so it must not be built in this
+      # mode: the step above generated the tables into its libunicode source tree, and this build
+      # takes that tree, which libunicode then uses without building the generator -- the recipe a
+      # wasm build follows (docs/design/tui-headless.md, "Where the tables come from").
+      - name: core::tui_core builds and renders with -fno-exceptions -fno-rtti
+        if: matrix.leg == 'tui-core'
+        run: |
+          libunicode_source=$(sed -n 's/^libunicode_SOURCE_DIR:STATIC=//p' "$RUNNER_TEMP/consumer-tui-core/CMakeCache.txt")
+          test -f "$libunicode_source/src/libunicode/ucd_enums.h" || {
+            echo "::error::no generated libunicode tree from the previous step (got '$libunicode_source')"
+            exit 1
+          }
+          cmake -S tests/consumer-tui-core -B "$RUNNER_TEMP/consumer-tui-core-noexcept" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER="clang++-$LLVM_VERSION" \
+            -DCMAKE_CXX_FLAGS="-fno-exceptions -fno-rtti" \
+            -DCPM_libunicode_SOURCE="$libunicode_source" \
+            -DCORE_CPP_SOURCE_DIR="$GITHUB_WORKSPACE"
+          cmake --build "$RUNNER_TEMP/consumer-tui-core-noexcept"
+          ctest --test-dir "$RUNNER_TEMP/consumer-tui-core-noexcept" --output-on-failure --no-tests=error
+
+      # The headless half's own suite and the archive's symbol check, in a tree where the terminal
+      # half does not exist: what passes here passes without core::tui to lean on.
+      - name: core::tui_core's suite passes with the terminal half off
+        if: matrix.leg == 'tui-core'
+        run: |
+          cmake -S . -B "$RUNNER_TEMP/tui-core-only" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER="clang++-$LLVM_VERSION" \
+            -DCORE_CPP_TESTING=ON -DCORE_CPP_WITH_TUI=OFF -DCORE_CPP_WITH_TUI_CORE=ON
+          cmake --build "$RUNNER_TEMP/tui-core-only" \
+            --target core-cpp-tui_core-test core-cpp-tui_output-test core-cpp-tui_core
+          ctest --test-dir "$RUNNER_TEMP/tui-core-only" --output-on-failure --no-tests=error \
+            -R '^core-cpp\.(tui_core|tui_output|tui-core-symbols)$'
 
       # --- vendored ----------------------------------------------------------------------------
       - name: Export a verbatim copy of this commit
@@ -1387,7 +1547,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [style, linux, macos, windows, windows-clang-tidy, sanitizers, clang-tidy, emscripten, consumer-smoke, compile-cache]
+    needs: [style, linux, macos, windows, windows-clang-tidy, sanitizers, clang-tidy, emscripten, wasi, consumer-smoke, compile-cache]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

@@ -102,19 +102,18 @@ class Buffer
         return row >= 0 && row < _rows && col >= 0 && col < _cols;
     }
 
-    /// Returns a reference to the cell at (row, col).
-    /// @throws std::out_of_range if coordinates are out of bounds.
-    [[nodiscard]] Cell& at(int row, int col);
+    /// Returns the cell at @p position, or nullptr outside the buffer.
+    ///
+    /// The one accessor: a read or write through it outside the buffer is a null check and nothing
+    /// else, never an exception, so the headless TUI builds with exceptions off.
+    /// @param position The cell's column (x) and row (y), both 0-based.
+    /// @return The cell, or nullptr when @p position is out of bounds.
+    [[nodiscard]] Cell* cellAt(Point position) noexcept;
 
-    /// Returns a const reference to the cell at (row, col).
-    /// @throws std::out_of_range if coordinates are out of bounds.
-    [[nodiscard]] Cell const& at(int row, int col) const;
-
-    /// Returns a pointer to the cell at (row, col), or nullptr if out of bounds.
-    [[nodiscard]] Cell* tryAt(int row, int col) noexcept;
-
-    /// Returns a const pointer to the cell at (row, col), or nullptr if out of bounds.
-    [[nodiscard]] Cell const* tryAt(int row, int col) const noexcept;
+    /// Returns the cell at @p position, or nullptr outside the buffer.
+    /// @param position The cell's column (x) and row (y), both 0-based.
+    /// @return The cell, or nullptr when @p position is out of bounds.
+    [[nodiscard]] Cell const* cellAt(Point position) const noexcept;
 
     // --- Drawing Operations ---
 

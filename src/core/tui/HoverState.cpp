@@ -6,7 +6,7 @@
 namespace core::tui
 {
 
-HoverState::HoverState(std::chrono::milliseconds delay): _delay(delay)
+HoverState::HoverState(std::chrono::milliseconds delay, IClock const& clock): _delay(delay), _clock(&clock)
 {
 }
 
@@ -24,7 +24,7 @@ void HoverState::onMouseMove(int x, int y, Component* target)
 
         // Reset hover state
         _hover = HoverInfo { .x = x, .y = y, .target = target };
-        _hoverStart = std::chrono::steady_clock::now();
+        _hoverStart = _clock->now();
         _confirmed = false;
     }
     else
@@ -45,7 +45,7 @@ void HoverState::onMouseLeave()
     _confirmed = false;
 }
 
-void HoverState::tick(std::chrono::steady_clock::time_point now)
+void HoverState::tick(SteadyTimePoint now)
 {
     if (!_hover || _confirmed)
         return;
@@ -75,7 +75,7 @@ int HoverState::timeoutMs() const
 {
     if (!_hover || _confirmed)
         return -1;
-    return remainingMs(_hoverStart, _delay);
+    return remainingMs(*_clock, _hoverStart, _delay);
 }
 
 std::optional<HoverInfo> HoverState::currentHover() const
@@ -103,6 +103,12 @@ void HoverState::reset()
     }
     _hover.reset();
     _confirmed = false;
+}
+
+void HoverState::forget(Component const& component)
+{
+    if (_hover && _hover->target == &component)
+        reset();
 }
 
 } // namespace core::tui

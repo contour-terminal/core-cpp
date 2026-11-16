@@ -119,6 +119,7 @@ nav:
     - Strands and the resume context: design/strands.md
     - Portability: design/portability.md
     - Profiling: design/profiling.md
+    - A headless TUI: design/tui-headless.md
   - Provenance: provenance.md
   - Contributing:
     - contributing/index.md

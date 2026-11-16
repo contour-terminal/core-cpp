@@ -164,21 +164,21 @@ auto spinnerInterval(SpinnerType type) -> std::chrono::milliseconds
     return std::chrono::milliseconds { 100 };
 }
 
-Spinner::Spinner(SpinnerType type):
-    _frames(spinnerFrames(type)),
-    _interval(spinnerInterval(type)),
-    _lastTick(std::chrono::steady_clock::now())
+Spinner::Spinner(SpinnerType type, IClock const& clock):
+    _frames(spinnerFrames(type)), _interval(spinnerInterval(type)), _clock(&clock), _lastTick(clock.now())
 {
 }
 
-Spinner::Spinner(std::span<std::string_view const> frames, std::chrono::milliseconds interval):
-    _frames(frames), _interval(interval), _lastTick(std::chrono::steady_clock::now())
+Spinner::Spinner(std::span<std::string_view const> frames,
+                 std::chrono::milliseconds interval,
+                 IClock const& clock):
+    _frames(frames), _interval(interval), _clock(&clock), _lastTick(clock.now())
 {
 }
 
 auto Spinner::tick() -> bool
 {
-    auto const now = std::chrono::steady_clock::now();
+    auto const now = _clock->now();
     if (now - _lastTick >= _interval)
     {
         _lastTick = now;
@@ -208,7 +208,7 @@ auto Spinner::frameCount() const noexcept -> std::size_t
 void Spinner::reset()
 {
     _frameIndex = 0;
-    _lastTick = std::chrono::steady_clock::now();
+    _lastTick = _clock->now();
 }
 
 void Spinner::render(TerminalOutput& output, Style const& style) const

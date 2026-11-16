@@ -11,6 +11,8 @@
 /// to an injected @ref TreeTableModel. A disk-usage browser, a process tree, a JSON
 /// explorer, etc. all reuse this component by implementing the model.
 
+#include <core/Clock.hpp>
+#include <core/Defines.hpp>
 #include <core/tui/Component.hpp>
 #include <core/tui/InputEvent.hpp>
 #include <core/tui/TerminalOutput.hpp>
@@ -118,7 +120,13 @@ class TreeTableView: public Component
   public:
     /// @param model The data/navigation seam (not owned; must outlive the view).
     /// @param config Layout configuration.
-    explicit TreeTableView(TreeTableModel& model, TreeTableConfig config = {}) noexcept;
+    /// @param clock The clock double-clicks are timed on (not owned; must outlive the view).
+    explicit TreeTableView(TreeTableModel& model,
+                           TreeTableConfig config = {},
+                           IClock const& clock CORE_LIFETIMEBOUND = defaultSteadyClock()) noexcept;
+
+    /// A clock is kept, not copied: a temporary would dangle, so an rvalue clock is refused.
+    TreeTableView(TreeTableModel& model, TreeTableConfig config, IClock const&& clock) = delete;
 
     void render(Canvas& canvas) override;
     [[nodiscard]] EventResult onEvent(InputEvent const& event) override;
@@ -177,6 +185,7 @@ class TreeTableView: public Component
 
     TreeTableModel& _model;           ///< Data + navigation seam.
     TreeTableConfig _config;          ///< Layout configuration.
+    IClock const& _clock;             ///< The clock double-clicks are timed on.
     std::size_t _cursor = 0;          ///< Cursor index into the current rows.
     std::size_t _scroll = 0;          ///< Index of the first visible row.
     std::function<void()> _onChanged; ///< Selection/navigation change callback.
@@ -187,9 +196,9 @@ class TreeTableView: public Component
 
     // Double-click tracking: a left-press on the already-clicked row within the interval
     // activates (descends into) it, like a desktop double-click.
-    bool _hadClick = false;                               ///< A prior left-press may begin a double-click.
-    std::size_t _lastClickRow = 0;                        ///< Row index of the prior left-press.
-    std::chrono::steady_clock::time_point _lastClickTime; ///< When the prior left-press happened.
+    bool _hadClick = false;         ///< A prior left-press may begin a double-click.
+    std::size_t _lastClickRow = 0;  ///< Row index of the prior left-press.
+    SteadyTimePoint _lastClickTime; ///< When the prior left-press happened.
 
     static constexpr auto DoubleClickInterval = std::chrono::milliseconds { 400 };
 };

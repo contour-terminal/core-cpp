@@ -30,7 +30,7 @@ template <typename Recompute>
 [[nodiscard]] bool acceptGhostText(InputField& inputField,
                                    Recompute const& recompute,
                                    bool& dirty,
-                                   std::optional<std::chrono::steady_clock::time_point>& pendingSince)
+                                   std::optional<SteadyTimePoint>& pendingSince)
 {
     recompute();
     if (!inputField.hasGhostText())
