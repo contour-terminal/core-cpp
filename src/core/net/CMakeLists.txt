@@ -104,6 +104,7 @@ endif()
 if(NOT _coreCppNetDefaultBackend STREQUAL "posix/DefaultBackend.cpp")
     core_cpp_add_unbuilt_source_check(net-default-backend
         SOURCES posix/DefaultBackend.cpp
+        PART_OF net
         USAGE core::net_types core::async core::platform)
 endif()
 
