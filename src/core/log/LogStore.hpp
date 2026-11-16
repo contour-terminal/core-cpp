@@ -370,11 +370,11 @@ inline void Sink::setWriter(Writer writer)
 /// Constructed in the library: a category registers itself by name and refuses a second of the same
 /// name, so one built in each image that includes this header would be refused in the second.
 /// @return The category.
-[[nodiscard]] CORE_LOG_API Category& errorCategory();
+[[nodiscard]] CORE_LOG_API Category& errorCategory() noexcept;
 
 /// The `fatal` category behind fatal(), constructed in the library for the reason errorCategory() is.
 /// @return The category.
-[[nodiscard]] CORE_LOG_API Category& fatalCategory();
+[[nodiscard]] CORE_LOG_API Category& fatalCategory() noexcept;
 
 /// The `error` category: a reference to errorCategory(), initialised in every translation unit that
 /// includes this header before that unit's first use of it.

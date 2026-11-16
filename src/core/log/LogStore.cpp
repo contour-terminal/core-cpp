@@ -13,13 +13,13 @@ std::vector<std::reference_wrapper<Category>>& get()
     return logStore;
 }
 
-Category& errorCategory()
+Category& errorCategory() noexcept
 {
     static auto category = Category("error", "Error Logger", Category::State::Enabled);
     return category;
 }
 
-Category& fatalCategory()
+Category& fatalCategory() noexcept
 {
     static auto category = Category("fatal", "Fatal error Logger", Category::State::Enabled);
     return category;

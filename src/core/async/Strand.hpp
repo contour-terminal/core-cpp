@@ -286,7 +286,7 @@ namespace detail
         };
 
         /// @return The calling thread's slot, defined in the library so that every image shares it.
-        [[nodiscard]] CORE_ASYNC_API static Freeing& slot() noexcept;
+        [[nodiscard]] static Freeing& slot() noexcept;
 
         Freeing _previous;
     };
