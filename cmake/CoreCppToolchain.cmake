@@ -358,6 +358,16 @@ function(core_cpp_apply_toolchain target)
         endforeach()
     endif()
 
+    # Windows finds a DLL beside the executable that loads it, and a module's DLL is built in its own
+    # directory, so each executable gets copies of the DLLs it links. The condition keeps an
+    # executable that links none from running a copy command with nothing to copy.
+    if(CORE_CPP_BUILD_SHARED AND WIN32 AND type STREQUAL "EXECUTABLE")
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:${target}> $<TARGET_FILE_DIR:${target}>
+            COMMAND_EXPAND_LISTS
+            VERBATIM)
+    endif()
+
     if(CORE_CPP_MSVC_DRIVER)
         target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${CORE_CPP_MSVC_DRIVER_FLAGS}>)
     endif()
