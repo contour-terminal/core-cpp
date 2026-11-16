@@ -66,6 +66,15 @@ if(INSTRUMENT_LINK_FLAGS)
     string(REPLACE "|" ";" instrumentFlags "${INSTRUMENT_LINK_FLAGS}")
     target_link_options(consumer-install PRIVATE ${instrumentFlags})
 endif()
+# An installed core-cpp built shared (CORE_CPP_BUILD_SHARED) has DLLs on Windows, which the loader finds
+# beside the executable and nowhere in the install prefix's bin directory unless it is on PATH. A static
+# one has none, and `cmake -E true` is the copy that does nothing then.
+if(WIN32)
+    set(copyDlls "$<IF:$<BOOL:$<TARGET_RUNTIME_DLLS:consumer-install>>,copy_if_different,true>")
+    add_custom_command(TARGET consumer-install POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E ${copyDlls} $<TARGET_RUNTIME_DLLS:consumer-install> $<TARGET_FILE_DIR:consumer-install>
+        COMMAND_EXPAND_LISTS VERBATIM)
+endif()
 add_test(NAME consumer-install COMMAND consumer-install)
 set_tests_properties(consumer-install PROPERTIES TIMEOUT 60)
 
@@ -91,6 +100,12 @@ if(EXPECT_TESTING_MAIN)
     if(INSTRUMENT_LINK_FLAGS)
         string(REPLACE "|" ";" instrumentFlags "${INSTRUMENT_LINK_FLAGS}")
         target_link_options(consumer-install-testing PRIVATE ${instrumentFlags})
+    endif()
+    if(WIN32)
+        set(copyDlls "$<IF:$<BOOL:$<TARGET_RUNTIME_DLLS:consumer-install-testing>>,copy_if_different,true>")
+        add_custom_command(TARGET consumer-install-testing POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E ${copyDlls} $<TARGET_RUNTIME_DLLS:consumer-install-testing> $<TARGET_FILE_DIR:consumer-install-testing>
+            COMMAND_EXPAND_LISTS VERBATIM)
     endif()
     add_test(NAME consumer-install-testing COMMAND consumer-install-testing)
     set_tests_properties(consumer-install-testing PROPERTIES SKIP_RETURN_CODE ${skipExitCode} TIMEOUT 60)

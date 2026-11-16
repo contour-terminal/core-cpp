@@ -1,7 +1,9 @@
 # async
 
 The C++23 coroutine vocabulary. Namespace `core::async`, directory `src/core/async/`, target
-`core::async` (header-only).
+`core::async`. Almost all header-only: its two sources define the thread-local slots the headers share
+(the current-executor chain, `Strand`'s dead-pump and freeing slots), so that a shared build has one
+of each per thread rather than one per image.
 
 !!! note "Status"
     `StopToken`, and contour's `Task`, cancellation and combinators (`src/coro` at

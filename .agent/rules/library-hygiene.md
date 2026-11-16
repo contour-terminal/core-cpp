@@ -35,6 +35,24 @@ because its event loop could not wait on a console handle.
   refuses. An exemption is a row in its allowlist with a reason, and a row that no longer
   allows anything is refused as stale.
 
+## Shared builds
+
+`CORE_CPP_BUILD_SHARED` builds every compiled module as a shared library with hidden visibility, so
+what a library exports is what its generated macro (`CORE_<NAME>_API`, in
+`core/<dir>/<Name>Export.hpp`) marks. Three consequences for a change:
+
+- **Process and thread state is defined in a `.cpp`, never inline in a header.** A `static` local or a
+  `thread_local` in an inline function, or an inline variable, is one object per linked image: a DLL
+  and the executable that loads it each get their own, so a registry, a handler, a singleton or a
+  per-thread context splits in two with nothing saying so. Declare an exported accessor in the header
+  and define the storage in the owning module's source. `constinit` stays on a `thread_local`, so a
+  read is a TLS load behind the call. `tests/shared-state/` holds one case per piece of state; a new
+  piece gets one. clang's `-Wunique-object-duplication` finds the inline ones.
+- **A public out-of-line function or class carries the module's macro**, after any attribute and before
+  the return type or the class name. A forgotten mark links everywhere in a static build and fails
+  in a shared one, on Linux too: the `clang-debug-shared` leg is what sees it.
+- **A header-only type needs no mark**, nor does a template, nor an inline function without state.
+
 ## Names
 
 - **Every option and cache variable is `CORE_CPP_`-prefixed, and every function and macro is

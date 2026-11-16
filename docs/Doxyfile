@@ -50,14 +50,27 @@ BUILTIN_STL_SUPPORT    = YES
 SORT_MEMBER_DOCS       = NO
 
 # The preprocessor sees the generated <core/Config.hpp> as absent; the WITH_* switches are
-# documented as if on, so the reference describes every optional part.
+# documented as if on, so the reference describes every optional part. It sees the generated export
+# headers as absent too, so each CORE_<NAME>_API macro is defined empty: it marks a symbol for the
+# linker and says nothing a reader of the reference needs.
 ENABLE_PREPROCESSING   = YES
 MACRO_EXPANSION        = YES
 EXPAND_ONLY_PREDEF     = YES
 PREDEFINED             = CORE_CPP_WITH_TUI=1 \
                          CORE_CPP_WITH_IMAGES=1 \
                          CORE_CPP_WITH_TLS=1 \
-                         CORE_CPP_WITH_TRACY=0
+                         CORE_CPP_WITH_TRACY=0 \
+                         CORE_BASE_API= \
+                         CORE_LOG_API= \
+                         CORE_CLI_API= \
+                         CORE_CODEC_API= \
+                         CORE_ASYNC_API= \
+                         CORE_PLATFORM_API= \
+                         CORE_NET_API= \
+                         CORE_NET_TLS_API= \
+                         CORE_TUI_OUTPUT_API= \
+                         CORE_TUI_CORE_API= \
+                         CORE_TUI_API=
 
 # Undocumented public API is reported, and does not yet fail the build:
 # https://github.com/contour-terminal/core-cpp/issues/10

@@ -218,9 +218,12 @@ awaitable that another thread completes reads that once, in `await_suspend`, and
   `Strand` object; once closed it drops what it is given, which frees a chain nobody owns. It costs
   one reference count per park on a strand, and nothing on a loop or a pool, whose scopes carry no
   reference. `Strand::runningHere()`, not a pointer comparison, is how to ask where a task is.
-- `inline` thread-locals are one per linked image: a program that loads core-cpp's headers into two
-  shared libraries with hidden visibility has two scope chains, and a scope stated in one is not
-  seen by an awaitable compiled into the other. core-cpp ships static libraries, where there is one.
+- The slot is defined in `core::async`'s library, not inline in the header: an `inline` thread-local
+  is one per linked image, so a DLL and the executable that loads it would have two scope chains, and
+  a scope stated in one would not be seen by an awaitable compiled into the other. With a shared
+  core-cpp (`CORE_CPP_BUILD_SHARED`) there is one slot per thread for the whole process. With a static
+  one each image that links it has its own copy of the slot, which is right for a program that is one
+  image. The same holds for `Strand`'s two per-thread slots.
 - Outside every scope an awaitable falls back to what it did before: `AsyncQueue` uses the executor
   it was constructed over. A test double that does not state itself leaves its coroutines there too,
   which is why `testing::ManualExecutor` does.

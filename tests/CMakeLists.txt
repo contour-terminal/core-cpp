@@ -698,7 +698,9 @@ set_tests_properties(core-cpp.format-scripts-selftest PROPERTIES
 #
 # Bounds: the mismatch builds one translation unit and fails at link, 10s measured on cl-debug; the
 # smoke is a loopback round trip, well under a second. 300 and 120 leave room for a cold runner.
-if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+# Static libraries only: a program linking core-cpp's DLLs links their import libraries, which record
+# no C runtime, so there is no mismatch to refuse (and CORE_CPP_BUILD_SHARED refuses the twins).
+if((MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC") AND NOT CORE_CPP_BUILD_SHARED)
     set(_coreCppStaticCrt "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
     add_executable(core-cpp-static-crt-mismatch EXCLUDE_FROM_ALL StaticCrtSmoke.cpp)
@@ -826,6 +828,27 @@ if(UNIX AND NOT EMSCRIPTEN AND TARGET core::net)
     add_executable(core-cpp-bench-executor-context bench/ExecutorContextBench.cpp)
     target_link_libraries(core-cpp-bench-executor-context PRIVATE core::net)
     core_cpp_apply_toolchain(core-cpp-bench-executor-context)
+endif()
+
+# One copy of core-cpp's process and thread state across a shared-library boundary. Only a shared
+# core-cpp can promise it -- a static one is linked into each image -- so the case is registered only
+# for CORE_CPP_BUILD_SHARED. The probe is a shared library of its own, compiled with hidden
+# visibility, so what core-cpp's headers define inline exists once in it and once in the test
+# executable, which is the situation of a consumer's DLL beside its executable
+# (tests/shared-state/SharedState_test.cpp). Without a shared core-cpp underneath, or with that state
+# defined inline in a header again, the cases fail: each reads in one image what the other wrote.
+if(CORE_CPP_TESTING AND CORE_CPP_BUILD_SHARED AND TARGET core::net)
+    add_library(core-cpp-shared-state-probe SHARED shared-state/Probe.cpp)
+    target_link_libraries(core-cpp-shared-state-probe PRIVATE core::net core::platform core::log core::async core::base)
+    target_compile_definitions(core-cpp-shared-state-probe PRIVATE CORE_CPP_SHARED_STATE_PROBE_BUILDING)
+    set_target_properties(core-cpp-shared-state-probe PROPERTIES
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN ON)
+    core_cpp_apply_toolchain(core-cpp-shared-state-probe)
+    core_cpp_add_test(base NAME shared-state
+        SOURCES shared-state/SharedState_test.cpp
+        LIBS core-cpp-shared-state-probe core::net core::platform core::log core::async)
+    target_include_directories(core-cpp-shared-state-test PRIVATE shared-state)
 endif()
 
 # The WebAssembly smoke, which is a program rather than a Catch2 binary and needs a link flag of

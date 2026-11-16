@@ -54,6 +54,14 @@
       }
     },
     {
+      "name": "clang-debug-shared",
+      "displayName": "Clang, Debug, shared libraries",
+      "inherits": "clang-debug",
+      "cacheVariables": {
+        "CORE_CPP_BUILD_SHARED": "ON"
+      }
+    },
+    {
       "name": "clang-release",
       "displayName": "Clang, Release",
       "inherits": "unix",
@@ -188,6 +196,14 @@
       }
     },
     {
+      "name": "cl-release-shared",
+      "displayName": "MSVC, Release, shared libraries (DLLs)",
+      "inherits": "cl-release",
+      "cacheVariables": {
+        "CORE_CPP_BUILD_SHARED": "ON"
+      }
+    },
+    {
       "name": "clangcl-debug",
       "displayName": "clang-cl, Debug",
       "inherits": "windows",
@@ -263,6 +279,11 @@
       "inherits": "unix"
     },
     {
+      "name": "clang-debug-shared",
+      "configurePreset": "clang-debug-shared",
+      "inherits": "unix"
+    },
+    {
       "name": "clang-release",
       "configurePreset": "clang-release",
       "inherits": "unix"
@@ -340,6 +361,11 @@
     {
       "name": "cl-release",
       "configurePreset": "cl-release",
+      "inherits": "windows"
+    },
+    {
+      "name": "cl-release-shared",
+      "configurePreset": "cl-release-shared",
       "inherits": "windows"
     },
     {
@@ -406,6 +432,11 @@
       "inherits": "unix"
     },
     {
+      "name": "clang-debug-shared",
+      "configurePreset": "clang-debug-shared",
+      "inherits": "unix"
+    },
+    {
       "name": "clang-release",
       "configurePreset": "clang-release",
       "inherits": "unix"
@@ -486,6 +517,11 @@
       "inherits": "windows"
     },
     {
+      "name": "cl-release-shared",
+      "configurePreset": "cl-release-shared",
+      "inherits": "windows"
+    },
+    {
       "name": "clangcl-debug",
       "configurePreset": "clangcl-debug",
       "inherits": "windows"
@@ -533,6 +569,24 @@
         {
           "type": "test",
           "name": "clang-debug"
+        }
+      ]
+    },
+    {
+      "name": "ci-clang-debug-shared",
+      "displayName": "CI: Clang, Debug, shared libraries",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "clang-debug-shared"
+        },
+        {
+          "type": "build",
+          "name": "clang-debug-shared"
+        },
+        {
+          "type": "test",
+          "name": "clang-debug-shared"
         }
       ]
     },
@@ -749,6 +803,24 @@
         {
           "type": "test",
           "name": "cl-release"
+        }
+      ]
+    },
+    {
+      "name": "ci-cl-release-shared",
+      "displayName": "CI: MSVC, Release, shared libraries",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "cl-release-shared"
+        },
+        {
+          "type": "build",
+          "name": "cl-release-shared"
+        },
+        {
+          "type": "test",
+          "name": "cl-release-shared"
         }
       ]
     },

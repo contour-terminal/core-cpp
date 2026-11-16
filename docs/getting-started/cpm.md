@@ -91,6 +91,6 @@ foreach(target IN LISTS coreCppTargets)
 endforeach()
 ```
 
-Header-only targets (`core::async`, `core::net_types`) are not in the list: they compile nothing
-of their own, so your flags reach their code through your targets. Neither are core-cpp's test
+The header-only target `core::net_types` is not in the list: it compiles nothing of its own, so your
+flags reach its code through your targets. Neither are core-cpp's test
 binaries, which a consumer does not build.
