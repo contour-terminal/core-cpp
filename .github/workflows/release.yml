@@ -30,7 +30,7 @@ jobs:
     env:
       TAG: ${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The tag equals project(VERSION), and CHANGELOG.md has its section.
       - name: The tag names this tree
