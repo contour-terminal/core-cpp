@@ -1,5 +1,5 @@
 mkdocs==1.6.1
-mkdocs-material==9.5.39
+mkdocs-material==9.7.7
 pymdown-extensions==10.11
 # Pinned: mkdocs-material only requires pygments~=2.16, so an unpinned install
 # picks up 2.20.0, whose formatter passes filename=None into html.escape() via
