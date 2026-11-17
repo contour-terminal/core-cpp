@@ -5,4 +5,4 @@ pymdown-extensions==10.11
 # picks up 2.20.0, whose formatter passes filename=None into html.escape() via
 # pymdown-extensions 10.11 and aborts the build with an AttributeError. Every
 # other dependency here is already pinned; this one was the gap.
-pygments==2.19.1
+pygments==2.20.0
