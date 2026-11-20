@@ -1037,12 +1037,12 @@ jobs:
       WASMTIME_VERSION: ${{ matrix.wasmtime }}
       WASMTIME_SHA256: ${{ matrix.wasmtime_sha256 }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
 
       - name: Cache CPM sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/cpm
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CoreCppDependencies.cmake') }}
@@ -1058,7 +1058,7 @@ jobs:
           echo "CXX_COMPILER=clang++-$LLVM_VERSION" >> "$GITHUB_ENV"
 
       # core-cpp.unicode-wasi and core-cpp.tui-core-wasi run their modules under Node's WASI preview 1.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
 
