@@ -9,6 +9,18 @@ workflow refuses one without a section here.
 
 ## [Unreleased]
 
+### Changed
+
+- **`writeFrameDiff` reaches a run of changed cells with one cursor move**, not one per cell: with
+  absolute addressing it skips the move to a cell the cursor already stands on, after a single printable
+  ASCII character short of the last column. After a wider or non-ASCII grapheme the move stays, so a
+  terminal that disagrees about a width cannot shift the cells after it. `TerminalOutput`'s cursor motions
+  (`moveTo`, `moveUp`/`Down`/`Left`/`Right`) and `deleteLines` format their counts with `std::to_chars`
+  instead of parsing a `std::format` string per call. A full 120x40 repaint costs about half as many
+  instructions, which a guest drawing its TUI under a WebAssembly interpreter feels most. The bytes a diff
+  writes change: a consumer that compares them byte for byte sees fewer `CUP` sequences, for the same
+  screen.
+
 ## [0.22.0] - 2026-11-16
 
 ### Added
