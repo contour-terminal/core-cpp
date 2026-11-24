@@ -11,7 +11,7 @@ workflow refuses one without a section here.
 
 ### Changed
 
-- **`writeFrameDiff` reaches a run of changed cells with one cursor move**, not one per cell: with
+- **`writeFrameDiff` reaches a run of changed cells with one cursor move** (#104), not one per cell: with
   absolute addressing it skips the move to a cell the cursor already stands on, after a single printable
   ASCII character short of the last column. After a wider or non-ASCII grapheme the move stays, so a
   terminal that disagrees about a width cannot shift the cells after it. `TerminalOutput`'s cursor motions
