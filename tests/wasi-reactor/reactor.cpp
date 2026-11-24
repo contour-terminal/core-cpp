@@ -108,6 +108,28 @@ struct Guest
 
 Guest guest;
 
+/// The bytes with their SGR sequences (`CSI ... m`) removed, so that a check reads the text and the
+/// cursor moves that place it, and not how each cell is styled.
+/// @param bytes Terminal output.
+/// @return @p bytes without its SGR sequences.
+std::string withoutSgr(std::string_view bytes)
+{
+    auto text = std::string {};
+    while (!bytes.empty())
+    {
+        auto const csi = bytes.find("\033[");
+        text += bytes.substr(0, csi);
+        if (csi == std::string_view::npos)
+            break;
+        auto const end = bytes.find_first_not_of("0123456789;:", csi + 2);
+        auto const isSgr = end != std::string_view::npos && bytes[end] == 'm';
+        if (!isSgr)
+            text += bytes.substr(csi, 2); // Another sequence: kept, and read on from its parameters.
+        bytes.remove_prefix(isSgr ? end + 1 : csi + 2);
+    }
+    return text;
+}
+
 int passed = 0;
 int failed = 0;
 
@@ -133,10 +155,10 @@ extern "C" __attribute__((export_name("core_tui_reactor_run"))) int coreTuiReact
     check("Screen delivers the keys to the focused input, which submits on Enter",
           [] { return guest.input.text() == "hi!" && guest.input.submitted() == "hi!"; });
 
-    // Bytes out: the frame reaches each cell by its own cursor move -- the input's first letter at column 1,
-    // the sidebar's at column 25, where the layout put it.
+    // Bytes out: the first row is written as one run after a single cursor move -- the input's text at
+    // column 1, the 21 blank cells it leaves, and the sidebar at column 25, where the layout put it.
     check("the frame written to the sink holds the input's text and the sidebar",
-          [] { return guest.frames.contains("\033[1;1Hh") && guest.frames.contains("\033[1;25Hs"); });
+          [] { return withoutSgr(guest.frames).contains("\033[1;1Hhi!" + std::string(21, ' ') + "side"); });
 
     // Two frames: what changed between them, and nothing between a frame and itself.
     auto const before = guest.screen.renderedBuffer();

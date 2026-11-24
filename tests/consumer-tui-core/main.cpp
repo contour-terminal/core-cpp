@@ -27,6 +27,28 @@ class Greeting: public core::tui::Component
     void render(core::tui::Canvas& canvas) override { canvas.putString(0, 0, "headless", {}); }
 };
 
+/// The bytes with their SGR sequences (`CSI ... m`) removed, so that a check reads the text and the
+/// cursor moves that place it, and not how each cell is styled.
+/// @param bytes Terminal output.
+/// @return @p bytes without its SGR sequences.
+std::string withoutSgr(std::string_view bytes)
+{
+    auto text = std::string {};
+    while (!bytes.empty())
+    {
+        auto const csi = bytes.find("\033[");
+        text += bytes.substr(0, csi);
+        if (csi == std::string_view::npos)
+            break;
+        auto const end = bytes.find_first_not_of("0123456789;:", csi + 2);
+        auto const isSgr = end != std::string_view::npos && bytes[end] == 'm';
+        if (!isSgr)
+            text += bytes.substr(csi, 2); // Another sequence: kept, and read on from its parameters.
+        bytes.remove_prefix(isSgr ? end + 1 : csi + 2);
+    }
+    return text;
+}
+
 } // namespace
 
 int main()
@@ -39,8 +61,8 @@ int main()
     screen.root().addChild(greeting, { .area = { .x = 0, .y = 0, .width = 20, .height = 1 } });
     screen.draw();
 
-    // Each cell is reached by its own cursor move: the first and the last letter of the word.
-    if (!frame.contains("\033[1;1Hh") || !frame.contains("\033[1;8Hs"))
+    // The word stands at the top-left corner, written as one run after the cursor move that reaches it.
+    if (!withoutSgr(frame).contains("\033[1;1Hheadless"))
     {
         std::fprintf(stderr, "consumer-tui-core: the frame does not hold the component's text\n");
         return 1;
