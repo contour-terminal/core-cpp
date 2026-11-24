@@ -1,8 +1,8 @@
 mkdocs==1.6.1
 mkdocs-material==9.7.7
-pymdown-extensions==10.11
-# Pinned: mkdocs-material only requires pygments~=2.16, so an unpinned install
-# picks up 2.20.0, whose formatter passes filename=None into html.escape() via
-# pymdown-extensions 10.11 and aborts the build with an AttributeError. Every
-# other dependency here is already pinned; this one was the gap.
+# Not 10.11: pygments 2.20.0's HTML formatter passes its filename option into html.escape(), and
+# pymdown-extensions 10.11 set it to None, which aborted `mkdocs build` with an AttributeError.
+pymdown-extensions==10.21.3
+# Pinned: mkdocs-material only requires pygments~=2.16, so an unpinned install would pick up whatever
+# is newest. Every other dependency here is pinned; this one must be too.
 pygments==2.20.0
