@@ -18,9 +18,11 @@
 # The table is read from the real cmake/CoreCppModules.cmake -- by configuring it, not by a regex
 # that imitates it -- and a module may include itself and whatever its DEPS reach, transitively,
 # because that is exactly what its target links. Tests (`*_test.cpp`) and canaries (`*Canary.cpp`)
-# are separate executables with links of their own, and are not scanned. The scan is watched
-# refusing a planted violation, and accepting a planted compliant tree, before it is run over this
-# one -- a scan that found nothing in a tree it could not read would read exactly like a clean one.
+# are separate executables with links of their own, and are not scanned; nor is a test-only support
+# header (`*TestSupport.hpp`), which is in no FILE_SET and is compiled only into those executables.
+# The scan is watched refusing a planted violation, and accepting a planted compliant tree, before
+# it is run over this one -- a scan that found nothing in a tree it could not read would read
+# exactly like a clean one.
 #
 # What the include scan does not see: a module's SUB-target (`tui_output`, `net_types`) is held to
 # its module's row rather than its own, because the files a sub-target owns are named in its
@@ -74,6 +76,11 @@ function(core_cpp_layering_add module name)
 endfunction()
 ]=])
 
+# A source root holding an empty CMakeLists.txt for every module of the real table but fs, for the
+# two scenarios that enter the module directories. `\$` keeps the variables for the scenario's own
+# configure; it has no `;`, which would split the scenario list.
+set(missingModuleRoot "set(fakeRoot \"\${CMAKE_CURRENT_BINARY_DIR}/fake-root\")\nforeach(module IN LISTS CORE_CPP_MODULES)\n    if(NOT module STREQUAL fs)\n        file(WRITE \"\${fakeRoot}/src/core/\${CORE_CPP_MODULE_\${module}_DIR}/CMakeLists.txt\" \"\")\n    endif()\nendforeach()\nset(CORE_CPP_SOURCE_DIR \"\${fakeRoot}\")")
+
 # "<scenario>|<expected: 'configures', or a regex the refusal must match>|<the scenario's CMake>".
 # The real net row lists DEPS async platform; net_x is a row a scenario adds to the net module.
 set(scenarios
@@ -117,6 +124,12 @@ set(scenarios
     # A module's own target follows the module's row: its DEPS, and the module's targets.
     "module-links-its-targets|configures|core_cpp_module(NAME demo KIND INTERFACE DEPS base PLATFORMS any)\ncore_cpp_module_target(NAME demo_types MODULE demo KIND INTERFACE PLATFORMS any)\ncore_cpp_layering_stand_in(base demo_types)\ncore_cpp_layering_add(demo demo core::base core::demo_types)"
     "module-links-undeclared-module|core-cpp-demo links core::log|core_cpp_module(NAME demo KIND INTERFACE DEPS base PLATFORMS any)\ncore_cpp_layering_stand_in(log)\ncore_cpp_layering_add(demo demo core::log)"
+
+    # An enabled module whose directory a vendored copy left out is refused naming the option that
+    # would switch it off, not by add_subdirectory() naming a path. The real table, over a root that
+    # has an empty directory for every module but fs; with the option off, the same root configures.
+    "enabled-module-without-its-directory|module fs is enabled but its directory src/core/fs is missing.*Set CORE_CPP_WITH_FS=OFF|${missingModuleRoot}\ncore_cpp_add_modules()"
+    "disabled-module-without-its-directory|configures|${missingModuleRoot}\nset(CORE_CPP_WITH_FS OFF)\ncore_cpp_add_modules()"
 )
 
 set(generatorArguments "")
@@ -282,7 +295,7 @@ function(core_cpp_layering_scan_includes root outViolations outFiles outEdges)
         else()
             file(GLOB_RECURSE sources LIST_DIRECTORIES false "${root}/src/core/${dir}/*.hpp" "${root}/src/core/${dir}/*.cpp")
         endif()
-        list(FILTER sources EXCLUDE REGEX "(_test|Canary)\\.cpp$")
+        list(FILTER sources EXCLUDE REGEX "((_test|Canary)\\.cpp|TestSupport\\.hpp)$")
         foreach(source IN LISTS sources)
             math(EXPR files "${files} + 1")
             file(STRINGS "${source}" includes REGEX "^[ \t]*#[ \t]*include[ \t]*[<\"]core/")
@@ -317,24 +330,25 @@ function(core_cpp_layering_scan_includes root outViolations outFiles outEdges)
 endfunction()
 
 # Watched refusing first, and accepting, on a planted tree: `log` reaching `net`, which its row does
-# not; `net` reaching `platform` and -- through it -- `base`, which its row does; and a test file
-# reaching `tui`, which is not scanned.
+# not; `net` reaching `platform` and -- through it -- `base`, which its row does; and a test file and
+# a test-only support header reaching `tui`, which are not scanned.
 set(fixture "${WORK_DIR}/include-edges-fixture")
 file(REMOVE_RECURSE "${fixture}")
 file(WRITE "${fixture}/src/core/log/Bad.hpp" "#pragma once\n#include <core/net/EventLoop.hpp>\n")
 file(WRITE "${fixture}/src/core/net/Good.hpp"
      "#pragma once\n#include <core/platform/Types.hpp>\n#include <core/Utils.hpp>\n#include <core/async/Task.hpp>\n")
 file(WRITE "${fixture}/src/core/net/Good_test.cpp" "#include <core/tui/Screen.hpp>\n")
+file(WRITE "${fixture}/src/core/net/NetTestSupport.hpp" "#pragma once\n#include <core/tui/Screen.hpp>\n")
 core_cpp_layering_scan_includes("${fixture}" planted plantedFiles plantedEdges)
 list(LENGTH planted plantedCount)
 if(NOT plantedCount EQUAL 1 OR NOT planted MATCHES "src/core/log/Bad.hpp includes <core/net/EventLoop.hpp>, and log's row does not reach net")
     message(STATUS "FAIL  include-edges-fixture: wanted exactly the planted violation, got ${plantedCount}: ${planted}")
     list(APPEND failures include-edges-fixture)
 elseif(NOT plantedEdges EQUAL 4)
-    message(STATUS "FAIL  include-edges-fixture: counted ${plantedEdges} cross-module include(s), not 4 -- the test file was scanned, or an allowed edge was missed")
+    message(STATUS "FAIL  include-edges-fixture: counted ${plantedEdges} cross-module include(s), not 4 -- the test file or the support header was scanned, or an allowed edge was missed")
     list(APPEND failures include-edges-fixture)
 else()
-    message(STATUS "ok    include-edges-fixture: refuses log -> net by name, allows net -> platform -> base, skips tests")
+    message(STATUS "ok    include-edges-fixture: refuses log -> net by name, allows net -> platform -> base, skips tests and their support headers")
 endif()
 
 core_cpp_layering_scan_includes("${ROOT}" violations scannedFiles scannedEdges)

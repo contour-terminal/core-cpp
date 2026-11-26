@@ -215,6 +215,20 @@ function(core_cpp_add_modules)
             endif()
         endforeach()
 
+        # A vendored copy may leave a module's directory out (docs/vendoring.md). Without this, the
+        # add_subdirectory() below fails naming a path, and nothing says which option would have
+        # switched the module off -- the one thing the consumer has to know.
+        if(NOT EXISTS "${CORE_CPP_SOURCE_DIR}/src/core/${CORE_CPP_MODULE_${module}_DIR}/CMakeLists.txt")
+            if(when)
+                set(remedy "Set ${when}=OFF before adding core-cpp, or copy the module in.")
+            else()
+                set(remedy "No option switches it off, so the copy has to carry it.")
+            endif()
+            message(FATAL_ERROR
+                "[core-cpp] module ${module} is enabled but its directory src/core/${CORE_CPP_MODULE_${module}_DIR} "
+                "is missing from ${CORE_CPP_SOURCE_DIR}. ${remedy}")
+        endif()
+
         set(CORE_CPP_CURRENT_MODULE "${module}")
         add_subdirectory("${CORE_CPP_SOURCE_DIR}/src/core/${CORE_CPP_MODULE_${module}_DIR}"
                          "${CORE_CPP_BINARY_DIR}/src/core/${CORE_CPP_MODULE_${module}_DIR}")
@@ -260,6 +274,12 @@ core_cpp_module(NAME platform KIND STATIC DEPS base log PLATFORMS wasm-subset)
 core_cpp_module(NAME net KIND STATIC DEPS async platform PLATFORMS wasm-subset)
 core_cpp_module_target(NAME net_types MODULE net KIND INTERFACE PLATFORMS any)
 core_cpp_module_target(NAME net_tls MODULE net KIND STATIC DEPS net PLATFORMS native WHEN CORE_CPP_WITH_TLS)
+
+# The descriptor-relative file system: every operation an async::Task, every blocking call offloaded to
+# an injected executor (async::offload), and no path resolved outside the directory it is relative to.
+# Its own module rather than more of platform, which has no async edge. Native only: Emscripten and
+# WASI have no file descriptors to hold.
+core_cpp_module(NAME fs KIND STATIC DEPS base log async platform PLATFORMS native WHEN CORE_CPP_WITH_FS)
 
 # endo's terminal UI. Native only: there is no terminal under Emscripten, where CORE_CPP_WITH_TUI is
 # forced off. core::tui_output is the part that composes and writes bytes, and it has a row of its

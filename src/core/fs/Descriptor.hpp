@@ -1,0 +1,396 @@
+// SPDX-License-Identifier: Apache-2.0
+#pragma once
+
+/// @file
+/// The descriptor-relative file system: @c IDescriptorFileSystem opens a preopened directory, and
+/// every @c IDescriptor operation is an @c async::Task relative to the descriptor it is called on.
+///
+/// What every implementation guarantees:
+/// - **No path leaves its descriptor.** An absolute path, a `..` above the descriptor, a symbolic
+///   link whose target leaves it or is absolute: each is `NotPermitted`. A final symbolic link is
+///   followed only where the call says @c SymlinkPolicy::Follow.
+/// - **Rights are the descriptor's.** Each operation needs the @c DescriptorFlags its row of
+///   @c rightsTable() names, and a child opened by @c IDescriptor::openAt carries no right its parent
+///   could not grant (@c checkOpenRights). A refusal is `NotPermitted`, before anything is touched.
+/// - **Nothing blocks the caller.** The blocking call runs on the executor the file system was built
+///   with (@c async::offload), and the caller resumes on its home executor.
+/// - **Paths are UTF-8**, relative, and checked against the file system's @c PathPolicy.
+
+#include <core/async/Task.hpp>
+#include <core/fs/FsError.hpp>
+
+#include <compare>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+#include <variant>
+#include <vector>
+
+namespace core::fs
+{
+
+/// What a descriptor or a directory entry refers to.
+enum class DescriptorType : std::uint8_t
+{
+    Unknown,         ///< Something the file system does not classify.
+    BlockDevice,     ///< A block device.
+    CharacterDevice, ///< A character device.
+    Directory,       ///< A directory.
+    Fifo,            ///< A named pipe.
+    SymbolicLink,    ///< A symbolic link.
+    RegularFile,     ///< A regular file.
+    Socket,          ///< A socket.
+};
+
+/// The rights and the write-integrity mode a descriptor carries. A bitmask: combine with `|`, test
+/// with @c hasFlag.
+enum class DescriptorFlags : std::uint8_t
+{
+    None = 0,                      ///< No right.
+    Read = 0b1,                    ///< Read a file's bytes or a directory's entries; resolve paths.
+    Write = 0b10,                  ///< Write a file's bytes. A directory never carries it.
+    FileIntegritySync = 0b100,     ///< Writes complete with file integrity (`O_SYNC`). Not a right.
+    DataIntegritySync = 0b1000,    ///< Writes complete with data integrity (`O_DSYNC`). Not a right.
+    RequestedWriteSync = 0b1'0000, ///< Reads wait for pending writes (`O_RSYNC`). Not a right.
+    MutateDirectory = 0b10'0000,   ///< Create, remove, rename and link entries in a directory.
+};
+
+/// @param a The first mask.
+/// @param b The second mask.
+/// @return Both masks' flags.
+[[nodiscard]] constexpr DescriptorFlags operator|(DescriptorFlags a, DescriptorFlags b) noexcept
+{
+    return static_cast<DescriptorFlags>(static_cast<std::uint8_t>(a) | static_cast<std::uint8_t>(b));
+}
+
+/// @param set The mask to test.
+/// @param flag The flag to look for; @c DescriptorFlags::None is never present.
+/// @return Whether @p set carries @p flag.
+[[nodiscard]] constexpr bool hasFlag(DescriptorFlags set, DescriptorFlags flag) noexcept
+{
+    return (static_cast<std::uint8_t>(set) & static_cast<std::uint8_t>(flag)) != 0;
+}
+
+/// How an @c IDescriptor::openAt treats what it opens. A bitmask: combine with `|`, test with
+/// @c hasFlag.
+enum class OpenFlags : std::uint8_t
+{
+    None = 0,          ///< Open what exists.
+    Create = 0b1,      ///< Create a regular file where nothing exists.
+    Directory = 0b10,  ///< Fail unless the object is a directory.
+    Exclusive = 0b100, ///< With @c Create: fail where something exists.
+    Truncate = 0b1000, ///< Truncate a regular file to zero bytes.
+};
+
+/// @param a The first mask.
+/// @param b The second mask.
+/// @return Both masks' flags.
+[[nodiscard]] constexpr OpenFlags operator|(OpenFlags a, OpenFlags b) noexcept
+{
+    return static_cast<OpenFlags>(static_cast<std::uint8_t>(a) | static_cast<std::uint8_t>(b));
+}
+
+/// @param set The mask to test.
+/// @param flag The flag to look for; @c OpenFlags::None is never present.
+/// @return Whether @p set carries @p flag.
+[[nodiscard]] constexpr bool hasFlag(OpenFlags set, OpenFlags flag) noexcept
+{
+    return (static_cast<std::uint8_t>(set) & static_cast<std::uint8_t>(flag)) != 0;
+}
+
+/// Whether a path's final component is followed when it is a symbolic link. Links before it are
+/// always followed, beneath the descriptor.
+enum class SymlinkPolicy : std::uint8_t
+{
+    NoFollow, ///< Operate on the link itself; an open of one is `Loop`.
+    Follow,   ///< Operate on what it names.
+};
+
+/// How the caller intends to access a range of a file (`posix_fadvise`). Advisory only.
+enum class Advice : std::uint8_t
+{
+    Normal,     ///< No particular pattern.
+    Sequential, ///< In order, from low offsets to high.
+    Random,     ///< In no particular order.
+    WillNeed,   ///< Soon.
+    DontNeed,   ///< Not soon.
+    NoReuse,    ///< Once.
+};
+
+/// Whether a read reached the end of what it reads.
+enum class StreamEnd : std::uint8_t
+{
+    More,    ///< There may be more after the bytes returned.
+    Reached, ///< The bytes returned end at the end of the file.
+};
+
+/// A point in time, as seconds and nanoseconds since the Unix epoch.
+struct FileTime
+{
+    std::int64_t seconds = 0;      ///< Whole seconds since 1970-01-01T00:00:00Z.
+    std::uint32_t nanoseconds = 0; ///< Below a second, `[0, 1e9)`.
+
+    /// Ordered by instant.
+    auto operator<=>(FileTime const&) const = default;
+};
+
+/// A @c NewTimestamp that leaves the time as it is.
+struct NoChange
+{
+};
+
+/// A @c NewTimestamp that sets the time to the file system's clock.
+struct SetToNow
+{
+};
+
+/// What @c IDescriptor::setTimes does with one of the times.
+using NewTimestamp = std::variant<NoChange, SetToNow, FileTime>;
+
+/// What a descriptor refers to, and its size and times.
+struct DescriptorStat
+{
+    DescriptorType type = DescriptorType::Unknown; ///< What it is.
+    std::uint64_t linkCount = 0;                   ///< How many hard links name it.
+    std::uint64_t size = 0;                        ///< Its size in bytes.
+    std::optional<FileTime> accessed;              ///< Last access, where the system keeps it.
+    std::optional<FileTime> modified;              ///< Last modification of its data.
+    std::optional<FileTime> statusChanged;         ///< Last change of its metadata.
+};
+
+/// One entry of a directory.
+struct DirectoryEntry
+{
+    DescriptorType type = DescriptorType::Unknown; ///< What it is.
+    std::string name;                              ///< Its name, in UTF-8.
+};
+
+/// A 128-bit hash of an object's metadata: equal for two descriptors of one unchanged object,
+/// different once it changes.
+struct MetadataHash
+{
+    std::uint64_t lower = 0; ///< The low 64 bits.
+    std::uint64_t upper = 0; ///< The high 64 bits.
+
+    /// Compared as a pair.
+    auto operator<=>(MetadataHash const&) const = default;
+};
+
+/// What a read returns.
+struct ReadChunk
+{
+    std::vector<std::byte> bytes;    ///< The bytes read; fewer than asked for near the end.
+    StreamEnd end = StreamEnd::More; ///< Whether they end at the end of the file.
+};
+
+/// The entries of a directory, read in batches.
+///
+/// Each @c IDescriptor::readDirectory opens a stream of its own, positioned at the directory's
+/// start, and the stream holds one batch of entries at a time, never the whole listing. A stream
+/// outlives the descriptor it came from. An entry neither added nor removed while the directory is
+/// read comes exactly once; one added or removed meanwhile may come or not, as the system has it. One
+/// call at a time: @c next is called again once the call before it has completed, and the stream
+/// outlives every call to it that is still pending.
+class IDirectoryStream
+{
+  public:
+    IDirectoryStream() = default;
+    IDirectoryStream(IDirectoryStream const&) = delete;
+    IDirectoryStream(IDirectoryStream&&) = delete;
+    IDirectoryStream& operator=(IDirectoryStream const&) = delete;
+    IDirectoryStream& operator=(IDirectoryStream&&) = delete;
+    virtual ~IDirectoryStream() = default;
+
+    /// @return The next entry, nullopt at the end; never "." or "..". An unrepresentable name is
+    ///         IllegalByteSequence for that entry, and the following call continues after it.
+    [[nodiscard]] virtual async::Task<FsResult<std::optional<DirectoryEntry>>> next() = 0;
+};
+
+/// An open file or directory, and every operation relative to it.
+///
+/// A descriptor passed as `newDirectory` or `other` is borrowed for the call; it must be one of the
+/// same file system instance, or the answer is `CrossDevice` (`false` for @c isSameObject).
+class IDescriptor
+{
+  public:
+    IDescriptor() = default;
+    IDescriptor(IDescriptor const&) = delete;
+    IDescriptor(IDescriptor&&) = delete;
+    IDescriptor& operator=(IDescriptor const&) = delete;
+    IDescriptor& operator=(IDescriptor&&) = delete;
+    virtual ~IDescriptor() = default;
+
+    /// Reads up to @p maxBytes from @p offset. Needs `Read`.
+    /// @param maxBytes How many bytes at most; clamped to the file system's `maxReadChunk`.
+    /// @param offset Where to start.
+    /// @return The bytes, and whether they reach the end of the file.
+    [[nodiscard]] virtual async::Task<FsResult<ReadChunk>> read(std::size_t maxBytes,
+                                                                std::uint64_t offset) = 0;
+
+    /// Writes @p bytes at @p offset, extending the file as needed. Needs `Write`.
+    /// @param bytes What to write.
+    /// @param offset Where.
+    /// @return How many bytes were written.
+    [[nodiscard]] virtual async::Task<FsResult<std::size_t>> write(std::vector<std::byte> bytes,
+                                                                   std::uint64_t offset) = 0;
+
+    /// Writes @p bytes at the end of the file. Needs `Write`.
+    /// @param bytes What to write.
+    /// @return How many bytes were written.
+    [[nodiscard]] virtual async::Task<FsResult<std::size_t>> append(std::vector<std::byte> bytes) = 0;
+
+    /// Tells the system how a range will be accessed.
+    /// @param offset Where the range starts.
+    /// @param length How long it is; 0 to the end.
+    /// @param advice How.
+    /// @return Nothing, or why the advice was refused.
+    [[nodiscard]] virtual async::Task<FsResult<void>> advise(std::uint64_t offset,
+                                                             std::uint64_t length,
+                                                             Advice advice) = 0;
+
+    /// @return Nothing once the file's data is on stable storage (`fdatasync`).
+    [[nodiscard]] virtual async::Task<FsResult<void>> syncData() = 0;
+
+    /// @return Nothing once the file's data and metadata are on stable storage (`fsync`).
+    [[nodiscard]] virtual async::Task<FsResult<void>> sync() = 0;
+
+    /// @return The flags the descriptor was opened with.
+    [[nodiscard]] virtual DescriptorFlags flags() const noexcept = 0;
+
+    /// @return What the descriptor refers to.
+    [[nodiscard]] virtual async::Task<FsResult<DescriptorType>> type() = 0;
+
+    /// Truncates or extends the file to @p size bytes. Needs `Write`.
+    /// @param size The new size.
+    /// @return Nothing, or why not.
+    [[nodiscard]] virtual async::Task<FsResult<void>> setSize(std::uint64_t size) = 0;
+
+    /// Sets the access and modification times. Needs `Write`, or `MutateDirectory` on a directory.
+    /// @param accessed The new access time.
+    /// @param modified The new modification time.
+    /// @return Nothing, or why not.
+    [[nodiscard]] virtual async::Task<FsResult<void>> setTimes(NewTimestamp accessed,
+                                                               NewTimestamp modified) = 0;
+
+    /// @return What the descriptor refers to, its size and its times.
+    [[nodiscard]] virtual async::Task<FsResult<DescriptorStat>> stat() = 0;
+
+    /// @return The hash of the object's metadata.
+    [[nodiscard]] virtual async::Task<FsResult<MetadataHash>> metadataHash() = 0;
+
+    /// Opens a stream over the directory's entries. Needs `Read`.
+    /// @return The stream.
+    [[nodiscard]] virtual async::Task<FsResult<std::unique_ptr<IDirectoryStream>>> readDirectory() = 0;
+
+    /// Opens @p path beneath this directory. Needs `Read`; the child's flags are held to
+    /// @c checkOpenRights.
+    /// @param policy Whether a final symbolic link is followed.
+    /// @param path The relative path.
+    /// @param open How to open it.
+    /// @param flags The rights and mode the new descriptor carries.
+    /// @return The new descriptor.
+    [[nodiscard]] virtual async::Task<FsResult<std::unique_ptr<IDescriptor>>> openAt(
+        SymlinkPolicy policy, std::string path, OpenFlags open, DescriptorFlags flags) = 0;
+
+    /// Creates the directory @p path. Needs `MutateDirectory`.
+    /// @param path The relative path.
+    /// @return Nothing, or why not.
+    [[nodiscard]] virtual async::Task<FsResult<void>> createDirectoryAt(std::string path) = 0;
+
+    /// Reads what @p path refers to without opening it. Needs `Read`.
+    /// @param policy Whether a final symbolic link is followed.
+    /// @param path The relative path.
+    /// @return What @p path refers to, its size and its times.
+    [[nodiscard]] virtual async::Task<FsResult<DescriptorStat>> statAt(SymlinkPolicy policy,
+                                                                       std::string path) = 0;
+
+    /// Sets the times of @p path. Needs `MutateDirectory`.
+    /// @param policy Whether a final symbolic link is followed.
+    /// @param path The relative path.
+    /// @param accessed The new access time.
+    /// @param modified The new modification time.
+    /// @return Nothing, or why not.
+    [[nodiscard]] virtual async::Task<FsResult<void>> setTimesAt(SymlinkPolicy policy,
+                                                                 std::string path,
+                                                                 NewTimestamp accessed,
+                                                                 NewTimestamp modified) = 0;
+
+    /// Creates the hard link @p newPath beneath @p newDirectory to @p oldPath beneath this one. Needs
+    /// `MutateDirectory` on both.
+    /// @param policy @c SymlinkPolicy::Follow is `Invalid`.
+    /// @param oldPath The existing object.
+    /// @param newDirectory From the same file system, or the answer is CrossDevice (D11).
+    /// @param newPath The new name.
+    /// @return Nothing, or why not.
+    [[nodiscard]] virtual async::Task<FsResult<void>> linkAt(SymlinkPolicy policy,
+                                                             std::string oldPath,
+                                                             IDescriptor* newDirectory,
+                                                             std::string newPath) = 0;
+
+    /// Reads a symbolic link's target. Needs `Read`.
+    /// @param path The relative path of the link.
+    /// @return Its target, as stored.
+    [[nodiscard]] virtual async::Task<FsResult<std::string>> readlinkAt(std::string path) = 0;
+
+    /// Removes the empty directory @p path. Needs `MutateDirectory`.
+    /// @param path The relative path.
+    /// @return Nothing, or why not.
+    [[nodiscard]] virtual async::Task<FsResult<void>> removeDirectoryAt(std::string path) = 0;
+
+    /// Renames @p oldPath beneath this directory to @p newPath beneath @p newDirectory. Needs
+    /// `MutateDirectory` on both.
+    /// @param oldPath The existing object.
+    /// @param newDirectory From the same file system, or the answer is CrossDevice (D11).
+    /// @param newPath The new name.
+    /// @return Nothing, or why not.
+    [[nodiscard]] virtual async::Task<FsResult<void>> renameAt(std::string oldPath,
+                                                               IDescriptor* newDirectory,
+                                                               std::string newPath) = 0;
+
+    /// Creates the symbolic link @p newPath holding @p target. Needs `MutateDirectory`.
+    /// @param target What the link names; an absolute one is `NotPermitted`.
+    /// @param newPath The relative path of the link.
+    /// @return Nothing, or why not.
+    [[nodiscard]] virtual async::Task<FsResult<void>> symlinkAt(std::string target, std::string newPath) = 0;
+
+    /// Removes the non-directory @p path. Needs `MutateDirectory`.
+    /// @param path The relative path.
+    /// @return Nothing, or why not.
+    [[nodiscard]] virtual async::Task<FsResult<void>> unlinkFileAt(std::string path) = 0;
+
+    /// Hashes the metadata of @p path without opening it. Needs `Read`.
+    /// @param policy Whether a final symbolic link is followed.
+    /// @param path The relative path.
+    /// @return The hash of its metadata.
+    [[nodiscard]] virtual async::Task<FsResult<MetadataHash>> metadataHashAt(SymlinkPolicy policy,
+                                                                             std::string path) = 0;
+
+    /// A bool because the name asks the question; a foreign descriptor is never the same object.
+    /// @param other The descriptor to compare with.
+    /// @return Whether both refer to one object.
+    [[nodiscard]] virtual async::Task<FsResult<bool>> isSameObject(IDescriptor* other) = 0;
+};
+
+/// Opens preopened directories, the roots every other descriptor descends from.
+class IDescriptorFileSystem
+{
+  public:
+    IDescriptorFileSystem() = default;
+    IDescriptorFileSystem(IDescriptorFileSystem const&) = delete;
+    IDescriptorFileSystem(IDescriptorFileSystem&&) = delete;
+    IDescriptorFileSystem& operator=(IDescriptorFileSystem const&) = delete;
+    IDescriptorFileSystem& operator=(IDescriptorFileSystem&&) = delete;
+    virtual ~IDescriptorFileSystem() = default;
+
+    /// Opens @p hostDirectory as a root. The host chose it, so it is not held to a @c PathPolicy.
+    /// @param hostDirectory The directory, in the host's own terms.
+    /// @param flags The rights the root carries; `Write` is `IsDirectory`, as on any directory.
+    /// @return The root descriptor.
+    [[nodiscard]] virtual async::Task<FsResult<std::unique_ptr<IDescriptor>>> openPreopen(
+        std::filesystem::path hostDirectory, DescriptorFlags flags) = 0;
+};
+
+} // namespace core::fs

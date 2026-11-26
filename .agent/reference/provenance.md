@@ -120,6 +120,8 @@ others in notes.
 | `src/core/async/Join.hpp` | origin: core-cpp | - | - | the runner, join state and awaiter that `whenAll` and `whenAny` are both written over, collapsed out of contour's two near-identical copies (Task B1). A policy supplies the one step that differs -- what a child finishing does to the shared state -- plus the token each child observes and the parent-cancellation bridge, if any. Public file, `core::async::detail` throughout, like `UniqueCoroHandle.hpp` |
 | `src/core/async/KeyedStrands.hpp` | origin: core-cpp | - | - | 0.4.0: one strand per key, made lazily and reclaimed when idle, with `runningHere(key)`, `runningAnyHere()` and `waitIdle()`. The requirements are morph's `morph::exec::detail::StrandExecutor` (`include/morph/core/strand.hpp` at `b6377c9508d5e5b80f607dcc6ab55596a9b3e5a5`, PR #806)'s; the design is new -- a key's strand is a coroutine pump over any `IExecutor` rather than a `std::function` queue, and a coroutine that parked while its key went idle comes back to the key through the registry rather than to a stale strand |
 | `src/core/async/KeyedStrands_test.cpp` | origin: core-cpp | - | - | 0.4.0. Per-key queries, FIFO, idle reclamation, the reclaimed-while-parked return to the key, destruction, and -- where threads exist -- per-key exclusion with cross-key concurrency, a rendezvous only concurrency satisfies, and `waitIdle` over work that submits work |
+| `src/core/async/Offload.hpp` | origin: core-cpp | - | - | 0.24.0 (P13). Runs a blocking call on an injected executor and resumes on the caller's; the stop token is read once, before the hop |
+| `src/core/async/Offload_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13). Over two `ManualExecutor`s: where the work runs, where the caller resumes, a stop before and during the hop, a throw |
 | `src/core/async/ParkedWork.hpp` | LASTRADA-Software/fastcached | `src/FastCache/Async/ParkedWork.hpp` | `0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21` | camelBack; `Detail::UnownedRootOf` and `ParkedWorkFor` moved here from `Task.hpp` as `unownedRootOf` and `parkedWorkFor`, so the file that defines `ParkedWork::abandon` is the one that decides it, and `ResumeOn` and `AsyncQueue` need no `Task.hpp`; the promise probe is the `CarriesUnownedRoot` concept rather than `std::is_base_of_v<TaskPromiseBase, Promise>`, which is what lets the `whenAll` and `whenAny` runners carry the answer too; `Parked` gains `explicit operator bool` |
 | `src/core/async/ParkedWork_test.cpp` | LASTRADA-Software/fastcached | `src/FastCache/Async/ParkedWork_test.cpp` | `0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21` | only the cases that need no event loop: upstream's reactor-driven teardown properties belong to Task B4. A file-local `QueuedExecutor` stands in for the loop, a frame sentinel counts destructions so no case rests on a sanitizer noticing, and the #1041 compile-time check is here with its negative control -- written over a non-virtual base, because GCC's `-Woverloaded-virtual` refuses the hiding shape on `IExecutor` outright. New: `unownedRoot` reaching a coroutine parked under a `whenAll` and under a `whenAny` runner; also built over the `StopToken` fallback |
 | `src/core/async/ResumeOn.hpp` | LASTRADA-Software/fastcached | `src/FastCache/Async/ResumeOn.hpp` | `0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21` | camelBack; includes `ParkedWork.hpp` rather than `Task.hpp` |
@@ -152,6 +154,82 @@ others in notes.
 | `src/core/codec/Stream.cpp` | contour-terminal/contour | `src/vtbackend/state/StateCodec.cpp` | `3334cdeb80789e8999b8f199501debfc1af657da` | `StateWriter`/`StateReader` without the stream header, as `Writer`/`Reader` |
 | `src/core/codec/Stream.hpp` | contour-terminal/contour | `src/vtbackend/state/StateCodec.hpp` | `3334cdeb80789e8999b8f199501debfc1af657da` | `StateWriter`/`StateReader` without the stream header, as `Writer`/`Reader` |
 | `src/core/codec/Stream_test.cpp` | origin: core-cpp | - | - | - |
+| `src/core/fs/CMakeLists.txt` | origin: core-cpp | - | - | 0.24.0 (P13): the module, its per-OS error tables and its test binary |
+| `src/core/fs/Descriptor.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `IDescriptorFileSystem`, `IDescriptor`, `IDirectoryStream` and their vocabulary, shaped after WASI 0.3 `wasi:filesystem` |
+| `src/core/fs/DescriptorContract_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): what every descriptor owes its caller, per fixture kind |
+| `src/core/fs/DescriptorEscape_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): no `*At` operation reaches outside the preopen, under both strategies and kinds; the swap race |
+| `src/core/fs/DescriptorTestSupport.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): test-only `DescriptorFixture`, `FixedRandom`, `bytesOf`/`textOf` |
+| `src/core/fs/DirectoryStream_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): every entry once, typed, a stream of its own per call holding one batch; `isSameObject`, `metadataHashAt` |
+| `src/core/fs/FsError.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/FsError.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): one code per WASI 0.3 `wasi:filesystem` `error-code` case, plus `WouldBlock` |
+| `src/core/fs/FsError_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/NativeDescriptor_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): no system call on the caller's executor, a handle that outlives a parked call (C2), the keyed metadata hash |
+| `src/core/fs/NativeFileSystem.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `makeNativeDescriptorFileSystem` and its options |
+| `src/core/fs/PathPolicy.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the POSIX and Windows rows |
+| `src/core/fs/PathPolicy.hpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/Rights.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the rights table and `checkOpenRights`, after wasmtime's descriptor permissions |
+| `src/core/fs/Rights.hpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/bsd/ErrnoTable.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): Apple and the BSDs; `EMLINK` for FreeBSD's `O_NOFOLLOW` |
+| `src/core/fs/darwin/PosixSystem.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): Apple: `st_atimespec`, `F_RDADVISE`, `F_FULLFSYNC`, `EACCES` for `O_CREAT` on a directory |
+| `src/core/fs/detail/DirectoryStream.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/detail/DirectoryStream.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the batched directory stream every implementation reads through |
+| `src/core/fs/detail/NativeSupport.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/detail/NativeSupport.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): what the native descriptors of every OS share: their context, the keyed metadata hash, the single-component rule |
+| `src/core/fs/detail/OwnedHandle.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the shared native handle of decision C2, closed on the blocking executor |
+| `src/core/fs/detail/PathWalk.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/detail/PathWalk.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the path planner and the walk every resolver shares |
+| `src/core/fs/detail/PathWalk_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/detail/ResolveBeneath.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `resolveBeneath`, `Resolved` and the kernel's beneath step `IBeneathOpener` |
+| `src/core/fs/linux/Append.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `pwritev2(RWF_APPEND)`, and a write at the end `fstat` reports, under the descriptor's lock, where the flag is refused |
+| `src/core/fs/linux/Append.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `appendAtEnd`, the append where `RWF_APPEND` is refused |
+| `src/core/fs/linux/Append_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/linux/BeneathDefault.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `Best` on Linux is `openat2`, probed; the walk opens `O_PATH` |
+| `src/core/fs/linux/DirectoryRead.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): a directory stream's `getdents64` records, field by field, in one fixed buffer |
+| `src/core/fs/linux/DirectoryRead.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `parseDirentRecords`, the `getdents64` record seam |
+| `src/core/fs/linux/DirectoryRead_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/linux/DescriptorEscape_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): no path goes through a `/proc` magic link |
+| `src/core/fs/linux/Lease.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): an open under a lease made again, waiting, through a path handle checked to be a regular file |
+| `src/core/fs/linux/Lease_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/linux/Openat2.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `openat2(RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS)`, the probe and the bounded `EAGAIN` retry |
+| `src/core/fs/linux/Openat2.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the `openat2` system-call seam |
+| `src/core/fs/linux/Openat2_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/posix/Append.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the second, `O_APPEND` handle of every POSIX system but Linux |
+| `src/core/fs/posix/BeneathDefault.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `Best` is the walk on every POSIX system but Linux; `#ifdef O_PATH` inside the data picks the walk's open flags |
+| `src/core/fs/posix/DirectoryEntries.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): what a directory entry is: `d_type`, else a stat without following |
+| `src/core/fs/posix/DirectoryEntries_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `DT_UNKNOWN` stat'ed without following; refused names |
+| `src/core/fs/posix/DirectoryRead.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `fdopendir` and `readdir` for every POSIX system but Linux |
+| `src/core/fs/posix/DirectoryRead.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the directory stream's per-OS reader |
+| `src/core/fs/posix/DirectoryStreamMemory_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): a large listing read within an allocation budget; replaces the global allocation functions |
+| `src/core/fs/posix/ErrnoRows.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the errno rows `posix/` and `bsd/ErrnoTable.cpp` share |
+| `src/core/fs/posix/ErrnoTable.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/posix/Lease.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): no leases off Linux: `WouldBlock` |
+| `src/core/fs/posix/NativePathPolicy.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/posix/OwnedHandleAllocation_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the last close when its frame cannot be allocated; replaces the global allocation functions |
+| `src/core/fs/posix/PosixDescriptor.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the POSIX native descriptors |
+| `src/core/fs/posix/PosixDescriptor_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): a FIFO opens without waiting; a name that is not UTF-8 is one refused entry |
+| `src/core/fs/posix/PosixPathWalk.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the component walker over held directory descriptors |
+| `src/core/fs/posix/PosixPathWalk.hpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/posix/PosixPathWalk_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the walker against a swap at a chosen step |
+| `src/core/fs/posix/PosixSystem.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): Linux, the BSDs and any POSIX system but Apple's; `#ifdef` inside the data picks `O_DSYNC` and `O_RSYNC` where a system lacks them |
+| `src/core/fs/posix/PosixSystem.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the calls POSIX systems differ in |
+| `src/core/fs/testing/InMemoryDescriptorFileSystem.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/testing/InMemoryDescriptorFileSystem.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the in-memory model, resolving and enforcing through the code the native one uses |
+| `src/core/fs/testing/InMemoryDescriptorFileSystem_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/windows/BeneathDefault.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `Best` is the walk on Windows |
+| `src/core/fs/windows/DescriptorEscape_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): junctions, mount points, backslash targets, link flavour, private reparse tags |
+| `src/core/fs/windows/DirectoryRecords.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `FILE_ID_BOTH_DIR_INFO` records, field by field, within their buffer |
+| `src/core/fs/windows/DirectoryRecords.hpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/windows/DirectoryRecords_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/windows/NativePathPolicy.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/windows/NtFile.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `NtCreateFile` relative to a held directory |
+| `src/core/fs/windows/NtStatusTable.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/windows/ReparsePoint.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): reparse data, field by field |
+| `src/core/fs/windows/ReparsePoint.hpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/windows/Win32ErrorTable.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/windows/WindowsDescriptor.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the Windows native descriptors |
+| `src/core/fs/windows/WindowsPathWalk.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the Windows component walker and the NT seam |
+| `src/core/fs/windows/WindowsPathWalk.hpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/windows/WindowsPathWalk_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/SystemRandomSource.hpp` | origin: core-cpp | - | - | the platform half of `Random.hpp`: one `fillFromSystemRandom()` per platform |
 | `src/core/log/Assert.hpp` | contour-terminal/contour | `src/crispy/Assert.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | `fatal()`/`SoftRequire()` moved here from crispy's `Assert.hpp` to close a base→log layering cycle; `Require`/`Guarantee`/`todo`/`unreachable`/`setFailHandler` stay in `src/core/Assert.hpp` |
 | `src/core/log/CMakeLists.txt` | origin: core-cpp | - | - | - |
