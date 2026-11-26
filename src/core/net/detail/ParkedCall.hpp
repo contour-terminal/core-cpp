@@ -6,14 +6,14 @@
 /// coroutine on a loop that waits for its answer, with a stop that ends the wait and not the call.
 ///
 /// Shared by every resolver that hands `getaddrinfo` to somebody else's thread
-/// (@c ThreadedAddressResolver, @c ExecutorAddressResolver), and shaped for any other call that
-/// cannot be interrupted once it has started.
+/// (@c ThreadedAddressResolver, @c ExecutorAddressResolver), by the TLS socket waiting for its chain
+/// verifier, and shaped for any other call that cannot be interrupted once it has started.
 
 #include <core/async/Awaitable.hpp>
 #include <core/async/Cancellation.hpp>
+#include <core/async/IExecutor.hpp>
 #include <core/async/ParkedWork.hpp>
 #include <core/async/StopToken.hpp>
-#include <core/net/EventLoop.hpp>
 
 #include <coroutine>
 #include <cstdint>
@@ -48,8 +48,12 @@ enum class SlotState : std::uint8_t
 /// been delivered into may already be gone. Such an answer is still stored, and an owner who keeps
 /// the call (a stream whose bytes must not be lost) takes it with @c takeLateAnswer.
 ///
-/// **Nothing here resumes inline.** The waiter is SUBMITTED to the loop it parked on, so the flow
-/// continues on the loop's thread and never on the runner's, or the stopper's.
+/// **Nothing here resumes inline.** The waiter is SUBMITTED to the executor it parked on, so the
+/// flow continues on the loop's thread and never on the runner's, or the stopper's.
+///
+/// **A stopped wait can be joined again** (@c rejoin): an owner that keeps the call -- a TLS socket
+/// whose handshake is driven again after a cancel -- waits for the same call rather than starting a
+/// second one.
 ///
 /// **Settling never throws.** It runs where nothing can take an exception -- a detached flow, a
 /// destructor, a stop callback -- so the one call that can fail, the loop's `submit` running out of
@@ -63,9 +67,10 @@ class ParkedCall
                   "settling moves the answer where nothing can take a throw");
 
   public:
-    /// @param loop Where the waiter is handed back. Null only where nothing ever parks on the call;
-    ///        a waiter with nowhere to go is freed rather than leaked (@c async::detail::Parked).
-    explicit ParkedCall(EventLoop* loop) noexcept: _loop(loop) {}
+    /// @param executor Where the waiter is handed back: the loop the waiting flow runs on. Null only
+    ///        where nothing ever parks on the call; a waiter with nowhere to go is freed rather than
+    ///        leaked (@c async::detail::Parked).
+    explicit ParkedCall(async::IExecutor* executor) noexcept: _executor(executor) {}
 
     /// Publishes the answer and hands the waiter back to the loop.
     ///
@@ -198,8 +203,20 @@ class ParkedCall
         return std::exchange(_answer, std::nullopt);
     }
 
+    /// Makes a call whose wait a stop ended waitable again, for an owner that joins it once more
+    /// rather than starting the work a second time.
+    ///
+    /// An answer that arrived after the stop is then delivered to the next @c wait at once; without
+    /// one, the next waiter parks as the first did. A call that was not stopped is left as it is.
+    void rejoin() noexcept
+    {
+        auto const guard = std::scoped_lock { _mutex };
+        if (_state == SlotState::Cancelled)
+            _state = _answer.has_value() ? SlotState::Answered : SlotState::Pending;
+    }
+
   private:
-    /// Hands @p waiter back to the loop, or frees it where there is nowhere to hand it.
+    /// Hands @p waiter back to the executor, or frees it where there is nowhere to hand it.
     ///
     /// An `async::detail::Parked` rather than a bare `ParkedWork`, so the branch that hands nothing
     /// on FREES an unowned chain instead of dropping it — `ParkedWork`'s contract, resumed or freed,
@@ -208,11 +225,11 @@ class ParkedCall
     /// @param waiter What was taken out of the call; may be empty.
     void handBack(async::detail::Parked waiter) noexcept
     {
-        if (waiter.handle() && _loop != nullptr)
-            _loop->submit(waiter.take());
+        if (waiter.handle() && _executor != nullptr)
+            _executor->submit(waiter.take());
     }
 
-    EventLoop* _loop;
+    async::IExecutor* _executor;
     std::mutex _mutex;
     std::optional<T> _answer;
     async::ParkedWork _waiter {};

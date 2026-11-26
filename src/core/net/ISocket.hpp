@@ -19,6 +19,7 @@
 /// Merged from contour's `net::ISocket` and fastcached's `FastCache::ISocket`
 /// (`FastCache/Net/ISocket.hpp` at `0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21`).
 
+#include <core/net/ITlsSession.hpp>
 #include <core/net/IoAwaitable.hpp>
 #include <core/net/IoResult.hpp>
 #include <core/net/KeepAlive.hpp>
@@ -367,6 +368,15 @@ class CORE_NET_API ISocket
     /// @param value The value.
     /// @return Nothing, or as @c option.
     [[nodiscard]] virtual std::expected<void, NetError> setOption(SocketOption option, std::uint64_t value);
+
+    /// The TLS session this socket carries, so code that reads a TLS failure or the negotiated ALPN
+    /// protocol needs no link to `core::net_tls`.
+    ///
+    /// **The default answers null**: a transport that is not TLS has no session. The TLS layer
+    /// answers its own; every decorator in this library forwards it, so a TLS socket under a
+    /// decorator is still seen as one (@c SplitSocket answers from its read half, as @c option).
+    /// @return The session, valid for as long as this socket lives; null for a plaintext socket.
+    [[nodiscard]] virtual ITlsSession const* tlsSession() const noexcept { return nullptr; }
 
     /// Closes the socket. Idempotent; a subsequent read or write resolves with
     /// @c NetErrorCode::BadHandle.

@@ -168,6 +168,7 @@ core_cpp_add_module(net KIND STATIC
         WithTimeout.hpp
         WriteQueue.hpp
         detail/CompletionHook.hpp
+        detail/InFlightBudget.hpp
         detail/ParkedCall.hpp
         detail/ParkId.hpp
         detail/ParkTable.hpp
@@ -326,22 +327,46 @@ core_cpp_add_module(net KIND STATIC
 # software because ssh-keygen makes sk signatures only with a device attached. Both are permitted
 # units of the seam, and neither header names an OpenSSL type. SshAgent is the ssh-agent protocol
 # over a socket: no OpenSSL, here only for SshPublicKey.
+#
+# The system trust is one CMake-selected SystemTrust.cpp, never an #ifdef: macOS and Windows hand
+# every chain to the platform's verifier (Security.framework; CryptoAPI's chain engine), so the
+# operating system's own trust settings decide, and every other system reads its bundle or hashed
+# directory through the portable file store in TrustStore.cpp.
+if(APPLE)
+    set(_coreCppNetSystemTrust darwin/SystemTrust.cpp darwin/DarwinChainVerifier.cpp darwin/DarwinChainVerifier.hpp)
+    set(_coreCppNetTlsPlatformLibs "-framework Security" "-framework CoreFoundation")
+    set(_coreCppNetTlsPlatformTests darwin/DarwinChainVerifier_test.cpp)
+elseif(WIN32)
+    set(_coreCppNetSystemTrust windows/SystemTrust.cpp windows/WindowsChainVerifier.cpp windows/WindowsChainVerifier.hpp)
+    set(_coreCppNetTlsPlatformLibs crypt32)
+    set(_coreCppNetTlsPlatformTests windows/WindowsChainVerifier_test.cpp)
+else()
+    set(_coreCppNetSystemTrust posix/SystemTrust.cpp)
+    set(_coreCppNetTlsPlatformLibs "")
+    # No platform verifier here: the file store's cases run on every OS from TrustStore_test.cpp.
+    set(_coreCppNetTlsPlatformTests "")
+endif()
+
 core_cpp_add_module(net_tls KIND STATIC
     HEADERS
         SshAgent.hpp
         SshKeys.hpp
         Tls.hpp
+        TrustStore.hpp
         testing/SoftwareSecurityKey.hpp
         testing/StrictTlsPeer.hpp
     SOURCES
         SshAgent.cpp
         SshKeys.cpp
         Tls.cpp
+        TrustStore.cpp
+        ${_coreCppNetSystemTrust}
+        detail/Alpn.hpp
         detail/SshWire.hpp
         testing/SoftwareSecurityKey.cpp
         testing/StrictTlsPeer.cpp
     PUBLIC_LIBS core::net
-    PRIVATE_LIBS OpenSSL::SSL OpenSSL::Crypto)
+    PRIVATE_LIBS OpenSSL::SSL OpenSSL::Crypto ${_coreCppNetTlsPlatformLibs})
 
 # The error vocabulary alone, in every build: under Emscripten this is what proves net_types builds.
 core_cpp_add_test(net NAME net_types SOURCES NetError_test.cpp)
@@ -496,14 +521,19 @@ endif()
 # core::net_tls, and OpenSSL stays PRIVATE to it.
 core_cpp_add_test(net NAME net_tls
     SOURCES
+        ChainVerifierTestSupport.hpp
         SshAgent_test.cpp
         SshKeys_test.cpp
         TlsContext_test.cpp
         TlsLifetime_test.cpp
         TlsCancelRead_test.cpp
+        TlsPeer_test.cpp
+        TlsTestSupport.hpp
         TlsSession_test.cpp
         TlsSocket_test.cpp
         Tls_test.cpp
+        TrustStore_test.cpp
+        ${_coreCppNetTlsPlatformTests}
     LABELS loopback
     # The keys and signatures ssh-keygen made, read where they are checked in (testdata/ssh/README.md).
     DEFINITIONS "CORE_CPP_SSH_TESTDATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/testdata/ssh\""

@@ -897,6 +897,12 @@ jobs:
     name: windows (clang-tidy)
     runs-on: windows-2025
     timeout-minutes: 60
+    # core::net_tls is configured in, so its `windows/` sources (the system trust and the chain
+    # verifier) are in the database and counted; without it the script refuses 81 of 84. OpenSSL
+    # comes from vcpkg as in the cl-release-tls leg, sharing that leg's binary archives.
+    env:
+      VCPKG_COMMIT: e6f9e70a29a3e80a1fc510d8503304315447112f
+      VCPKG_ARCHIVES: ${{ github.workspace }}/.cache/vcpkg-archives
     steps:
       - uses: actions/checkout@v7
         with:
@@ -933,6 +939,30 @@ jobs:
           test -x "$tidy" || { echo "::error::the clang-tidy wheel has no $tidy"; exit 1; }
           echo "CLANG_TIDY_EXE=$tidy" >> "$GITHUB_ENV"
 
+      - name: Cache vcpkg binary archives
+        uses: actions/cache@v6
+        with:
+          path: .cache/vcpkg-archives
+          key: vcpkg-archives-x64-windows-${{ env.VCPKG_COMMIT }}-${{ hashFiles('.github/vcpkg/vcpkg.json') }}
+          restore-keys: vcpkg-archives-x64-windows-${{ env.VCPKG_COMMIT }}-
+
+      - name: vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT }}
+
+      # As in the windows matrix: run-vcpkg's x-gha provider is gone, so a files provider in the
+      # cached directory replaces it.
+      - name: Use vcpkg's toolchain and binary archives
+        run: |
+          archives="${VCPKG_ARCHIVES//\\//}"
+          mkdir -p "$archives"
+          root="${VCPKG_ROOT//\\//}"
+          workspace="${GITHUB_WORKSPACE//\\//}"
+          echo "VCPKG_BINARY_SOURCES=clear;files,$archives,readwrite" >> "$GITHUB_ENV"
+          echo "TOOLCHAIN_FILE=$root/scripts/buildsystems/vcpkg.cmake" >> "$GITHUB_ENV"
+          echo "VCPKG_MANIFEST=$workspace/.github/vcpkg" >> "$GITHUB_ENV"
+
       - name: MSVC developer environment
         uses: ilammy/msvc-dev-cmd@v1
 
@@ -944,7 +974,8 @@ jobs:
       # linkage findings). So the one target that generates them is built, and nothing else.
       - name: Configure, and generate libunicode's headers
         run: |
-          cmake --preset clangcl-release "-DCMAKE_CXX_COMPILER=$CXX_COMPILER_PATH"
+          cmake --preset clangcl-release "-DCMAKE_CXX_COMPILER=$CXX_COMPILER_PATH" -DCORE_CPP_WITH_TLS=ON \
+            "-DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN_FILE" "-DVCPKG_MANIFEST_DIR=$VCPKG_MANIFEST"
           cmake --build out/build/clangcl-release --target unicode_ucd
 
       - name: clang-tidy over the clang-cl compile database

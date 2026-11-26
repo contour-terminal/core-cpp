@@ -10,6 +10,7 @@
 /// other, closing both together.
 
 #include <core/net/ISocket.hpp>
+#include <core/net/ITlsSession.hpp>
 #include <core/net/NetError.hpp>
 #include <core/net/SocketAddress.hpp>
 #include <core/net/SocketOption.hpp>
@@ -139,6 +140,9 @@ class SplitSocket final: public ISocket
     {
         return _readHalf->setOption(option, value);
     }
+
+    /// From the read half, as @c option reads it: the half whose bytes a session would decrypt.
+    [[nodiscard]] ITlsSession const* tlsSession() const noexcept override { return _readHalf->tlsSession(); }
 
   private:
     std::unique_ptr<ISocket> _readHalf;

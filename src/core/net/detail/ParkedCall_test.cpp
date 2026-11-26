@@ -3,12 +3,14 @@
 // `detail::ParkedCall<T>`: the rendezvous both resolvers park on, and Task 11's stdin read will.
 // Whoever takes the waiter first decides; an answer after a stop is kept for the owner, not lost.
 #include <core/async/Cancellation.hpp>
+#include <core/async/StopToken.hpp>
 #include <core/async/Task.hpp>
 #include <core/net/detail/ParkedCall.hpp>
 #include <core/net/testing/TestLoop.hpp>
 #include <core/platform/Clock.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <memory>
 #include <optional>
@@ -118,4 +120,54 @@ TEST_CASE("a stop hands the flow back cancelled and keeps the late answer for it
     CHECK(loop.drain() == 0); // nobody to deliver it to
     CHECK(call->takeLateAnswer() == 9);
     CHECK_FALSE(call->takeLateAnswer().has_value()); // taken once
+}
+
+TEST_CASE("a stopped wait rejoins the same call, before or after its late answer", "[net][parked-call]")
+{
+    auto clock = core::platform::ManualClock {};
+    auto loop = TestLoop { clock };
+    auto const answeredFirst = GENERATE(false, true);
+    CAPTURE(answeredFirst);
+    auto call = std::make_shared<ParkedCall<int>>(&loop);
+
+    auto stopped = Outcome {};
+    auto source = core::async::StopSource {};
+    auto first = waitInto(call, &stopped);
+    first.handle().promise().setStopToken(source.get_token());
+    first.handle().resume();
+    source.request_stop();
+    loop.drain();
+    REQUIRE(stopped.isFinished);
+    CHECK(stopped.isCancelled);
+
+    if (answeredFirst)
+        call->settle(5);
+    call->rejoin();
+    auto joined = Outcome {};
+    loop.spawn(waitInto(call, &joined));
+    loop.drain();
+    if (!answeredFirst)
+    {
+        CHECK_FALSE(joined.isFinished); // parked again, as the first waiter was
+        call->settle(5);
+        loop.drain();
+    }
+    REQUIRE(joined.isFinished);
+    CHECK_FALSE(joined.isCancelled);
+    CHECK(joined.answer == 5);
+}
+
+TEST_CASE("rejoining a call no stop ended changes nothing", "[net][parked-call]")
+{
+    auto clock = core::platform::ManualClock {};
+    auto loop = TestLoop { clock };
+    auto call = std::make_shared<ParkedCall<int>>(&loop);
+    call->settle(3);
+    call->rejoin();
+    CHECK_FALSE(call->takeLateAnswer().has_value()); // answered, not late
+    auto outcome = Outcome {};
+    loop.spawn(waitInto(call, &outcome));
+    loop.drain();
+    REQUIRE(outcome.isFinished);
+    CHECK(outcome.answer == 3);
 }

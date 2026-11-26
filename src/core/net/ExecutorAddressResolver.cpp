@@ -5,6 +5,7 @@
 #include <core/async/DetachedTask.hpp>
 #include <core/async/ResumeOn.hpp>
 #include <core/net/EventLoop.hpp>
+#include <core/net/detail/InFlightBudget.hpp>
 #include <core/net/detail/ParkedCall.hpp>
 
 #include <atomic>
@@ -25,33 +26,6 @@ namespace
 
     /// One lookup's rendezvous between the executor that runs it and the parked flow.
     using ResolveCall = detail::ParkedCall<ResolveResult>;
-
-    /// Whether a lookup got one of the budget's slots.
-    enum class SlotReservation : std::uint8_t
-    {
-        Refused,  ///< The budget was full; nothing was taken.
-        Reserved, ///< One slot is the caller's, to be given back exactly once.
-    };
-
-    /// Takes one slot of @p inFlight's budget, if one is free.
-    ///
-    /// A loop of compare-exchange rather than an add and a take-back, so that a full budget is never
-    /// exceeded even for a moment -- several loops may resolve through one resolver at once.
-    /// @param inFlight The slots taken.
-    /// @param maxInFlight How many there are.
-    /// @return Whether one was taken.
-    [[nodiscard]] SlotReservation reserveSlot(std::atomic<std::size_t>& inFlight,
-                                              std::size_t maxInFlight) noexcept
-    {
-        auto current = inFlight.load(std::memory_order_relaxed);
-        do
-        {
-            if (current >= maxInFlight)
-                return SlotReservation::Refused;
-        } while (!inFlight.compare_exchange_weak(
-            current, current + 1, std::memory_order_acq_rel, std::memory_order_relaxed));
-        return SlotReservation::Reserved;
-    }
 
     /// One lookup's slot and its answer, owned by the detached flow that runs it.
     ///
@@ -197,7 +171,7 @@ async::Task<ResolveResult> ExecutorAddressResolver::resolve(std::string host,
 
     // Allocated before the slot is taken, so a failed allocation has no slot to give back.
     auto call = std::make_shared<ResolveCall>(loop);
-    if (reserveSlot(*_inFlight, _options.maxInFlight) == SlotReservation::Refused)
+    if (detail::reserveSlot(*_inFlight, _options.maxInFlight) == detail::SlotReservation::Refused)
     {
         _refused.fetch_add(1, std::memory_order_relaxed);
         co_return std::unexpected(

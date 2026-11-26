@@ -12,6 +12,7 @@
 #include <core/net/EventLoop.hpp>
 #include <core/net/IListener.hpp>
 #include <core/net/ISocket.hpp>
+#include <core/net/ITlsSession.hpp>
 #include <core/net/IoBackend.hpp>
 #include <core/net/IpSocketAddress.hpp>
 #include <core/net/NetError.hpp>
@@ -19,11 +20,14 @@
 #include <core/net/Sockets.hpp>
 #include <core/net/SplitSocket.hpp>
 #include <core/net/testing/InMemorySocket.hpp>
+#include <core/net/testing/InMemoryTransport.hpp>
 #include <core/net/testing/SocketDecorator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <memory>
@@ -104,6 +108,41 @@ Task<void> dialAndAccept(EventLoop* loop, std::string host, IListener* listener,
 {
     return failedWith(result, NetErrorCode::BadHandle) && result.error().systemCode == 0;
 }
+
+/// A session that answers nothing: what the forwarding case compares pointers against.
+class FakeSession final: public core::net::ITlsSession
+{
+  public:
+    FakeSession() = default;
+
+    [[nodiscard]] std::expected<std::array<std::byte, 32>, std::string> channelBinding() const override
+    {
+        return std::unexpected(std::string { "fake" });
+    }
+    [[nodiscard]] std::optional<std::array<std::byte, 32>> peerCertificateDigest() const override
+    {
+        return std::nullopt;
+    }
+    [[nodiscard]] std::optional<core::net::TlsVersion> negotiatedVersion() const override
+    {
+        return std::nullopt;
+    }
+};
+
+/// A transport that reports @p session as its TLS session, as a TLS socket reports itself.
+class SessionSocket final: public core::net::testing::SocketDecorator
+{
+  public:
+    SessionSocket(ISocket& inner, core::net::ITlsSession const& session) noexcept:
+        SocketDecorator { inner }, _session { session }
+    {
+    }
+
+    [[nodiscard]] core::net::ITlsSession const* tlsSession() const noexcept override { return &_session; }
+
+  private:
+    core::net::ITlsSession const& _session;
+};
 
 } // namespace
 
@@ -240,5 +279,40 @@ TEST_CASE("A transport with no address answers Unsupported", "[net][endpoints][i
         };
         CHECK(ipOf(socket.localEndpoint()) == ipOf(local));
         CHECK(failedWith(socket.remoteEndpoint(), NetErrorCode::Unsupported));
+    }
+}
+
+TEST_CASE("A decorator forwards the TLS session of the socket it decorates",
+          "[net][socket][decorator][tls-session]")
+{
+    // `http` reads a connection's TLS failure and ALPN through `ISocket::tlsSession()`, whatever
+    // decorates the TLS socket by then. A decorator that answered the base's null would make a
+    // TLS connection look like a plaintext one.
+    auto backend = core::net::makeDefaultBackend();
+    auto loop = EventLoop { *backend };
+    auto pair = core::net::testing::makeSocketPair(loop);
+    REQUIRE(pair.has_value());
+    auto const session = FakeSession {};
+    CHECK(pair->first->tlsSession() == nullptr); // a plain transport has none
+
+    SECTION("SocketDecorator")
+    {
+        auto tls = SessionSocket { *pair->first, session };
+        auto& transport = static_cast<ISocket&>(tls); // not a copy of the decorator
+        auto const decorated = core::net::testing::SocketDecorator { transport };
+        CHECK(decorated.tlsSession() == &session);
+    }
+
+    SECTION("SplitSocket answers from its read half")
+    {
+        auto const split =
+            core::net::combineHalves(std::make_unique<SessionSocket>(*pair->first, session),
+                                     std::make_unique<core::net::testing::SocketDecorator>(*pair->second));
+        CHECK(split->tlsSession() == &session);
+
+        auto const reversed =
+            core::net::combineHalves(std::make_unique<core::net::testing::SocketDecorator>(*pair->second),
+                                     std::make_unique<SessionSocket>(*pair->first, session));
+        CHECK(reversed->tlsSession() == nullptr);
     }
 }

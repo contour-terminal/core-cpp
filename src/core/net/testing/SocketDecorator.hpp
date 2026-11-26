@@ -8,6 +8,7 @@
 /// Origin: fastcached `src/tests/SocketDecorator.hpp` (`0708dd54dc7ee72622c8c0783c2bd4a06f0e9b21`).
 
 #include <core/net/ISocket.hpp>
+#include <core/net/ITlsSession.hpp>
 #include <core/net/IoAwaitable.hpp>
 #include <core/net/NetError.hpp>
 #include <core/net/SocketAddress.hpp>
@@ -35,8 +36,8 @@ namespace core::net::testing
 /// **What hand-written copies get wrong is the part they did not write.** @c ISocket has virtuals
 /// with default implementations -- @c readWithFd, @c handshakeIfNeeded, @c waitReadable,
 /// @c cancelRead, @c shutdownWrite, @c setReceiveDeadline, @c armKeepAlive, @c peerAddress,
-/// @c localEndpoint, @c remoteEndpoint, @c option, @c setOption -- and a decorator that overrides
-/// none of them silently answers from the BASE rather than from the socket it decorates: a
+/// @c localEndpoint, @c remoteEndpoint, @c option, @c setOption, @c tlsSession -- and a decorator that
+/// overrides none of them silently answers from the BASE rather than from the socket it decorates: a
 /// decorated peer has no address, a half-close reaches nothing, a deadline bounds nothing. None of that is
 /// visible at a call site, because every one of those defaults succeeds, or answers @c
 /// NetErrorCode::Unsupported as though the socket had nothing to give. Forwarding them is a property of this
@@ -116,6 +117,8 @@ class SocketDecorator: public ISocket
     {
         return _inner.setOption(option, value);
     }
+
+    [[nodiscard]] ITlsSession const* tlsSession() const noexcept override { return _inner.tlsSession(); }
 
     void close() noexcept override { _inner.close(); }
 
