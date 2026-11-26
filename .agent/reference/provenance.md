@@ -288,6 +288,16 @@ others in notes.
 | `src/core/net/posix/SocketOptionTable.cpp` | origin: core-cpp | - | - | P13 Task 9. Chooses constants within the platform family by `#if` in the data (Ruling R42, P13 ruling R11): `__linux__` for the doubled buffer sizes, `TCP_KEEPIDLE` against macOS's `TCP_KEEPALIVE`; fix round 1: per-row maxima, the buffer maximum chosen per kernel (`__linux__`, `__APPLE__`) |
 | `src/core/net/windows/IocpTcpSocket.cpp` | origin: core-cpp | - | - | P13 Task 9 |
 | `src/core/net/windows/SocketOptionTable.cpp` | origin: core-cpp | - | - | P13 Task 9; the reuse-address rows are empty by P13 ruling R17; fix round 1: per-row maxima |
+| `src/core/net/IAsyncDatagramSocket.hpp` | origin: core-cpp | - | - | P13 Task 10: a UDP socket driven by the `EventLoop`, and `openAsyncDatagramSocket` |
+| `src/core/net/AsyncDatagramSocket.cpp` | origin: core-cpp | - | - | P13 Task 10: the `IAsyncDatagramSocket` state machine, written once over a `detail::IDatagramChannel` |
+| `src/core/net/AsyncDatagram_test.cpp` | origin: core-cpp | - | - | P13 Task 10 |
+| `src/core/net/AsyncDatagramLoopback_test.cpp` | origin: core-cpp | - | - | P13 Task 10 |
+| `src/core/net/detail/DatagramChannel.hpp` | origin: core-cpp | - | - | P13 Task 10: the platform half of a datagram socket, defined per platform and in memory |
+| `src/core/net/posix/ReadinessDatagramSocket.cpp` | origin: core-cpp | - | - | P13 Task 10 |
+| `src/core/net/windows/IocpDatagramSocket.cpp` | origin: core-cpp | - | - | P13 Task 10: `WSARecvFrom`/`WSASendTo` through `detail::CompletionWait`, `SIO_UDP_CONNRESET` off |
+| `src/core/net/testing/InMemoryAsyncDatagram.hpp` | origin: core-cpp | - | - | P13 Task 10: an in-memory network behind the real socket's state machine |
+| `src/core/net/testing/InMemoryAsyncDatagram.cpp` | origin: core-cpp | - | - | P13 Task 10 |
+| `src/core/net/detail/OperationClaim.hpp` | origin: core-cpp | - | - | P13 Task 11: the one-operation-in-flight claim, moved out of `AsyncDatagramSocket.cpp` (Task 10) to be shared with the standard streams |
 | `src/core/net/linux/AcceptedSocketOptions_test.cpp` | origin: core-cpp | - | - | P13 Task 9 fix round 1: what a Linux listener's accepted connections inherit |
 | `src/core/net/HostDrivenBackend.cpp` | origin: core-cpp | - | - | its body: the coalescing (several wakes before the host gets a turn are one pump), the clamp of a deadline already past to a zero delay, and the schedule cleared BEFORE a pump runs so the turn it drives can arm the next one |
 | `src/core/net/HostDrivenBackend.hpp` | origin: core-cpp | - | - | Task B3: the IoBackend for a loop that is PUMPED rather than one that blocks. Portable, and tested on every platform over testing::ManualHostScheduler -- the browser is one of its hosts, not its definition |

@@ -133,6 +133,7 @@ core_cpp_add_module(net KIND STATIC
         HttpServer.hpp
         IAdmissionControl.hpp
         IAsyncAddressResolver.hpp
+        IAsyncDatagramSocket.hpp
         ICompletionPort.hpp
         IConnector.hpp
         IDatagramSocket.hpp
@@ -179,6 +180,7 @@ core_cpp_add_module(net KIND STATIC
         testing/CoroTestSupport.hpp
         testing/DatagramPayload.hpp
         testing/FailingListener.hpp
+        testing/InMemoryAsyncDatagram.hpp
         testing/InMemoryDatagram.hpp
         testing/InMemorySocket.hpp
         testing/InMemoryTransport.hpp
@@ -195,6 +197,7 @@ core_cpp_add_module(net KIND STATIC
         AcceptLoopHealth.cpp
         AcceptPolicy.cpp
         AsyncBufferedReader.cpp
+        AsyncDatagramSocket.cpp
         BlockingConnector.cpp
         BlockingSocket.cpp
         ConnectFlow.cpp
@@ -216,13 +219,16 @@ core_cpp_add_module(net KIND STATIC
         TcpSocket.cpp
         ThreadedAddressResolver.cpp
         WriteQueue.cpp
+        testing/InMemoryAsyncDatagram.cpp
         testing/InMemoryDatagram.cpp
         testing/InMemorySocket.cpp
         ${_coreCppNetDefaultBackend}
         detail/BlockingPrimitives.hpp
         detail/DatagramAddressing.hpp
+        detail/DatagramChannel.hpp
         detail/DatagramReceiveBuffer.hpp
         detail/DialPrimitives.hpp
+        detail/OperationClaim.hpp
         detail/PeerAddress.hpp
         detail/SocketEndpoint.hpp
         detail/SocketErrors.hpp
@@ -244,6 +250,7 @@ core_cpp_add_module(net KIND STATIC
         posix/PosixSocket.cpp
         posix/PosixSocket.hpp
         posix/PosixTcpSocket.cpp
+        posix/ReadinessDatagramSocket.cpp
         posix/SocketErrors.cpp
         posix/SocketOptionTable.cpp
         posix/SocketsPosix.cpp
@@ -268,6 +275,7 @@ core_cpp_add_module(net KIND STATIC
         windows/InvalidSocket.hpp
         windows/IocpBackend.cpp
         windows/IocpBackend.hpp
+        windows/IocpDatagramSocket.cpp
         windows/IocpDial.cpp
         windows/IocpOperation.hpp
         windows/IocpSocket.cpp
@@ -366,6 +374,8 @@ core_cpp_add_test(net
         AcceptPolicy_test.cpp
         AdoptSocket_test.cpp
         AsyncBufferedReader_test.cpp
+        AsyncDatagram_test.cpp
+        AsyncDatagramLoopback_test.cpp
         BackendParity_test.cpp
         BlockingConnector_test.cpp
         BlockingSocket_test.cpp

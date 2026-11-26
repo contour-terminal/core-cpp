@@ -130,14 +130,7 @@ void blockOnWithin(EventLoop& loop,
                    Task<void> task,
                    std::chrono::milliseconds limit = std::chrono::seconds { 5 })
 {
-    auto finished = false;
-    auto run = [](Task<void> inner, bool* done) -> Task<void> {
-        co_await std::move(inner);
-        *done = true;
-    };
-    loop.blockOn(core::net::testing::anyOf(run(std::move(task), &finished),
-                                           core::net::testing::sleepFor(&loop, limit)));
-    if (!finished)
+    if (!core::net::testing::blockOnWithin(loop, std::move(task), limit))
         FAIL("a socket wait in \"" << Catch::getResultCapture().getCurrentTestName() << "\" took longer than "
                                    << limit.count() << " ms");
 }
