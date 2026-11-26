@@ -141,7 +141,9 @@ core_cpp_add_module(net KIND STATIC
         InterruptibleSleep.hpp
         IoAwaitable.hpp
         IoBackend.hpp
+        IpSocketAddress.hpp
         ISocket.hpp
+        ITcpSocket.hpp
         ITlsContext.hpp
         ITlsSession.hpp
         KeepAlive.hpp
@@ -153,6 +155,7 @@ core_cpp_add_module(net KIND STATIC
         SocketBuffers.hpp
         SocketContract.hpp
         SocketDeadline.hpp
+        SocketOption.hpp
         SleepUntil.hpp
         Sockets.hpp
         SplitSocket.hpp
@@ -200,14 +203,17 @@ core_cpp_add_module(net KIND STATIC
         ExecutorAddressResolver.cpp
         HealthProbe.cpp
         HttpServer.cpp
+        IpSocketAddress.cpp
         ISocket.cpp
         LingeringClose.cpp
         ReadinessDial.cpp
         SharedPortDatagram.cpp
         SocketAddress.cpp
         SocketContract.cpp
+        SocketOption.cpp
         Sockets.cpp
         TcpClient.cpp
+        TcpSocket.cpp
         ThreadedAddressResolver.cpp
         WriteQueue.cpp
         testing/InMemoryDatagram.cpp
@@ -218,8 +224,11 @@ core_cpp_add_module(net KIND STATIC
         detail/DatagramReceiveBuffer.hpp
         detail/DialPrimitives.hpp
         detail/PeerAddress.hpp
+        detail/SocketEndpoint.hpp
         detail/SocketErrors.hpp
+        detail/SocketOptionAccess.hpp
         detail/SshAgentEndpoint.hpp
+        detail/TcpSocketPrimitives.hpp
         detail/WakeupChannel.hpp
     SOURCES_POSIX
         detail/WouldBlock.hpp
@@ -234,7 +243,9 @@ core_cpp_add_module(net KIND STATIC
         posix/PosixListener.hpp
         posix/PosixSocket.cpp
         posix/PosixSocket.hpp
+        posix/PosixTcpSocket.cpp
         posix/SocketErrors.cpp
+        posix/SocketOptionTable.cpp
         posix/SocketsPosix.cpp
         posix/SshAgentEndpoint.cpp
         posix/StreamSocketOptions.cpp
@@ -261,11 +272,13 @@ core_cpp_add_module(net KIND STATIC
         windows/IocpOperation.hpp
         windows/IocpSocket.cpp
         windows/IocpSocket.hpp
+        windows/IocpTcpSocket.cpp
         windows/NamedPipe.cpp
         windows/NamedPipe.hpp
         windows/NetworkEvents.cpp
         windows/NetworkEvents.hpp
         windows/SocketErrors.cpp
+        windows/SocketOptionTable.cpp
         windows/SocketsWin32.cpp
         windows/SshAgentEndpoint.cpp
         windows/StreamSocketOptions.cpp
@@ -368,6 +381,7 @@ core_cpp_add_test(net
         HttpServer_test.cpp
         IAdmissionControl_test.cpp
         IoAwaitable_test.cpp
+        IpSocketAddress_test.cpp
         LingeringClose_test.cpp
         LoopTeardown_test.cpp
         ReadinessDial_test.cpp
@@ -375,9 +389,11 @@ core_cpp_add_test(net
         SocketAddress_test.cpp
         SocketClosedStates_test.cpp
         SocketDeadline_test.cpp
+        SocketEndpoints_test.cpp
         Socket_test.cpp
         StreamSocketOptions_test.cpp
         TcpClient_test.cpp
+        TcpSocket_test.cpp
         ThreadedAddressResolver_test.cpp
         UdpSocket_test.cpp
         WaitReadable_test.cpp
@@ -424,6 +440,8 @@ core_cpp_add_test(net
         posix/SshAgentEndpoint_test.cpp
         posix/UnixSocket_test.cpp
         posix/WaitReadableClose_test.cpp
+    SOURCES_LINUX
+        linux/AcceptedSocketOptions_test.cpp
     SOURCES_WINDOWS
         windows/AdoptListener_test.cpp
         windows/IocpBackend_test.cpp

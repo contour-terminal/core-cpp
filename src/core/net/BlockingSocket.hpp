@@ -88,6 +88,8 @@ class CORE_NET_API BlockingSocket final: public ISocket
     void setSendDeadline(std::chrono::milliseconds deadline) const noexcept;
 
     [[nodiscard]] std::string peerAddress() const override { return _peerAddress; }
+    [[nodiscard]] std::expected<ResolvedEndpoint, NetError> localEndpoint() const override;
+    [[nodiscard]] std::expected<ResolvedEndpoint, NetError> remoteEndpoint() const override;
 
     void close() noexcept override;
 

@@ -11,14 +11,19 @@
 #include <core/net/ICompletionPort.hpp>
 #include <core/net/SocketAddress.hpp>
 #include <core/net/Sockets.hpp>
+#include <core/net/detail/SocketEndpoint.hpp>
 #include <core/net/windows/InvalidSocket.hpp>
 #include <core/net/windows/IocpSocket.hpp>
 #include <core/net/windows/UnixSocketPath.hpp>
+#include <core/net/windows/WinsockError.hpp>
 #include <core/platform/WinsockInit.hpp>
 
 #include <array>
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <expected>
 #include <filesystem>
 #include <span>
 #include <string>
@@ -221,6 +226,29 @@ namespace detail
     {
         // Winsock's resolver codes are WSAGetLastError values.
         return gaiCode;
+    }
+
+    std::expected<ResolvedEndpoint, NetError> socketEndpoint(platform::NativeHandle socket, SocketSide side)
+    {
+        /// The call each side is asked with, indexed by @c SocketSide.
+        struct EndpointCall
+        {
+            decltype(&::getsockname) call; ///< `getsockname` or `getpeername`.
+            char const* name;              ///< Its name, for the error's context.
+        };
+        // Not constexpr: Winsock's functions are imported from ws2_32.dll, and an imported
+        // function's address is not a constant expression.
+        static auto const calls = std::array {
+            EndpointCall { .call = &::getsockname, .name = "getsockname" },
+            EndpointCall { .call = &::getpeername, .name = "getpeername" },
+        };
+        auto const& [call, name] = calls.at(static_cast<std::size_t>(side));
+
+        auto storage = sockaddr_storage {};
+        auto length = static_cast<int>(sizeof(storage));
+        if (call(reinterpret_cast<SOCKET>(socket), reinterpret_cast<sockaddr*>(&storage), &length) != 0)
+            return std::unexpected(fromWinsockError(::WSAGetLastError(), name));
+        return endpointFromSockaddr(&storage, static_cast<std::uint32_t>(length));
     }
 } // namespace detail
 

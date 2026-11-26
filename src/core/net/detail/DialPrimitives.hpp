@@ -25,6 +25,7 @@
 #include <expected>
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace core::net
 {
@@ -79,6 +80,40 @@ namespace detail
     /// @param loop The loop the readiness handle may be registered with; may be null.
     /// @param handles What to close; left invalid.
     CORE_NET_API void closeDialSocket(EventLoop* loop, DialHandles& handles) noexcept;
+
+    /// Owns what @c openDialSocket made, or a socket an @c ITcpSocket opened: closes it through
+    /// @c closeDialSocket unless it is released first.
+    ///
+    /// **What lets a dial take a socket by value into a lazy coroutine.** A task that is dropped
+    /// before it first runs destroys its parameters and nothing else, so a dial handed bare
+    /// @c DialHandles would leak them; handed this, it closes them.
+    class DialSocket
+    {
+      public:
+        /// @param loop The loop the readiness handle may be registered with; may be null.
+        /// @param handles The handles to own.
+        DialSocket(EventLoop* loop, DialHandles handles) noexcept: _loop { loop }, _handles { handles } {}
+
+        ~DialSocket() { closeDialSocket(_loop, _handles); }
+
+        DialSocket(DialSocket const&) = delete;
+        DialSocket& operator=(DialSocket const&) = delete;
+        DialSocket(DialSocket&& other) noexcept:
+            _loop { other._loop }, _handles { std::exchange(other._handles, DialHandles {}) }
+        {
+        }
+        DialSocket& operator=(DialSocket&&) = delete;
+
+        /// @return The handles, still owned.
+        [[nodiscard]] DialHandles const& handles() const noexcept { return _handles; }
+
+        /// @return The handles, no longer owned: the caller closes them.
+        [[nodiscard]] DialHandles release() noexcept { return std::exchange(_handles, DialHandles {}); }
+
+      private:
+        EventLoop* _loop;
+        DialHandles _handles;
+    };
 
     /// Issues the non-blocking `::connect`.
     /// @param handles What @c openDialSocket produced.
@@ -147,6 +182,49 @@ namespace detail
                                                                         ResolvedEndpoint endpoint,
                                                                         platform::SteadyTimePoint deadline,
                                                                         StreamSocketOptions options);
+
+    /// `detail::dialReadiness` (`ReadinessDial.hpp`) on a socket the caller opened -- with
+    /// @c openDialSocket, or an @c ITcpSocket's, possibly bound: everything after the socket exists.
+    /// @param loop The loop the resulting socket is pinned to and whose backend watches the dial.
+    /// @param socket The socket; closed on every way out but the connected socket.
+    /// @param endpoint The address to dial; by value, for the coroutine-frame reason.
+    /// @param deadline When to give up; `SteadyTimePoint::max()` for never.
+    /// @param options As `dialReadiness`'s.
+    /// @return As `dialReadiness`.
+    /// @throws async::OperationCancelled as `dialReadiness`.
+    [[nodiscard]] CORE_NET_API async::Task<SocketResult> dialReadinessOn(EventLoop* loop,
+                                                                         DialSocket socket,
+                                                                         ResolvedEndpoint endpoint,
+                                                                         platform::SteadyTimePoint deadline,
+                                                                         StreamSocketOptions options);
+
+    /// Whether a socket handed to @c dialCompletionOn is already bound.
+    enum class LocalBinding : std::uint8_t
+    {
+        Unbound, ///< Bound to the family's wildcard address first, which `ConnectEx` requires.
+        Bound,   ///< Bound by the caller; connected from that address.
+    };
+
+    /// @c dialCompletion on a socket the caller opened: an overlapped stream socket, not yet
+    /// associated with any completion port, possibly bound.
+    ///
+    /// For an @c ITcpSocket, which binds before it connects. @c dialCompletion is this on a socket
+    /// of its own.
+    /// @param loop The loop whose port completes the dial; not owned.
+    /// @param owned The socket; its readiness handle is unused. Closed on every way out but the
+    ///        connected socket.
+    /// @param binding Whether @p owned is already bound.
+    /// @param endpoint The address to dial; by value, for the coroutine-frame reason.
+    /// @param deadline When to give up; `SteadyTimePoint::max()` for never.
+    /// @param options As @c dialCompletion's.
+    /// @return As @c dialCompletion.
+    /// @throws async::OperationCancelled as @c dialCompletion.
+    [[nodiscard]] CORE_NET_API async::Task<SocketResult> dialCompletionOn(EventLoop* loop,
+                                                                          DialSocket owned,
+                                                                          LocalBinding binding,
+                                                                          ResolvedEndpoint endpoint,
+                                                                          platform::SteadyTimePoint deadline,
+                                                                          StreamSocketOptions options);
 
 } // namespace detail
 

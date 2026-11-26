@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core/net/SocketAddress.hpp>
 #include <core/net/Sockets.hpp>
+#include <core/net/detail/SocketEndpoint.hpp>
 #include <core/net/detail/SocketErrors.hpp>
 #include <core/net/posix/FdUtils.hpp>
 #include <core/net/posix/PosixListener.hpp>
@@ -14,7 +15,10 @@
 #include <array>
 #include <cassert>
 #include <cerrno>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <expected>
 #include <filesystem>
 #include <span>
 #include <string>
@@ -259,6 +263,27 @@ namespace detail
     int resolverSystemCode(int gaiCode) noexcept
     {
         return gaiCode == EAI_SYSTEM ? errno : 0;
+    }
+
+    std::expected<ResolvedEndpoint, NetError> socketEndpoint(platform::NativeHandle socket, SocketSide side)
+    {
+        /// The call each side is asked with, indexed by @c SocketSide.
+        struct EndpointCall
+        {
+            decltype(&::getsockname) call; ///< `getsockname` or `getpeername`.
+            char const* name;              ///< Its name, for the error's context.
+        };
+        static constexpr auto Calls = std::array {
+            EndpointCall { .call = &::getsockname, .name = "getsockname" },
+            EndpointCall { .call = &::getpeername, .name = "getpeername" },
+        };
+        auto const& [call, name] = Calls.at(static_cast<std::size_t>(side));
+
+        auto storage = sockaddr_storage {};
+        auto length = static_cast<socklen_t>(sizeof(storage));
+        if (call(socket, reinterpret_cast<sockaddr*>(&storage), &length) != 0)
+            return std::unexpected(socketError(errno, name));
+        return endpointFromSockaddr(&storage, static_cast<std::uint32_t>(length));
     }
 } // namespace detail
 

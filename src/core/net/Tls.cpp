@@ -8,7 +8,9 @@
 #include <core/async/IExecutor.hpp>
 #include <core/async/ParkedWork.hpp>
 #include <core/async/StopToken.hpp>
+#include <core/net/SocketAddress.hpp>
 #include <core/net/SocketContract.hpp>
+#include <core/net/SocketOption.hpp>
 #include <core/net/detail/ScopeGuard.hpp>
 
 #include <openssl/bio.h>
@@ -28,6 +30,7 @@
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -610,6 +613,31 @@ namespace
         }
 
         [[nodiscard]] std::string peerAddress() const override { return _inner->peerAddress(); }
+
+        /// The INNER transport's: TLS records ride on its connection, which is what has an address.
+        [[nodiscard]] std::expected<ResolvedEndpoint, NetError> localEndpoint() const override
+        {
+            return _inner->localEndpoint();
+        }
+
+        /// The INNER transport's, as @c localEndpoint is.
+        [[nodiscard]] std::expected<ResolvedEndpoint, NetError> remoteEndpoint() const override
+        {
+            return _inner->remoteEndpoint();
+        }
+
+        /// The INNER transport's: the options are the TCP connection's, which TLS records ride on.
+        [[nodiscard]] std::expected<std::uint64_t, NetError> option(SocketOption option) const override
+        {
+            return _inner->option(option);
+        }
+
+        /// Set on the INNER transport, as @c option reads it.
+        [[nodiscard]] std::expected<void, NetError> setOption(SocketOption option,
+                                                              std::uint64_t value) override
+        {
+            return _inner->setOption(option, value);
+        }
 
         /// Closes the inner transport, WITHOUT a `close_notify`: a synchronous `noexcept` close
         /// cannot await the write an alert needs. A caller that wants its peer to see an orderly

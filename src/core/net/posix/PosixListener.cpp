@@ -2,7 +2,9 @@
 #include <core/net/posix/PosixListener.hpp>
 
 #include <core/net/SocketAddress.hpp>
+#include <core/net/detail/SocketEndpoint.hpp>
 #include <core/net/detail/SocketErrors.hpp>
+#include <core/net/detail/SocketOptionAccess.hpp>
 #include <core/net/detail/StreamSocketOptions.hpp>
 #include <core/net/posix/AcceptLoop.hpp>
 #include <core/net/posix/FdUtils.hpp>
@@ -210,6 +212,28 @@ std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::adopt(Eve
         port = detail::portOfSockaddr(&bound, static_cast<std::uint32_t>(boundLen));
 
     return std::unique_ptr<PosixListener>(new PosixListener(loop, fd, port));
+}
+
+std::expected<ResolvedEndpoint, NetError> PosixListener::localEndpoint() const
+{
+    if (_closed || _fd < 0)
+        return std::unexpected(
+            makeNetError(NetErrorCode::BadHandle, 0, "localEndpoint on a closed listener"));
+    return detail::socketEndpoint(_fd, detail::SocketSide::Local);
+}
+
+std::expected<std::uint64_t, NetError> PosixListener::option(SocketOption option) const
+{
+    if (_closed || _fd < 0)
+        return std::unexpected(makeNetError(NetErrorCode::BadHandle, 0, "option on a closed listener"));
+    return detail::readSocketOption(_fd, option);
+}
+
+std::expected<void, NetError> PosixListener::setOption(SocketOption option, std::uint64_t value)
+{
+    if (_closed || _fd < 0)
+        return std::unexpected(makeNetError(NetErrorCode::BadHandle, 0, "setOption on a closed listener"));
+    return detail::writeSocketOption(_fd, option, value);
 }
 
 async::Task<AcceptResult> PosixListener::accept()
