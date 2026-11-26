@@ -298,6 +298,18 @@ others in notes.
 | `src/core/net/testing/InMemoryAsyncDatagram.hpp` | origin: core-cpp | - | - | P13 Task 10: an in-memory network behind the real socket's state machine |
 | `src/core/net/testing/InMemoryAsyncDatagram.cpp` | origin: core-cpp | - | - | P13 Task 10 |
 | `src/core/net/detail/OperationClaim.hpp` | origin: core-cpp | - | - | P13 Task 11: the one-operation-in-flight claim, moved out of `AsyncDatagramSocket.cpp` (Task 10) to be shared with the standard streams |
+| `src/core/net/StandardStreams.hpp` | origin: core-cpp | - | - | P13 Task 11: the standard streams as coroutines, `classifyStreamHandle`, `openStandardStreams` |
+| `src/core/net/StandardStreams.cpp` | origin: core-cpp | - | - | P13 Task 11: the input (Pollable through the loop, Blocking through a `detail::ParkedCall` worker, P13 ruling R13) and the offloaded output |
+| `src/core/net/detail/StandardStreamPrimitives.hpp` | origin: core-cpp | - | - | P13 Task 11: the platform half of the standard streams, defined per platform |
+| `src/core/net/posix/StandardStreamPrimitives.cpp` | origin: core-cpp | - | - | P13 Task 11: `read`, `write` with `SIGPIPE` held off the writing thread, a zero-timeout `poll` |
+| `src/core/net/posix/StreamKindTable.cpp` | origin: core-cpp | - | - | P13 Task 11: `fstat` type to stream kind; a character device is Pollable only as a terminal (P13 ruling R14) |
+| `src/core/net/windows/StandardStreamPrimitives.cpp` | origin: core-cpp | - | - | P13 Task 11: synchronous `ReadFile`/`WriteFile`, `CancelSynchronousIo` on a stop |
+| `src/core/net/windows/StreamKindTable.cpp` | origin: core-cpp | - | - | P13 Task 11: `GetFileType` to stream kind; every row Blocking, each with its reason |
+| `src/core/net/StandardStreams_test.cpp` | origin: core-cpp | - | - | P13 Task 11 |
+| `src/core/net/StandardStreamsTestSupport.hpp` | origin: core-cpp | - | - | P13 Task 11: the pipes, files and null device the cases make for themselves |
+| `src/core/net/posix/StandardStreams_test.cpp` | origin: core-cpp | - | - | P13 Task 11: pipes, sockets and pseudo-terminals through the loop |
+| `src/core/net/posix/StandardStreamsTestSupport.cpp` | origin: core-cpp | - | - | P13 Task 11 |
+| `src/core/net/windows/StandardStreamsTestSupport.cpp` | origin: core-cpp | - | - | P13 Task 11 |
 | `src/core/net/linux/AcceptedSocketOptions_test.cpp` | origin: core-cpp | - | - | P13 Task 9 fix round 1: what a Linux listener's accepted connections inherit |
 | `src/core/net/HostDrivenBackend.cpp` | origin: core-cpp | - | - | its body: the coalescing (several wakes before the host gets a turn are one pump), the clamp of a deadline already past to a zero delay, and the schedule cleared BEFORE a pump runs so the turn it drives can arm the next one |
 | `src/core/net/HostDrivenBackend.hpp` | origin: core-cpp | - | - | Task B3: the IoBackend for a loop that is PUMPED rather than one that blocks. Portable, and tested on every platform over testing::ManualHostScheduler -- the browser is one of its hosts, not its definition |

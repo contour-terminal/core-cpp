@@ -1367,6 +1367,26 @@ in-process doubles (`testing::DatagramBus`, `testing::InMemorySocket`, the parki
   `WSARecvFrom` is answered `MessageTooLarge` at once, never waited for, and the operation is left
   announced and holding itself, so a packet that may or may not follow frees it. The rebind after a
   Linux disconnect takes the address `bind` was given, not `getsockname`'s connected source.
+- **A standard handle's flags are the parent's, so the standard streams never set one** (P13 Task
+  11). `O_NONBLOCK` lives on the open file description an inherited descriptor shares with its
+  parent, and a shell whose stdin turned non-blocking under it reads `EAGAIN` as end of input. A
+  Pollable input (`classifyStreamHandle`: a pipe, a socket, a terminal) therefore waits on the loop
+  and then asks a zero-timeout `poll` before it reads, so a spurious readiness never blocks the
+  loop's thread on a blocking descriptor. A regular file and `/dev/null` are never Pollable, because
+  epoll refuses both (`EPERM`); a registration the backend refuses anyway (macOS kqueue, some ttys)
+  turns the stream Blocking for good. No Windows handle is Pollable: a console cannot join a
+  completion port, and an inherited pipe is not overlapped.
+- **A blocking stdin read is a `detail::ParkedCall`, not `async::offload`** (P13 ruling R13):
+  `offload` never resumes before its work returns, and a read of a terminal may never return. A stop
+  hands the waiter back at once; the worker read stays the stream's ONE outstanding read, the next
+  read waits for that same worker (swapping in a fresh call under the worker's mutex), and what it
+  read is the next read's -- bytes beyond the next read's `maxBytes` are kept, never dropped. On
+  Windows the stop also sends `CancelSynchronousIo` to the worker's thread, recorded and forgotten
+  under that mutex so it can never reach the pool thread's next job.
+- **A write to a pipe nobody reads is an error, not a signal.** There is no `MSG_NOSIGNAL` for a
+  pipe and no descriptor flag a child may set, so the standard output blocks `SIGPIPE` on the
+  writing thread for the write and consumes one the write raised (`sigwait`, since macOS lacks
+  `sigtimedwait`) before the mask returns.
 - **Sharing a port buys hearing a broadcast, and nothing else.** A unicast to a shared port reaches
   one socket, and which one differs by platform, so a node that shares a port to hear the segment
   sends -- and is answered -- from an address only it holds (`answerFromOwnAddress`,

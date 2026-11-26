@@ -161,6 +161,7 @@ core_cpp_add_module(net KIND STATIC
         Sockets.hpp
         SplitSocket.hpp
         SshAgentEndpoint.hpp
+        StandardStreams.hpp
         TcpClient.hpp
         ThreadedAddressResolver.hpp
         UdpSocket.hpp
@@ -215,6 +216,7 @@ core_cpp_add_module(net KIND STATIC
         SocketContract.cpp
         SocketOption.cpp
         Sockets.cpp
+        StandardStreams.cpp
         TcpClient.cpp
         TcpSocket.cpp
         ThreadedAddressResolver.cpp
@@ -234,6 +236,7 @@ core_cpp_add_module(net KIND STATIC
         detail/SocketErrors.hpp
         detail/SocketOptionAccess.hpp
         detail/SshAgentEndpoint.hpp
+        detail/StandardStreamPrimitives.hpp
         detail/TcpSocketPrimitives.hpp
         detail/WakeupChannel.hpp
     SOURCES_POSIX
@@ -255,6 +258,8 @@ core_cpp_add_module(net KIND STATIC
         posix/SocketOptionTable.cpp
         posix/SocketsPosix.cpp
         posix/SshAgentEndpoint.cpp
+        posix/StandardStreamPrimitives.cpp
+        posix/StreamKindTable.cpp
         posix/StreamSocketOptions.cpp
         posix/UdpSocket.cpp
         posix/UnixListener.cpp
@@ -289,6 +294,8 @@ core_cpp_add_module(net KIND STATIC
         windows/SocketOptionTable.cpp
         windows/SocketsWin32.cpp
         windows/SshAgentEndpoint.cpp
+        windows/StandardStreamPrimitives.cpp
+        windows/StreamKindTable.cpp
         windows/StreamSocketOptions.cpp
         windows/UdpSocket.cpp
         windows/UnixSocketPath.cpp
@@ -401,6 +408,8 @@ core_cpp_add_test(net
         SocketDeadline_test.cpp
         SocketEndpoints_test.cpp
         Socket_test.cpp
+        StandardStreams_test.cpp
+        StandardStreamsTestSupport.hpp
         StreamSocketOptions_test.cpp
         TcpClient_test.cpp
         TcpSocket_test.cpp
@@ -448,6 +457,8 @@ core_cpp_add_test(net
         posix/ResolverErrors_test.cpp
         posix/SocketErrors_test.cpp
         posix/SshAgentEndpoint_test.cpp
+        posix/StandardStreams_test.cpp
+        posix/StandardStreamsTestSupport.cpp
         posix/UnixSocket_test.cpp
         posix/WaitReadableClose_test.cpp
     SOURCES_LINUX
@@ -463,6 +474,7 @@ core_cpp_add_test(net
         windows/ResolverErrors_test.cpp
         windows/SocketErrors_test.cpp
         windows/SshAgentEndpoint_test.cpp
+        windows/StandardStreamsTestSupport.cpp
         windows/UnixListener_test.cpp
     LABELS loopback
     # IoAwaitable_test.cpp's loop of inline completions skips where symmetric transfer is not a
