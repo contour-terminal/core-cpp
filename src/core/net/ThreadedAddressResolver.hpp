@@ -59,9 +59,10 @@ struct ThreadedResolverOptions
 ///
 /// An unbounded queue is a memory-exhaustion hole reachable by whatever provokes dials. And
 /// blocking the caller to wait for room would reintroduce, on the loop thread, precisely the
-/// stall this class exists to remove — so over-depth returns @c NetErrorCode::WouldBlock
-/// immediately. `WouldBlock` and not `SystemError`, because a caller can retry the first and can
-/// do nothing at all with the second.
+/// stall this class exists to remove — so over-depth returns @c NetErrorCode::ResourceExhausted
+/// immediately. Not `SystemError`, because a caller can retry once a lookup has returned and can
+/// do nothing at all with the second; and not `WouldBlock`, which @c isDeadlineExpiry reads as a
+/// deadline's tick.
 class CORE_NET_API ThreadedAddressResolver final: public IAsyncAddressResolver
 {
   public:
@@ -84,6 +85,11 @@ class CORE_NET_API ThreadedAddressResolver final: public IAsyncAddressResolver
     /// to @p loop cancelled at once, and the worker, which cannot be interrupted inside the
     /// blocking resolver, finishes in its own time and publishes into a slot nobody waits on.
     /// The lookup still occupies its thread until then — a stop ends the WAIT, not the lookup.
+    ///
+    /// A failure carries the code @c IAddressResolver::resolveClassified gave it, so a name that does
+    /// not exist and a resolver that could not answer reach the caller apart.
+    /// Host text @c detail::checkLookupHost refuses (empty, an embedded NUL, more than 253 bytes) is
+    /// @c NetErrorCode::AddressError before any lookup starts, whatever @p loop is.
     [[nodiscard]] async::Task<ResolveResult> resolve(std::string host,
                                                      std::uint16_t port,
                                                      EventLoop* loop) override;

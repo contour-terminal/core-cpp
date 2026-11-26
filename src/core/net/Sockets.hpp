@@ -142,7 +142,9 @@ struct ListenOptions
 ///        then. `connect(loop, makeHost(), port)` is the ordinary call that would dangle.
 /// @param port The remote port.
 /// @return A task resolving to the connected socket, or a @c NetError on failure: a name that
-///         cannot be resolved is @c NetErrorCode::AddressError.
+///         does not exist is @c NetErrorCode::NameNotFound, a resolver that could not answer
+///         @c NetErrorCode::ResolverTemporaryFailure, and any other lookup failure
+///         @c NetErrorCode::AddressError.
 /// @throws async::OperationCancelled if the awaiting flow is stopped while the dial is outstanding.
 [[nodiscard]] CORE_NET_API async::Task<SocketResult> connect(EventLoop* loop,
                                                              std::string host,

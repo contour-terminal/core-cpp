@@ -1285,8 +1285,11 @@ std::expected<std::unique_ptr<IocpListener>, NetError> IocpListener::bind(EventL
     addrinfo* resolved = nullptr;
     if (auto const rc = ::getaddrinfo(
             hostString.empty() ? nullptr : hostString.c_str(), portString.c_str(), &hints, &resolved);
-        rc != 0 || resolved == nullptr)
-        return std::unexpected(makeNetError(NetErrorCode::AddressError, rc, "getaddrinfo"));
+        rc != 0)
+        return std::unexpected(
+            makeNetError(detail::classifyResolverError(rc), detail::resolverSystemCode(rc), "getaddrinfo"));
+    if (resolved == nullptr)
+        return std::unexpected(makeNetError(NetErrorCode::AddressError, 0, "getaddrinfo"));
 
     auto socket = detail::InvalidSocket;
     auto lastError = makeNetError(NetErrorCode::AddressError, 0, "no usable address");

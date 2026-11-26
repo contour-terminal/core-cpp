@@ -127,6 +127,7 @@ core_cpp_add_module(net KIND STATIC
         DeadlineTimer.hpp
         Diagnostics.hpp
         EventLoop.hpp
+        ExecutorAddressResolver.hpp
         HealthProbe.hpp
         HostDrivenBackend.hpp
         HttpServer.hpp
@@ -162,6 +163,7 @@ core_cpp_add_module(net KIND STATIC
         WithTimeout.hpp
         WriteQueue.hpp
         detail/CompletionHook.hpp
+        detail/ParkedCall.hpp
         detail/ParkId.hpp
         detail/ParkTable.hpp
         detail/ReadinessSlot.hpp
@@ -181,6 +183,7 @@ core_cpp_add_module(net KIND STATIC
         testing/NullBackend.hpp
         testing/ParkingReadableSocket.hpp
         testing/RawSockets.hpp
+        testing/ScriptedAddressResolver.hpp
         testing/ScriptedBackend.hpp
         testing/SocketDecorator.hpp
         testing/TestLoop.hpp
@@ -194,6 +197,7 @@ core_cpp_add_module(net KIND STATIC
         ConnectFlow.cpp
         Connector.cpp
         Diagnostics.cpp
+        ExecutorAddressResolver.cpp
         HealthProbe.cpp
         HttpServer.cpp
         ISocket.cpp
@@ -359,6 +363,7 @@ core_cpp_add_test(net
         ConnectFlow_test.cpp
         Connector_test.cpp
         EventLoop_test.cpp
+        ExecutorAddressResolver_test.cpp
         HealthProbe_test.cpp
         HttpServer_test.cpp
         IAdmissionControl_test.cpp
@@ -378,10 +383,12 @@ core_cpp_add_test(net
         WaitReadable_test.cpp
         WithTimeout_test.cpp
         WriteQueue_test.cpp
+        detail/ParkedCall_test.cpp
         testing/FailingListener_test.cpp
         testing/InMemoryDatagram_test.cpp
         testing/InMemorySocket_test.cpp
         testing/ParkingReadableSocket_test.cpp
+        testing/ScriptedAddressResolver_test.cpp
         testing/TestLoop_test.cpp
     # POSIX-only, each for its own reason. `ReactorSocket_test` names PosixSocket directly, and
     # `SocketRegistration_test` counts what PosixSocket's kept registration costs the backend.
@@ -412,6 +419,7 @@ core_cpp_add_test(net
         posix/AdoptListener_test.cpp
         posix/FdPassing_test.cpp
         posix/PortSharing_test.cpp
+        posix/ResolverErrors_test.cpp
         posix/SocketErrors_test.cpp
         posix/SshAgentEndpoint_test.cpp
         posix/UnixSocket_test.cpp
@@ -424,6 +432,7 @@ core_cpp_add_test(net
         windows/NamedPipe_test.cpp
         windows/NetworkEvents_test.cpp
         windows/PortSharing_test.cpp
+        windows/ResolverErrors_test.cpp
         windows/SocketErrors_test.cpp
         windows/SshAgentEndpoint_test.cpp
         windows/UnixListener_test.cpp

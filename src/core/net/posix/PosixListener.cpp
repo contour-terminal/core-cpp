@@ -113,8 +113,14 @@ std::expected<std::unique_ptr<PosixListener>, NetError> PosixListener::bind(Even
     addrinfo* resolved = nullptr;
     auto const rc =
         ::getaddrinfo(hostStr.empty() ? nullptr : hostStr.c_str(), portStr.c_str(), &hints, &resolved);
-    if (rc != 0 || resolved == nullptr)
-        return std::unexpected(makeNetError(NetErrorCode::AddressError, rc, "getaddrinfo"));
+    if (rc != 0)
+    {
+        // The system code first: for EAI_SYSTEM it is errno, which nothing may touch before it.
+        auto const systemCode = detail::resolverSystemCode(rc);
+        return std::unexpected(makeNetError(detail::classifyResolverError(rc), systemCode, "getaddrinfo"));
+    }
+    if (resolved == nullptr)
+        return std::unexpected(makeNetError(NetErrorCode::AddressError, 0, "getaddrinfo"));
 
     int fd = -1;
     NetError lastError = makeNetError(NetErrorCode::AddressError, 0, "no usable address");
