@@ -59,6 +59,16 @@ struct WireTimeouts
     /// Each write, a head's or a body chunk's, to its last byte (@c HttpErrorCode::ConnectionWriteTimeout).
     /// A peer that stops reading stalls a write at most this long.
     std::chrono::milliseconds write { 0 };
+    /// A head as a whole, from its first byte to its last (@c HttpErrorCode::ConnectionReadTimeout): the
+    /// wait for that first byte is @c firstByte's alone, a separate budget. It is checked before every
+    /// read of the head after the first byte and caps each read's own deadline, so neither a trickle
+    /// of bytes each inside @c betweenBytes nor a read that beat its cancel by a byte (a completion
+    /// transport's, where the data wins) stretches a head past it.
+    std::chrono::milliseconds head { 0 };
+    /// A body as a whole, from its reader's first adoption after the head to its last byte
+    /// (@c HttpErrorCode::ConnectionReadTimeout), checked before every read of it as @c head is. Time
+    /// the caller spends between reads counts: a read after the bound is refused at once.
+    std::chrono::milliseconds body { 0 };
 };
 
 /// One HTTP/1.1 connection, either end.

@@ -16,4 +16,9 @@ bool runsUnderWine() noexcept
     return ntdll != nullptr && GetProcAddress(ntdll, "wine_get_version") != nullptr;
 }
 
+LoopbackFlood loopbackFlood() noexcept
+{
+    return LoopbackFlood::Absorbed;
+}
+
 } // namespace core::http::test

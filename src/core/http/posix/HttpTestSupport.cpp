@@ -11,4 +11,9 @@ bool runsUnderWine() noexcept
     return false;
 }
 
+LoopbackFlood loopbackFlood() noexcept
+{
+    return LoopbackFlood::Stalls;
+}
+
 } // namespace core::http::test

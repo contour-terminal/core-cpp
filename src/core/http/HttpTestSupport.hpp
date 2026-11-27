@@ -4,14 +4,16 @@
 /// @file
 /// Test-only helpers the `core::http` cases share: raw wire text written to a socket, a body read
 /// to its end, a flow run on a hand-driven loop until it has an answer, a server end a case scripts,
-/// and a TLS context whose handshake and failures a case scripts (R29: no `core::net_tls`, so the
-/// binaries build without `CORE_CPP_WITH_TLS`). Test-only: in no `FILE_SET`, so never installed.
+/// a served connection a case drives byte by byte with the handlers it serves, and a TLS context whose
+/// handshake and failures a case scripts (R29: no `core::net_tls`, so the binaries build without
+/// `CORE_CPP_WITH_TLS`). Test-only: in no `FILE_SET`, so never installed.
 
 #include <core/async/Task.hpp>
 #include <core/http/Body.hpp>
 #include <core/http/Connection.hpp>
 #include <core/http/Framing.hpp>
 #include <core/http/HttpClient.hpp>
+#include <core/http/HttpServer.hpp>
 #include <core/http/Message.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/ISocket.hpp>
@@ -19,6 +21,9 @@
 #include <core/net/ITlsSession.hpp>
 #include <core/net/IoAwaitable.hpp>
 #include <core/net/NetError.hpp>
+#include <core/net/testing/InMemorySocket.hpp>
+#include <core/net/testing/TestLoop.hpp>
+#include <core/platform/Clock.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -44,6 +49,19 @@ namespace core::http::test
 /// one of them may call it. A case uses it to accept a behaviour wine has and no native kernel
 /// does, and to fail where the same behaviour shows natively. A @c bool because the name asks it.
 [[nodiscard]] bool runsUnderWine() noexcept;
+
+/// What a loopback connection does with a flood its peer never reads.
+enum class LoopbackFlood : std::uint8_t
+{
+    Stalls,   ///< The writer stalls once the kernel buffers are full (Linux, macOS, the BSDs).
+    Absorbed, ///< The whole flood is taken: Windows, natively and under wine, which tunes a
+              ///< loopback window past the buffer sizes it was given (measured on CI with 4 and
+              ///< 64 MiB).
+};
+
+/// @return What this platform's loopback does with an unread flood; defined beside
+///         @c runsUnderWine.
+[[nodiscard]] LoopbackFlood loopbackFlood() noexcept;
 
 /// @param text The bytes to view.
 /// @return @p text as the byte span a socket write takes.
@@ -349,6 +367,414 @@ class SlowBodySource final: public IBodySource
     std::chrono::milliseconds _gap;
     std::optional<std::size_t> _failAt;
     std::size_t _next = 0;
+};
+
+// -------------------------------------------------------------------------------------------------
+// A served connection, driven by a case (Task 18).
+
+/// Whether a flow a case started has finished.
+enum class FlowEnd : std::uint8_t
+{
+    Running,  ///< It is still parked, or has not started.
+    Finished, ///< It ran to its end.
+};
+
+/// Runs @p task, then marks @p end finished.
+/// @param task The flow.
+/// @param end Where it says so; must outlive the returned task.
+inline async::Task<void> marking(async::Task<void> task, FlowEnd* end)
+{
+    co_await std::move(task);
+    *end = FlowEnd::Finished;
+}
+
+/// Reads @p socket until EOF or an error, appending as it goes, then marks @p end finished: what a
+/// client received so far, readable while the server is still writing.
+/// @param socket The client end; must outlive the returned task.
+/// @param out Where the bytes go; must outlive the returned task.
+/// @param end Set once the wire has ended; must outlive the returned task.
+inline async::Task<void> collect(net::ISocket* socket, std::string* out, FlowEnd* end)
+{
+    auto chunk = std::vector<std::byte>(4096);
+    while (true)
+    {
+        auto const got = co_await socket->read(std::span<std::byte> { chunk });
+        if (!got.has_value() || *got == 0)
+            break;
+        *out += textOf(std::span<std::byte const> { chunk }.first(*got));
+    }
+    *end = FlowEnd::Finished;
+}
+
+/// Writes @p text to @p socket in full, then half-closes it: a client that has sent all it will.
+/// @param socket The writer; must outlive the returned task.
+/// @param text The wire bytes, owned by the frame.
+inline async::Task<void> writeThenFinish(net::ISocket* socket, std::string text)
+{
+    if (!text.empty())
+        static_cast<void>(co_await socket->write(bytesOf(text)));
+    static_cast<void>(co_await socket->shutdownWrite());
+}
+
+/// Whether a served connection's client end reads what the server writes.
+enum class ClientReads : std::uint8_t
+{
+    Yes, ///< Everything, as it arrives.
+    No,  ///< Nothing: a client that stops reading, which a bounded pair turns into a stalled write.
+};
+
+/// One connection served by @c serveHttpConnection over an in-memory pair on a hand-driven loop, its
+/// client end a case writes raw bytes to. Everything the server wrote is in @c received as soon as a
+/// drain has run; the clock moves only when the case advances it.
+class ServedConnection
+{
+  public:
+    /// Starts serving.
+    /// @param handler The handler; must outlive this.
+    /// @param options The server's configuration.
+    /// @param maxBytesInFlight The pair's per-direction bound; zero means none.
+    /// @param reads Whether the client end reads.
+    ServedConnection(IHttpHandler& handler,
+                     HttpServerOptions options,
+                     std::size_t maxBytesInFlight = 0,
+                     ClientReads reads = ClientReads::Yes):
+        _pair { net::testing::InMemorySocketPair::create(maxBytesInFlight) }
+    {
+        _loop.spawn(marking(
+            serveHttpConnection(&_loop, std::move(_pair.server), &handler, std::move(options)), &_server));
+        if (reads == ClientReads::Yes)
+            _loop.spawn(collect(_pair.client.get(), &_received, &_wire));
+        drain(); // the server parks in its first read now, at time zero
+    }
+
+    ServedConnection(ServedConnection const&) = delete;
+    ServedConnection& operator=(ServedConnection const&) = delete;
+    ServedConnection(ServedConnection&&) = delete;
+    ServedConnection& operator=(ServedConnection&&) = delete;
+    ~ServedConnection() = default;
+
+    /// Sends @p text and leaves the client end open, then drains.
+    void send(std::string text)
+    {
+        _loop.spawn(writeOnly(_pair.client.get(), std::move(text)));
+        drain();
+    }
+
+    /// Sends @p text and half-closes the client end, then drains.
+    void finish(std::string text = {})
+    {
+        _loop.spawn(writeThenFinish(_pair.client.get(), std::move(text)));
+        drain();
+    }
+
+    /// Runs the loop until it has nothing to do.
+    void drain() { std::ignore = _loop.drain(); }
+
+    /// Moves the clock by @p by, then drains.
+    void advance(std::chrono::milliseconds by)
+    {
+        _clock.advance(by);
+        drain();
+    }
+
+    /// @return The loop, for a handler that waits on its clock.
+    [[nodiscard]] net::EventLoop& loop() noexcept { return _loop; }
+
+    /// @return Everything the server wrote so far.
+    [[nodiscard]] std::string const& received() const noexcept { return _received; }
+
+    /// @return Whether the server's flow has ended.
+    [[nodiscard]] FlowEnd server() const noexcept { return _server; }
+
+    /// @return Whether the client end has read the wire's end (EOF or a reset).
+    [[nodiscard]] FlowEnd wire() const noexcept { return _wire; }
+
+  private:
+    platform::ManualClock _clock {};
+    net::testing::InMemorySocketPair _pair;
+    std::string _received;
+    FlowEnd _server = FlowEnd::Running;
+    FlowEnd _wire = FlowEnd::Running;
+    net::testing::TestLoop _loop { _clock }; // last: destroyed first, with every flow that uses the above
+};
+
+/// What a client of one served connection saw.
+struct Exchanged
+{
+    std::string wire; ///< Every byte the server wrote.
+    FlowEnd server;   ///< Whether the server's flow ended.
+    FlowEnd closed;   ///< Whether the client saw the wire end.
+};
+
+/// Sends @p wire on a fresh connection and half-closes it, then reads what the server answers.
+/// @param handler The handler.
+/// @param options The server's configuration.
+/// @param wire The client's bytes.
+/// @return What came back.
+[[nodiscard]] inline Exchanged exchange(IHttpHandler& handler, HttpServerOptions options, std::string wire)
+{
+    auto served = ServedConnection { handler, std::move(options) };
+    served.finish(std::move(wire));
+    return Exchanged { .wire = served.received(), .server = served.server(), .closed = served.wire() };
+}
+
+/// One response as a client read it off the wire.
+struct ParsedResponse
+{
+    ResponseHead head; ///< Its head.
+    std::string body;  ///< Its body, decoded.
+    Fields trailers;   ///< Its trailers.
+};
+
+/// Every response in @p wire, in order, each framed as a response to @p method would be; a malformed
+/// one fails the case, and a body cut off at the wire's end ends the list.
+/// @param wire What a server wrote.
+/// @param method The request method the responses answer.
+/// @return The responses, 1xx ones included.
+[[nodiscard]] inline std::vector<ParsedResponse> parseResponses(std::string_view wire,
+                                                                std::string_view method = "GET")
+{
+    auto responses = std::vector<ParsedResponse> {};
+    while (!wire.empty())
+    {
+        auto parser = HeadParser { MessageRole::Response, HttpLimits {} };
+        auto fed = parser.feed(wire);
+        REQUIRE(fed.has_value());
+        if (fed->progress != Progress::Complete)
+            break;
+        wire.remove_prefix(fed->consumed);
+        auto response = ParsedResponse { .head = parser.takeResponse(), .body = {}, .trailers = {} };
+        auto framing =
+            responseFraming(method, response.head.version, response.head.status, response.head.fields);
+        REQUIRE(framing.has_value());
+        switch (framing->kind)
+        {
+            case BodyFraming::None: break;
+            case BodyFraming::Length:
+                if (wire.size() < framing->length)
+                    return responses;
+                response.body = std::string { wire.substr(0, framing->length) };
+                wire.remove_prefix(framing->length);
+                break;
+            case BodyFraming::UntilClose:
+                response.body = std::string { wire };
+                wire = {};
+                break;
+            case BodyFraming::Chunked: {
+                auto decoder = ChunkedDecoder { MessageRole::Response, HttpLimits {} };
+                while (true)
+                {
+                    auto step = decoder.feed(wire);
+                    REQUIRE(step.has_value());
+                    response.body += std::string { step->data };
+                    wire.remove_prefix(step->consumed);
+                    if (step->progress == Progress::Complete)
+                        break;
+                    if (wire.empty())
+                        return responses;
+                }
+                response.trailers = decoder.takeTrailers();
+                break;
+            }
+        }
+        responses.push_back(std::move(response));
+    }
+    return responses;
+}
+
+/// @return The first value of the field @p name in @p fields, or empty.
+[[nodiscard]] inline std::string fieldOf(Fields const& fields, std::string_view name)
+{
+    auto const values = fields.get(name);
+    return values.empty() ? std::string {} : std::string { values.front() };
+}
+
+/// A body source that reads a request body as the response is written: what a handler that streams
+/// its request into its response returns. It holds the reader, so the reader lives until the
+/// response does.
+class ReaderBodySource final: public IBodySource
+{
+  public:
+    /// @param reader The request body.
+    explicit ReaderBodySource(std::unique_ptr<IBodyReader> reader): _reader { std::move(reader) } {}
+
+    [[nodiscard]] std::optional<std::uint64_t> knownLength() const noexcept override { return std::nullopt; }
+    [[nodiscard]] TrailerIntent trailerIntent() const noexcept override { return TrailerIntent::Possible; }
+    [[nodiscard]] async::Task<HttpResult<BodyChunk>> next() override { return _reader->read(1024); }
+    [[nodiscard]] async::Task<HttpResult<Fields>> trailers() override { return _reader->trailers(); }
+
+  private:
+    std::unique_ptr<IBodyReader> _reader;
+};
+
+/// How an @c EchoHandler reads the request body.
+enum class EchoMode : std::uint8_t
+{
+    Buffered, ///< Whole, before it answers: the response has a known length (or trailers).
+    Streamed, ///< Lazily, as the server writes the response, which is chunked.
+};
+
+/// Answers every request 200 with its body and trailers, and `X-Echo: <method> <target>`. A body
+/// read failure is the handler's failure, and is recorded.
+class EchoHandler final: public IHttpHandler
+{
+  public:
+    /// @param mode How the body is read.
+    explicit EchoHandler(EchoMode mode = EchoMode::Buffered): _mode { mode } {}
+
+    [[nodiscard]] async::Task<HttpResult<OutgoingResponse>> handle(IncomingRequest request) override
+    {
+        return answer(this, std::move(request));
+    }
+
+    /// @return How many requests it was called for.
+    [[nodiscard]] std::size_t calls() const noexcept { return _calls; }
+
+    /// @return The code of the last body read that failed, if one did.
+    [[nodiscard]] std::optional<HttpErrorCode> readFailure() const noexcept { return _readFailure; }
+
+    /// @return The peer of the last request.
+    [[nodiscard]] std::optional<net::ResolvedEndpoint> const& lastPeer() const noexcept { return _peer; }
+
+    /// @return The target of every request it was called for, in order.
+    [[nodiscard]] std::vector<std::string> const& targets() const noexcept { return _targets; }
+
+  private:
+    static async::Task<HttpResult<OutgoingResponse>> answer(EchoHandler* self, IncomingRequest request)
+    {
+        ++self->_calls;
+        self->_peer = request.peer;
+        self->_targets.emplace_back(request.head.target.text());
+        auto head = ResponseHead {};
+        auto const echo =
+            std::string { request.head.method.text() } + " " + std::string { request.head.target.text() };
+        REQUIRE(head.fields.append("X-Echo", echo).has_value());
+        if (self->_mode == EchoMode::Streamed)
+            co_return OutgoingResponse { .head = std::move(head),
+                                         .body =
+                                             std::make_unique<ReaderBodySource>(std::move(request.body)) };
+        auto body = co_await readAll(request.body.get(), 1024);
+        if (body.error.has_value())
+        {
+            self->_readFailure = body.error->code;
+            co_return std::unexpected(std::move(*body.error));
+        }
+        auto trailers = co_await request.body->trailers();
+        if (!trailers.has_value())
+            co_return std::unexpected(std::move(trailers.error()));
+        co_return OutgoingResponse { .head = std::move(head),
+                                     .body = std::make_unique<BufferBodySource>(std::move(body.text),
+                                                                                std::move(*trailers)) };
+    }
+
+    EchoMode _mode;
+    std::size_t _calls = 0;
+    std::optional<HttpErrorCode> _readFailure;
+    std::optional<net::ResolvedEndpoint> _peer;
+    std::vector<std::string> _targets;
+};
+
+/// Whether an @c IgnoringHandler keeps each request's body reader alive after it answers.
+enum class KeepsReader : std::uint8_t
+{
+    No,  ///< The reader is dropped with the request.
+    Yes, ///< The handler holds it for as long as it lives.
+};
+
+/// Answers every request `200` with the body `ok`, and never reads the request body.
+class IgnoringHandler final: public IHttpHandler
+{
+  public:
+    /// @param keeps Whether the unread body readers are kept alive.
+    explicit IgnoringHandler(KeepsReader keeps = KeepsReader::No): _keeps { keeps } {}
+
+    [[nodiscard]] async::Task<HttpResult<OutgoingResponse>> handle(IncomingRequest request) override
+    {
+        ++_calls;
+        if (_keeps == KeepsReader::Yes)
+            _kept.push_back(std::move(request.body));
+        return okResponse();
+    }
+
+    /// @return How many requests it was called for.
+    [[nodiscard]] std::size_t calls() const noexcept { return _calls; }
+
+    /// @return The readers it kept, in order.
+    [[nodiscard]] std::vector<std::unique_ptr<IBodyReader>>& kept() noexcept { return _kept; }
+
+    /// @return A 200 response with the body `ok`.
+    static async::Task<HttpResult<OutgoingResponse>> okResponse()
+    {
+        co_return OutgoingResponse { .head = ResponseHead {},
+                                     .body = std::make_unique<BufferBodySource>("ok") };
+    }
+
+  private:
+    KeepsReader _keeps;
+    std::size_t _calls = 0;
+    std::vector<std::unique_ptr<IBodyReader>> _kept;
+};
+
+/// What a body read a handler left running found: the body it read, the failure that ended it, and
+/// what a read retried after that failure answered.
+struct LeftRunning
+{
+    std::string text;                     ///< The body bytes it read.
+    std::optional<HttpErrorCode> failure; ///< What ended the read, if anything did.
+    std::optional<HttpErrorCode> retry;   ///< What one more read after the failure answered.
+    FlowEnd end = FlowEnd::Running;       ///< Whether the read's flow has ended.
+};
+
+/// Reads @p reader to its end and, after a failure, once more: a handler's read that runs on after it.
+/// @param reader The body, owned by the flow.
+/// @param out What it found; must outlive the returned task.
+inline async::Task<void> readThenRetry(std::unique_ptr<IBodyReader> reader, LeftRunning* out)
+{
+    auto body = co_await readAll(reader.get(), 1024);
+    out->text = body.text;
+    if (body.error.has_value())
+    {
+        out->failure = body.error->code;
+        auto again = co_await reader->read(1024);
+        if (!again.has_value())
+            out->retry = again.error().code;
+    }
+    out->end = FlowEnd::Finished;
+}
+
+/// Answers every request `200` with the body `ok` at once, and leaves a flow reading its body running
+/// on the loop: a handler whose body read outlives its response.
+class SpawningReader final: public IHttpHandler
+{
+  public:
+    /// @param loop Where the read is spawned, set before the first request; must outlive this.
+    /// @param out What the last read found; must outlive every read.
+    /// @param answerAfter How long it waits on the loop's clock before it answers; zero answers at once.
+    SpawningReader(net::EventLoop** loop,
+                   LeftRunning* out,
+                   std::chrono::milliseconds answerAfter = std::chrono::milliseconds { 0 }):
+        _loop { loop }, _out { out }, _answerAfter { answerAfter }
+    {
+    }
+
+    [[nodiscard]] async::Task<HttpResult<OutgoingResponse>> handle(IncomingRequest request) override
+    {
+        (*_loop)->spawn(readThenRetry(std::move(request.body), _out));
+        return answer(*_loop, _answerAfter);
+    }
+
+  private:
+    static async::Task<HttpResult<OutgoingResponse>> answer(net::EventLoop* loop,
+                                                            std::chrono::milliseconds after)
+    {
+        if (after > std::chrono::milliseconds { 0 })
+            co_await loop->delay(after);
+        co_return co_await IgnoringHandler::okResponse();
+    }
+
+    net::EventLoop** _loop;
+    LeftRunning* _out;
+    std::chrono::milliseconds _answerAfter;
 };
 
 // -------------------------------------------------------------------------------------------------

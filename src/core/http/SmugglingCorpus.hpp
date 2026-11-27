@@ -852,6 +852,39 @@ namespace detail
                         .code = HttpErrorCode::InternalError,
                         .status = 200,
                         .body = "" },
+        // CL.TE: a front end framing by Content-Length would pass the chunked body's end and the request
+        // behind it as one body; refused at the head, so nothing after it is ever read as a request
+        SmugglingCase { .name = "smuggled-get-behind-te-with-cl",
+                        .role = MessageRole::Request,
+                        .wire = "POST / HTTP/1.1\r\n"
+                                "Host: a\r\n"
+                                "Content-Length: 44\r\n"
+                                "Transfer-Encoding: chunked\r\n"
+                                "\r\n"
+                                "0\r\n"
+                                "\r\n"
+                                "GET /smuggled HTTP/1.1\r\n"
+                                "Host: a\r\n"
+                                "\r\n"sv,
+                        .verdict = SmugglingVerdict::Refused,
+                        .code = HttpErrorCode::ProtocolError,
+                        .status = 400,
+                        .body = "" },
+        // two Content-Length values: one reader takes the shorter, and the rest is a request
+        SmugglingCase { .name = "smuggled-get-behind-two-lengths",
+                        .role = MessageRole::Request,
+                        .wire = "POST / HTTP/1.1\r\n"
+                                "Host: a\r\n"
+                                "Content-Length: 0\r\n"
+                                "Content-Length: 37\r\n"
+                                "\r\n"
+                                "GET /smuggled HTTP/1.1\r\n"
+                                "Host: a\r\n"
+                                "\r\n"sv,
+                        .verdict = SmugglingVerdict::Refused,
+                        .code = HttpErrorCode::ProtocolError,
+                        .status = 400,
+                        .body = "" },
         // a field line is past HttpLimits::maxFieldBytes
         SmugglingCase { .name = "field-too-large",
                         .role = MessageRole::Request,

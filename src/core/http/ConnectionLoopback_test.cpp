@@ -79,15 +79,16 @@ constexpr auto SmallBuffer = std::uint64_t { 4096 };
 /// peer that does not read stalls a writer.
 constexpr auto Flood = std::size_t { 4 } * 1024 * 1024;
 
-/// Asserts that a write against a peer that never reads stalled. Wine's IOCP sockets take the whole
-/// flood whatever the buffer sizes, so there the case could not run and says so; on a native
-/// kernel a write that finished is the defect this case exists to find.
+/// Asserts that a write against a peer that never reads stalled. Windows' loopback, natively and
+/// under wine, takes the whole flood whatever the buffer sizes, so there the case could not run and
+/// says so; on a kernel whose loopback stalls a write that finished is the defect this case exists
+/// to find.
 /// @param finished Whether the write ran to its end.
 void expectStalled(bool finished)
 {
-    if (finished && core::http::test::runsUnderWine())
-        SKIP("wine's IOCP sockets buffer the whole flood however small SO_SNDBUF/SO_RCVBUF are, so "
-             "no write stalls there");
+    if (finished && core::http::test::loopbackFlood() == core::http::test::LoopbackFlood::Absorbed)
+        SKIP("Windows' loopback, natively and under wine, takes the whole flood however small "
+             "SO_SNDBUF/SO_RCVBUF are, so no write stalls there");
     REQUIRE_FALSE(finished);
 }
 

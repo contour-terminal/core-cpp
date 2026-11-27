@@ -22,6 +22,7 @@
 #include <core/platform/Clock.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <algorithm>
 #include <array>
@@ -1147,6 +1148,108 @@ TEST_CASE("Connection.aSilentPeerTimesOut", "[http][connection]")
     }
 }
 
+namespace
+{
+
+/// Writes @p prefix, then @p text one byte every @p gap on @p loop's clock, each write awaited.
+Task<void> trickleAfter(core::net::EventLoop* loop,
+                        ISocket* socket,
+                        std::string prefix,
+                        std::string text,
+                        std::chrono::milliseconds gap)
+{
+    if (!prefix.empty() && !(co_await socket->write(core::http::test::bytesOf(prefix))).has_value())
+        co_return;
+    for (auto const octet: text)
+    {
+        auto const one = std::string(1, octet);
+        if (!(co_await socket->write(core::http::test::bytesOf(one))).has_value())
+            co_return;
+        co_await loop->delay(gap);
+    }
+}
+
+/// A transport whose reads always beat their cancel: `cancelRead` reaches nothing, as a completion
+/// transport's does when its receive has already finished (the data wins).
+class UncancellableSocket final: public SocketDecorator
+{
+  public:
+    explicit UncancellableSocket(ISocket& inner) noexcept: SocketDecorator { inner } {}
+
+    void cancelRead() noexcept override {}
+};
+
+} // namespace
+
+TEST_CASE("Connection.aHeadOrABodyAsAWholeIsBounded", "[http][connection]")
+{
+    // Every byte arrives inside betweenBytes; only the whole-message bound can end the trickle. Where
+    // the cancel reaches nothing, the bound still holds at the first read after it: one byte late.
+    enum class Cancel : std::uint8_t
+    {
+        Reaches,
+        Ignored,
+    };
+    struct Row
+    {
+        std::string_view name;
+        WireTimeouts timeouts;
+        std::string_view prefix;
+        Cancel cancel;
+        std::chrono::milliseconds answeredAt;
+    };
+    constexpr auto Head = std::string_view {};
+    constexpr auto Body = std::string_view { "POST / HTTP/1.1\r\nHost: h\r\nContent-Length: 40\r\n\r\n" };
+    constexpr auto Rows = std::array {
+        Row { "a head", WireTimeouts { .betweenBytes = 100ms, .head = 300ms }, Head, Cancel::Reaches, 300ms },
+        Row { "a head whose read beats its cancel",
+              WireTimeouts { .betweenBytes = 100ms, .head = 300ms },
+              Head,
+              Cancel::Ignored,
+              360ms },
+        Row { "a body", WireTimeouts { .betweenBytes = 100ms, .body = 300ms }, Body, Cancel::Reaches, 300ms },
+        Row { "a body whose read beats its cancel",
+              WireTimeouts { .betweenBytes = 100ms, .body = 300ms },
+              Body,
+              Cancel::Ignored,
+              360ms },
+    };
+    for (auto const& row: Rows)
+    {
+        DYNAMIC_SECTION(row.name)
+        {
+            auto wire = Wire {};
+            auto socket =
+                row.cancel == Cancel::Ignored
+                    ? std::unique_ptr<ISocket> { std::make_unique<UncancellableSocket>(*wire.pair.server) }
+                    : std::unique_ptr<ISocket> { std::move(wire.pair.server) };
+            auto connection = Connection {
+                wire.loop, std::move(socket), MessageRole::Request, HttpLimits {}, row.timeouts
+            };
+            auto const trickle = row.prefix.empty()
+                                     ? std::string { "GET / HTTP/1.1\r\nHost: h\r\nX-Slow: aaaaaaaaaa" }
+                                     : std::string(20, 'x');
+            wire.loop.spawn(
+                trickleAfter(&wire.loop, wire.pair.client.get(), std::string { row.prefix }, trickle, 90ms));
+            auto served = std::optional<ServedRequest> {};
+            wire.loop.spawn(into(serveOne(&connection, 100), &served));
+            std::ignore = wire.loop.drain();
+            auto elapsed = 0ms;
+            while (!served.has_value() && elapsed < 2000ms)
+            {
+                wire.clock.advance(10ms);
+                elapsed += 10ms;
+                std::ignore = wire.loop.drain();
+            }
+            REQUIRE(served.has_value());
+            auto const code =
+                served->body.error.has_value() ? std::optional { served->body.error->code } : served->error;
+            CHECK(code == HttpErrorCode::ConnectionReadTimeout);
+            CHECK(elapsed == row.answeredAt);
+        }
+    }
+}
+
 TEST_CASE("Connection.aZeroTimeoutIsNone", "[http][connection]")
 {
     // R31: a zero duration means no deadline, not one that fires at once.
@@ -2169,6 +2272,42 @@ TEST_CASE("Connection.aHeadRefusedForItsFramingCanBeCorrected", "[http][connecti
     REQUIRE(corrected.has_value());
     CHECK(corrected->has_value());
     CHECK(server.reusable() == Reuse::Yes);
+    server.close();
+    std::ignore = wire.loop.drain();
+    REQUIRE(peer.has_value());
+    CHECK(*peer == "HTTP/1.1 204 \r\n\r\n");
+}
+
+TEST_CASE("Connection.aStatusOutside100To999IsRefusedBeforeTheWire", "[http][connection]")
+{
+    // A status line carries three digits: 99 and 1000 would put a malformed line on the wire. Refused
+    // before the first byte, so a corrected head still follows.
+    auto const status =
+        GENERATE(std::uint16_t { 0 }, std::uint16_t { 99 }, std::uint16_t { 1000 }, std::uint16_t { 65535 });
+    CAPTURE(status);
+    auto wire = Wire {};
+    auto server = Connection {
+        wire.loop, std::move(wire.pair.server), MessageRole::Request, HttpLimits {}, NoTimeouts
+    };
+    wire.loop.spawn(writeOnly(wire.pair.client.get(), "GET / HTTP/1.1\r\nHost: h\r\n\r\n"));
+    auto served = std::optional<ServedRequest> {};
+    wire.loop.spawn(into(serveOne(&server, 100), &served));
+    std::ignore = wire.loop.drain();
+    REQUIRE(served.has_value());
+
+    auto peer = std::optional<std::string> {};
+    wire.loop.spawn(into(readUntilClosed(wire.pair.client.get()), &peer));
+    auto refused = std::optional<HttpResult<void>> {};
+    wire.loop.spawn(into(server.writeResponseHead(responseHead(status, {}), Framing {}), &refused));
+    std::ignore = wire.loop.drain();
+    REQUIRE(refused.has_value());
+    REQUIRE_FALSE(refused->has_value());
+    CHECK(refused->error().code == HttpErrorCode::ProtocolError);
+    auto corrected = std::optional<HttpResult<void>> {};
+    wire.loop.spawn(into(server.writeResponseHead(responseHead(204, {}), Framing {}), &corrected));
+    std::ignore = wire.loop.drain();
+    REQUIRE(corrected.has_value());
+    CHECK(corrected->has_value());
     server.close();
     std::ignore = wire.loop.drain();
     REQUIRE(peer.has_value());

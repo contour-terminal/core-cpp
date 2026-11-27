@@ -135,14 +135,16 @@ namespace detail
 /// What a refusal of a peer's message was for, where its code alone does not say which status a
 /// server answers it with.
 ///
-/// Not part of the WIT's `error-code`, which has no case for either: both are a
-/// @c HttpErrorCode::ProtocolError there. RFC 9110 gives each a status of its own, so the parsers
-/// say which it was and a server's @c errorStatusTable maps the pair.
+/// Not part of the WIT's `error-code`, which has no case for any of these: the first two are a
+/// @c HttpErrorCode::ProtocolError there, and the third a read timeout. RFC 9110 gives the first two a
+/// status of their own, and a server closes an idle connection without one (RFC 9112 section 9.5), so
+/// the parsers and the connection say which it was and a server's @c errorStatusTable maps the pair.
 enum class RefusalReason : std::uint8_t
 {
     Unclassified,        ///< Nothing beyond the code; the default.
     UnsupportedVersion,  ///< The message's version is not HTTP/1.x (RFC 9110 section 15.6.6: 505).
     UnimplementedCoding, ///< A request transfer coding this layer cannot decode (RFC 9112 6.1: 501).
+    NothingArrived,      ///< A read deadline passed before a message's first byte: an idle connection.
 };
 
 /// An HTTP failure: its code and the payload the code carries.
@@ -301,7 +303,7 @@ struct RequestHead
 /// A response's status line and its fields.
 struct ResponseHead
 {
-    std::uint16_t status = 200;                ///< The status code, 100 to 599.
+    std::uint16_t status = 200;                ///< The status code; one outside 100 to 999 is never written.
     ReasonPhrase reason;                       ///< The reason phrase.
     HttpVersion version = HttpVersion::Http11; ///< The version it is framed by.
     Fields fields;                             ///< The header fields.

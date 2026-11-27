@@ -7,6 +7,7 @@
 #include <core/net/IoResult.hpp>
 #include <core/net/NetError.hpp>
 #include <core/net/SocketDeadline.hpp>
+#include <core/platform/Clock.hpp>
 
 #include <algorithm>
 #include <array>
@@ -395,6 +396,8 @@ namespace detail
         Fields trailers;
         /// The failure that ended the current body, repeated to every later read of it.
         std::optional<HttpError> bodyError;
+        /// When the current body's whole-body bound (@c WireTimeouts::body) runs out, if it has one.
+        std::optional<platform::SteadyTimePoint> bodyDeadline;
 
         ConnectionState(net::EventLoop* ownerLoop,
                         std::unique_ptr<net::ISocket> ownedSocket,
@@ -488,7 +491,8 @@ namespace
     /// @return The byte count, zero for the peer's EOF, or the failure (which breaks the stream).
     async::Task<HttpResult<std::size_t>> fill(std::shared_ptr<ConnectionState> state,
                                               std::chrono::milliseconds timeout,
-                                              HttpErrorCode timeoutCode)
+                                              HttpErrorCode timeoutCode,
+                                              RefusalReason timeoutReason = RefusalReason::Unclassified)
     {
         if (state->readWire == Wire::Busy || state->readStream == Stream::Broken)
             co_return std::unexpected(state->fail(detail::refusal(
@@ -513,8 +517,12 @@ namespace
         state->readWire = Wire::Idle;
         timer.reset();
         if (!result.has_value() && deadline.expiry == Expiry::Fired)
-            co_return std::unexpected(state->fail(
-                detail::refusal(timeoutCode, std::format("no byte arrived within {} ms", timeout.count()))));
+            co_return std::unexpected(
+                state->fail(detail::refusal(timeoutCode,
+                                            std::format("no byte arrived within {} ms", timeout.count()),
+                                            std::nullopt,
+                                            std::nullopt,
+                                            timeoutReason)));
         if (!result.has_value())
             co_return std::unexpected(state->fail(fromNet(result.error(), Direction::Read)));
         state->end = *result;
@@ -546,10 +554,15 @@ namespace
         auto const& row = rowFor(state->role);
         auto parser = HeadParser { state->role, state->limits };
         auto progress = HeadProgress::Nothing;
+        // The whole head's bound starts at its first byte: the wait for that byte is firstByte's
+        // budget alone, so a client that idles is not charged for it twice.
+        auto headDeadline = std::optional<platform::SteadyTimePoint> {};
         while (true)
         {
             if (auto const bytes = state->buffered(); !bytes.empty())
             {
+                if (progress == HeadProgress::Nothing && state->timeouts.head > 0ms)
+                    headDeadline = state->loop->clock().now() + state->timeouts.head;
                 progress = HeadProgress::Started;
                 auto fed = parser.feed(bytes);
                 if (!fed.has_value())
@@ -567,9 +580,26 @@ namespace
                 continue;
             }
             auto const first = progress == HeadProgress::Nothing;
-            auto got = co_await fill(state,
-                                     first ? state->timeouts.firstByte : state->timeouts.betweenBytes,
-                                     first ? row.firstByteTimeout : HttpErrorCode::ConnectionReadTimeout);
+            auto const nothing = first ? RefusalReason::NothingArrived : RefusalReason::Unclassified;
+            auto wait = first ? state->timeouts.firstByte : state->timeouts.betweenBytes;
+            auto code = first ? row.firstByteTimeout : HttpErrorCode::ConnectionReadTimeout;
+            if (headDeadline.has_value())
+            {
+                // The whole head's bound, asked before every read rather than armed once: a read
+                // whose bytes beat its cancel leaves no timer behind to bound the next one.
+                auto const now = state->loop->clock().now();
+                if (now >= *headDeadline)
+                    co_return std::unexpected(state->fail(detail::refusal(
+                        HttpErrorCode::ConnectionReadTimeout,
+                        std::format("the head took longer than {} ms", state->timeouts.head.count()))));
+                auto const left = std::chrono::ceil<std::chrono::milliseconds>(*headDeadline - now);
+                if (wait <= 0ms || left < wait)
+                {
+                    wait = left;
+                    code = HttpErrorCode::ConnectionReadTimeout;
+                }
+            }
+            auto got = co_await fill(state, wait, code, nothing);
             if (!got.has_value())
                 co_return std::unexpected(std::move(got.error()));
             if (*got == 0)
@@ -612,10 +642,29 @@ namespace
         return chunk;
     }
 
+    /// The deadline of the next body read: @c WireTimeouts::betweenBytes, capped by what is left of
+    /// the whole body's bound; or the refusal once that bound has run out.
+    [[nodiscard]] HttpResult<std::chrono::milliseconds> bodyWait(ConnectionState const& state)
+    {
+        auto const wait = state.timeouts.betweenBytes;
+        if (!state.bodyDeadline.has_value())
+            return wait;
+        auto const now = state.loop->clock().now();
+        if (now >= *state.bodyDeadline)
+            return std::unexpected(
+                detail::refusal(HttpErrorCode::ConnectionReadTimeout,
+                                std::format("the body took longer than {} ms", state.timeouts.body.count())));
+        auto const left = std::chrono::ceil<std::chrono::milliseconds>(*state.bodyDeadline - now);
+        return wait <= 0ms || left < wait ? left : wait;
+    }
+
     /// Reads more of a body into the empty buffer; an EOF is the role's incomplete-message code.
     async::Task<HttpResult<void>> fillBody(std::shared_ptr<ConnectionState> state)
     {
-        auto got = co_await fill(state, state->timeouts.betweenBytes, HttpErrorCode::ConnectionReadTimeout);
+        auto const wait = bodyWait(*state);
+        if (!wait.has_value())
+            co_return std::unexpected(state->failBody(wait.error()));
+        auto got = co_await fill(state, *wait, HttpErrorCode::ConnectionReadTimeout);
         if (!got.has_value())
             co_return std::unexpected(state->failBody(std::move(got.error())));
         if (*got == 0)
@@ -644,8 +693,10 @@ namespace
     {
         if (state->buffered().empty())
         {
-            auto got =
-                co_await fill(state, state->timeouts.betweenBytes, HttpErrorCode::ConnectionReadTimeout);
+            auto const wait = bodyWait(*state);
+            if (!wait.has_value())
+                co_return std::unexpected(state->failBody(wait.error()));
+            auto got = co_await fill(state, *wait, HttpErrorCode::ConnectionReadTimeout);
             if (!got.has_value())
                 co_return std::unexpected(state->failBody(std::move(got.error())));
             if (*got == 0)
@@ -803,6 +854,10 @@ namespace
         auto head = std::move(startLine);
         // Refused before the first wire byte: the connection is left as it was, so the caller may
         // send a corrected head (a handler's 500 after its own bad one). Nothing above changes state.
+        // A status line carries three digits: anything else would be a malformed line on the wire.
+        if (written == Written::Response && (status < 100 || status > 999))
+            co_return std::unexpected(detail::refusal(HttpErrorCode::ProtocolError,
+                                                      std::format("status {} is not three digits", status)));
         if (auto appended = appendCallerFields(head, fields); !appended.has_value())
             co_return std::unexpected(std::move(appended.error()));
         auto const reply = written == Written::Response ? state->replyBody : ReplyBody::AsFramed;
@@ -971,6 +1026,9 @@ std::unique_ptr<IBodyReader> Connection::bodyReader(Framing framing)
         else
             state.decoder.reset();
         state.untilCloseBytes = 0;
+        state.bodyDeadline.reset();
+        if (state.timeouts.body > 0ms)
+            state.bodyDeadline = state.loop->clock().now() + state.timeouts.body;
         if ((framing.persistence == Persistence::Close || framing.kind == BodyFraming::UntilClose)
             && state.persist == Persist::KeepAlive)
             state.persist = Persist::LastExchange;

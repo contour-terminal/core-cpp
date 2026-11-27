@@ -6,14 +6,16 @@
 # (Framing_test.cpp, over the shared SmugglingCorpus.hpp). Connection puts it on an ISocket: heads
 # and streamed bodies with trailers, read through one buffer of maxReadChunk bytes. HttpClient sends
 # a request over a connection of its own: the dial through an injected IConnector, TLS through an
-# injected ITlsContext, and every failure on the way classified. testing/ScriptedConnector is the
-# connector a consumer's test dials in memory with.
+# injected ITlsContext, and every failure on the way classified. serveHttp is the keep-alive server
+# over the same Connection, one flow per accepted socket, its refusals answered through one status
+# table. testing/ScriptedConnector is the connector a consumer's test dials in memory with.
 core_cpp_add_module(http KIND STATIC
     HEADERS
         Body.hpp
         Connection.hpp
         Framing.hpp
         HttpClient.hpp
+        HttpServer.hpp
         Message.hpp
         testing/ScriptedConnector.hpp
     SOURCES
@@ -21,6 +23,7 @@ core_cpp_add_module(http KIND STATIC
         Connection.cpp
         Framing.cpp
         HttpClient.cpp
+        HttpServer.cpp
         Message.cpp
         testing/ScriptedConnector.cpp
     PUBLIC_LIBS core::base core::net)
@@ -35,16 +38,19 @@ core_cpp_add_test(http
         Connection_test.cpp
         Framing_test.cpp
         HttpClient_test.cpp
+        HttpServer_test.cpp
         HttpTestSupport.hpp
         Message_test.cpp
         SmugglingCorpus.hpp)
 
-# Connection over a real socket pair on every backend this platform builds: the deadlines and the
-# cancellations the in-memory double cannot drive. Its own binary for the label; a deadline defect
+# Connection and the server over real sockets on every backend this platform builds: the deadlines
+# and the cancellations the in-memory double cannot drive, and one HttpClient round trip against
+# serveHttp on the default backend. Its own binary for the label; a deadline defect
 # hangs rather than fails, so every case runs under a watchdog, and TIMEOUT is the backstop.
 core_cpp_add_test(http NAME http_loopback
     SOURCES
         ConnectionLoopback_test.cpp
+        HttpServerLoopback_test.cpp
         HttpTestSupport.hpp
     SOURCES_POSIX
         posix/HttpTestSupport.cpp

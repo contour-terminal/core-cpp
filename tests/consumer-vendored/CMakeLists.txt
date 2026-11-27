@@ -78,6 +78,6 @@ add_test(NAME core-cpp-vendored-copy
 add_executable(consumer-vendored main.cpp)
 # core::fs is linked although main.cpp names nothing of it: it is EXCLUDE_FROM_ALL like every target
 # of the copy, so a link is what makes this build compile it.
-target_link_libraries(consumer-vendored PRIVATE core::async core::log core::net core::net_tls core::fs)
+target_link_libraries(consumer-vendored PRIVATE core::async core::log core::net core::net_tls core::fs core::http)
 add_test(NAME consumer-vendored COMMAND consumer-vendored)
 set_tests_properties(consumer-vendored PROPERTIES TIMEOUT 120)

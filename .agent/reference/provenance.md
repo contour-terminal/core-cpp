@@ -243,6 +243,10 @@ others in notes.
 | `src/core/http/HttpClient.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the dial, wrap and TLS-failure row tables; the exchange as two halves under `whenAll` |
 | `src/core/http/HttpClient.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `HttpClient`, `Origin`, `HttpTimeouts` (zero is none), `OutgoingRequest`, `IncomingResponse` |
 | `src/core/http/HttpClient_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the client over `testing::ScriptedConnector` on a `TestLoop`, TLS scripted |
+| `src/core/http/HttpServer.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the refusal-to-status table, the per-request exchange (drain, `100 Continue`, whole-head and whole-body deadlines), and an accept loop after `net::serve`'s |
+| `src/core/http/HttpServer.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `serveHttp`, `serveHttpConnection`, `IHttpHandler`, `HttpServerOptions`, `errorStatusTable` |
+| `src/core/http/HttpServerLoopback_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the server over real sockets: an `HttpClient` round trip and the slow-client deadlines on every backend |
+| `src/core/http/HttpServer_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the server over in-memory pairs on a `TestLoop`, the smuggling corpus with exact statuses |
 | `src/core/http/HttpTestSupport.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): test-only helpers the http cases share: a scripted server end, a slow body source, and a scripted TLS context (R29) |
 | `src/core/http/Message.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/http/Message.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): one `HttpErrorCode` per WASI 0.3 `wasi:http` `error-code` case, the validating field, method, target and reason factories |
