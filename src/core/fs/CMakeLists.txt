@@ -27,17 +27,28 @@
 #     system has leases (posix/).
 #   - DirectoryRead.cpp: a directory stream reads Linux's getdents64 records into a fixed buffer
 #     (linux/); every other POSIX system reads through fdopendir and readdir (posix/).
+#   - AccessFacts.cpp: who may reach an object, read from its handle. Linux, and every POSIX system
+#     without an ACL of its own, needs only the fstat (posix/); FreeBSD reads an NFSv4 ACL
+#     (bsd/), macOS an extended one (darwin/), Windows the owner and DACL (windows/, beside
+#     OwnerSecurity.cpp, the descriptor owner-only creations are made with). Each fills the same
+#     AccessFacts, and AccessScope.cpp decides from them on every OS.
 if(WIN32)
-    set(_coreCppFsPlatform windows/Win32ErrorTable.cpp windows/NtStatusTable.cpp windows/BeneathDefault.cpp)
-    set(_coreCppFsPrivateLibs ntdll)
+    set(_coreCppFsPlatform windows/Win32ErrorTable.cpp windows/NtStatusTable.cpp windows/BeneathDefault.cpp windows/AccessFacts.cpp)
+    set(_coreCppFsPrivateLibs ntdll advapi32)
 elseif(APPLE)
-    set(_coreCppFsPlatform bsd/ErrnoTable.cpp darwin/PosixSystem.cpp posix/Append.cpp posix/BeneathDefault.cpp posix/DirectoryRead.cpp posix/Lease.cpp)
+    set(_coreCppFsPlatform bsd/ErrnoTable.cpp darwin/PosixSystem.cpp posix/Append.cpp posix/BeneathDefault.cpp posix/DirectoryRead.cpp posix/Lease.cpp darwin/AccessFacts.cpp)
 elseif(CORE_CPP_PLATFORM_BSD)
     set(_coreCppFsPlatform bsd/ErrnoTable.cpp posix/PosixSystem.cpp posix/Append.cpp posix/BeneathDefault.cpp posix/DirectoryRead.cpp posix/Lease.cpp)
+    # NFSv4 ACLs are FreeBSD's; the other BSDs have none beyond what the mode bounds.
+    if(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+        list(APPEND _coreCppFsPlatform bsd/AccessFacts.cpp)
+    else()
+        list(APPEND _coreCppFsPlatform posix/AccessFacts.cpp)
+    endif()
 elseif(LINUX)
-    set(_coreCppFsPlatform posix/ErrnoTable.cpp posix/PosixSystem.cpp linux/Append.cpp linux/BeneathDefault.cpp linux/DirectoryRead.cpp linux/Lease.cpp)
+    set(_coreCppFsPlatform posix/ErrnoTable.cpp posix/PosixSystem.cpp linux/Append.cpp linux/BeneathDefault.cpp linux/DirectoryRead.cpp linux/Lease.cpp posix/AccessFacts.cpp)
 else()
-    set(_coreCppFsPlatform posix/ErrnoTable.cpp posix/PosixSystem.cpp posix/Append.cpp posix/BeneathDefault.cpp posix/DirectoryRead.cpp posix/Lease.cpp)
+    set(_coreCppFsPlatform posix/ErrnoTable.cpp posix/PosixSystem.cpp posix/Append.cpp posix/BeneathDefault.cpp posix/DirectoryRead.cpp posix/Lease.cpp posix/AccessFacts.cpp)
 endif()
 
 # The openat2 path spells the call's ABI itself (linux/Openat2.hpp), so no UAPI 5.6 headers or glibc
@@ -46,6 +57,7 @@ endif()
 
 core_cpp_add_module(fs KIND STATIC
     HEADERS
+        AccessScope.hpp
         Descriptor.hpp
         FsError.hpp
         NativeFileSystem.hpp
@@ -53,6 +65,7 @@ core_cpp_add_module(fs KIND STATIC
         Rights.hpp
         testing/InMemoryDescriptorFileSystem.hpp
     SOURCES
+        AccessScope.cpp
         FsError.cpp
         PathPolicy.cpp
         Rights.cpp
@@ -71,6 +84,8 @@ core_cpp_add_module(fs KIND STATIC
         posix/DirectoryRead.hpp
         posix/ErrnoRows.hpp
         posix/NativePathPolicy.cpp
+        posix/OwnerOnlyCreation.cpp
+        posix/OwnerOnlyCreation.hpp
         posix/PosixDescriptor.cpp
         posix/PosixPathWalk.cpp
         posix/PosixPathWalk.hpp
@@ -84,7 +99,10 @@ core_cpp_add_module(fs KIND STATIC
         windows/DirectoryRecords.cpp
         windows/DirectoryRecords.hpp
         windows/NativePathPolicy.cpp
+        windows/AccessFacts.hpp
         windows/NtFile.hpp
+        windows/OwnerSecurity.cpp
+        windows/OwnerSecurity.hpp
         windows/ReparsePoint.cpp
         windows/ReparsePoint.hpp
         windows/WindowsDescriptor.cpp
@@ -104,10 +122,20 @@ if(LINUX)
         USAGE core::base core::async core::platform)
 endif()
 
+# How a test plants an inheritable ACL through the host: per OS, as the readers are chosen above.
+if(APPLE)
+    set(_coreCppFsInheritableAcl darwin/InheritableAcl_test.cpp)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+    set(_coreCppFsInheritableAcl bsd/InheritableAcl_test.cpp)
+else()
+    set(_coreCppFsInheritableAcl posix/InheritableAcl_test.cpp)
+endif()
+
 # One binary: every case links core::fs and nothing the module's row does not list.
 # DescriptorTestSupport.hpp is the test-only fixture the descriptor cases share.
 core_cpp_add_test(fs
     SOURCES
+        AccessScope_test.cpp
         DescriptorContract_test.cpp
         DescriptorEscape_test.cpp
         DescriptorTestSupport.hpp
@@ -117,7 +145,11 @@ core_cpp_add_test(fs
         detail/PathWalk_test.cpp
         testing/InMemoryDescriptorFileSystem_test.cpp
     SOURCES_POSIX
+        posix/DescriptorTestSupport.cpp
         posix/DirectoryEntries_test.cpp
+        posix/InheritableAcl.hpp
+        ${_coreCppFsInheritableAcl}
+        posix/OwnerOnly_test.cpp
         posix/PosixDescriptor_test.cpp
         posix/PosixPathWalk_test.cpp
     SOURCES_LINUX
@@ -128,7 +160,9 @@ core_cpp_add_test(fs
         linux/Openat2_test.cpp
     SOURCES_WINDOWS
         windows/DescriptorEscape_test.cpp
+        windows/DescriptorTestSupport.cpp
         windows/DirectoryRecords_test.cpp
+        windows/OwnerOnly_test.cpp
         windows/WindowsPathWalk_test.cpp)
 
 # What the last owner of a handle does when its queued close cannot be allocated: a binary of its own

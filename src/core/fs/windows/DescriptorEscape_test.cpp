@@ -142,7 +142,7 @@ TEST_CASE("windows: a junction or a mount point beneath the preopen is never tra
 {
     auto fixture = DescriptorFixture::createNative();
     auto& root = fixture.root();
-    REQUIRE(fixture.run(root.createDirectoryAt("inside")).has_value());
+    REQUIRE(fixture.run(root.createDirectoryAt("inside", core::fs::CreationAccess::Default)).has_value());
     fixture.createFile("inside/decoy", "inside");
     fixture.writeOutsideFile("decoy", "outside");
 
@@ -178,7 +178,8 @@ TEST_CASE("windows: a junction or a mount point beneath the preopen is never tra
             CHECK(outcomeOf(fixture.run(root.metadataHashAt(policy, name + "/."))) == notPermitted);
         }
         CHECK(outcomeOf(fixture.run(root.statAt(SymlinkPolicy::Follow, name))) == notPermitted);
-        CHECK(outcomeOf(fixture.run(root.createDirectoryAt(name + "/new"))) == notPermitted);
+        CHECK(outcomeOf(fixture.run(root.createDirectoryAt(name + "/new", core::fs::CreationAccess::Default)))
+              == notPermitted);
         CHECK(outcomeOf(fixture.run(root.unlinkFileAt(name + "/decoy"))) == notPermitted);
         CHECK(outcomeOf(fixture.run(root.readlinkAt(name))) == notPermitted);
         // Unfollowed, it is a link like any other, inside the root.

@@ -4,6 +4,7 @@
 #include <core/async/IExecutor.hpp>
 #include <core/async/Offload.hpp>
 #include <core/async/Task.hpp>
+#include <core/fs/AccessScope.hpp>
 #include <core/fs/Descriptor.hpp>
 #include <core/fs/FsError.hpp>
 #include <core/fs/NativeFileSystem.hpp>
@@ -78,6 +79,7 @@ struct InMemoryState
         FileTime modified;
         FileTime statusChanged;
         DescriptorType type = DescriptorType::Unknown;
+        AccessFacts access; ///< Who may reach it, as a native reader would have found it.
     };
 
     /// Where a path resolved to: the directories walked from the descriptor down to the one holding
@@ -198,7 +200,19 @@ struct InMemoryState
         ++node.changes;
     }
 
-    [[nodiscard]] std::uint64_t createNode(DescriptorType type)
+    /// The mode a new node gets: a umask of 022 for @c CreationAccess::Default, as most systems have.
+    [[nodiscard]] static std::uint32_t modeOf(DescriptorType type, CreationAccess access) noexcept
+    {
+        if (type == DescriptorType::SymbolicLink)
+            return 0777;
+        auto const searchable = type == DescriptorType::Directory;
+        if (access == CreationAccess::OwnerOnly)
+            return searchable ? 0700 : 0600;
+        return searchable ? 0755 : 0644;
+    }
+
+    [[nodiscard]] std::uint64_t createNode(DescriptorType type,
+                                           CreationAccess access = CreationAccess::Default)
     {
         auto const inode = nextInode++;
         auto const when = now();
@@ -211,7 +225,11 @@ struct InMemoryState
                              .accessed = when,
                              .modified = when,
                              .statusChanged = when,
-                             .type = type });
+                             .type = type,
+                             .access = AccessFacts { .owner = AccessFacts::Owner::CurrentUser,
+                                                     .posixMode = modeOf(type, access),
+                                                     .acl = AccessFacts::AclState::Absent,
+                                                     .entries = {} } });
         return inode;
     }
 
@@ -350,7 +368,8 @@ struct InMemoryState
                                 .size = size,
                                 .accessed = node.accessed,
                                 .modified = node.modified,
-                                .statusChanged = node.statusChanged };
+                                .statusChanged = node.statusChanged,
+                                .access = classifyAccess(node.access) };
     }
 
     void applyTimes(std::uint64_t inode, NewTimestamp const& accessed, NewTimestamp const& modified)
@@ -662,16 +681,18 @@ namespace
                 });
         }
 
-        async::Task<FsResult<void>> createDirectoryAt(std::string path) override
+        async::Task<FsResult<void>> createDirectoryAt(std::string path, CreationAccess access) override
         {
-            return submit([inode = _inode, flags = _flags, path = std::move(path)](InMemoryState& state) {
-                return checkRights(flags, Operation::CreateDirectoryAt)
-                    .and_then([&] { return state.vacant(inode, path, DescriptorType::Directory); })
-                    .transform([&](Location const& location) {
-                        state.insert(
-                            location.parent(), location.name, state.createNode(DescriptorType::Directory));
-                    });
-            });
+            return submit(
+                [inode = _inode, flags = _flags, path = std::move(path), access](InMemoryState& state) {
+                    return checkRights(flags, Operation::CreateDirectoryAt)
+                        .and_then([&] { return state.vacant(inode, path, DescriptorType::Directory); })
+                        .transform([&](Location const& location) {
+                            state.insert(location.parent(),
+                                         location.name,
+                                         state.createNode(DescriptorType::Directory, access));
+                        });
+                });
         }
 
         async::Task<FsResult<DescriptorStat>> statAt(SymlinkPolicy policy, std::string path) override
@@ -899,7 +920,10 @@ namespace
                     return refuse(FsErrorCode::NoEntry);
                 if (location.finalComponent == fs::detail::FinalComponent::Directory)
                     return refuse(FsErrorCode::NotDirectory);
-                auto const file = state.createNode(DescriptorType::RegularFile);
+                auto const file =
+                    state.createNode(DescriptorType::RegularFile,
+                                     hasFlag(open, OpenFlags::OwnerOnly) ? CreationAccess::OwnerOnly
+                                                                         : CreationAccess::Default);
                 state.insert(location.parent(), location.name, file);
                 return file;
             }
@@ -986,6 +1010,24 @@ void InMemoryDescriptorFileSystem::addFile(std::string_view path, std::string_vi
     auto& node = _state->nodes.at(_state->add(path, DescriptorType::RegularFile));
     node.data.resize(content.size());
     std::ranges::transform(content, node.data.begin(), [](char c) { return static_cast<std::byte>(c); });
+}
+
+void InMemoryDescriptorFileSystem::setAccessFacts(std::string_view path, AccessFacts facts)
+{
+    auto const lock = std::scoped_lock { _state->mutex };
+    auto node = RootInode;
+    for (auto const piece: path | std::views::split('/'))
+    {
+        auto const name = std::string_view { piece };
+        if (name.empty() || name == ".")
+            continue;
+        auto const found = _state->lookup(node, name);
+        if (!found)
+            throw std::invalid_argument { "InMemoryDescriptorFileSystem::setAccessFacts: no '"
+                                          + std::string { path } + "'" };
+        node = *found;
+    }
+    _state->nodes.at(node).access = std::move(facts);
 }
 
 void InMemoryDescriptorFileSystem::addSymlink(std::string_view path, std::string target)

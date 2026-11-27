@@ -83,13 +83,19 @@ FsResult<void> checkOpenRights(DescriptorFlags parent, OpenFlags open, Descripto
     // wasmtime's order: what the parent may not grant is NotPermitted before the flags themselves
     // are judged.
     auto const changesEntries = hasFlag(open, OpenFlags::Create) || hasFlag(open, OpenFlags::Truncate)
-                                || hasFlag(open, OpenFlags::Exclusive);
+                                || hasFlag(open, OpenFlags::Exclusive) || hasFlag(open, OpenFlags::OwnerOnly);
     if (hasFlag(child, Read) && !hasFlag(parent, Read))
         return refuse(FsErrorCode::NotPermitted);
     auto const needsMutate = hasFlag(child, Write) || hasFlag(child, MutateDirectory) || changesEntries;
     if (needsMutate && !hasFlag(parent, MutateDirectory))
         return refuse(FsErrorCode::NotPermitted);
     if (hasFlag(open, OpenFlags::Directory) && changesEntries)
+        return refuse(FsErrorCode::Invalid);
+    // Owner-only is a property of a creation this call surely made: without Create the caller would
+    // get whatever is there, and without Exclusive an ACL stripped, or a name unlinked on failure,
+    // could be another's.
+    if (hasFlag(open, OpenFlags::OwnerOnly)
+        && (!hasFlag(open, OpenFlags::Create) || !hasFlag(open, OpenFlags::Exclusive)))
         return refuse(FsErrorCode::Invalid);
     if (hasFlag(open, OpenFlags::Directory) && hasFlag(child, Write))
         return refuse(FsErrorCode::IsDirectory);

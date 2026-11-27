@@ -17,6 +17,7 @@
 /// - **Paths are UTF-8**, relative, and checked against the file system's @c PathPolicy.
 
 #include <core/async/Task.hpp>
+#include <core/fs/AccessScope.hpp>
 #include <core/fs/FsError.hpp>
 
 #include <compare>
@@ -83,6 +84,35 @@ enum class OpenFlags : std::uint8_t
     Directory = 0b10,  ///< Fail unless the object is a directory.
     Exclusive = 0b100, ///< With @c Create: fail where something exists.
     Truncate = 0b1000, ///< Truncate a regular file to zero bytes.
+    /// With @c Create and @c Exclusive (else `Invalid`): the file is created so that no other user
+    /// can reach it at any moment, under its final name or before it:
+    /// - **Linux:** mode 0600 is given to `openat` itself; a default ACL cannot widen it, since
+    ///   each entry it hands down is capped by the mode (the mask by the group bits).
+    /// - **macOS, FreeBSD:** an inherited ACL (extended; NFSv4) could, so the file is made inside a
+    ///   fresh staging directory beside it: that directory is created 0700, its inherited ACL
+    ///   stripped and its access verified before anything is created in it, so another user who
+    ///   opened it early holds a descriptor that searches nothing. The file is created there,
+    ///   stripped and verified too, then linked to its final name (which fails, as `Exclusive`
+    ///   says, where something exists) and the staging directory removed.
+    /// - **Windows:** owned by the process token's user, with a protected DACL (nothing inherited)
+    ///   granting that user alone, given to `NtCreateFile` itself.
+    ///
+    /// Nothing has been written to it when the call returns. Where any step fails, what was made is
+    /// removed through the parent's handle and the call fails (`NotPermitted` where the access read
+    /// back is not @c AccessScope::OwnerOnly, else what refused the step).
+    OwnerOnly = 0b1'0000,
+};
+
+/// Who may reach a directory @c IDescriptor::createDirectoryAt creates.
+enum class CreationAccess : std::uint8_t
+{
+    Default, ///< What the system gives: POSIX 0777 less the umask; Windows the inherited DACL.
+    /// No other user can reach it at any moment, as for @c OpenFlags::OwnerOnly: Linux gives 0700 to
+    /// `mkdirat`; macOS and FreeBSD make it inside a stripped, verified 0700 staging directory, strip
+    /// and verify it too, then rename it over an empty placeholder made with the final name (so an
+    /// existing entry is `Exist`); Windows gives it the same protected DACL, its entry inheritable.
+    /// Where a step fails, what was made is removed and the call fails.
+    OwnerOnly,
 };
 
 /// @param a The first mask.
@@ -159,6 +189,16 @@ struct DescriptorStat
     std::optional<FileTime> accessed;              ///< Last access, where the system keeps it.
     std::optional<FileTime> modified;              ///< Last modification of its data.
     std::optional<FileTime> statusChanged;         ///< Last change of its metadata.
+    /// Who may reach it, read from the handle the stat was made through (@c classifyAccess).
+    ///
+    /// **nullopt means "cannot judge", never "probably fine"**: an ACL that cannot be read, a
+    /// Windows object whose DACL withholds `READ_CONTROL`, a FreeBSD or macOS
+    /// @c IDescriptor::statAt, which holds no handle to read an ACL from. A consumer that guards a
+    /// secret with this (a key directory, a key file) must refuse nullopt as it refuses
+    /// @c AccessScope::Shared: fail closed. An object created owner-only (@c OpenFlags::OwnerOnly,
+    /// @c CreationAccess::OwnerOnly) reads @c AccessScope::OwnerOnly through its handle when it is
+    /// returned.
+    std::optional<AccessScope> access;
 };
 
 /// One entry of a directory.
@@ -297,8 +337,10 @@ class IDescriptor
 
     /// Creates the directory @p path. Needs `MutateDirectory`.
     /// @param path The relative path.
+    /// @param access Who may reach it, given to the creating call itself.
     /// @return Nothing, or why not.
-    [[nodiscard]] virtual async::Task<FsResult<void>> createDirectoryAt(std::string path) = 0;
+    [[nodiscard]] virtual async::Task<FsResult<void>> createDirectoryAt(std::string path,
+                                                                        CreationAccess access) = 0;
 
     /// Reads what @p path refers to without opening it. Needs `Read`.
     /// @param policy Whether a final symbolic link is followed.

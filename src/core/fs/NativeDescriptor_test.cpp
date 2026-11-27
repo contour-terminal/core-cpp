@@ -102,7 +102,7 @@ constexpr auto ParkRows = std::to_array<ParkRow>({
       } },
     { "createDirectoryAt",
       [](ParkContext c) -> core::async::Task<Outcome> {
-          co_return outcomeOf(co_await c.root->createDirectoryAt("new"));
+          co_return outcomeOf(co_await c.root->createDirectoryAt("new", core::fs::CreationAccess::Default));
       } },
     { "statAt",
       [](ParkContext c) -> core::async::Task<Outcome> {
@@ -170,7 +170,8 @@ TEST_CASE("native: every descriptor operation parks on the blocking executor", "
         CAPTURE(row.operation);
         auto fixture = DescriptorFixture::createNative();
         fixture.createFile("f", "content");
-        REQUIRE(fixture.run(fixture.root().createDirectoryAt("sub")).has_value());
+        REQUIRE(fixture.run(fixture.root().createDirectoryAt("sub", core::fs::CreationAccess::Default))
+                    .has_value());
         if (fixture.requireSymlinks() == SymlinkSupport::Available)
             REQUIRE(fixture.run(fixture.root().symlinkAt("f", "link")).has_value());
         auto const file = openExisting(fixture, "f", DescriptorFlags::Read | DescriptorFlags::Write);
@@ -303,7 +304,8 @@ constexpr auto BarPolicy = core::fs::PathPolicy {
 TEST_CASE("native: a name never holds what the kernel splits on, whatever the policy", "[fs][native]")
 {
     auto fixture = DescriptorFixture::createNative({ .policy = &BarPolicy });
-    REQUIRE(fixture.run(fixture.root().createDirectoryAt("a")).has_value());
+    REQUIRE(
+        fixture.run(fixture.root().createDirectoryAt("a", core::fs::CreationAccess::Default)).has_value());
     fixture.createFile("f", "content");
     auto const nf = SymlinkPolicy::NoFollow;
 
@@ -311,7 +313,9 @@ TEST_CASE("native: a name never holds what the kernel splits on, whatever the po
     for (auto const* name: { "a/b", "a/." })
     {
         CAPTURE(name);
-        CHECK(outcomeOf(fixture.run(fixture.root().createDirectoryAt(name))) == FsErrorCode::Invalid);
+        CHECK(
+            outcomeOf(fixture.run(fixture.root().createDirectoryAt(name, core::fs::CreationAccess::Default)))
+            == FsErrorCode::Invalid);
         CHECK(outcomeOf(fixture.run(fixture.root().statAt(nf, name))) == FsErrorCode::Invalid);
         CHECK(
             outcomeOf(fixture.run(fixture.root().openAt(nf, name, OpenFlags::Create, DescriptorFlags::Write)))

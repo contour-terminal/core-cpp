@@ -76,7 +76,8 @@ void populate(DescriptorFixture const& fixture)
 {
     for (auto const index: std::views::iota(std::size_t { 0 }, FileCount))
         fixture.createFile(fileName(index), "x");
-    REQUIRE(fixture.run(fixture.root().createDirectoryAt("sub")).has_value());
+    REQUIRE(
+        fixture.run(fixture.root().createDirectoryAt("sub", core::fs::CreationAccess::Default)).has_value());
 }
 
 std::unique_ptr<IDirectoryStream> openStream(DescriptorFixture const& fixture, IDescriptor& directory)
@@ -143,7 +144,8 @@ TEST_CASE("directory stream: a symbolic link is typed as one, never followed", "
     if (fixture.requireSymlinks() == SymlinkSupport::Unavailable)
         SKIP("this file system cannot create symbolic links");
     fixture.createFile("f", "x");
-    REQUIRE(fixture.run(fixture.root().createDirectoryAt("d")).has_value());
+    REQUIRE(
+        fixture.run(fixture.root().createDirectoryAt("d", core::fs::CreationAccess::Default)).has_value());
     REQUIRE(fixture.run(fixture.root().symlinkAt("f", "to-file")).has_value());
     REQUIRE(fixture.run(fixture.root().symlinkAt("d", "to-directory")).has_value());
     REQUIRE(fixture.run(fixture.root().symlinkAt("missing", "dangling")).has_value());
@@ -265,7 +267,8 @@ TEST_CASE("directory stream: a directory changed while it is read is read to an 
     // in batches the system has not read yet.
     for (auto const index: std::views::iota(std::size_t { 0 }, LongCount))
         fixture.createFile(longName(index), "x");
-    REQUIRE(fixture.run(fixture.root().createDirectoryAt("sub")).has_value());
+    REQUIRE(
+        fixture.run(fixture.root().createDirectoryAt("sub", core::fs::CreationAccess::Default)).has_value());
     auto stream = openStream(fixture, fixture.root());
 
     // Every tenth file is removed, unless the stream has handed it out already, and as many new ones
@@ -399,7 +402,8 @@ TEST_CASE("metadataHashAt: equals the hash of a descriptor of the same object", 
 {
     auto fixture = DescriptorFixture::create(GENERATE(FixtureKind::InMemory, FixtureKind::Native));
     fixture.createFile("f", "x");
-    REQUIRE(fixture.run(fixture.root().createDirectoryAt("d")).has_value());
+    REQUIRE(
+        fixture.run(fixture.root().createDirectoryAt("d", core::fs::CreationAccess::Default)).has_value());
     for (auto const* name: { "f", "d" })
     {
         CAPTURE(name);

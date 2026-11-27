@@ -6,6 +6,7 @@
 /// chooses (`posix/PosixSystem.cpp` or `bsd/PosixSystem.cpp`; `linux/Append.cpp` or
 /// `posix/Append.cpp`), so the descriptor itself names no system. Private to the fs module.
 
+#include <core/fs/AccessScope.hpp>
 #include <core/fs/Descriptor.hpp>
 #include <core/fs/FsError.hpp>
 #include <core/fs/FsExport.hpp>
@@ -18,8 +19,11 @@
 #include <cstdint>
 #include <expected>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
+
+#include <unistd.h>
 
 namespace core::fs::detail
 {
@@ -129,5 +133,38 @@ struct StatTimes
                                                 OwnedHandle const* appendHandle,
                                                 std::mutex& appendLock,
                                                 std::span<std::byte const> bytes);
+
+/// @param status An `fstat`.
+/// @return Its owner, against the effective uid, and its mode, with no ACL beyond it.
+[[nodiscard]] inline AccessFacts modeFactsOf(struct ::stat const& status)
+{
+    return AccessFacts { .owner = status.st_uid == ::geteuid() ? AccessFacts::Owner::CurrentUser
+                                                               : AccessFacts::Owner::Other,
+                         .posixMode = static_cast<std::uint32_t>(status.st_mode & 07777),
+                         .acl = AccessFacts::AclState::Absent,
+                         .entries = {} };
+}
+
+/// What the open object tells about who may reach it: its owner and mode, and where the system has
+/// ACLs beyond the mode, its ACL read from the very handle (`posix/AccessFacts.cpp` on Linux, which
+/// has none beyond the mode; `bsd/AccessFacts.cpp` on FreeBSD, NFSv4; `darwin/AccessFacts.cpp` on
+/// macOS, extended). Never by name.
+/// @param handle The open object, or @c platform::InvalidHandle where only @p status is at hand (a
+///        `statAt`, made by name with `fstatat`).
+/// @param status Its `fstat` (or `fstatat` without following).
+/// @return The facts; nullopt where an ACL cannot be read, or no @p handle is given on a system
+///         whose ACL needs one.
+[[nodiscard]] CORE_FS_API std::optional<AccessFacts> accessFactsOf(int handle, struct ::stat const& status);
+
+/// Removes, on the handle of an object this process has just created owner-only, any ACL the
+/// system let it inherit from its directory, which could grant others more than @p mode does: an
+/// extended ACL on macOS (`darwin/AccessFacts.cpp`: set empty), a non-trivial NFSv4 ACL on FreeBSD
+/// (`bsd/AccessFacts.cpp`: stripped to the trivial one, then the mode set again). Nothing on Linux
+/// (`posix/AccessFacts.cpp`): a default ACL's entries are capped by the mask, which the mode given
+/// to `openat`/`mkdirat` bounds. The caller reads the access back afterwards.
+/// @param handle The new object.
+/// @param mode The mode it was created with.
+/// @return Nothing, or what refused the change.
+[[nodiscard]] CORE_FS_API FsResult<void> stripInheritedAcl(int handle, ::mode_t mode);
 
 } // namespace core::fs::detail

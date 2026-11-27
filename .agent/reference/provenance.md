@@ -160,6 +160,9 @@ others in notes.
 | `src/core/codec/Stream.cpp` | contour-terminal/contour | `src/vtbackend/state/StateCodec.cpp` | `3334cdeb80789e8999b8f199501debfc1af657da` | `StateWriter`/`StateReader` without the stream header, as `Writer`/`Reader` |
 | `src/core/codec/Stream.hpp` | contour-terminal/contour | `src/vtbackend/state/StateCodec.hpp` | `3334cdeb80789e8999b8f199501debfc1af657da` | `StateWriter`/`StateReader` without the stream header, as `Writer`/`Reader` |
 | `src/core/codec/Stream_test.cpp` | origin: core-cpp | - | - | - |
+| `src/core/fs/AccessScope.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `classifyAccess`, the one access table of every OS |
+| `src/core/fs/AccessScope.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `AccessScope`, `AccessFacts` and `classifyAccess` |
+| `src/core/fs/AccessScope_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/fs/CMakeLists.txt` | origin: core-cpp | - | - | 0.24.0 (P13): the module, its per-OS error tables and its test binary |
 | `src/core/fs/Descriptor.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `IDescriptorFileSystem`, `IDescriptor`, `IDirectoryStream` and their vocabulary, shaped after WASI 0.3 `wasi:filesystem` |
 | `src/core/fs/DescriptorContract_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): what every descriptor owes its caller, per fixture kind |
@@ -175,7 +178,11 @@ others in notes.
 | `src/core/fs/PathPolicy.hpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/fs/Rights.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the rights table and `checkOpenRights`, after wasmtime's descriptor permissions |
 | `src/core/fs/Rights.hpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/bsd/AccessFacts.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): FreeBSD's access reader, NFSv4 ACLs |
 | `src/core/fs/bsd/ErrnoTable.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): Apple and the BSDs; `EMLINK` for FreeBSD's `O_NOFOLLOW` |
+| `src/core/fs/bsd/InheritableAcl_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): an NFSv4 `setfacl`, FreeBSD |
+| `src/core/fs/darwin/AccessFacts.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): macOS's access reader, extended ACLs |
+| `src/core/fs/darwin/InheritableAcl_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `chmod +a`, macOS |
 | `src/core/fs/darwin/PosixSystem.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): Apple: `st_atimespec`, `F_RDADVISE`, `F_FULLFSYNC`, `EACCES` for `O_CREAT` on a directory |
 | `src/core/fs/detail/DirectoryStream.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/fs/detail/DirectoryStream.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the batched directory stream every implementation reads through |
@@ -199,8 +206,10 @@ others in notes.
 | `src/core/fs/linux/Openat2.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `openat2(RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS)`, the probe and the bounded `EAGAIN` retry |
 | `src/core/fs/linux/Openat2.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the `openat2` system-call seam |
 | `src/core/fs/linux/Openat2_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/posix/AccessFacts.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the access reader of Linux and every POSIX system without an ACL of its own |
 | `src/core/fs/posix/Append.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the second, `O_APPEND` handle of every POSIX system but Linux |
 | `src/core/fs/posix/BeneathDefault.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `Best` is the walk on every POSIX system but Linux; `#ifdef O_PATH` inside the data picks the walk's open flags |
+| `src/core/fs/posix/DescriptorTestSupport.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `runsUnderWine` on POSIX |
 | `src/core/fs/posix/DirectoryEntries.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): what a directory entry is: `d_type`, else a stat without following |
 | `src/core/fs/posix/DirectoryEntries_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `DT_UNKNOWN` stat'ed without following; refused names |
 | `src/core/fs/posix/DirectoryRead.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `fdopendir` and `readdir` for every POSIX system but Linux |
@@ -208,9 +217,14 @@ others in notes.
 | `src/core/fs/posix/DirectoryStreamMemory_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): a large listing read within an allocation budget; replaces the global allocation functions |
 | `src/core/fs/posix/ErrnoRows.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the errno rows `posix/` and `bsd/ErrnoTable.cpp` share |
 | `src/core/fs/posix/ErrnoTable.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/posix/InheritableAcl.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): how a test plants an inheritable ACL, per OS |
+| `src/core/fs/posix/InheritableAcl_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `setfacl -d`, Linux |
 | `src/core/fs/posix/Lease.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): no leases off Linux: `WouldBlock` |
 | `src/core/fs/posix/NativePathPolicy.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/fs/posix/OwnedHandleAllocation_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the last close when its frame cannot be allocated; replaces the global allocation functions |
+| `src/core/fs/posix/OwnerOnlyCreation.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): owner-only creation, direct or through a stripped staging directory |
+| `src/core/fs/posix/OwnerOnlyCreation.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): owner-only creation on POSIX |
+| `src/core/fs/posix/OwnerOnly_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/fs/posix/PosixDescriptor.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the POSIX native descriptors |
 | `src/core/fs/posix/PosixDescriptor_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): a FIFO opens without waiting; a name that is not UTF-8 is one refused entry |
 | `src/core/fs/posix/PosixPathWalk.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the component walker over held directory descriptors |
@@ -221,14 +235,20 @@ others in notes.
 | `src/core/fs/testing/InMemoryDescriptorFileSystem.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/fs/testing/InMemoryDescriptorFileSystem.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the in-memory model, resolving and enforcing through the code the native one uses |
 | `src/core/fs/testing/InMemoryDescriptorFileSystem_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/windows/AccessFacts.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the Windows access reader, owner and DACL by handle |
+| `src/core/fs/windows/AccessFacts.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the Windows access reader |
 | `src/core/fs/windows/BeneathDefault.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `Best` is the walk on Windows |
 | `src/core/fs/windows/DescriptorEscape_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): junctions, mount points, backslash targets, link flavour, private reparse tags |
+| `src/core/fs/windows/DescriptorTestSupport.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `runsUnderWine` on Windows |
 | `src/core/fs/windows/DirectoryRecords.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `FILE_ID_BOTH_DIR_INFO` records, field by field, within their buffer |
 | `src/core/fs/windows/DirectoryRecords.hpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/fs/windows/DirectoryRecords_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/fs/windows/NativePathPolicy.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/fs/windows/NtFile.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `NtCreateFile` relative to a held directory |
 | `src/core/fs/windows/NtStatusTable.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/windows/OwnerOnly_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/windows/OwnerSecurity.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the token user and the owner-only security descriptors |
+| `src/core/fs/windows/OwnerSecurity.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the token user and the owner-only security descriptors |
 | `src/core/fs/windows/ReparsePoint.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): reparse data, field by field |
 | `src/core/fs/windows/ReparsePoint.hpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/fs/windows/Win32ErrorTable.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |

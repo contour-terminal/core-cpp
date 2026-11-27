@@ -60,11 +60,12 @@ struct RightsRow
 
 /// Checks what a child opened by @c IDescriptor::openAt may carry, against its parent directory:
 /// - `Read` needs the parent's `Read`;
-/// - `Write` or `MutateDirectory`, and `Create`, `Truncate` or `Exclusive`, need the parent's
-///   `MutateDirectory`;
+/// - `Write` or `MutateDirectory`, and `Create`, `Truncate`, `Exclusive` or `OwnerOnly`, need the
+///   parent's `MutateDirectory`;
 /// - the three sync flags are a mode, not a right, and need nothing;
 /// - then, as wasmtime checks them only once the rights hold: `Directory` with `Create`,
-///   `Truncate` or `Exclusive` is `Invalid`, and a directory never carries `Write` (`IsDirectory`).
+///   `Truncate`, `Exclusive` or `OwnerOnly` is `Invalid`, and a directory never carries `Write`
+///   (`IsDirectory`); `OwnerOnly` without both `Create` and `Exclusive` is `Invalid`.
 /// @param parent The flags of the directory @c openAt is called on.
 /// @param open How the child is opened.
 /// @param child The flags the child asks for.

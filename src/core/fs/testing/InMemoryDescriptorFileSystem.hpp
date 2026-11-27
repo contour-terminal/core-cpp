@@ -6,6 +6,7 @@
 
 #include <core/async/IExecutor.hpp>
 #include <core/async/Task.hpp>
+#include <core/fs/AccessScope.hpp>
 #include <core/fs/Descriptor.hpp>
 #include <core/fs/FsError.hpp>
 #include <core/fs/FsExport.hpp>
@@ -79,6 +80,15 @@ class CORE_FS_API InMemoryDescriptorFileSystem final: public IDescriptorFileSyst
     /// @param target What the link names, stored as given.
     /// @throws std::invalid_argument Where something is in the way.
     void addSymlink(std::string_view path, std::string target);
+
+    /// Replaces what a native reader would have found on the handle of @p path, so a case can model
+    /// any OS's owner and ACL: a stat of it reports @c classifyAccess of @p facts. A new node has the
+    /// current user as owner, no ACL, and mode 0644 or 0755 (0600 or 0700 where it was created
+    /// owner-only); a link 0777.
+    /// @param path Relative to the root, `/`-separated; links on the way are not followed.
+    /// @param facts What its handle would tell.
+    /// @throws std::invalid_argument Where nothing has that path.
+    void setAccessFacts(std::string_view path, AccessFacts facts);
 
     /// Opens the directory @p hostDirectory of the model: `/`, `.` and the empty path are its root.
     /// @param hostDirectory A `/`-separated path from the root.

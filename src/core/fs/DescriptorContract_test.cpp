@@ -2,11 +2,13 @@
 //
 // What every IDescriptor owes its caller, whichever file system is under it. Each case GENERATEs
 // the fixture kinds it holds for: the in-memory model and the native descriptors.
+#include <core/fs/AccessScope.hpp>
 #include <core/fs/Descriptor.hpp>
 #include <core/fs/DescriptorTestSupport.hpp>
 #include <core/fs/FsError.hpp>
 #include <core/fs/PathPolicy.hpp>
 #include <core/fs/Rights.hpp>
+#include <core/fs/testing/InMemoryDescriptorFileSystem.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -24,7 +26,10 @@
 #include <utility>
 #include <vector>
 
+using core::fs::AccessFacts;
+using core::fs::AccessScope;
 using core::fs::Advice;
+using core::fs::CreationAccess;
 using core::fs::DescriptorFlags;
 using core::fs::DescriptorStat;
 using core::fs::DescriptorType;
@@ -71,7 +76,7 @@ TEST_CASE("contract: written bytes read back with an end marker", "[fs][contract
 TEST_CASE("contract: a path that climbs above its descriptor is NotPermitted", "[fs][contract]")
 {
     auto fixture = DescriptorFixture::create(GENERATE(FixtureKind::InMemory, FixtureKind::Native));
-    REQUIRE(fixture.run(fixture.root().createDirectoryAt("a")).has_value());
+    REQUIRE(fixture.run(fixture.root().createDirectoryAt("a", CreationAccess::Default)).has_value());
     fixture.createFile("x", "inside");
 
     auto const escaped = fixture.run(
@@ -90,7 +95,7 @@ TEST_CASE("contract: a read-only preopen refuses every mutation and changes noth
 {
     auto fixture = DescriptorFixture::create(GENERATE(FixtureKind::InMemory, FixtureKind::Native));
     fixture.createFile("f", "content");
-    REQUIRE(fixture.run(fixture.root().createDirectoryAt("d")).has_value());
+    REQUIRE(fixture.run(fixture.root().createDirectoryAt("d", CreationAccess::Default)).has_value());
     auto readOnly = fixture.openRoot(DescriptorFlags::Read);
     REQUIRE(readOnly.has_value());
     auto& dir = **readOnly;
@@ -109,7 +114,7 @@ TEST_CASE("contract: a read-only preopen refuses every mutation and changes noth
           == FsErrorCode::NotPermitted);
     CHECK(refusal(dir.openAt(SymlinkPolicy::NoFollow, "f", OpenFlags::Truncate, DescriptorFlags::Read))
           == FsErrorCode::NotPermitted);
-    CHECK(refusal(dir.createDirectoryAt("e")) == FsErrorCode::NotPermitted);
+    CHECK(refusal(dir.createDirectoryAt("e", CreationAccess::Default)) == FsErrorCode::NotPermitted);
     CHECK(refusal(dir.unlinkFileAt("f")) == FsErrorCode::NotPermitted);
     CHECK(refusal(dir.removeDirectoryAt("d")) == FsErrorCode::NotPermitted);
     CHECK(refusal(dir.renameAt("f", &dir, "g")) == FsErrorCode::NotPermitted);
@@ -136,7 +141,7 @@ TEST_CASE("contract: a read-only preopen refuses every mutation and changes noth
 TEST_CASE("contract: a child opened with more flags than its parent is NotPermitted", "[fs][contract]")
 {
     auto fixture = DescriptorFixture::create(GENERATE(FixtureKind::InMemory, FixtureKind::Native));
-    REQUIRE(fixture.run(fixture.root().createDirectoryAt("d")).has_value());
+    REQUIRE(fixture.run(fixture.root().createDirectoryAt("d", CreationAccess::Default)).has_value());
     auto readOnly = fixture.openRoot(DescriptorFlags::Read);
     REQUIRE(readOnly.has_value());
 
@@ -159,7 +164,7 @@ TEST_CASE("contract: an open the parent may not make is NotPermitted before its 
 {
     // wasmtime's order: the parent's rights first, then Directory with Create is Invalid.
     auto fixture = DescriptorFixture::create(GENERATE(FixtureKind::InMemory, FixtureKind::Native));
-    REQUIRE(fixture.run(fixture.root().createDirectoryAt("d")).has_value());
+    REQUIRE(fixture.run(fixture.root().createDirectoryAt("d", CreationAccess::Default)).has_value());
     auto readOnly = fixture.openRoot(DescriptorFlags::Read);
     REQUIRE(readOnly.has_value());
 
@@ -239,7 +244,7 @@ TEST_CASE("contract: a symbolic link is followed only beneath its descriptor", "
     auto fixture = DescriptorFixture::create(GENERATE(FixtureKind::InMemory, FixtureKind::Native));
     if (fixture.requireSymlinks() == SymlinkSupport::Unavailable)
         SKIP("this file system cannot create symbolic links");
-    REQUIRE(fixture.run(fixture.root().createDirectoryAt("a")).has_value());
+    REQUIRE(fixture.run(fixture.root().createDirectoryAt("a", CreationAccess::Default)).has_value());
     fixture.createFile("target", "through the link");
 
     CHECK(outcomeOf(fixture.run(fixture.root().symlinkAt("/etc/passwd", "absolute")))
@@ -271,7 +276,7 @@ TEST_CASE("contract: a symbolic link is followed only beneath its descriptor", "
 TEST_CASE("contract: a directory descriptor never carries Write", "[fs][contract]")
 {
     auto fixture = DescriptorFixture::create(GENERATE(FixtureKind::InMemory, FixtureKind::Native));
-    REQUIRE(fixture.run(fixture.root().createDirectoryAt("d")).has_value());
+    REQUIRE(fixture.run(fixture.root().createDirectoryAt("d", CreationAccess::Default)).has_value());
     CHECK(outcomeOf(fixture.run(fixture.root().openAt(
               SymlinkPolicy::NoFollow, "d", OpenFlags::None, DescriptorFlags::Read | DescriptorFlags::Write)))
           == FsErrorCode::IsDirectory);
@@ -350,7 +355,9 @@ std::vector<RightsCase> rightsCases()
         { CreateDirectoryAt,
           DescriptorFlags::MutateDirectory,
           Directory,
-          [](auto& fx, auto& d) { return outcomeOf(fx.run(d.createDirectoryAt("new"))); } },
+          [](auto& fx, auto& d) {
+              return outcomeOf(fx.run(d.createDirectoryAt("new", CreationAccess::Default)));
+          } },
         { StatAt,
           DescriptorFlags::Read,
           Directory,
@@ -397,7 +404,7 @@ Outcome callWith(FixtureKind kind, RightsCase const& rightsCase, DescriptorFlags
 {
     auto fixture = DescriptorFixture::create(kind);
     fixture.createFile("f", "content");
-    REQUIRE(fixture.run(fixture.root().createDirectoryAt("sub")).has_value());
+    REQUIRE(fixture.run(fixture.root().createDirectoryAt("sub", CreationAccess::Default)).has_value());
     if (fixture.requireSymlinks() == SymlinkSupport::Available)
         REQUIRE(fixture.run(fixture.root().symlinkAt("f", "link")).has_value());
     auto holder =
@@ -466,7 +473,8 @@ TEST_CASE("contract: a file descriptor resolves no path and carries no MutateDir
     CHECK(outcomeOf(fixture.run(
               (*file)->openAt(SymlinkPolicy::NoFollow, "x", OpenFlags::None, DescriptorFlags::Read)))
           == FsErrorCode::NotDirectory);
-    CHECK(outcomeOf(fixture.run((*file)->createDirectoryAt("x"))) == FsErrorCode::NotPermitted);
+    CHECK(outcomeOf(fixture.run((*file)->createDirectoryAt("x", CreationAccess::Default)))
+          == FsErrorCode::NotPermitted);
     CHECK(outcomeOf(fixture.run(fixture.root().renameAt("g", file->get(), "x")))
           == FsErrorCode::NotPermitted);
     CHECK(fixture.run(fixture.root().statAt(SymlinkPolicy::NoFollow, "g")).has_value());
@@ -487,7 +495,7 @@ TEST_CASE("contract: a trailing slash requires a directory", "[fs][contract]")
     auto fixture = DescriptorFixture::create(GENERATE(FixtureKind::InMemory, FixtureKind::Native));
     auto& root = fixture.root();
     fixture.createFile("file", "content");
-    REQUIRE(fixture.run(root.createDirectoryAt("dir")).has_value());
+    REQUIRE(fixture.run(root.createDirectoryAt("dir", CreationAccess::Default)).has_value());
     auto const nf = SymlinkPolicy::NoFollow;
     auto const notDirectory = Outcome { FsErrorCode::NotDirectory };
 
@@ -516,7 +524,7 @@ TEST_CASE("contract: a trailing slash requires a directory", "[fs][contract]")
             CAPTURE(name);
             CHECK(outcomeOf(fixture.run(root.statAt(nf, name))) == FsErrorCode::NoEntry);
         }
-        REQUIRE(fixture.run(root.createDirectoryAt("made/")).has_value());
+        REQUIRE(fixture.run(root.createDirectoryAt("made/", CreationAccess::Default)).has_value());
         CHECK(fixture.run(root.statAt(nf, "made"))->type == DescriptorType::Directory);
     }
     SECTION("a directory named with a trailing slash")
@@ -565,7 +573,7 @@ TEST_CASE("contract: a directory named through its own dot is not removed", "[fs
     // `dir/.` names the directory itself, not an entry of its parent: Linux's rmdir answers EINVAL.
     auto fixture = DescriptorFixture::create(GENERATE(FixtureKind::InMemory, FixtureKind::Native));
     auto& root = fixture.root();
-    REQUIRE(fixture.run(root.createDirectoryAt("dir")).has_value());
+    REQUIRE(fixture.run(root.createDirectoryAt("dir", CreationAccess::Default)).has_value());
 
     CHECK(outcomeOf(fixture.run(root.removeDirectoryAt("dir/."))) == FsErrorCode::Invalid);
     CHECK(outcomeOf(fixture.run(root.removeDirectoryAt("dir/./"))) == FsErrorCode::Invalid);
@@ -575,7 +583,7 @@ TEST_CASE("contract: a directory named through its own dot is not removed", "[fs
 TEST_CASE("contract: Create opens no directory and creates nothing through a link", "[fs][contract]")
 {
     auto fixture = DescriptorFixture::create(GENERATE(FixtureKind::InMemory, FixtureKind::Native));
-    REQUIRE(fixture.run(fixture.root().createDirectoryAt("dir")).has_value());
+    REQUIRE(fixture.run(fixture.root().createDirectoryAt("dir", CreationAccess::Default)).has_value());
     CHECK(outcomeOf(fixture.run(fixture.root().openAt(
               SymlinkPolicy::NoFollow, "dir", OpenFlags::Create, DescriptorFlags::Read)))
           == FsErrorCode::IsDirectory);
@@ -774,7 +782,7 @@ TEST_CASE("contract: openAt creates, truncates and requires a directory as it is
     auto fixture = DescriptorFixture::create(GENERATE(FixtureKind::InMemory, FixtureKind::Native));
     auto& root = fixture.root();
     fixture.createFile("f", "content");
-    REQUIRE(fixture.run(root.createDirectoryAt("d")).has_value());
+    REQUIRE(fixture.run(root.createDirectoryAt("d", CreationAccess::Default)).has_value());
     auto const nf = SymlinkPolicy::NoFollow;
     auto const sizeOf = [&](std::string name) {
         return fixture.run(root.statAt(nf, std::move(name)))->size;
@@ -844,12 +852,150 @@ TEST_CASE("contract: a final link is followed where the call says so, and no fur
     CHECK(fixture.run(root.statAt(SymlinkPolicy::NoFollow, "absent"))->type == DescriptorType::RegularFile);
 }
 
+namespace
+{
+
+/// The access @p descriptor's own handle reports; fails the case where the stat does not answer.
+[[nodiscard]] std::optional<AccessScope> accessOf(DescriptorFixture const& fixture, IDescriptor& descriptor)
+{
+    auto const status = fixture.run(descriptor.stat());
+    REQUIRE(status.has_value());
+    return status->access;
+}
+
+} // namespace
+
+TEST_CASE("contract: an OwnerOnly file is owner-only", "[fs][contract][access]")
+{
+    auto fixture = DescriptorFixture::create(GENERATE(FixtureKind::InMemory, FixtureKind::Native));
+    auto file =
+        fixture.run(fixture.root().openAt(SymlinkPolicy::NoFollow,
+                                          "secret",
+                                          OpenFlags::Create | OpenFlags::Exclusive | OpenFlags::OwnerOnly,
+                                          DescriptorFlags::Read | DescriptorFlags::Write));
+    REQUIRE(file.has_value());
+    CHECK(accessOf(fixture, **file) == AccessScope::OwnerOnly);
+    // By name too, where the file system reads it without a handle of its own.
+    auto const byName = fixture.run(fixture.root().statAt(SymlinkPolicy::NoFollow, "secret"));
+    REQUIRE(byName.has_value());
+    CHECK((!byName->access.has_value() || *byName->access == AccessScope::OwnerOnly));
+}
+
+TEST_CASE("contract: an OwnerOnly directory is owner-only", "[fs][contract][access]")
+{
+    auto fixture = DescriptorFixture::create(GENERATE(FixtureKind::InMemory, FixtureKind::Native));
+    REQUIRE(fixture.run(fixture.root().createDirectoryAt("keys", CreationAccess::OwnerOnly)).has_value());
+    auto directory = fixture.run(
+        fixture.root().openAt(SymlinkPolicy::NoFollow, "keys", OpenFlags::Directory, DescriptorFlags::Read));
+    REQUIRE(directory.has_value());
+    CHECK(accessOf(fixture, **directory) == AccessScope::OwnerOnly);
+}
+
+TEST_CASE("contract: OwnerOnly asks for an exclusive creation", "[fs][contract][access]")
+{
+    auto fixture = DescriptorFixture::create(GENERATE(FixtureKind::InMemory, FixtureKind::Native));
+    fixture.createFile("existing", "x");
+    // Without Create there is nothing to make owner-only: the caller would get whatever is there.
+    CHECK(outcomeOf(fixture.run(fixture.root().openAt(
+              SymlinkPolicy::NoFollow, "existing", OpenFlags::OwnerOnly, DescriptorFlags::Read)))
+          == FsErrorCode::Invalid);
+    // Without Exclusive the file might be another's, whose ACL would be stripped and whose name unlinked.
+    for (auto const* const name: { "existing", "absent" })
+    {
+        INFO(name);
+        CHECK(outcomeOf(fixture.run(fixture.root().openAt(SymlinkPolicy::NoFollow,
+                                                          name,
+                                                          OpenFlags::Create | OpenFlags::OwnerOnly,
+                                                          DescriptorFlags::Write)))
+              == FsErrorCode::Invalid);
+    }
+    CHECK(outcomeOf(fixture.run(fixture.root().statAt(SymlinkPolicy::NoFollow, "absent")))
+          == FsErrorCode::NoEntry);
+    auto readOnly = fixture.openRoot(DescriptorFlags::Read);
+    REQUIRE(readOnly.has_value());
+    // A parent without MutateDirectory refuses it first, as it refuses every flag that changes entries.
+    CHECK(outcomeOf(fixture.run((*readOnly)->openAt(
+              SymlinkPolicy::NoFollow, "existing", OpenFlags::OwnerOnly, DescriptorFlags::Read)))
+          == FsErrorCode::NotPermitted);
+    CHECK(
+        outcomeOf(fixture.run((*readOnly)->openAt(
+            SymlinkPolicy::NoFollow, "new", OpenFlags::Create | OpenFlags::OwnerOnly, DescriptorFlags::Read)))
+        == FsErrorCode::NotPermitted);
+}
+
+TEST_CASE("contract: access is read on the open handle", "[fs][contract][access]")
+{
+    auto fixture = DescriptorFixture::create(GENERATE(FixtureKind::InMemory, FixtureKind::Native));
+    auto& root = fixture.root();
+    auto file = fixture.run(root.openAt(SymlinkPolicy::NoFollow,
+                                        "key",
+                                        OpenFlags::Create | OpenFlags::Exclusive | OpenFlags::OwnerOnly,
+                                        DescriptorFlags::Read));
+    REQUIRE(file.has_value());
+    fixture.createFile("planted", "attacker");
+    auto const planted = fixture.run(root.statAt(SymlinkPolicy::NoFollow, "planted"));
+    REQUIRE(planted.has_value());
+    if (planted->access == AccessScope::OwnerOnly)
+        SKIP("a Default file is owner-only here (an owner-only umask or directory ACL); the OS's own case "
+             "widens one explicitly");
+    // Someone renames a file anyone may write over the name: the handle still answers for its own object.
+    auto const renamed = fixture.run(root.renameAt("planted", &root, "key"));
+    if (!renamed && fixture.kind() == FixtureKind::Native && core::fs::test::runsUnderWine())
+        SKIP("wine refuses to replace a file that is open (" << renamed.error().toString() << ")");
+    REQUIRE(renamed.has_value());
+    CHECK(accessOf(fixture, **file) == AccessScope::OwnerOnly);
+    auto const byName = fixture.run(root.statAt(SymlinkPolicy::NoFollow, "key"));
+    REQUIRE(byName.has_value());
+    CHECK(byName->access == planted->access);
+}
+
+TEST_CASE("contract: a foreign owner is ForeignOwner", "[fs][contract][access]")
+{
+    // The model only: a native object of another owner needs a privilege, which each OS's own case
+    // takes where it has it.
+    auto fixture = DescriptorFixture::create(FixtureKind::InMemory);
+    fixture.createFile("theirs", "x");
+    fixture.inMemory().setAccessFacts("root/theirs",
+                                      AccessFacts { .owner = AccessFacts::Owner::Other,
+                                                    .posixMode = 0600,
+                                                    .acl = AccessFacts::AclState::Absent,
+                                                    .entries = {} });
+    auto file = fixture.run(
+        fixture.root().openAt(SymlinkPolicy::NoFollow, "theirs", OpenFlags::None, DescriptorFlags::Read));
+    REQUIRE(file.has_value());
+    CHECK(accessOf(fixture, **file) == AccessScope::ForeignOwner);
+}
+
+TEST_CASE("contract: renameAt replaces an existing file atomically", "[fs][contract]")
+{
+    auto fixture = DescriptorFixture::create(GENERATE(FixtureKind::InMemory, FixtureKind::Native));
+    auto& root = fixture.root();
+    fixture.createFile("a", "new bytes");
+    fixture.createFile("b", "old");
+    auto reader =
+        fixture.run(root.openAt(SymlinkPolicy::NoFollow, "b", OpenFlags::None, DescriptorFlags::Read));
+    REQUIRE(reader.has_value());
+
+    // Windows replaces an open file only with POSIX semantics (FileRenameInformationEx, NTFS).
+    auto const renamed = fixture.run(root.renameAt("a", &root, "b"));
+    if (!renamed && fixture.kind() == FixtureKind::Native && core::fs::test::runsUnderWine())
+        SKIP("wine refuses to replace a file that is open (" << renamed.error().toString() << ")");
+    REQUIRE(renamed.has_value());
+    CHECK(outcomeOf(fixture.run(root.statAt(SymlinkPolicy::NoFollow, "a"))) == FsErrorCode::NoEntry);
+    auto replaced =
+        fixture.run(root.openAt(SymlinkPolicy::NoFollow, "b", OpenFlags::None, DescriptorFlags::Read));
+    REQUIRE(replaced.has_value());
+    CHECK(textOf(fixture.run((*replaced)->read(64, 0)).value().bytes) == "new bytes");
+    // The reader that held the old b still reads the old bytes: no moment had b half-written.
+    CHECK(textOf(fixture.run((*reader)->read(64, 0)).value().bytes) == "old");
+}
+
 TEST_CASE("contract: a directory's descriptor reads no bytes", "[fs][contract]")
 {
     // POSIX's pread answers EISDIR, Windows' ReadFile ERROR_INVALID_FUNCTION: both are IsDirectory.
     auto fixture = DescriptorFixture::create(GENERATE(FixtureKind::InMemory, FixtureKind::Native));
     auto& root = fixture.root();
-    REQUIRE(fixture.run(root.createDirectoryAt("dir")).has_value());
+    REQUIRE(fixture.run(root.createDirectoryAt("dir", CreationAccess::Default)).has_value());
     auto directory =
         fixture.run(root.openAt(SymlinkPolicy::NoFollow, "dir", OpenFlags::Directory, DescriptorFlags::Read));
     REQUIRE(directory.has_value());

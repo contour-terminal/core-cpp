@@ -77,7 +77,9 @@ NativeContext::NativeContext(async::IExecutor& homeExecutor,
                              IRandom& random,
                              NativeFileSystemOptions fileSystemOptions,
                              std::string_view separators,
-                             INtFiles const* files):
+                             INtFiles const* files,
+                             std::shared_ptr<OwnerSecurity const> security,
+                             std::shared_ptr<OwnerOnlyCreator const> creator):
     home { &homeExecutor },
     blocking { &blockingExecutor },
     wallClock { &clock },
@@ -90,7 +92,9 @@ NativeContext::NativeContext(async::IExecutor& homeExecutor,
                             && fileSystemOptions.maxSymlinkHops >= DefaultMaxSymlinkHops
                         ? makeBestBeneathOpener()
                         : nullptr },
-    ntFiles { files }
+    ntFiles { files },
+    ownerSecurity { std::move(security) },
+    ownerOnlyCreator { std::move(creator) }
 {
     random.fill(secret);
 }

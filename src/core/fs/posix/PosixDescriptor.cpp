@@ -13,6 +13,7 @@
 #include <core/async/IExecutor.hpp>
 #include <core/async/Offload.hpp>
 #include <core/async/Task.hpp>
+#include <core/fs/AccessScope.hpp>
 #include <core/fs/Descriptor.hpp>
 #include <core/fs/FsError.hpp>
 #include <core/fs/NativeFileSystem.hpp>
@@ -23,6 +24,7 @@
 #include <core/fs/detail/PathWalk.hpp>
 #include <core/fs/detail/ResolveBeneath.hpp>
 #include <core/fs/posix/DirectoryRead.hpp>
+#include <core/fs/posix/OwnerOnlyCreation.hpp>
 #include <core/fs/posix/PosixPathWalk.hpp>
 #include <core/fs/posix/PosixSystem.hpp>
 #include <core/platform/Clock.hpp>
@@ -80,13 +82,32 @@ namespace
     /// some systems and two on others.
     constexpr auto WouldBlockErrnos = std::to_array({ EAGAIN, EWOULDBLOCK });
 
-    /// The mode a new file or directory is created with, before the process's umask.
-    constexpr ::mode_t NewFileMode = 0666;
-    constexpr ::mode_t NewDirectoryMode = 0777;
+    /// The modes a new file and a new directory are created with, given to `openat` and `mkdirat`
+    /// themselves: the umask can only take bits away, so an owner-only object is never anyone
+    /// else's, not even between its creation and a `chmod`.
+    struct CreationModeRow
+    {
+        CreationAccess access;
+        ::mode_t file;
+        ::mode_t directory;
+    };
+
+    constexpr auto CreationModes = std::to_array<CreationModeRow>({
+        { .access = CreationAccess::Default, .file = 0666, .directory = 0777 },
+        { .access = CreationAccess::OwnerOnly, .file = 0600, .directory = 0700 },
+    });
+
+    /// @return The row of @p access; the owner-only one for a value no row names, which fails closed.
+    [[nodiscard]] constexpr CreationModeRow const& creationModesOf(CreationAccess access) noexcept
+    {
+        auto const row = std::ranges::find(CreationModes, access, &CreationModeRow::access);
+        return row != CreationModes.end() ? *row : CreationModes.back();
+    }
 
     using detail::typeOfMode;
 
-    DescriptorStat statOf(struct ::stat const& status) noexcept
+    /// @param handle What @p status was read through, or @c platform::InvalidHandle for a stat by name.
+    DescriptorStat statOf(int handle, struct ::stat const& status)
     {
         auto const times = detail::timesOf(status);
         return DescriptorStat { .type = typeOfMode(status.st_mode),
@@ -94,7 +115,8 @@ namespace
                                 .size = static_cast<std::uint64_t>(status.st_size),
                                 .accessed = times.accessed,
                                 .modified = times.modified,
-                                .statusChanged = times.statusChanged };
+                                .statusChanged = times.statusChanged,
+                                .access = detail::accessFactsOf(handle, status).transform(classifyAccess) };
     }
 
     MetadataHash hashOf(NativeContext const& context, struct ::stat const& status) noexcept
@@ -227,11 +249,11 @@ namespace
     /// flag cleared once open. A regular file under a lease answers EWOULDBLOCK then; it is opened
     /// again, waiting for the lease, through @c detail::openAfterWouldBlock, which never opens
     /// anything but a regular file blocking.
-    FsResult<UniqueHandle> openEntry(int directory, std::string const& name, int flags)
+    FsResult<UniqueHandle> openEntry(int directory, std::string const& name, int flags, ::mode_t mode)
     {
         auto const* const path = name.empty() ? "." : name.c_str();
-        auto const opened = detail::retryOnInterrupt(
-            [&] { return ::openat(directory, path, flags | O_NONBLOCK, NewFileMode); });
+        auto const opened =
+            detail::retryOnInterrupt([&] { return ::openat(directory, path, flags | O_NONBLOCK, mode); });
         if (opened >= 0)
         {
             auto handle = UniqueHandle { opened };
@@ -418,7 +440,7 @@ namespace
             return submit([handle = handle(), flags = flags()]() {
                 return checkRights(flags, Operation::Stat)
                     .and_then([&] { return statHandle(handle->get()); })
-                    .transform([](struct ::stat const& status) { return statOf(status); });
+                    .transform([&](struct ::stat const& status) { return statOf(handle->get(), status); });
             });
         }
 
@@ -490,7 +512,12 @@ namespace
                 }
                 auto const directory = resolved->directory();
                 auto const& name = resolved->name;
-                auto child = openEntry(directory, name, *openFlags);
+                auto const creating =
+                    hasFlag(open, OpenFlags::OwnerOnly) ? CreationAccess::OwnerOnly : CreationAccess::Default;
+                // OwnerOnly comes with Create | Exclusive (checkOpenRights): this call makes the file.
+                auto child = creating == CreationAccess::OwnerOnly
+                                 ? context->ownerOnlyCreator->createFile(directory, name, *openFlags)
+                                 : openEntry(directory, name, *openFlags, creationModesOf(creating).file);
                 if (!child)
                     return std::unexpected { child.error() };
                 auto const opened = child->get();
@@ -526,13 +553,14 @@ namespace
             });
         }
 
-        async::Task<FsResult<void>> createDirectoryAt(std::string path) override
+        async::Task<FsResult<void>> createDirectoryAt(std::string path, CreationAccess access) override
         {
             return submit([context = context(),
                            handle = handle(),
                            flags = flags(),
                            type = objectType(),
-                           path = std::move(path)]() {
+                           path = std::move(path),
+                           access]() {
                 return checkRights(flags, Operation::CreateDirectoryAt)
                     .and_then([&] { return detail::requireDirectory(type); })
                     .and_then([&] {
@@ -545,10 +573,14 @@ namespace
                     .and_then([](Resolved resolved) {
                         return vacant(std::move(resolved), DescriptorType::Directory);
                     })
-                    .and_then([](Resolved const& resolved) {
-                        return succeededOr(
-                            ::mkdirat(resolved.directory(), resolved.name.c_str(), NewDirectoryMode),
-                            "mkdirat");
+                    .and_then([&context, access](Resolved const& resolved) -> FsResult<void> {
+                        if (access == CreationAccess::OwnerOnly)
+                            return context->ownerOnlyCreator->createDirectory(resolved.directory(),
+                                                                              resolved.name);
+                        return succeededOr(::mkdirat(resolved.directory(),
+                                                     resolved.name.c_str(),
+                                                     creationModesOf(access).directory),
+                                           "mkdirat");
                     });
             });
         }
@@ -567,9 +599,13 @@ namespace
                         return resolve(handle->get(), path, *context, policy, TrailingSlashOnLink::Follow);
                     })
                     .and_then([](Resolved const& resolved) {
-                        return statEntry(resolved.directory(), resolved.name);
-                    })
-                    .transform([](struct ::stat const& status) { return statOf(status); });
+                        // The directory itself is stat'ed through its handle; a name, by name.
+                        auto const through =
+                            resolved.name.empty() ? resolved.directory() : platform::InvalidHandle;
+                        return statEntry(resolved.directory(), resolved.name)
+                            .transform(
+                                [through](struct ::stat const& status) { return statOf(through, status); });
+                    });
             });
         }
 
@@ -897,7 +933,15 @@ FsResult<std::unique_ptr<IDescriptorFileSystem>> makeNativeDescriptorFileSystem(
 {
     return detail::checkOptions(options).transform([&] -> std::unique_ptr<IDescriptorFileSystem> {
         return std::make_unique<PosixFileSystem>(std::make_shared<NativeContext const>(
-            home, blocking, wallClock, random, options, KernelSeparators, nullptr));
+            home,
+            blocking,
+            wallClock,
+            random,
+            options,
+            KernelSeparators,
+            nullptr,
+            nullptr,
+            std::make_shared<detail::OwnerOnlyCreator const>(random, detail::nativeOwnerOnlyCreation())));
     });
 }
 

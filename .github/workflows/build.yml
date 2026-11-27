@@ -619,6 +619,10 @@ jobs:
     env:
       VCPKG_COMMIT: e6f9e70a29a3e80a1fc510d8503304315447112f
       VCPKG_ARCHIVES: ${{ github.workspace }}/.cache/vcpkg-archives
+      # GitHub's Windows runners run elevated (administrator, UAC off), so the fs cases that need
+      # elevation -- an owner-only file created elevated, a file given to BUILTIN\Administrators --
+      # fail here instead of skipping (src/core/fs/windows/OwnerOnly_test.cpp).
+      CORE_TEST_REQUIRE_ELEVATED: "1"
     steps:
       - uses: actions/checkout@v7
         with:

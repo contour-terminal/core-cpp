@@ -222,7 +222,8 @@ constexpr auto Ops = std::to_array<EscapeOp>({
     { .operation = "createDirectoryAt",
       .aimedAt = "fresh",
       .start = [](Call c) -> Task<Outcome> {
-          co_return outcomeOf(co_await c.fixture->root().createDirectoryAt(c.path));
+          co_return outcomeOf(
+              co_await c.fixture->root().createDirectoryAt(c.path, core::fs::CreationAccess::Default));
       },
       .onFinalLink = FsErrorCode::Exist },
 });
@@ -271,7 +272,8 @@ DescriptorFixture escapeFixture(Variant const& variant)
     auto fixture = DescriptorFixture::create(variant.kind, { .strategy = variant.strategy });
     if (fixture.requireSymlinks() == SymlinkSupport::Unavailable)
         return fixture;
-    REQUIRE(fixture.run(fixture.root().createDirectoryAt("a")).has_value());
+    REQUIRE(
+        fixture.run(fixture.root().createDirectoryAt("a", core::fs::CreationAccess::Default)).has_value());
     fixture.createFile("f", "inside");
     REQUIRE(fixture.run(fixture.root().symlinkAt("../", "up")).has_value());
     REQUIRE(fixture.run(fixture.root().symlinkAt("..", "uplink")).has_value());
@@ -319,7 +321,8 @@ TEST_CASE("a symlink cycle ends in Loop, not a hang", "[fs][escape]")
 
     CHECK(outcomeOf(fixture.run(root.statAt(SymlinkPolicy::Follow, "ping"))) == FsErrorCode::Loop);
     CHECK(outcomeOf(fixture.run(root.statAt(SymlinkPolicy::NoFollow, "ping/x"))) == FsErrorCode::Loop);
-    CHECK(outcomeOf(fixture.run(root.createDirectoryAt("pong/new"))) == FsErrorCode::Loop);
+    CHECK(outcomeOf(fixture.run(root.createDirectoryAt("pong/new", core::fs::CreationAccess::Default)))
+          == FsErrorCode::Loop);
     CHECK(outcomeOf(fixture.run(
               root.openAt(SymlinkPolicy::NoFollow, "ping/f", OpenFlags::Create, DescriptorFlags::Write)))
           == FsErrorCode::Loop);

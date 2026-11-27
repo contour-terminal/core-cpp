@@ -18,6 +18,7 @@
 #include <core/async/IExecutor.hpp>
 #include <core/async/Offload.hpp>
 #include <core/async/Task.hpp>
+#include <core/fs/AccessScope.hpp>
 #include <core/fs/Descriptor.hpp>
 #include <core/fs/FsError.hpp>
 #include <core/fs/NativeFileSystem.hpp>
@@ -27,8 +28,10 @@
 #include <core/fs/detail/OwnedHandle.hpp>
 #include <core/fs/detail/PathWalk.hpp>
 #include <core/fs/detail/ResolveBeneath.hpp>
+#include <core/fs/windows/AccessFacts.hpp>
 #include <core/fs/windows/DirectoryRecords.hpp>
 #include <core/fs/windows/NtFile.hpp>
+#include <core/fs/windows/OwnerSecurity.hpp>
 #include <core/fs/windows/ReparsePoint.hpp>
 #include <core/fs/windows/WindowsPathWalk.hpp>
 #include <core/platform/Clock.hpp>
@@ -190,14 +193,22 @@ namespace
         return DescriptorType::RegularFile;
     }
 
-    DescriptorStat statOf(Information const& information) noexcept
+    /// What @p handle tells: its attributes, times and, read from its security descriptor, who may
+    /// reach it. The handle carries `READ_CONTROL`: every open a stat is made through asks for it.
+    FsResult<DescriptorStat> statOf(NativeContext const& context, HANDLE handle)
     {
-        return DescriptorStat { .type = typeOf(information),
-                                .linkCount = information.standard.NumberOfLinks,
-                                .size = static_cast<std::uint64_t>(information.standard.EndOfFile.QuadPart),
-                                .accessed = fileTimeOf(information.basic.LastAccessTime),
-                                .modified = fileTimeOf(information.basic.LastWriteTime),
-                                .statusChanged = fileTimeOf(information.basic.ChangeTime) };
+        return informationOf(handle).transform([&](Information const& information) {
+            return DescriptorStat {
+                .type = typeOf(information),
+                .linkCount = information.standard.NumberOfLinks,
+                .size = static_cast<std::uint64_t>(information.standard.EndOfFile.QuadPart),
+                .accessed = fileTimeOf(information.basic.LastAccessTime),
+                .modified = fileTimeOf(information.basic.LastWriteTime),
+                .statusChanged = fileTimeOf(information.basic.ChangeTime),
+                .access =
+                    detail::accessFactsOf(handle, context.ownerSecurity->user()).transform(classifyAccess),
+            };
+        });
     }
 
     FsResult<MetadataHash> hashOf(NativeContext const& context, HANDLE handle)
@@ -352,13 +363,31 @@ namespace
         });
     }
 
-    /// @return The request that opens an entry to read its attributes and, with @p access, more.
+    /// @return The request that opens an entry to read its attributes and, with @p access, more; a
+    ///         stat asks for `READ_CONTROL` too (@c statRequest), so it can read who may reach it.
     detail::NtOpenRequest attributesRequest(ACCESS_MASK access) noexcept
     {
         return detail::NtOpenRequest { .access = access | FILE_READ_ATTRIBUTES,
                                        .disposition = FILE_OPEN,
                                        .options = 0,
                                        .reparse = detail::ReparseHandling::OpenThePoint };
+    }
+
+    /// @return The request a stat by name opens its entry with: attributes and the security descriptor.
+    detail::NtOpenRequest statRequest() noexcept
+    {
+        return attributesRequest(READ_CONTROL);
+    }
+
+    /// Opens the final name of @p resolved for a stat: with `READ_CONTROL`, and where the object's
+    /// DACL withholds that (`Access`), again without it, so a stat that succeeded before access was
+    /// read still does; its access is then unknown (nullopt), never guessed.
+    FsResult<UniqueHandle> openForStat(NativeContext const& context, Resolved const& resolved)
+    {
+        auto opened = openFinal(context, resolved, statRequest());
+        if (opened || opened.error().code != FsErrorCode::Access)
+            return opened;
+        return openFinal(context, resolved, attributesRequest(0));
     }
 
     struct SyncFlagRow
@@ -376,8 +405,10 @@ namespace
     /// The `NtCreateFile` request for @p open and @p flags.
     FsResult<detail::NtOpenRequest> openRequestOf(OpenFlags open, DescriptorFlags flags)
     {
-        auto request =
-            detail::NtOpenRequest { .access = FILE_READ_ATTRIBUTES, .disposition = FILE_OPEN, .options = 0 };
+        // READ_CONTROL: the descriptor's stat reads who may reach the object from this very handle.
+        auto request = detail::NtOpenRequest { .access = FILE_READ_ATTRIBUTES | READ_CONTROL,
+                                               .disposition = FILE_OPEN,
+                                               .options = 0 };
         if (hasFlag(flags, DescriptorFlags::Read))
             request.access |= FILE_GENERIC_READ;
         if (hasFlag(flags, DescriptorFlags::Write))
@@ -744,10 +775,10 @@ namespace
 
         async::Task<FsResult<DescriptorStat>> stat() override
         {
-            return submit([handle = handle(), flags = flags()]() {
-                return checkRights(flags, Operation::Stat)
-                    .and_then([&] { return informationOf(handle->get()); })
-                    .transform([](Information const& information) { return statOf(information); });
+            return submit([context = context(), handle = handle(), flags = flags()]() {
+                return checkRights(flags, Operation::Stat).and_then([&] {
+                    return statOf(*context, handle->get());
+                });
             });
         }
 
@@ -822,10 +853,23 @@ namespace
                         return refuse(FsErrorCode::NotDirectory);
                     request->options |= FILE_DIRECTORY_FILE;
                 }
+                // Owner-only from the moment NtCreateFile makes it; an existing file keeps its own.
+                if (hasFlag(open, OpenFlags::OwnerOnly))
+                    request->security = context->ownerSecurity->forFile();
                 auto const name = detail::utf16Of(resolved->name);
                 if (!name)
                     return std::unexpected { name.error() };
                 auto child = detail::openEntry(*context->ntFiles, resolved->directory(), *name, *request);
+                // READ_CONTROL is asked only so stat() can read access; where a descriptor with no
+                // right of its own meets a DACL that withholds it, the open is made without it, and
+                // the descriptor's access is unknown. Never on a creation: the creator is granted it.
+                if (!child && child.error().code == FsErrorCode::Access && !hasFlag(open, OpenFlags::Create)
+                    && !hasFlag(childFlags, DescriptorFlags::Read)
+                    && !hasFlag(childFlags, DescriptorFlags::Write))
+                {
+                    request->access &= ~ACCESS_MASK { READ_CONTROL };
+                    child = detail::openEntry(*context->ntFiles, resolved->directory(), *name, *request);
+                }
                 if (!child)
                     return std::unexpected { child.error() };
                 auto const opened = child->handle.get();
@@ -868,13 +912,14 @@ namespace
             });
         }
 
-        async::Task<FsResult<void>> createDirectoryAt(std::string path) override
+        async::Task<FsResult<void>> createDirectoryAt(std::string path, CreationAccess access) override
         {
             return submit([context = context(),
                            handle = handle(),
                            flags = flags(),
                            type = objectType(),
-                           path = std::move(path)]() {
+                           path = std::move(path),
+                           access]() {
                 return checkRights(flags, Operation::CreateDirectoryAt)
                     .and_then([&] { return detail::requireDirectory(type); })
                     .and_then([&] {
@@ -888,13 +933,16 @@ namespace
                         return vacant(std::move(resolved), DescriptorType::Directory);
                     })
                     .and_then([&](Resolved const& resolved) {
-                        return openFinal(
-                                   *context,
-                                   resolved,
-                                   detail::NtOpenRequest { .access = FILE_LIST_DIRECTORY,
-                                                           .disposition = FILE_CREATE,
-                                                           .options = FILE_DIRECTORY_FILE,
-                                                           .reparse = detail::ReparseHandling::OpenThePoint })
+                        return openFinal(*context,
+                                         resolved,
+                                         detail::NtOpenRequest {
+                                             .access = FILE_LIST_DIRECTORY,
+                                             .disposition = FILE_CREATE,
+                                             .options = FILE_DIRECTORY_FILE,
+                                             .reparse = detail::ReparseHandling::OpenThePoint,
+                                             .security = access == CreationAccess::OwnerOnly
+                                                             ? context->ownerSecurity->forDirectory()
+                                                             : nullptr })
                             .transform([](UniqueHandle const&) {});
                     });
             });
@@ -913,11 +961,8 @@ namespace
                     .and_then([&] {
                         return resolve(handle->get(), path, *context, policy, TrailingSlashOnLink::Follow);
                     })
-                    .and_then([&](Resolved const& resolved) {
-                        return openFinal(*context, resolved, attributesRequest(0));
-                    })
-                    .and_then([](UniqueHandle const& opened) { return informationOf(opened.get()); })
-                    .transform([](Information const& information) { return statOf(information); });
+                    .and_then([&](Resolved const& resolved) { return openForStat(*context, resolved); })
+                    .and_then([&](UniqueHandle const& opened) { return statOf(*context, opened.get()); });
             });
         }
 
@@ -1246,19 +1291,26 @@ namespace
                  flags]() -> FsResult<std::unique_ptr<IDescriptor>> {
                     if (hasFlag(flags, DescriptorFlags::Write))
                         return refuse(FsErrorCode::IsDirectory);
-                    auto access =
-                        DWORD { FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE };
+                    // READ_CONTROL: the root's stat reads who may reach it from this handle.
+                    auto access = DWORD { FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES
+                                          | READ_CONTROL | SYNCHRONIZE };
                     if (hasFlag(flags, DescriptorFlags::MutateDirectory))
                         access |= FILE_WRITE_ATTRIBUTES;
                     // The host chose this directory, so the system resolves its path.
-                    auto const opened = ::CreateFileW(path.c_str(),
-                                                      access,
-                                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                                      nullptr,
-                                                      OPEN_EXISTING,
-                                                      FILE_FLAG_BACKUP_SEMANTICS | SECURITY_SQOS_PRESENT
-                                                          | SECURITY_IDENTIFICATION,
-                                                      nullptr);
+                    auto const openWith = [&](DWORD wanted) {
+                        return ::CreateFileW(path.c_str(),
+                                             wanted,
+                                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                             nullptr,
+                                             OPEN_EXISTING,
+                                             FILE_FLAG_BACKUP_SEMANTICS | SECURITY_SQOS_PRESENT
+                                                 | SECURITY_IDENTIFICATION,
+                                             nullptr);
+                    };
+                    auto opened = openWith(access);
+                    // A DACL that withholds READ_CONTROL opens the root without it: its access is unknown.
+                    if (opened == INVALID_HANDLE_VALUE && ::GetLastError() == ERROR_ACCESS_DENIED)
+                        opened = openWith(access & ~DWORD { READ_CONTROL });
                     if (opened == INVALID_HANDLE_VALUE)
                         return lastError("CreateFileW");
                     auto handle = UniqueHandle { opened };
@@ -1289,10 +1341,21 @@ FsResult<std::unique_ptr<IDescriptorFileSystem>> makeNativeDescriptorFileSystem(
     IRandom& random,
     NativeFileSystemOptions options)
 {
-    return detail::checkOptions(options).transform([&] -> std::unique_ptr<IDescriptorFileSystem> {
-        return std::make_unique<WindowsFileSystem>(std::make_shared<NativeContext const>(
-            home, blocking, wallClock, random, options, KernelSeparators, &detail::systemNtFiles()));
-    });
+    return detail::checkOptions(options)
+        .and_then([] { return detail::OwnerSecurity::ofProcess(); })
+        .transform([&](std::shared_ptr<detail::OwnerSecurity const> security)
+                       -> std::unique_ptr<IDescriptorFileSystem> {
+            return std::make_unique<WindowsFileSystem>(
+                std::make_shared<NativeContext const>(home,
+                                                      blocking,
+                                                      wallClock,
+                                                      random,
+                                                      options,
+                                                      KernelSeparators,
+                                                      &detail::systemNtFiles(),
+                                                      std::move(security),
+                                                      nullptr));
+        });
 }
 
 FsResult<std::unique_ptr<IDescriptorFileSystem>> detail::makeWindowsDescriptorFileSystem(
@@ -1303,10 +1366,21 @@ FsResult<std::unique_ptr<IDescriptorFileSystem>> detail::makeWindowsDescriptorFi
     NativeFileSystemOptions options,
     INtFiles const& files)
 {
-    return detail::checkOptions(options).transform([&] -> std::unique_ptr<IDescriptorFileSystem> {
-        return std::make_unique<WindowsFileSystem>(std::make_shared<NativeContext const>(
-            home, blocking, wallClock, random, options, KernelSeparators, &files));
-    });
+    return detail::checkOptions(options)
+        .and_then([] { return detail::OwnerSecurity::ofProcess(); })
+        .transform([&](std::shared_ptr<detail::OwnerSecurity const> security)
+                       -> std::unique_ptr<IDescriptorFileSystem> {
+            return std::make_unique<WindowsFileSystem>(
+                std::make_shared<NativeContext const>(home,
+                                                      blocking,
+                                                      wallClock,
+                                                      random,
+                                                      options,
+                                                      KernelSeparators,
+                                                      &files,
+                                                      std::move(security),
+                                                      nullptr));
+        });
 }
 
 } // namespace core::fs

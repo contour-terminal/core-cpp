@@ -32,7 +32,9 @@
 namespace core::fs::detail
 {
 
-class INtFiles; // windows/WindowsPathWalk.hpp
+class INtFiles;         // windows/WindowsPathWalk.hpp
+class OwnerSecurity;    // windows/OwnerSecurity.hpp
+class OwnerOnlyCreator; // posix/OwnerOnlyCreation.hpp
 
 /// @param code What refused.
 /// @return The refusal, with no system code.
@@ -67,6 +69,12 @@ struct NativeContext
     /// The NT calls a Windows file system opens, inspects and identifies through: the system's, or a
     /// test's scripted ones. Null on every other system.
     INtFiles const* ntFiles = nullptr;
+    /// The process token's user, and the security descriptors an owner-only creation is made with,
+    /// read once, when the file system is built. Null on every system but Windows.
+    std::shared_ptr<OwnerSecurity const> ownerSecurity;
+    /// What makes an owner-only file or directory, its staging key drawn when the file system is
+    /// built. Null on Windows.
+    std::shared_ptr<OwnerOnlyCreator const> ownerOnlyCreator;
 
     /// @param homeExecutor Where every operation resumes.
     /// @param blockingExecutor Where every system call runs.
@@ -75,6 +83,8 @@ struct NativeContext
     /// @param fileSystemOptions What the file system is built with; a null policy is the native one.
     /// @param separators What this kernel splits a name on.
     /// @param files The NT calls on Windows; null elsewhere. Must outlive the file system.
+    /// @param security The owner's security on Windows; null elsewhere.
+    /// @param creator What makes owner-only objects on POSIX; null on Windows.
     /// The strategy's opener is made here: under `Best`, from @c makeBestBeneathOpener.
     NativeContext(async::IExecutor& homeExecutor,
                   async::IExecutor& blockingExecutor,
@@ -82,7 +92,9 @@ struct NativeContext
                   IRandom& random,
                   NativeFileSystemOptions fileSystemOptions,
                   std::string_view separators,
-                  INtFiles const* files);
+                  INtFiles const* files,
+                  std::shared_ptr<OwnerSecurity const> security,
+                  std::shared_ptr<OwnerOnlyCreator const> creator);
 };
 
 /// How a native file system and its descriptors share their @c NativeContext.

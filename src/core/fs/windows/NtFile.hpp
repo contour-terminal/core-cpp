@@ -72,6 +72,10 @@ struct NtOpenRequest
     ULONG disposition = 0;  ///< `FILE_OPEN`, `FILE_CREATE`, ...
     ULONG options = 0;      ///< `FILE_DIRECTORY_FILE`, ...; synchronous I/O is always added.
     ReparseHandling reparse = ReparseHandling::OpenThePoint; ///< What a reparse point it names is.
+    /// What an object this open creates is given as its owner and DACL, by `NtCreateFile` itself
+    /// (`OBJECT_ATTRIBUTES::SecurityDescriptor`), so it is never anyone else's for a moment; null for
+    /// what the system gives (the inherited DACL). An object that already exists keeps its own.
+    PSECURITY_DESCRIPTOR security = nullptr;
 };
 
 /// How every open identifies this process to a server it reaches (a named pipe, a share): never
@@ -116,7 +120,7 @@ inline constexpr auto IdentificationOnly = SECURITY_QUALITY_OF_SERVICE {
                                               .RootDirectory = directory,
                                               .ObjectName = &unicodeName,
                                               .Attributes = OBJ_CASE_INSENSITIVE | attributeFlags,
-                                              .SecurityDescriptor = nullptr,
+                                              .SecurityDescriptor = request.security,
                                               .SecurityQualityOfService = &qualityOfService };
         auto status = IO_STATUS_BLOCK {};
         auto handle = HANDLE {};

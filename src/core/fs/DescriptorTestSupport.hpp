@@ -43,6 +43,13 @@
 namespace core::fs::test
 {
 
+/// Whether this process runs under wine rather than on Windows or a POSIX system. Defined per
+/// platform (`posix/DescriptorTestSupport.cpp`, `windows/DescriptorTestSupport.cpp`); only a binary
+/// that links one of them may call it. A case uses it to accept a behaviour wine has and no native
+/// file system does, and to fail where the same behaviour shows natively. A @c bool because the
+/// name asks it.
+[[nodiscard]] bool runsUnderWine() noexcept;
+
 /// Which implementation of @c IDescriptorFileSystem a fixture builds.
 enum class FixtureKind : std::uint8_t
 {
@@ -309,6 +316,15 @@ class DescriptorFixture
     /// @return The file system.
     [[nodiscard]] IDescriptorFileSystem& fileSystem() const noexcept { return *_fileSystem; }
 
+    /// @return The model under an in-memory fixture, for a setup no descriptor can make.
+    /// @throws std::logic_error For a native fixture.
+    [[nodiscard]] testing::InMemoryDescriptorFileSystem& inMemory() const
+    {
+        if (_inMemory == nullptr)
+            throw std::logic_error { "DescriptorFixture::inMemory: only an in-memory fixture has a model" };
+        return *_inMemory;
+    }
+
     /// @return The directory the root is preopened on, in the host's terms.
     [[nodiscard]] std::filesystem::path const& hostDirectory() const noexcept { return _hostDirectory; }
 
@@ -381,7 +397,7 @@ class DescriptorFixture
         for (auto const& name: names | std::views::take(names.size() - 1))
         {
             parent += parent.empty() ? name : "/" + name;
-            if (auto made = run(root().createDirectoryAt(parent));
+            if (auto made = run(root().createDirectoryAt(parent, CreationAccess::Default));
                 !made && made.error().code != FsErrorCode::Exist)
                 throw std::runtime_error { "DescriptorFixture::writeFile: " + made.error().toString() };
         }
@@ -408,7 +424,7 @@ class DescriptorFixture
     /// @throws std::runtime_error Where it could not.
     void createOutsideDirectory(std::string const& name)
     {
-        if (auto made = run(outside().createDirectoryAt(name)); !made)
+        if (auto made = run(outside().createDirectoryAt(name, CreationAccess::Default)); !made)
             throw std::runtime_error { "DescriptorFixture::createOutsideDirectory: "
                                        + made.error().toString() };
         _decoys.push_back(name);
