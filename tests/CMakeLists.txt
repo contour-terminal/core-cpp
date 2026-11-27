@@ -376,6 +376,30 @@ set_tests_properties(core-cpp.install PROPERTIES
     LABELS "core-cpp;hygiene"
     TIMEOUT 600)
 
+# core-cpp configures on a Clang without clang-scan-deps, top-level and as a subproject, and still
+# scans when a parent asks: tests/cmake/check-module-scan.cmake says how. NOT `tree-level`: it asks
+# this build's compiler. Bound from measurement: three configures, 2.5s under clang-debug; the
+# bound is layering's, which configures real projects too and is as exposed to a cold runner.
+add_test(NAME core-cpp.module-scan
+         COMMAND "${CMAKE_COMMAND}"
+                 "-DSOURCE_DIR=${CORE_CPP_SOURCE_DIR}"
+                 "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/module-scan-check"
+                 "-DCXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+                 "-DCXX_FRONTEND=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT}"
+                 "-DTARGET_SYSTEM=${CMAKE_SYSTEM_NAME}"
+                 "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                 "-DGENERATOR=${CMAKE_GENERATOR}"
+                 "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+                 "-DTOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}"
+                 "-DWITH_SYSTEMD=${CORE_CPP_WITH_SYSTEMD}"
+                 "-DSKIP_EXIT_CODE=${CORE_CPP_SKIP_EXIT_CODE}"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-module-scan.cmake")
+set_tests_properties(core-cpp.module-scan PROPERTIES
+    SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE}
+    SKIP_REGULAR_EXPRESSION "check-module-scan: SKIPPED"
+    LABELS "core-cpp;hygiene"
+    TIMEOUT 120)
+
 # The vendoring tool exports the file set of Part I §5 byte for byte, and refuses each way a copy
 # can stop being verbatim. Every case builds a git repository of its own; the tool's MODE=check
 # needs no git, and one case proves that by running it with an empty PATH.

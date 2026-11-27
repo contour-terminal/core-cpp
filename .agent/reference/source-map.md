@@ -119,6 +119,8 @@ tests/
                                     repositories it builds for the purpose
     check-install.cmake             installs the build, consumes the package, and exports from a
                                     parent with CORE_CPP_INSTALL on and off
+    check-module-scan.cmake         configures core-cpp top-level and as a subproject on a Clang
+                                    without clang-scan-deps, and a parent asking for modules
   consumer-shared/          ConsumerSmoke.hpp: the loopback echo and the core::log line the CPM
                             and vendored consumer programs both run, so neither carries a copy
   consumer-cpm/             a consumer's own project, added to core-cpp with CPM: asserts that
@@ -130,6 +132,8 @@ tests/
   consumer-install/         a consumer of the INSTALLED package: find_package(core-cpp), core::net,
                             and core::testing_main where the build installed it
   consumer-install-nested/  a parent exporting a target that links core-cpp's, as morph does
+  consumer-module-scan/     a C++23 parent that adds core-cpp and never asks for modules, as
+                            Isoline does
 scripts/
   tool-versions.py          prints, installs or checks the pinned clang-format/clang-tidy
   clang-format.py           formats or checks the C++ sources named, or --all, with the pinned build
