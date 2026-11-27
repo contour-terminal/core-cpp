@@ -224,6 +224,9 @@ others in notes.
 | `src/core/net/windows/SshAgentEndpoint_test.cpp` | origin: core-cpp | - | - | defaultSshAgentEndpoint naming the Win32-OpenSSH pipe |
 | `src/core/PosixRandom.cpp` | origin: core-cpp | - | - | `getentropy()` in chunks of at most 256 bytes: Linux, Apple, the BSDs, illumos and Emscripten; its header is chosen by `__has_include(<sys/random.h>)` (Apple, illumos), else `<unistd.h>` |
 | `src/core/platform/Clock.cpp` | origin: core-cpp | - | - | `defaultSystemWallClock()`'s instance, out of line so that a shared build has one |
+| `src/core/platform/PlatformTestSupport.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `runsUnderWine` for the platform tests |
+| `src/core/platform/posix/PlatformTestSupport.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `runsUnderWine` on POSIX |
+| `src/core/platform/windows/PlatformTestSupport.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `runsUnderWine` on Windows |
 | `src/core/testing/windows/SuppressWindowsDialogs_test.cpp` | origin: core-cpp | - | - | 0.3.0: reads back from WerGetFlags that suppressWindowsDialogs() asked Windows Error Reporting for no UI |
 | `src/core/net/CallbackAllocation_test.cpp` | origin: core-cpp | - | - | 0.3.0 review: a drain-step callback that queues nothing costs no allocation, measured by replacing the global allocation functions, which is why it is a binary of its own |
 | `src/core/net/CompletionClaim_test.cpp` | origin: core-cpp | - | - | 0.4.0: the claim a frame-free completion queues for a chain nobody owns -- counted, armed, holding no reference -- and its free at teardown and take-back; a `[bench]` case for the completion path |

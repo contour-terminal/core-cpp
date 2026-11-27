@@ -165,9 +165,18 @@ if(LINUX AND CORE_CPP_WITH_SYSTEMD AND TARGET core-cpp-platform)
     target_include_directories(core-cpp-platform PRIVATE ${_coreCppPlatformPowerIncludes})
 endif()
 
+# runsUnderWine() for the platform tests: one definition per platform, the POSIX one under Emscripten.
+if(WIN32)
+    set(_coreCppPlatformTestSupport windows/PlatformTestSupport.cpp)
+else()
+    set(_coreCppPlatformTestSupport posix/PlatformTestSupport.cpp)
+endif()
+
 core_cpp_add_test(platform
     SOURCES
         ${_coreCppPlatformSubsetTests}
+        PlatformTestSupport.hpp
+        ${_coreCppPlatformTestSupport}
         CpuCountersNative_test.cpp
         FileSystem_test.cpp
         LinuxPerfPlan_test.cpp
@@ -187,4 +196,6 @@ core_cpp_add_test(platform
         windows/SystemPipeInheritance_test.cpp
         windows/WideEnvironment_test.cpp
     SOURCES_EMSCRIPTEN
-        ${_coreCppPlatformSubsetTests})
+        ${_coreCppPlatformSubsetTests}
+        PlatformTestSupport.hpp
+        ${_coreCppPlatformTestSupport})
