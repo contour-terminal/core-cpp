@@ -343,8 +343,12 @@ TEST_CASE("a directory swapped for an outward symlink mid-walk never yields a de
     auto refused = 0;
     {
         auto const swapper = fixture.startSwapper("d", "../");
-        for (auto const round: std::views::iota(0, 2000)) // bounded by count, not by wall time
+        // Bounded by count, not by wall time: at least 2000 rounds, and on until the swapper has made
+        // its hundred swaps, which a slow runner (macOS CI: 78 in 2000) needs more rounds for.
+        for (auto const round: std::views::iota(0, 20'000))
         {
+            if (round >= 2000 && swapper->swaps() > 100)
+                break;
             INFO(round);
             auto opened = fixture.run(fixture.root().openAt(
                 SymlinkPolicy::Follow, "d/inside.txt", OpenFlags::None, DescriptorFlags::Read));

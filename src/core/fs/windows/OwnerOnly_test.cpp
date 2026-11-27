@@ -38,12 +38,16 @@
 #include <sddl.h>
 #include <windows.h>
 
+#include "VirtualVolumeTestSupport.hpp"
+
 using core::fs::AccessScope;
 using core::fs::CreationAccess;
 using core::fs::DescriptorFlags;
 using core::fs::OpenFlags;
 using core::fs::SymlinkPolicy;
 using core::fs::test::DescriptorFixture;
+using core::fs::test::requireElevationOrSkip;
+using core::fs::test::VirtualVolume;
 
 namespace
 {
@@ -153,15 +157,6 @@ void grantEveryone(std::filesystem::path const& path, DWORD inheritance = NO_INH
     REQUIRE(::SetSecurityInfo(
                 handle.get(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, widened, nullptr)
             == ERROR_SUCCESS);
-}
-
-/// Skips a case that needs elevation, or fails it where `CORE_TEST_REQUIRE_ELEVATED=1` says the
-/// runner is elevated (Windows CI), so a lost privilege fails rather than skips there.
-void requireElevationOrSkip(char const* why)
-{
-    if (core::LiveEnvironment {}.get("CORE_TEST_REQUIRE_ELEVATED") == "1")
-        FAIL("CORE_TEST_REQUIRE_ELEVATED=1, but " << why);
-    SKIP(why);
 }
 
 /// @return The access @p descriptor's own handle reports.
@@ -423,4 +418,37 @@ TEST_CASE("windows: a DACL that withholds READ_CONTROL still stats, with access 
     }
     fileSystem->reset();
     std::ignore = home.drain() + blocking.drain();
+}
+
+TEST_CASE("windows: owner-only creation on FAT is refused and leaves nothing behind",
+          "[fs][native][access][windows-native]")
+{
+    // FAT keeps no security descriptor: what NtCreateFile was given is dropped without an error, so
+    // only reading the new object's access back can tell. It is then deleted through its own handle.
+    auto const scratch = core::testing::ScopedTempDir { "core-cpp-fs-fat-owner" };
+    auto volume = VirtualVolume { scratch.path(), "fat32" };
+    auto const root = volume.attach();
+    if (!root)
+        requireElevationOrSkip("no FAT volume could be attached here: diskpart needs an administrator");
+    std::filesystem::create_directories(*root / "grant");
+    auto fixture = DescriptorFixture::createNative();
+    auto directory = fixture.run(fixture.fileSystem().openPreopen(
+        *root / "grant", DescriptorFlags::Read | DescriptorFlags::MutateDirectory));
+    INFO("open: " << (directory ? std::string { "ok" } : directory.error().toString()));
+    REQUIRE(directory.has_value());
+
+    auto const file =
+        fixture.run((*directory)
+                        ->openAt(SymlinkPolicy::NoFollow,
+                                 "secret",
+                                 OpenFlags::Create | OpenFlags::Exclusive | OpenFlags::OwnerOnly,
+                                 DescriptorFlags::Read | DescriptorFlags::Write));
+    REQUIRE_FALSE(file.has_value());
+    CHECK(file.error().code == core::fs::FsErrorCode::NotPermitted);
+    CHECK_FALSE(std::filesystem::exists(*root / "grant" / "secret"));
+
+    auto const made = fixture.run((*directory)->createDirectoryAt("keys", CreationAccess::OwnerOnly));
+    REQUIRE_FALSE(made.has_value());
+    CHECK(made.error().code == core::fs::FsErrorCode::NotPermitted);
+    CHECK_FALSE(std::filesystem::exists(*root / "grant" / "keys"));
 }

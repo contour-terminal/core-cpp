@@ -51,6 +51,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -461,6 +462,24 @@ namespace
             "SetFileInformationByHandle");
     }
 
+    /// Reads @p handle's access back and refuses an object that is not owner-only: a file system that
+    /// keeps no security descriptor (FAT, exFAT) drops the one it was created with and says nothing.
+    /// The refused object is deleted through @p handle, which carries `READ_CONTROL` and `DELETE`, so
+    /// it goes when the handle is closed and no name is ever looked up again.
+    /// @param context The file system, for the token's user.
+    /// @param handle The object just created.
+    /// @return Nothing where it reads owner-only; `NotPermitted` otherwise.
+    FsResult<void> requireOwnerOnly(NativeContext const& context, HANDLE handle)
+    {
+        if (detail::accessFactsOf(handle, context.ownerSecurity->user()).transform(classifyAccess)
+            == AccessScope::OwnerOnly)
+            return {};
+        std::ignore = deleteOpened(handle);
+        return std::unexpected { FsError { .code = FsErrorCode::NotPermitted,
+                                           .systemCode = 0,
+                                           .context = "the new object is not owner-only" } };
+    }
+
     FsResult<void> truncateOpened(HANDLE handle)
     {
         auto end = FILE_END_OF_FILE_INFO {};
@@ -853,9 +872,13 @@ namespace
                         return refuse(FsErrorCode::NotDirectory);
                     request->options |= FILE_DIRECTORY_FILE;
                 }
-                // Owner-only from the moment NtCreateFile makes it; an existing file keeps its own.
+                // Owner-only from the moment NtCreateFile makes it, and read back before it is used.
+                // DELETE, so an object that does not read owner-only goes through this handle.
                 if (hasFlag(open, OpenFlags::OwnerOnly))
+                {
                     request->security = context->ownerSecurity->forFile();
+                    request->access |= DELETE;
+                }
                 auto const name = detail::utf16Of(resolved->name);
                 if (!name)
                     return std::unexpected { name.error() };
@@ -873,6 +896,9 @@ namespace
                 if (!child)
                     return std::unexpected { child.error() };
                 auto const opened = child->handle.get();
+                if (hasFlag(open, OpenFlags::OwnerOnly))
+                    if (auto held = requireOwnerOnly(*context, opened); !held)
+                        return std::unexpected { held.error() };
                 auto const information = informationOf(opened);
                 if (!information)
                     return std::unexpected { information.error() };
@@ -933,17 +959,25 @@ namespace
                         return vacant(std::move(resolved), DescriptorType::Directory);
                     })
                     .and_then([&](Resolved const& resolved) {
-                        return openFinal(*context,
-                                         resolved,
-                                         detail::NtOpenRequest {
-                                             .access = FILE_LIST_DIRECTORY,
-                                             .disposition = FILE_CREATE,
-                                             .options = FILE_DIRECTORY_FILE,
-                                             .reparse = detail::ReparseHandling::OpenThePoint,
-                                             .security = access == CreationAccess::OwnerOnly
-                                                             ? context->ownerSecurity->forDirectory()
-                                                             : nullptr })
-                            .transform([](UniqueHandle const&) {});
+                        auto const ownerOnly = access == CreationAccess::OwnerOnly;
+                        return openFinal(
+                                   *context,
+                                   resolved,
+                                   detail::NtOpenRequest {
+                                       // Read back, and deleted through this handle where it does not
+                                       // read owner-only, as openAt's owner-only file is.
+                                       .access = FILE_LIST_DIRECTORY
+                                                 | (ownerOnly ? ACCESS_MASK { READ_CONTROL | DELETE } : 0),
+                                       .disposition = FILE_CREATE,
+                                       .options = FILE_DIRECTORY_FILE,
+                                       .reparse = detail::ReparseHandling::OpenThePoint,
+                                       .security =
+                                           ownerOnly ? context->ownerSecurity->forDirectory() : nullptr })
+                            .and_then([&](UniqueHandle const& made) -> FsResult<void> {
+                                if (!ownerOnly)
+                                    return {};
+                                return requireOwnerOnly(*context, made.get());
+                            });
                     });
             });
         }
@@ -1072,7 +1106,10 @@ namespace
                         return openFinal(*context, resolved, attributesRequest(0));
                     })
                     .and_then([](UniqueHandle const& link) { return detail::readReparseData(link.get()); })
-                    .and_then([](detail::ReparseData const& data) { return detail::reportedTarget(data); });
+                    .and_then([](detail::ReparseData const& data) { return detail::reportedTarget(data); })
+                    .and_then([&](std::string target) {
+                        return detail::refuseRootedTarget(std::move(target), *context->policy);
+                    });
             });
         }
 
@@ -1328,6 +1365,11 @@ namespace
                 });
         }
 
+        async::Task<FsResult<Relation>> relation(IDescriptor const& first, IDescriptor const& second) override
+        {
+            return detail::relationOf(_context, first, second);
+        }
+
       private:
         SharedContext _context;
     };
@@ -1354,6 +1396,7 @@ FsResult<std::unique_ptr<IDescriptorFileSystem>> makeNativeDescriptorFileSystem(
                                                       KernelSeparators,
                                                       &detail::systemNtFiles(),
                                                       std::move(security),
+                                                      nullptr,
                                                       nullptr));
         });
 }
@@ -1379,6 +1422,7 @@ FsResult<std::unique_ptr<IDescriptorFileSystem>> detail::makeWindowsDescriptorFi
                                                       KernelSeparators,
                                                       &files,
                                                       std::move(security),
+                                                      nullptr,
                                                       nullptr));
         });
 }

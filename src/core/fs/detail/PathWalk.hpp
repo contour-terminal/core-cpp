@@ -69,6 +69,14 @@ struct PathPlan
 [[nodiscard]] CORE_FS_API FsResult<void> checkSymlinkTarget(std::string_view target,
                                                             PathPolicy const& policy);
 
+/// What `readlinkAt` hands out: a target read from a link, unless it names a root, which no walk
+/// follows and no `symlinkAt` makes (@c isRootedLinkTarget), and is refused as WASI 0.3.2 refuses it.
+/// @param target The target as stored.
+/// @param policy The name rules.
+/// @return @p target, or `NotPermitted` where it is rooted.
+[[nodiscard]] CORE_FS_API FsResult<std::string> refuseRootedTarget(std::string target,
+                                                                   PathPolicy const& policy);
+
 /// Replaces component @p at of @p plan, a symbolic link, with the components of its @p target, so
 /// the walk goes on from the directory holding the link. A target ending in `/` or `/.` that
 /// replaces the last component makes the plan's @c PathPlan::finalComponent `Directory`.

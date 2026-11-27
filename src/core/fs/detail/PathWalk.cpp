@@ -153,12 +153,11 @@ namespace
             return refuse(FsErrorCode::NoEntry);
         if (auto checked = checkText(text); !checked)
             return std::unexpected { std::move(checked.error()) };
-        if (separators.contains(text.front()))
+        auto const rooted = kind == TextKind::SymlinkTarget ? isRootedLinkTarget(text, policy)
+                                                            : separators.contains(text.front());
+        if (rooted)
             return refuse(FsErrorCode::NotPermitted);
         auto const pieces = splitOn(text, separators);
-        if (kind == TextKind::SymlinkTarget && !pieces.empty()
-            && pieces.front().find_first_of(policy.volumeSeparators) != std::string_view::npos)
-            return refuse(FsErrorCode::NotPermitted);
         auto components = Components {};
         if (separators.contains(text.back()) || (!pieces.empty() && pieces.back() == "."))
             components.finalComponent = FinalComponent::Directory;
@@ -202,6 +201,13 @@ FsResult<PathPlan> planRelativePath(std::string_view path, PathPolicy const& pol
 FsResult<void> checkSymlinkTarget(std::string_view target, PathPolicy const& policy)
 {
     return componentsOf(target, TextKind::SymlinkTarget, policy).transform([](Components const&) {});
+}
+
+FsResult<std::string> refuseRootedTarget(std::string target, PathPolicy const& policy)
+{
+    if (isRootedLinkTarget(target, policy))
+        return refuse(FsErrorCode::NotPermitted);
+    return target;
 }
 
 FsResult<void> spliceSymlink(PathPlan& plan,

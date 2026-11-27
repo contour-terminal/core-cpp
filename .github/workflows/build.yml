@@ -485,7 +485,15 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
 
+      # Ubuntu 24.04's AppArmor refuses an unprivileged process its own user namespace, so the
+      # Linux relation rows across bind and tmpfs mounts (src/core/fs/linux/Relation_test.cpp)
+      # would skip; with the restriction lifted, CORE_TEST_REQUIRE_USERNS makes such a skip fail.
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Test
+        env:
+          CORE_TEST_REQUIRE_USERNS: "1"
         run: ctest --preset ${{ matrix.preset }} -LE tree-level
 
   # ---------------------------------------------------------------------------------------------
@@ -821,7 +829,18 @@ jobs:
       #
       # To exclude another label here, extend this regex -- `-LE 'tree-level|other'` -- and never
       # add a second flag.
+
+      # Ubuntu 24.04's AppArmor refuses an unprivileged process its own user namespace, so the
+      # Linux relation rows across bind and tmpfs mounts (src/core/fs/linux/Relation_test.cpp)
+      # would skip; with the restriction lifted, CORE_TEST_REQUIRE_USERNS makes such a skip fail.
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      # Not under TSan: its runtime keeps a thread of its own in a forked child, and the kernel
+      # refuses a user namespace to a process with more than one thread (unshare: EINVAL).
       - name: Test
+        env:
+          CORE_TEST_REQUIRE_USERNS: ${{ matrix.preset == 'clang-tsan' && '0' || '1' }}
         run: ctest --preset ${{ matrix.preset }} -LE tree-level
 
   # ---------------------------------------------------------------------------------------------
@@ -1249,7 +1268,16 @@ jobs:
           [ "${hits:-0}" -ge 1 ] || { echo "::error::pace-cc --show-stats shows no hits"; exit 1; }
 
       # A replayed object is only as good as what it runs: the tests run on the cache's objects.
+
+      # Ubuntu 24.04's AppArmor refuses an unprivileged process its own user namespace, so the
+      # Linux relation rows across bind and tmpfs mounts (src/core/fs/linux/Relation_test.cpp)
+      # would skip; with the restriction lifted, CORE_TEST_REQUIRE_USERNS makes such a skip fail.
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Test the replayed build
+        env:
+          CORE_TEST_REQUIRE_USERNS: "1"
         run: ctest --preset "$PRESET" -LE tree-level
 
   # ---------------------------------------------------------------------------------------------
@@ -1495,7 +1523,15 @@ jobs:
       - name: Build
         run: cmake --build --preset clang-coverage
 
+      # Ubuntu 24.04's AppArmor refuses an unprivileged process its own user namespace, so the
+      # Linux relation rows across bind and tmpfs mounts (src/core/fs/linux/Relation_test.cpp)
+      # would skip; with the restriction lifted, CORE_TEST_REQUIRE_USERNS makes such a skip fail.
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Test
+        env:
+          CORE_TEST_REQUIRE_USERNS: "1"
         run: |
           mkdir -p out/build/clang-coverage/profiles
           LLVM_PROFILE_FILE="$PWD/out/build/clang-coverage/profiles/%m-%p.profraw" ctest --preset clang-coverage -LE tree-level

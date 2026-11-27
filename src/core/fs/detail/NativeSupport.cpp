@@ -4,6 +4,7 @@
 #include <core/Sha256.hpp>
 #include <core/fs/FsError.hpp>
 #include <core/fs/PathPolicy.hpp>
+#include <core/fs/detail/Ancestry.hpp>
 #include <core/fs/detail/PathWalk.hpp>
 
 #include <array>
@@ -79,7 +80,8 @@ NativeContext::NativeContext(async::IExecutor& homeExecutor,
                              std::string_view separators,
                              INtFiles const* files,
                              std::shared_ptr<OwnerSecurity const> security,
-                             std::shared_ptr<OwnerOnlyCreator const> creator):
+                             std::shared_ptr<OwnerOnlyCreator const> creator,
+                             std::shared_ptr<IMountBoundaries const> boundaries):
     home { &homeExecutor },
     blocking { &blockingExecutor },
     wallClock { &clock },
@@ -94,7 +96,8 @@ NativeContext::NativeContext(async::IExecutor& homeExecutor,
                         : nullptr },
     ntFiles { files },
     ownerSecurity { std::move(security) },
-    ownerOnlyCreator { std::move(creator) }
+    ownerOnlyCreator { std::move(creator) },
+    mountBoundaries { std::move(boundaries) }
 {
     random.fill(secret);
 }
@@ -130,14 +133,20 @@ FsResult<void> requireDirectory(DescriptorType type)
     return {};
 }
 
+FsResult<NativeDescriptorBase::Target> NativeDescriptorBase::targetIn(SharedContext const& context,
+                                                                      IDescriptor const& descriptor)
+{
+    auto const* mine = dynamic_cast<NativeDescriptorBase const*>(&descriptor);
+    if (mine == nullptr || mine->_context != context)
+        return refuse(FsErrorCode::CrossDevice);
+    return Target { .handle = mine->_handle, .flags = mine->_flags, .type = mine->_type };
+}
+
 FsResult<NativeDescriptorBase::Target> NativeDescriptorBase::sameSystemTarget(IDescriptor* other) const
 {
     if (other == nullptr)
         return refuse(FsErrorCode::BadDescriptor);
-    auto const* mine = dynamic_cast<NativeDescriptorBase const*>(other);
-    if (mine == nullptr || mine->_context != _context)
-        return refuse(FsErrorCode::CrossDevice);
-    return Target { .handle = mine->_handle, .flags = mine->_flags, .type = mine->_type };
+    return targetIn(_context, *other);
 }
 
 FsResult<std::optional<NativeDescriptorBase::Target>> NativeDescriptorBase::sameObjectCandidate(
@@ -149,6 +158,28 @@ FsResult<std::optional<NativeDescriptorBase::Target>> NativeDescriptorBase::same
     if (target.error().code == FsErrorCode::CrossDevice)
         return std::optional<Target> {};
     return std::unexpected { std::move(target.error()) };
+}
+
+async::Task<FsResult<Relation>> relationOf(SharedContext const& context,
+                                           IDescriptor const& first,
+                                           IDescriptor const& second)
+{
+    using Target = NativeDescriptorBase::Target;
+    auto targets = NativeDescriptorBase::targetIn(context, first).and_then([&](Target firstTarget) {
+        return NativeDescriptorBase::targetIn(context, second).transform([&](Target secondTarget) {
+            return std::pair { std::move(firstTarget), std::move(secondTarget) };
+        });
+    });
+    return async::offload(
+        context->home, context->blocking, [context, targets = std::move(targets)]() -> FsResult<Relation> {
+            if (!targets)
+                return std::unexpected { targets.error() };
+            auto const& [firstTarget, secondTarget] = *targets;
+            if (firstTarget.type != DescriptorType::Directory
+                || secondTarget.type != DescriptorType::Directory)
+                return refuse(FsErrorCode::NotDirectory);
+            return nativeRelation(*context, firstTarget.handle->get(), secondTarget.handle->get());
+        });
 }
 
 WalkRules walkRulesOf(NativeContext const& context,

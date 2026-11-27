@@ -27,28 +27,40 @@
 #     system has leases (posix/).
 #   - DirectoryRead.cpp: a directory stream reads Linux's getdents64 records into a fixed buffer
 #     (linux/); every other POSIX system reads through fdopendir and readdir (posix/).
-#   - AccessFacts.cpp: who may reach an object, read from its handle. Linux, and every POSIX system
-#     without an ACL of its own, needs only the fstat (posix/); FreeBSD reads an NFSv4 ACL
+#   - AccessFacts.cpp: who may reach an object, read from its handle. Linux reads the fstat and
+#     judges nothing on an NFS or SMB mount or an object with an NFSv4 ACL (linux/); OpenBSD and
+#     DragonFly need only the fstat (posix/); NetBSD, whose ACLs are not read, and any other POSIX
+#     system judge nothing (posix/UnknownAccessFacts.cpp); the mode caps what they inherit
+#     (posix/ModeCappedCreation.cpp). FreeBSD reads an NFSv4 ACL
 #     (bsd/), macOS an extended one (darwin/), Windows the owner and DACL (windows/, beside
 #     OwnerSecurity.cpp, the descriptor owner-only creations are made with). Each fills the same
 #     AccessFacts, and AccessScope.cpp decides from them on every OS.
+#   - MountBoundaries.cpp: what a relation walk that leaves a mount reads of it. Linux reads the
+#     mount's device, root and type in mountinfo (linux/); macOS and the BSDs read the mount and its
+#     type from fstatfs (bsd/), and whether the step left from its root from MountExit.cpp: macOS's
+#     firmlinks leave below it (darwin/), the other BSDs only at it (bsd/); any other POSIX system
+#     knows the device alone (posix/). Windows
+#     walks by final path and needs none (windows/Ancestry.cpp).
 if(WIN32)
     set(_coreCppFsPlatform windows/Win32ErrorTable.cpp windows/NtStatusTable.cpp windows/BeneathDefault.cpp windows/AccessFacts.cpp)
     set(_coreCppFsPrivateLibs ntdll advapi32)
 elseif(APPLE)
-    set(_coreCppFsPlatform bsd/ErrnoTable.cpp darwin/PosixSystem.cpp posix/Append.cpp posix/BeneathDefault.cpp posix/DirectoryRead.cpp posix/Lease.cpp darwin/AccessFacts.cpp)
+    set(_coreCppFsPlatform bsd/ErrnoTable.cpp darwin/PosixSystem.cpp posix/Append.cpp posix/BeneathDefault.cpp posix/DirectoryRead.cpp posix/Lease.cpp darwin/AccessFacts.cpp bsd/MountBoundaries.cpp darwin/MountExit.cpp)
 elseif(CORE_CPP_PLATFORM_BSD)
-    set(_coreCppFsPlatform bsd/ErrnoTable.cpp posix/PosixSystem.cpp posix/Append.cpp posix/BeneathDefault.cpp posix/DirectoryRead.cpp posix/Lease.cpp)
-    # NFSv4 ACLs are FreeBSD's; the other BSDs have none beyond what the mode bounds.
+    set(_coreCppFsPlatform bsd/ErrnoTable.cpp posix/PosixSystem.cpp posix/Append.cpp posix/BeneathDefault.cpp posix/DirectoryRead.cpp posix/Lease.cpp bsd/MountBoundaries.cpp bsd/MountExit.cpp)
+    # FreeBSD's NFSv4 ACLs are read; NetBSD's are not, so nothing is judged there; OpenBSD and
+    # DragonFly have none beyond what the mode bounds.
     if(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
         list(APPEND _coreCppFsPlatform bsd/AccessFacts.cpp)
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+        list(APPEND _coreCppFsPlatform posix/UnknownAccessFacts.cpp posix/ModeCappedCreation.cpp)
     else()
-        list(APPEND _coreCppFsPlatform posix/AccessFacts.cpp)
+        list(APPEND _coreCppFsPlatform posix/AccessFacts.cpp posix/ModeCappedCreation.cpp)
     endif()
 elseif(LINUX)
-    set(_coreCppFsPlatform posix/ErrnoTable.cpp posix/PosixSystem.cpp linux/Append.cpp linux/BeneathDefault.cpp linux/DirectoryRead.cpp linux/Lease.cpp posix/AccessFacts.cpp)
+    set(_coreCppFsPlatform posix/ErrnoTable.cpp posix/PosixSystem.cpp linux/Append.cpp linux/BeneathDefault.cpp linux/DirectoryRead.cpp linux/Lease.cpp linux/AccessFacts.cpp posix/ModeCappedCreation.cpp linux/MountBoundaries.cpp)
 else()
-    set(_coreCppFsPlatform posix/ErrnoTable.cpp posix/PosixSystem.cpp posix/Append.cpp posix/BeneathDefault.cpp posix/DirectoryRead.cpp posix/Lease.cpp posix/AccessFacts.cpp)
+    set(_coreCppFsPlatform posix/ErrnoTable.cpp posix/PosixSystem.cpp posix/Append.cpp posix/BeneathDefault.cpp posix/DirectoryRead.cpp posix/Lease.cpp posix/UnknownAccessFacts.cpp posix/ModeCappedCreation.cpp posix/MountBoundaries.cpp)
 endif()
 
 # The openat2 path spells the call's ABI itself (linux/Openat2.hpp), so no UAPI 5.6 headers or glibc
@@ -69,6 +81,8 @@ core_cpp_add_module(fs KIND STATIC
         FsError.cpp
         PathPolicy.cpp
         Rights.cpp
+        detail/Ancestry.cpp
+        detail/Ancestry.hpp
         detail/DirectoryStream.cpp
         detail/DirectoryStream.hpp
         detail/NativeSupport.cpp
@@ -80,8 +94,10 @@ core_cpp_add_module(fs KIND STATIC
         testing/InMemoryDescriptorFileSystem.cpp
         ${_coreCppFsPlatform}
     SOURCES_POSIX
+        posix/Ancestry.cpp
         posix/DirectoryEntries.cpp
         posix/DirectoryRead.hpp
+        posix/MountBoundaries.hpp
         posix/ErrnoRows.hpp
         posix/NativePathPolicy.cpp
         posix/OwnerOnlyCreation.cpp
@@ -93,9 +109,11 @@ core_cpp_add_module(fs KIND STATIC
     SOURCES_LINUX
         linux/Append.hpp
         linux/DirectoryRead.hpp
+        linux/MountInfo.hpp
         linux/Openat2.cpp
         linux/Openat2.hpp
     SOURCES_WINDOWS
+        windows/Ancestry.cpp
         windows/DirectoryRecords.cpp
         windows/DirectoryRecords.hpp
         windows/NativePathPolicy.cpp
@@ -105,6 +123,8 @@ core_cpp_add_module(fs KIND STATIC
         windows/OwnerSecurity.hpp
         windows/ReparsePoint.cpp
         windows/ReparsePoint.hpp
+        windows/StableFileIdRows.cpp
+        windows/StableFileIdRows.hpp
         windows/WindowsDescriptor.cpp
         windows/WindowsPathWalk.cpp
         windows/WindowsPathWalk.hpp
@@ -114,10 +134,12 @@ core_cpp_add_module(fs KIND STATIC
 # posix/Append.cpp, posix/BeneathDefault.cpp, posix/DirectoryRead.cpp and posix/Lease.cpp are what Apple and
 # the BSDs append, resolve, read directories and open leased files with,
 # so a Linux build would never compile them: parse them there too, so a rename or a dropped include
-# shows up before a macOS job does.
+# shows up before a macOS job does. posix/MountBoundaries.cpp, which only a POSIX system that is
+# neither Linux, Apple nor a BSD builds, is parsed with them.
 if(LINUX)
     core_cpp_add_unbuilt_source_check(fs-posix
         SOURCES posix/Append.cpp posix/BeneathDefault.cpp posix/DirectoryRead.cpp posix/Lease.cpp
+                posix/MountBoundaries.cpp
         PART_OF fs
         USAGE core::base core::async core::platform)
 endif()
@@ -131,6 +153,15 @@ else()
     set(_coreCppFsInheritableAcl posix/InheritableAcl_test.cpp)
 endif()
 
+# The relation across macOS's own volumes: a firmlink leaves the Data volume below its root, and a
+# disk image mounted beneath a grant. On FreeBSD, nullfs and tmpfs mounts beneath a grant.
+set(_coreCppFsMountTests)
+if(APPLE)
+    set(_coreCppFsMountTests darwin/Relation_test.cpp)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+    set(_coreCppFsMountTests bsd/Relation_test.cpp)
+endif()
+
 # One binary: every case links core::fs and nothing the module's row does not list.
 # DescriptorTestSupport.hpp is the test-only fixture the descriptor cases share.
 core_cpp_add_test(fs
@@ -142,13 +173,17 @@ core_cpp_add_test(fs
         DirectoryStream_test.cpp
         FsError_test.cpp
         NativeDescriptor_test.cpp
+        PathPolicy_test.cpp
+        Relation_test.cpp
         detail/PathWalk_test.cpp
         testing/InMemoryDescriptorFileSystem_test.cpp
     SOURCES_POSIX
         posix/DescriptorTestSupport.cpp
         posix/DirectoryEntries_test.cpp
+        posix/MountBoundaries_test.cpp
         posix/InheritableAcl.hpp
         ${_coreCppFsInheritableAcl}
+        ${_coreCppFsMountTests}
         posix/OwnerOnly_test.cpp
         posix/PosixDescriptor_test.cpp
         posix/PosixPathWalk_test.cpp
@@ -157,12 +192,16 @@ core_cpp_add_test(fs
         linux/DescriptorEscape_test.cpp
         linux/DirectoryRead_test.cpp
         linux/Lease_test.cpp
+        linux/MountInfo_test.cpp
         linux/Openat2_test.cpp
+        linux/Relation_test.cpp
     SOURCES_WINDOWS
         windows/DescriptorEscape_test.cpp
         windows/DescriptorTestSupport.cpp
         windows/DirectoryRecords_test.cpp
         windows/OwnerOnly_test.cpp
+        windows/Relation_test.cpp
+        windows/VirtualVolumeTestSupport.hpp
         windows/WindowsPathWalk_test.cpp)
 
 # What the last owner of a handle does when its queued close cannot be allocated: a binary of its own
@@ -175,4 +214,7 @@ if(NOT CORE_CPP_SANITIZERS AND NOT WIN32)
     # What a directory stream holds while it reads a large directory, counted the same way.
     core_cpp_add_test(fs NAME fs-memory
         SOURCES posix/DirectoryStreamMemory_test.cpp DescriptorTestSupport.hpp ../testing/ReplacedGlobalAllocation.cpp)
+    # What a relation holds while it walks, counted the same way.
+    core_cpp_add_test(fs NAME fs-relation-memory
+        SOURCES RelationMemory_test.cpp DescriptorTestSupport.hpp ../testing/ReplacedGlobalAllocation.cpp)
 endif()

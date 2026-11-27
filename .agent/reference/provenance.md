@@ -176,14 +176,21 @@ others in notes.
 | `src/core/fs/NativeFileSystem.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `makeNativeDescriptorFileSystem` and its options |
 | `src/core/fs/PathPolicy.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the POSIX and Windows rows |
 | `src/core/fs/PathPolicy.hpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/PathPolicy_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `isRootedLinkTarget` over both policies |
+| `src/core/fs/RelationMemory_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): what one relation holds while it walks, counted |
+| `src/core/fs/Relation_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the native relation under a rename race, every OS |
 | `src/core/fs/Rights.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the rights table and `checkOpenRights`, after wasmtime's descriptor permissions |
 | `src/core/fs/Rights.hpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/fs/bsd/AccessFacts.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): FreeBSD's access reader, NFSv4 ACLs |
 | `src/core/fs/bsd/ErrnoTable.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): Apple and the BSDs; `EMLINK` for FreeBSD's `O_NOFOLLOW` |
 | `src/core/fs/bsd/InheritableAcl_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): an NFSv4 `setfacl`, FreeBSD |
+| `src/core/fs/bsd/MountBoundaries.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): mount boundaries from fstatfs on macOS and the BSDs |
+| `src/core/fs/bsd/Relation_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): a nullfs mount beneath a grant that shows the key, FreeBSD |
 | `src/core/fs/darwin/AccessFacts.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): macOS's access reader, extended ACLs |
 | `src/core/fs/darwin/InheritableAcl_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `chmod +a`, macOS |
 | `src/core/fs/darwin/PosixSystem.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): Apple: `st_atimespec`, `F_RDADVISE`, `F_FULLFSYNC`, `EACCES` for `O_CREAT` on a directory |
+| `src/core/fs/detail/Ancestry.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `decideRelation`, shared by the walkers and the model |
+| `src/core/fs/detail/Ancestry.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `ObjectIdentity`, `decideRelation`, `nativeRelation` |
 | `src/core/fs/detail/DirectoryStream.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/fs/detail/DirectoryStream.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the batched directory stream every implementation reads through |
 | `src/core/fs/detail/NativeSupport.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
@@ -196,6 +203,7 @@ others in notes.
 | `src/core/fs/linux/Append.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `pwritev2(RWF_APPEND)`, and a write at the end `fstat` reports, under the descriptor's lock, where the flag is refused |
 | `src/core/fs/linux/Append.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `appendAtEnd`, the append where `RWF_APPEND` is refused |
 | `src/core/fs/linux/Append_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/linux/AccessFacts.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the access reader of Linux; nothing is judged on NFS, SMB or an NFSv4 ACL |
 | `src/core/fs/linux/BeneathDefault.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `Best` on Linux is `openat2`, probed; the walk opens `O_PATH` |
 | `src/core/fs/linux/DirectoryRead.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): a directory stream's `getdents64` records, field by field, in one fixed buffer |
 | `src/core/fs/linux/DirectoryRead.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `parseDirentRecords`, the `getdents64` record seam |
@@ -203,10 +211,17 @@ others in notes.
 | `src/core/fs/linux/DescriptorEscape_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): no path goes through a `/proc` magic link |
 | `src/core/fs/linux/Lease.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): an open under a lease made again, waiting, through a path handle checked to be a regular file |
 | `src/core/fs/linux/Lease_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/linux/MountBoundaries.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): mount boundaries from statx and mountinfo |
+| `src/core/fs/linux/MountInfo.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the root column of mountinfo |
+| `src/core/fs/linux/MountInfo_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/fs/linux/Openat2.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `openat2(RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS)`, the probe and the bounded `EAGAIN` retry |
 | `src/core/fs/linux/Openat2.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the `openat2` system-call seam |
 | `src/core/fs/linux/Openat2_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
-| `src/core/fs/posix/AccessFacts.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the access reader of Linux and every POSIX system without an ACL of its own |
+| `src/core/fs/linux/Relation_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): relation across a mount and a bind mount |
+| `src/core/fs/posix/AccessFacts.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the access reader of OpenBSD and DragonFly, whose mode bounds every access |
+| `src/core/fs/posix/ModeCappedCreation.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): owner-only creation where the creating mode caps what a directory hands down |
+| `src/core/fs/posix/UnknownAccessFacts.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the access reader of NetBSD and every other POSIX system: nothing is judged |
+| `src/core/fs/posix/Ancestry.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the POSIX walker, through the kernel's own `..` |
 | `src/core/fs/posix/Append.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the second, `O_APPEND` handle of every POSIX system but Linux |
 | `src/core/fs/posix/BeneathDefault.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `Best` is the walk on every POSIX system but Linux; `#ifdef O_PATH` inside the data picks the walk's open flags |
 | `src/core/fs/posix/DescriptorTestSupport.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `runsUnderWine` on POSIX |
@@ -220,6 +235,13 @@ others in notes.
 | `src/core/fs/posix/InheritableAcl.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): how a test plants an inheritable ACL, per OS |
 | `src/core/fs/posix/InheritableAcl_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `setfacl -d`, Linux |
 | `src/core/fs/posix/Lease.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): no leases off Linux: `WouldBlock` |
+| `src/core/fs/posix/MountBoundaries.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): mount boundaries where nothing tells what a mount shows |
+| `src/core/fs/posix/MountBoundaries.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `IMountBoundaries` |
+| `src/core/fs/posix/MountBoundaries_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): what a mount left may hide, and the relation walk under scripted boundaries |
+| `src/core/fs/bsd/MountExit.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): whether a walk left a mount from its root, macOS and the BSDs |
+| `src/core/fs/bsd/MountExit.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the BSDs leave a mount only at its root |
+| `src/core/fs/darwin/MountExit.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): a macOS firmlink leaves the Data volume below its root |
+| `src/core/fs/darwin/Relation_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the relation across a macOS firmlink |
 | `src/core/fs/posix/NativePathPolicy.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/fs/posix/OwnedHandleAllocation_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the last close when its frame cannot be allocated; replaces the global allocation functions |
 | `src/core/fs/posix/OwnerOnlyCreation.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): owner-only creation, direct or through a stripped staging directory |
@@ -237,6 +259,7 @@ others in notes.
 | `src/core/fs/testing/InMemoryDescriptorFileSystem_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/fs/windows/AccessFacts.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the Windows access reader, owner and DACL by handle |
 | `src/core/fs/windows/AccessFacts.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the Windows access reader |
+| `src/core/fs/windows/Ancestry.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the Windows walker, by final path and file id |
 | `src/core/fs/windows/BeneathDefault.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `Best` is the walk on Windows |
 | `src/core/fs/windows/DescriptorEscape_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): junctions, mount points, backslash targets, link flavour, private reparse tags |
 | `src/core/fs/windows/DescriptorTestSupport.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `runsUnderWine` on Windows |
@@ -249,8 +272,12 @@ others in notes.
 | `src/core/fs/windows/OwnerOnly_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/fs/windows/OwnerSecurity.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the token user and the owner-only security descriptors |
 | `src/core/fs/windows/OwnerSecurity.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the token user and the owner-only security descriptors |
+| `src/core/fs/windows/Relation_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/windows/VirtualVolumeTestSupport.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the diskpart virtual disks the volume cases need, and their elevation rule |
 | `src/core/fs/windows/ReparsePoint.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): reparse data, field by field |
 | `src/core/fs/windows/ReparsePoint.hpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/fs/windows/StableFileIdRows.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the file systems whose ids relation trusts |
+| `src/core/fs/windows/StableFileIdRows.hpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/fs/windows/Win32ErrorTable.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/fs/windows/WindowsDescriptor.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the Windows native descriptors |
 | `src/core/fs/windows/WindowsPathWalk.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the Windows component walker and the NT seam |

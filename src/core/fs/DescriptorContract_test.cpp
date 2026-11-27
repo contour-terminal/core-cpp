@@ -6,6 +6,7 @@
 #include <core/fs/Descriptor.hpp>
 #include <core/fs/DescriptorTestSupport.hpp>
 #include <core/fs/FsError.hpp>
+#include <core/fs/NativeFileSystem.hpp>
 #include <core/fs/PathPolicy.hpp>
 #include <core/fs/Rights.hpp>
 #include <core/fs/testing/InMemoryDescriptorFileSystem.hpp>
@@ -22,7 +23,9 @@
 #include <initializer_list>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -990,6 +993,189 @@ TEST_CASE("contract: renameAt replaces an existing file atomically", "[fs][contr
     CHECK(textOf(fixture.run((*reader)->read(64, 0)).value().bytes) == "old");
 }
 
+namespace
+{
+
+using core::fs::Relation;
+
+/// Opens the directory @p path beneath @p fixture's root, following a final link where @p policy
+/// says so; `.` is the root again.
+[[nodiscard]] std::unique_ptr<IDescriptor> openDirectory(DescriptorFixture const& fixture,
+                                                         std::string path,
+                                                         SymlinkPolicy policy = SymlinkPolicy::NoFollow)
+{
+    auto opened = fixture.run(
+        fixture.root().openAt(policy, std::move(path), OpenFlags::Directory, DescriptorFlags::Read));
+    REQUIRE(opened.has_value());
+    return std::move(*opened);
+}
+
+/// @return How @p first relates to @p second, or why not.
+[[nodiscard]] FsResult<Relation> relationOf(DescriptorFixture const& fixture,
+                                            IDescriptor const& first,
+                                            IDescriptor const& second)
+{
+    return fixture.run(fixture.fileSystem().relation(first, second));
+}
+
+/// Skips a case of the native relation under wine, which hands out paths by volume GUID
+/// (`\\?\Volume{...}\`) that it cannot open again, and the path a handle was opened by after it
+/// was renamed (tried with paths by drive letter instead); native Windows runs every one.
+void skipNativeRelationUnderWine(FixtureKind kind)
+{
+    if (kind == FixtureKind::Native && core::fs::test::runsUnderWine())
+        SKIP("wine cannot open the volume GUID paths its GetFinalPathNameByHandleW hands out, and names a "
+             "renamed handle by the path it was opened by");
+}
+
+/// Makes the directories of @p path beneath @p fixture's root, each one above it first.
+void makeDirectories(DescriptorFixture const& fixture, std::string const& path)
+{
+    auto parent = std::string {};
+    for (auto const piece: path | std::views::split('/'))
+    {
+        parent += (parent.empty() ? "" : "/") + std::string { std::string_view { piece } };
+        auto const made = fixture.run(fixture.root().createDirectoryAt(parent, CreationAccess::Default));
+        REQUIRE((made.has_value() || made.error().code == FsErrorCode::Exist));
+    }
+}
+
+} // namespace
+
+TEST_CASE("contract: relation decides on real parents", "[fs][contract][relation]")
+{
+    auto const kind = GENERATE(FixtureKind::InMemory, FixtureKind::Native);
+    skipNativeRelationUnderWine(kind);
+    auto fixture = DescriptorFixture::create(kind);
+    makeDirectories(fixture, "a/b");
+    makeDirectories(fixture, "c");
+    fixture.createFile("f", "a file");
+
+    struct Row
+    {
+        std::string first;
+        std::string second;
+        Relation expected = Relation::Unrelated;
+    };
+    auto const row = GENERATE(Row { "a", "a", Relation::Same },
+                              Row { "a", "a/b", Relation::FirstContainsSecond },
+                              Row { "a/b", "a", Relation::SecondContainsFirst },
+                              Row { "a/b", "c", Relation::Unrelated },
+                              Row { ".", "a/b", Relation::FirstContainsSecond },
+                              Row { "a/b", ".", Relation::SecondContainsFirst });
+    CAPTURE(row.first, row.second);
+    auto const first = openDirectory(fixture, row.first);
+    auto const second = openDirectory(fixture, row.second);
+    CHECK(relationOf(fixture, *first, *second) == row.expected);
+
+    // A regular file as either is NotDirectory, whatever the other is.
+    auto file = fixture.run(
+        fixture.root().openAt(SymlinkPolicy::NoFollow, "f", OpenFlags::None, DescriptorFlags::Read));
+    REQUIRE(file.has_value());
+    CHECK(outcomeOf(relationOf(fixture, **file, *second)) == FsErrorCode::NotDirectory);
+    // A file with itself, too: the walk alone would find the file's parents by name on Windows, or
+    // its own identity Same, so the type is what refuses.
+    CHECK(outcomeOf(relationOf(fixture, **file, **file)) == FsErrorCode::NotDirectory);
+    CHECK(outcomeOf(relationOf(fixture, *first, **file)) == FsErrorCode::NotDirectory);
+}
+
+TEST_CASE("contract: relation sees through a symlinked component", "[fs][contract][relation]")
+{
+    // The key-path bypass of the P14 review (C1): ~/.config is a link into /data/dotfiles, so the
+    // key directory lies beneath a grant of /data/dotfiles though no path says so.
+    auto const kind = GENERATE(FixtureKind::InMemory, FixtureKind::Native);
+    skipNativeRelationUnderWine(kind);
+    auto fixture = DescriptorFixture::create(kind);
+    if (fixture.requireSymlinks() == SymlinkSupport::Unavailable)
+        SKIP("this file system cannot create symbolic links");
+    makeDirectories(fixture, "dotfiles/config/isoline");
+    makeDirectories(fixture, "home");
+    REQUIRE(fixture.run(fixture.root().symlinkAt("../dotfiles/config", "home/config")).has_value());
+    auto const key = openDirectory(fixture, "home/config/isoline", SymlinkPolicy::Follow);
+    auto const dotfiles = openDirectory(fixture, "dotfiles");
+    auto const home = openDirectory(fixture, "home");
+    CHECK(relationOf(fixture, *dotfiles, *key) == Relation::FirstContainsSecond);
+    CHECK(relationOf(fixture, *key, *dotfiles) == Relation::SecondContainsFirst);
+    // What the opening path says is not what counts: home holds no part of it.
+    CHECK(relationOf(fixture, *home, *key) == Relation::Unrelated);
+}
+
+TEST_CASE("contract: relation follows a rename after open", "[fs][contract][relation]")
+{
+    auto const kind = GENERATE(FixtureKind::InMemory, FixtureKind::Native);
+    skipNativeRelationUnderWine(kind);
+    auto fixture = DescriptorFixture::create(kind);
+    makeDirectories(fixture, "a/b");
+    makeDirectories(fixture, "c");
+    auto const a = openDirectory(fixture, "a");
+    auto const b = openDirectory(fixture, "a/b");
+    auto const c = openDirectory(fixture, "c");
+    REQUIRE(relationOf(fixture, *a, *b) == Relation::FirstContainsSecond);
+    REQUIRE(fixture.run(fixture.root().renameAt("a/b", &fixture.root(), "c/b")).has_value());
+    // The object's parents now, never the path it was opened by.
+    CHECK(relationOf(fixture, *a, *b) == Relation::Unrelated);
+    CHECK(relationOf(fixture, *c, *b) == Relation::FirstContainsSecond);
+}
+
+TEST_CASE("contract: relation of a removed directory is NoEntry", "[fs][contract][relation]")
+{
+    // In the model: a removed directory has no parent, as a native `..` of it on POSIX finds none.
+    // Windows keeps a removed directory in its parent until its last handle is closed.
+    auto fixture = DescriptorFixture::createInMemory();
+    makeDirectories(fixture, "a/b");
+    auto const b = openDirectory(fixture, "a/b");
+    REQUIRE(fixture.run(fixture.root().removeDirectoryAt("a/b")).has_value());
+    CHECK(outcomeOf(relationOf(fixture, fixture.root(), *b)) == FsErrorCode::NoEntry);
+    CHECK(outcomeOf(relationOf(fixture, *b, fixture.root())) == FsErrorCode::NoEntry);
+}
+
+TEST_CASE("contract: relation fails closed without identities", "[fs][contract][relation]")
+{
+    auto fixture = DescriptorFixture::createInMemory(core::fs::posixPathPolicy(),
+                                                     core::fs::testing::IdentityModel::Unavailable);
+    makeDirectories(fixture, "a/b");
+    auto const a = openDirectory(fixture, "a");
+    auto const b = openDirectory(fixture, "a/b");
+    CHECK(outcomeOf(relationOf(fixture, *a, *b)) == FsErrorCode::Unsupported);
+    CHECK(outcomeOf(relationOf(fixture, *a, *a)) == FsErrorCode::Unsupported);
+}
+
+TEST_CASE("contract: relation refuses foreign descriptors", "[fs][contract][relation]")
+{
+    auto const kind = GENERATE(FixtureKind::InMemory, FixtureKind::Native);
+    auto fixture = DescriptorFixture::create(kind);
+    auto other = DescriptorFixture::create(kind);
+    makeDirectories(fixture, "a");
+    auto const a = openDirectory(fixture, "a");
+    CHECK(outcomeOf(relationOf(fixture, *a, other.root())) == FsErrorCode::CrossDevice);
+    CHECK(outcomeOf(relationOf(fixture, other.root(), *a)) == FsErrorCode::CrossDevice);
+    // The other file system refuses this one's, too.
+    CHECK(outcomeOf(relationOf(other, other.root(), *a)) == FsErrorCode::CrossDevice);
+}
+
+TEST_CASE("contract: relation is bounded", "[fs][contract][relation]")
+{
+    auto const kind = GENERATE(FixtureKind::InMemory, FixtureKind::Native);
+    skipNativeRelationUnderWine(kind);
+    auto fixture =
+        DescriptorFixture::create(kind, core::fs::NativeFileSystemOptions { .maxAncestorDepth = 8 });
+    makeDirectories(fixture, "d1/d2/d3/d4/d5/d6/d7/d8/d9");
+    auto const deep = openDirectory(fixture, "d1/d2/d3/d4/d5/d6/d7/d8/d9");
+    // Nine parents below the root before the root's own: past eight, whatever lies above the root.
+    CHECK(outcomeOf(relationOf(fixture, fixture.root(), *deep)) == FsErrorCode::Loop);
+    CHECK(outcomeOf(relationOf(fixture, *deep, fixture.root())) == FsErrorCode::Loop);
+    if (kind == FixtureKind::InMemory)
+    {
+        // Within the cap it decides: d5's parents are d4 to d1, the root and the model's root.
+        auto const shallow = openDirectory(fixture, "d1/d2/d3/d4/d5");
+        CHECK(relationOf(fixture, fixture.root(), *shallow) == Relation::FirstContainsSecond);
+    }
+    auto unbounded = DescriptorFixture::create(kind);
+    makeDirectories(unbounded, "d1/d2/d3/d4/d5/d6/d7/d8/d9");
+    auto const deepUnbounded = openDirectory(unbounded, "d1/d2/d3/d4/d5/d6/d7/d8/d9");
+    CHECK(relationOf(unbounded, unbounded.root(), *deepUnbounded) == Relation::FirstContainsSecond);
+}
+
 TEST_CASE("contract: a directory's descriptor reads no bytes", "[fs][contract]")
 {
     // POSIX's pread answers EISDIR, Windows' ReadFile ERROR_INVALID_FUNCTION: both are IsDirectory.
@@ -1000,4 +1186,17 @@ TEST_CASE("contract: a directory's descriptor reads no bytes", "[fs][contract]")
         fixture.run(root.openAt(SymlinkPolicy::NoFollow, "dir", OpenFlags::Directory, DescriptorFlags::Read));
     REQUIRE(directory.has_value());
     CHECK(outcomeOf(fixture.run((*directory)->read(16, 0))) == FsErrorCode::IsDirectory);
+}
+
+TEST_CASE("contract: a link whose target names a root is not read", "[fs][contract]")
+{
+    // A rooted target names nothing relative to the link: no walk follows it and no symlinkAt makes
+    // one, so readlinkAt refuses it too (WASI 0.3.2's not-permitted). One that climbs is relative.
+    auto fixture = DescriptorFixture::create(GENERATE(FixtureKind::InMemory, FixtureKind::Native));
+    if (fixture.requireSymlinks() == SymlinkSupport::Unavailable)
+        SKIP("this file system cannot create symbolic links");
+    fixture.hostSymlink("abs", fixture.outsideAbsoluteTarget());
+    REQUIRE(fixture.run(fixture.root().symlinkAt("../up", "climbs")).has_value());
+    CHECK(outcomeOf(fixture.run(fixture.root().readlinkAt("abs"))) == FsErrorCode::NotPermitted);
+    CHECK(fixture.run(fixture.root().readlinkAt("climbs")).value() == "../up");
 }

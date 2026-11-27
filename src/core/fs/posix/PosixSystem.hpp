@@ -146,9 +146,11 @@ struct StatTimes
 }
 
 /// What the open object tells about who may reach it: its owner and mode, and where the system has
-/// ACLs beyond the mode, its ACL read from the very handle (`posix/AccessFacts.cpp` on Linux, which
-/// has none beyond the mode; `bsd/AccessFacts.cpp` on FreeBSD, NFSv4; `darwin/AccessFacts.cpp` on
-/// macOS, extended). Never by name.
+/// ACLs beyond the mode, its ACL read from the very handle (`linux/AccessFacts.cpp` on Linux, where
+/// only an NFS or SMB mount or an NFSv4 ACL goes beyond the mode, and then nothing is judged;
+/// `bsd/AccessFacts.cpp` on FreeBSD, NFSv4; `darwin/AccessFacts.cpp` on macOS, extended;
+/// `posix/AccessFacts.cpp`, the mode alone, on OpenBSD and DragonFly; nothing judged on NetBSD and
+/// elsewhere). Never by name.
 /// @param handle The open object, or @c platform::InvalidHandle where only @p status is at hand (a
 ///        `statAt`, made by name with `fstatat`).
 /// @param status Its `fstat` (or `fstatat` without following).

@@ -255,11 +255,30 @@ class DescriptorFixture
     {
         if (kind == FixtureKind::Native)
             return createNative({ .policy = &policy });
+        return createInMemory(policy);
+    }
+
+    /// An in-memory file system under @p policy.
+    /// @param policy The name rules it applies.
+    /// @param identities Whether its `relation` can decide.
+    /// @param maxAncestorDepth How many parents its `relation` walks before `Loop`.
+    /// @return A fixture with its root descriptor open.
+    /// @throws std::runtime_error Where the root cannot be opened.
+    [[nodiscard]] static DescriptorFixture createInMemory(
+        PathPolicy const& policy = posixPathPolicy(),
+        testing::IdentityModel identities = testing::IdentityModel::Stable,
+        std::size_t maxAncestorDepth = DefaultMaxAncestorDepth)
+    {
         auto fixture = DescriptorFixture { FixtureKind::InMemory, DefaultSecretSeed };
         fixture._outsideDirectory = std::filesystem::path { "/" };
         fixture._hostDirectory = std::filesystem::path { "/root" };
-        auto fileSystem = std::make_unique<testing::InMemoryDescriptorFileSystem>(
-            *fixture._home, *fixture._blocking, *fixture._clock, policy, MaxReadChunk);
+        auto fileSystem = std::make_unique<testing::InMemoryDescriptorFileSystem>(*fixture._home,
+                                                                                  *fixture._blocking,
+                                                                                  *fixture._clock,
+                                                                                  policy,
+                                                                                  MaxReadChunk,
+                                                                                  identities,
+                                                                                  maxAncestorDepth);
         fileSystem->addDirectory("root");
         fixture._inMemory = fileSystem.get();
         fixture._fileSystem = std::move(fileSystem);
@@ -268,14 +287,15 @@ class DescriptorFixture
     }
 
     /// @param kind Which file system to build.
-    /// @param options What a native one is built with; an in-memory one takes none of them.
+    /// @param options What a native one is built with; an in-memory one takes only its
+    ///        `maxAncestorDepth`.
     /// @return A fixture with its root descriptor open.
     /// @throws std::runtime_error Where the root cannot be opened.
     [[nodiscard]] static DescriptorFixture create(FixtureKind kind, NativeFileSystemOptions options)
     {
         if (kind == FixtureKind::Native)
             return createNative(options);
-        return create(kind, posixPathPolicy());
+        return createInMemory(posixPathPolicy(), testing::IdentityModel::Stable, options.maxAncestorDepth);
     }
 
     /// A native file system over a temporary directory of its own.

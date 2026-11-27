@@ -64,4 +64,14 @@ PathPolicy const& windowsPathPolicy() noexcept
     return WindowsPolicy;
 }
 
+bool isRootedLinkTarget(std::string_view target, PathPolicy const& policy) noexcept
+{
+    if (target.empty())
+        return false;
+    if (policy.targetSeparators.contains(target.front()))
+        return true;
+    auto const firstComponent = target.substr(0, target.find_first_of(policy.targetSeparators));
+    return firstComponent.find_first_of(policy.volumeSeparators) != std::string_view::npos;
+}
+
 } // namespace core::fs

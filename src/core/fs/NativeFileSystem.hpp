@@ -23,6 +23,10 @@ namespace core::fs
 /// How many symbolic links one resolution follows before it answers `Loop`, as Linux's own limit.
 inline constexpr std::size_t DefaultMaxSymlinkHops = 40;
 
+/// How many parents one @c IDescriptorFileSystem::relation walks from each directory before it
+/// answers `Loop`: deeper than any real tree, low enough that a crafted one costs a bounded walk.
+inline constexpr std::size_t DefaultMaxAncestorDepth = 4'096;
+
 /// How a path is resolved beneath the descriptor it is relative to.
 enum class BeneathStrategy : std::uint8_t
 {
@@ -44,6 +48,8 @@ struct NativeFileSystemOptions
                                                          ///< caller asks for.
     PathPolicy const* policy = nullptr; ///< The name rules; null is @c nativePathPolicy(). Must
                                         ///< outlive the file system and its descriptors.
+    std::size_t maxAncestorDepth = DefaultMaxAncestorDepth; ///< Parents one relation() walks from each
+                                                            ///< directory before it answers `Loop`.
 };
 
 /// Builds the operating system's file system.
@@ -85,6 +91,11 @@ struct NativeFileSystemOptions
 ///   Before Windows 10 1803, which cannot refuse that reparse, such a point does not open at all.
 /// - Every open identifies the process to a server it reaches (a named pipe, a share) at most at
 ///   identification level, so no server can impersonate it.
+/// - `relation` reads each directory's final path by volume GUID and opens every ancestor on it, and
+///   every folder its volume is mounted on, for its file id alone. Identities count only on a local
+///   NTFS or ReFS volume: FAT, exFAT, any other file system and every share (whatever file system
+///   the server reports) answer `Unsupported`. A rename that moved either directory or any ancestor
+///   met during the walk answers `Busy`.
 ///
 /// @param home Where every operation resumes. Must outlive the file system and its descriptors.
 /// @param blocking Where every system call runs. Must outlive them too.

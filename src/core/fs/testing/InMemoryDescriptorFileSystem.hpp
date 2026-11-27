@@ -10,10 +10,12 @@
 #include <core/fs/Descriptor.hpp>
 #include <core/fs/FsError.hpp>
 #include <core/fs/FsExport.hpp>
+#include <core/fs/NativeFileSystem.hpp>
 #include <core/fs/PathPolicy.hpp>
 #include <core/platform/Clock.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -24,6 +26,14 @@ namespace core::fs::testing
 
 /// The nodes and the configuration a file system and its descriptors share; defined in the source.
 struct InMemoryState;
+
+/// Whether the model's nodes have identities @c IDescriptorFileSystem::relation can decide on.
+enum class IdentityModel : std::uint8_t
+{
+    Stable,      ///< Every node has one for its life, as on a native file system that keeps them.
+    Unavailable, ///< None has: `relation` is `Unsupported`, as on FAT, so a consumer tests its
+                 ///< fail-closed path on every OS.
+};
 
 /// A file system of nodes in memory: directories, regular files and symbolic links.
 ///
@@ -52,11 +62,16 @@ class CORE_FS_API InMemoryDescriptorFileSystem final: public IDescriptorFileSyst
     /// @param policy The name rules paths are held to. Must outlive the file system and its
     ///        descriptors: it is kept by address, and its rows are views.
     /// @param maxReadChunk The most one read returns.
+    /// @param identities Whether `relation` can decide.
+    /// @param maxAncestorDepth How many parents `relation` walks from each directory before it
+    ///        answers `Loop`.
     InMemoryDescriptorFileSystem(async::IExecutor& home,
                                  async::IExecutor& blocking,
                                  platform::IWallClock const& clock,
                                  PathPolicy const& policy = posixPathPolicy(),
-                                 std::size_t maxReadChunk = std::size_t { 1 } << 20U);
+                                 std::size_t maxReadChunk = std::size_t { 1 } << 20U,
+                                 IdentityModel identities = IdentityModel::Stable,
+                                 std::size_t maxAncestorDepth = DefaultMaxAncestorDepth);
 
     InMemoryDescriptorFileSystem(InMemoryDescriptorFileSystem const&) = delete;
     InMemoryDescriptorFileSystem(InMemoryDescriptorFileSystem&&) = delete;
@@ -96,6 +111,14 @@ class CORE_FS_API InMemoryDescriptorFileSystem final: public IDescriptorFileSyst
     /// @return The descriptor.
     [[nodiscard]] async::Task<FsResult<std::unique_ptr<IDescriptor>>> openPreopen(
         std::filesystem::path hostDirectory, DescriptorFlags flags) override;
+
+    /// Walks each directory's parent links up to the model's root. A directory removed since it was
+    /// opened has no parent: `NoEntry`, as a native `..` of it answers.
+    /// @param first A directory of this model.
+    /// @param second A directory of this model.
+    /// @return How they relate, or what @c IDescriptorFileSystem::relation names.
+    [[nodiscard]] async::Task<FsResult<Relation>> relation(IDescriptor const& first,
+                                                           IDescriptor const& second) override;
 
   private:
     std::shared_ptr<InMemoryState> _state;

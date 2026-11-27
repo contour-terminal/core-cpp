@@ -10,6 +10,7 @@
 #include <core/fs/NativeFileSystem.hpp>
 #include <core/fs/PathPolicy.hpp>
 #include <core/fs/Rights.hpp>
+#include <core/fs/detail/Ancestry.hpp>
 #include <core/fs/detail/DirectoryStream.hpp>
 #include <core/fs/detail/PathWalk.hpp>
 #include <core/platform/Clock.hpp>
@@ -80,6 +81,9 @@ struct InMemoryState
         FileTime statusChanged;
         DescriptorType type = DescriptorType::Unknown;
         AccessFacts access; ///< Who may reach it, as a native reader would have found it.
+        /// A directory's real parent: the root's is itself, and a directory removed or replaced has
+        /// none (0), as a native `..` of it finds nothing.
+        std::uint64_t parent = 0;
     };
 
     /// Where a path resolved to: the directories walked from the descriptor down to the one holding
@@ -164,6 +168,8 @@ struct InMemoryState
     platform::IWallClock const* clock;
     PathPolicy const* policy;
     std::size_t maxReadChunk;
+    IdentityModel identities;
+    std::size_t maxAncestorDepth;
     std::mutex mutex;
     std::map<std::uint64_t, Node> nodes;
     std::uint64_t nextInode = RootInode;
@@ -172,14 +178,18 @@ struct InMemoryState
                   async::IExecutor& blockingExecutor,
                   platform::IWallClock const& wallClock,
                   PathPolicy const& pathPolicy,
-                  std::size_t readChunk):
+                  std::size_t readChunk,
+                  IdentityModel identityModel,
+                  std::size_t ancestorDepth):
         home { &homeExecutor },
         blocking { &blockingExecutor },
         clock { &wallClock },
         policy { &pathPolicy },
-        maxReadChunk { readChunk }
+        maxReadChunk { readChunk },
+        identities { identityModel },
+        maxAncestorDepth { ancestorDepth }
     {
-        std::ignore = createNode(DescriptorType::Directory);
+        nodes.at(createNode(DescriptorType::Directory)).parent = RootInode;
     }
 
     [[nodiscard]] FileTime now() const
@@ -256,17 +266,53 @@ struct InMemoryState
 
     void insert(std::uint64_t directory, std::string name, std::uint64_t inode)
     {
-        auto& parent = nodes.at(directory);
         auto key = keyOf(name);
+        detach(directory, key);
+        if (auto& node = nodes.at(inode); node.type == DescriptorType::Directory)
+            node.parent = directory;
+        auto& parent = nodes.at(directory);
         parent.entries.insert_or_assign(std::move(key), Entry { .name = std::move(name), .inode = inode });
         touch(parent, now());
     }
 
     void erase(std::uint64_t directory, std::string_view name)
     {
+        auto const key = keyOf(name);
+        detach(directory, key);
         auto& parent = nodes.at(directory);
-        parent.entries.erase(keyOf(name));
+        parent.entries.erase(key);
         touch(parent, now());
+    }
+
+    /// Takes the parent of the directory @p key names in @p directory, which is losing that entry.
+    void detach(std::uint64_t directory, std::string const& key)
+    {
+        auto const& entries = nodes.at(directory).entries;
+        if (auto const found = entries.find(key); found != entries.end())
+            if (auto& node = nodes.at(found->second.inode);
+                node.type == DescriptorType::Directory && node.parent == directory)
+                node.parent = 0;
+    }
+
+    /// @return @p inode's identity, then each real parent's up to the model's root; `NoEntry` past
+    ///         a directory with no parent, `Loop` past @c maxAncestorDepth parents.
+    [[nodiscard]] FsResult<std::vector<fs::detail::ObjectIdentity>> ancestryOf(std::uint64_t inode) const
+    {
+        // Grown per step, never reserved to the cap, as the native walkers do. At most
+        // maxAncestorDepth + 1 parents are looked at, and the last of them must be the root.
+        auto chain = std::vector { fs::detail::ObjectIdentity { .device = 0, .idLow = inode, .idHigh = 0 } };
+        auto current = inode;
+        for ([[maybe_unused]] auto const step: std::views::iota(std::size_t { 0 }, maxAncestorDepth + 1))
+        {
+            auto const parent = nodes.at(current).parent;
+            if (parent == 0)
+                return refuse(FsErrorCode::NoEntry);
+            if (parent == current)
+                return chain;
+            chain.push_back(fs::detail::ObjectIdentity { .device = 0, .idLow = parent, .idHigh = 0 });
+            current = parent;
+        }
+        return refuse(FsErrorCode::Loop);
     }
 
     void dropLink(std::uint64_t inode)
@@ -537,6 +583,18 @@ namespace
         {
         }
 
+        /// @param descriptor Any descriptor.
+        /// @param state A model's.
+        /// @return The node @p descriptor is open on where it is a descriptor of that model.
+        [[nodiscard]] static std::optional<std::uint64_t> nodeOf(IDescriptor const& descriptor,
+                                                                 std::shared_ptr<InMemoryState> const& state)
+        {
+            auto const* mine = dynamic_cast<InMemoryDescriptor const*>(&descriptor);
+            if (mine == nullptr || mine->_state != state)
+                return std::nullopt;
+            return mine->_inode;
+        }
+
         async::Task<FsResult<ReadChunk>> read(std::size_t maxBytes, std::uint64_t offset) override
         {
             return submit([inode = _inode, flags = _flags, maxBytes, offset](
@@ -761,7 +819,8 @@ namespace
                         auto const& node = state.nodes.at(found);
                         if (node.type != DescriptorType::SymbolicLink)
                             return refuse(FsErrorCode::Invalid);
-                        return node.target;
+                        // One rule with the walk and symlinkAt: a rooted target is never handed out.
+                        return fs::detail::refuseRootedTarget(node.target, *state.policy);
                     });
             });
         }
@@ -991,8 +1050,11 @@ InMemoryDescriptorFileSystem::InMemoryDescriptorFileSystem(async::IExecutor& hom
                                                            async::IExecutor& blocking,
                                                            platform::IWallClock const& clock,
                                                            PathPolicy const& policy,
-                                                           std::size_t maxReadChunk):
-    _state { std::make_shared<InMemoryState>(home, blocking, clock, policy, maxReadChunk) }
+                                                           std::size_t maxReadChunk,
+                                                           IdentityModel identities,
+                                                           std::size_t maxAncestorDepth):
+    _state { std::make_shared<InMemoryState>(
+        home, blocking, clock, policy, maxReadChunk, identities, maxAncestorDepth) }
 {
 }
 
@@ -1061,6 +1123,32 @@ async::Task<FsResult<std::unique_ptr<IDescriptor>>> InMemoryDescriptorFileSystem
                                   directory = *found;
                               }
                               return std::make_unique<InMemoryDescriptor>(state, directory, flags);
+                          });
+}
+
+async::Task<FsResult<Relation>> InMemoryDescriptorFileSystem::relation(IDescriptor const& first,
+                                                                       IDescriptor const& second)
+{
+    return async::offload(_state->home,
+                          _state->blocking,
+                          [state = _state,
+                           firstNode = InMemoryDescriptor::nodeOf(first, _state),
+                           secondNode = InMemoryDescriptor::nodeOf(second, _state)]() -> FsResult<Relation> {
+                              if (!firstNode || !secondNode)
+                                  return refuse(FsErrorCode::CrossDevice);
+                              auto const lock = std::scoped_lock { state->mutex };
+                              if (state->nodes.at(*firstNode).type != DescriptorType::Directory
+                                  || state->nodes.at(*secondNode).type != DescriptorType::Directory)
+                                  return refuse(FsErrorCode::NotDirectory);
+                              if (state->identities == IdentityModel::Unavailable)
+                                  return refuse(FsErrorCode::Unsupported);
+                              if (*firstNode == *secondNode)
+                                  return Relation::Same;
+                              return state->ancestryOf(*firstNode).and_then([&](auto const& up) {
+                                  return state->ancestryOf(*secondNode).transform([&](auto const& down) {
+                                      return fs::detail::decideRelation(up, down);
+                                  });
+                              });
                           });
 }
 

@@ -64,4 +64,16 @@ struct PathPolicy
 /// @return The rules of the operating system this was built for, chosen by the build.
 [[nodiscard]] CORE_FS_API PathPolicy const& nativePathPolicy() noexcept;
 
+/// Whether a symbolic link's @p target names a root rather than a place relative to the link: it
+/// starts with one of @p policy's target separators (`/etc`; under the Windows rules also `\x`,
+/// `\\server\share` and `\\?\C:\`), or its first component holds one of its volume separators
+/// (`C:`, `C:x`, `C:\x`). Under the POSIX rules `\x` and `C:x` are relative names. A relative target
+/// that climbs out of a root (`../x`) is not rooted; resolution refuses it where it leaves.
+/// Every link a walk follows and every `symlinkAt` asks this, so the rule has one definition.
+/// A bool: the name asks the question.
+/// @param target The link's target, as stored.
+/// @param policy The name rules it is read under.
+/// @return Whether it is rooted; an empty target is not.
+[[nodiscard]] CORE_FS_API bool isRootedLinkTarget(std::string_view target, PathPolicy const& policy) noexcept;
+
 } // namespace core::fs

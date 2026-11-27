@@ -192,8 +192,10 @@ struct DescriptorStat
     /// Who may reach it, read from the handle the stat was made through (@c classifyAccess).
     ///
     /// **nullopt means "cannot judge", never "probably fine"**: an ACL that cannot be read, a
-    /// Windows object whose DACL withholds `READ_CONTROL`, a FreeBSD or macOS
-    /// @c IDescriptor::statAt, which holds no handle to read an ACL from. A consumer that guards a
+    /// Windows object whose DACL withholds `READ_CONTROL`, a Linux, FreeBSD or macOS
+    /// @c IDescriptor::statAt, which holds no handle to read an ACL or a file system from, an object
+    /// on Linux whose NFS or SMB mount or NFSv4 ACL the mode does not bound, and every object on
+    /// NetBSD and on POSIX systems this module reads no ACL of. A consumer that guards a
     /// secret with this (a key directory, a key file) must refuse nullopt as it refuses
     /// @c AccessScope::Shared: fail closed. An object created owner-only (@c OpenFlags::OwnerOnly,
     /// @c CreationAccess::OwnerOnly) reads @c AccessScope::OwnerOnly through its handle when it is
@@ -374,7 +376,8 @@ class IDescriptor
 
     /// Reads a symbolic link's target. Needs `Read`.
     /// @param path The relative path of the link.
-    /// @return Its target, as stored.
+    /// @return Its target, as stored; `NotPermitted` for a target that names a root
+    ///         (@c isRootedLinkTarget), which no walk follows and no `symlinkAt` makes.
     [[nodiscard]] virtual async::Task<FsResult<std::string>> readlinkAt(std::string path) = 0;
 
     /// Removes the empty directory @p path. Needs `MutateDirectory`.
@@ -416,6 +419,16 @@ class IDescriptor
     [[nodiscard]] virtual async::Task<FsResult<bool>> isSameObject(IDescriptor* other) = 0;
 };
 
+/// How two opened directories relate in the real directory tree. `Same` is zero, so a
+/// zero-initialized value refuses in a guard that admits only `Unrelated`.
+enum class Relation : std::uint8_t
+{
+    Same,                ///< One directory.
+    FirstContainsSecond, ///< The first is a real ancestor of the second.
+    SecondContainsFirst, ///< The second is a real ancestor of the first.
+    Unrelated,           ///< Neither lies beneath the other.
+};
+
 /// Opens preopened directories, the roots every other descriptor descends from.
 class IDescriptorFileSystem
 {
@@ -433,6 +446,52 @@ class IDescriptorFileSystem
     /// @return The root descriptor.
     [[nodiscard]] virtual async::Task<FsResult<std::unique_ptr<IDescriptor>>> openPreopen(
         std::filesystem::path hostDirectory, DescriptorFlags flags) = 0;
+
+    /// Decides whether @p first is, contains or lies beneath @p second on the opened handles: each
+    /// one's real parents are walked up to the root and compared by identity (device and inode;
+    /// volume serial and file id on Windows), never by path text. So a component of the path either
+    /// was opened by that is a symbolic link, a junction or a mount of a whole file system changes
+    /// nothing, and nor does a rename after the open: what counts is where the object is now. A
+    /// mount that shows only a subtree of its file system -- a bind mount of a subdirectory, a btrfs
+    /// subvolume, a nullfs mount -- hides the directories of that file system above the subtree
+    /// from a walk that leaves it; a macOS firmlink (`/Users`) leaves the Data volume below its
+    /// root and skips that volume's directories above it and every directory on its mount point's
+    /// path (`/System`, `/System/Volumes`), which are on the system volume. A containment the walks
+    /// meet is always real; an `Unrelated` stands where the other directory is none of what was
+    /// skipped (known by identity, or `Unsupported` where it cannot be read), and is on the mount
+    /// left, on another file system, or, where Linux's mountinfo shows it, beneath a part of the
+    /// file system that is not above the hidden subtree.
+    /// A file system that may show another's directories as its own -- overlay, any FUSE file
+    /// system, nullfs, unionfs, a network share -- decides only on its own mount: a walk that leaves
+    /// one, or a directory on one, is otherwise `Unsupported`, sshfs included. So is any of these
+    /// facts a system cannot read: macOS and the BSDs say nowhere which subtree a mount shows.
+    /// A walk up never meets a mount BENEATH either directory, which can put the other inside it
+    /// (a bind mount of a key directory under a granted one). So on POSIX an `Unrelated` also scans
+    /// the mount table: each mount point's path is followed from the root one component at a time,
+    /// never through a link, each component told apart by identity before it is entered and
+    /// entered only as that directory (a rename between the two is `Busy`); a mount point strictly
+    /// beneath either directory is opened, and the answer is `Unsupported` where it opens onto
+    /// another mount than the table's, is of the other directory's file system, or either may show
+    /// another's. The table is read again after the scan, and a difference is `Busy`.
+    /// Each walk is checked after it is done: on POSIX both are walked again, on Windows every
+    /// ancestor met is asked for its path again, and any change is `Busy`. A directory moved away and back
+    /// between the two passes (ABA) is not seen on POSIX; each chain still is one that existed.
+    /// **The answer is the layout when it was asked**: a mount made beneath either directory after
+    /// it is not seen, so a host asks at the moment it grants (Isoline's preopen grant, P14a,
+    /// evaluates the relation at grant time) and holds the grant to what it decided then.
+    ///
+    /// Both descriptors are read on the caller's thread, before the returned task first suspends;
+    /// neither needs to outlive the task.
+    /// @param first A directory of this file system.
+    /// @param second A directory of this file system.
+    /// @return How they relate; `NotDirectory` where either is not a directory; `CrossDevice` for a
+    ///         descriptor of another file system (D11); `Unsupported` where the file system cannot
+    ///         give stable identities or a mount of a subtree may hide one from the other (fail
+    ///         closed); `Loop` past @c NativeFileSystemOptions::maxAncestorDepth parents; `Busy`
+    ///         where a rename during the walk could have changed the answer; or what refused opening
+    ///         a parent (`Access` on one the user may not search).
+    [[nodiscard]] virtual async::Task<FsResult<Relation>> relation(IDescriptor const& first,
+                                                                   IDescriptor const& second) = 0;
 };
 
 } // namespace core::fs

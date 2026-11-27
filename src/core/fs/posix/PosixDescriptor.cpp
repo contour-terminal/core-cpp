@@ -24,6 +24,7 @@
 #include <core/fs/detail/PathWalk.hpp>
 #include <core/fs/detail/ResolveBeneath.hpp>
 #include <core/fs/posix/DirectoryRead.hpp>
+#include <core/fs/posix/MountBoundaries.hpp>
 #include <core/fs/posix/OwnerOnlyCreation.hpp>
 #include <core/fs/posix/PosixPathWalk.hpp>
 #include <core/fs/posix/PosixSystem.hpp>
@@ -711,6 +712,9 @@ namespace
                         if (resolved.name.empty())
                             return refuse(FsErrorCode::Invalid);
                         return detail::readLinkAt(resolved.directory(), resolved.name);
+                    })
+                    .and_then([&](std::string target) {
+                        return detail::refuseRootedTarget(std::move(target), *context->policy);
                     });
             });
         }
@@ -918,6 +922,11 @@ namespace
                                   });
         }
 
+        async::Task<FsResult<Relation>> relation(IDescriptor const& first, IDescriptor const& second) override
+        {
+            return detail::relationOf(_context, first, second);
+        }
+
       private:
         SharedContext _context;
     };
@@ -941,7 +950,8 @@ FsResult<std::unique_ptr<IDescriptorFileSystem>> makeNativeDescriptorFileSystem(
             KernelSeparators,
             nullptr,
             nullptr,
-            std::make_shared<detail::OwnerOnlyCreator const>(random, detail::nativeOwnerOnlyCreation())));
+            std::make_shared<detail::OwnerOnlyCreator const>(random, detail::nativeOwnerOnlyCreation()),
+            detail::makeMountBoundaries()));
     });
 }
 

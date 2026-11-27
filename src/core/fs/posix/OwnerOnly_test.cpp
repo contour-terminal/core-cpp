@@ -427,3 +427,15 @@ TEST_CASE("posix: a staged creation under an inheritable ACL is owner-only", "[f
     CHECK(modeOf(held.directory.path() / "keys") == 0700);
     CHECK(held.names() == std::vector<std::string> { "keys", "secret" });
 }
+
+TEST_CASE("posix: who may reach an object is judged through a handle only", "[fs][native][access]")
+{
+    // Linux decides from the handle whether the mode bounds access at all (an NFS or SMB mount, an
+    // NFSv4 ACL); by name there is no handle to ask, so nothing is judged.
+    auto const directory = core::testing::ScopedTempDir { "core-cpp-fs-facts" };
+    auto const path = directory.path() / "plain";
+    std::ofstream { path } << "x";
+    struct ::stat status {};
+    REQUIRE(::stat(path.c_str(), &status) == 0);
+    CHECK_FALSE(core::fs::detail::accessFactsOf(core::platform::InvalidHandle, status).has_value());
+}

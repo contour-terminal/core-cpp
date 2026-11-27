@@ -35,6 +35,7 @@ namespace core::fs::detail
 class INtFiles;         // windows/WindowsPathWalk.hpp
 class OwnerSecurity;    // windows/OwnerSecurity.hpp
 class OwnerOnlyCreator; // posix/OwnerOnlyCreation.hpp
+class IMountBoundaries; // posix/MountBoundaries.hpp
 
 /// @param code What refused.
 /// @return The refusal, with no system code.
@@ -50,7 +51,7 @@ class OwnerOnlyCreator; // posix/OwnerOnlyCreation.hpp
 using MetadataSecret = std::array<std::byte, 32>;
 
 /// What one native file system and all of its descriptors share, fixed at construction.
-struct NativeContext
+struct CORE_FS_API NativeContext
 {
     async::IExecutor* home = nullptr;                ///< Where every operation resumes.
     async::IExecutor* blocking = nullptr;            ///< Where every system call runs.
@@ -75,6 +76,10 @@ struct NativeContext
     /// What makes an owner-only file or directory, its staging key drawn when the file system is
     /// built. Null on Windows.
     std::shared_ptr<OwnerOnlyCreator const> ownerOnlyCreator;
+    /// Where a relation walk leaves a mount that may hide real parents, made when the file system is
+    /// built. Null on Windows, and where this system's could not be made (every relation is then
+    /// `Unsupported`).
+    std::shared_ptr<IMountBoundaries const> mountBoundaries;
 
     /// @param homeExecutor Where every operation resumes.
     /// @param blockingExecutor Where every system call runs.
@@ -85,6 +90,7 @@ struct NativeContext
     /// @param files The NT calls on Windows; null elsewhere. Must outlive the file system.
     /// @param security The owner's security on Windows; null elsewhere.
     /// @param creator What makes owner-only objects on POSIX; null on Windows.
+    /// @param boundaries The mount boundaries a POSIX relation walk checks; null on Windows.
     /// The strategy's opener is made here: under `Best`, from @c makeBestBeneathOpener.
     NativeContext(async::IExecutor& homeExecutor,
                   async::IExecutor& blockingExecutor,
@@ -94,7 +100,8 @@ struct NativeContext
                   std::string_view separators,
                   INtFiles const* files,
                   std::shared_ptr<OwnerSecurity const> security,
-                  std::shared_ptr<OwnerOnlyCreator const> creator);
+                  std::shared_ptr<OwnerOnlyCreator const> creator,
+                  std::shared_ptr<IMountBoundaries const> boundaries);
 };
 
 /// How a native file system and its descriptors share their @c NativeContext.
@@ -145,6 +152,22 @@ class NativeDescriptorBase: public IDescriptor
     /// @return The flags the descriptor carries.
     [[nodiscard]] DescriptorFlags flags() const noexcept final { return _flags; }
 
+    /// A descriptor passed to another one or to its file system: its handle, rights and type, read
+    /// on the caller's thread while the caller still holds it.
+    struct Target
+    {
+        SharedHandle handle;                           ///< Its handle, shared with the job.
+        DescriptorFlags flags = DescriptorFlags::None; ///< Its rights.
+        DescriptorType type = DescriptorType::Unknown; ///< What it is.
+    };
+
+    /// @param context A native file system's.
+    /// @param descriptor Any descriptor.
+    /// @return @p descriptor's handle, rights and type; `CrossDevice` unless it is a descriptor of
+    ///         the file system @p context is (D11).
+    [[nodiscard]] static FsResult<Target> targetIn(SharedContext const& context,
+                                                   IDescriptor const& descriptor);
+
   protected:
     /// @param context The file system's.
     /// @param handle The descriptor's handle.
@@ -157,15 +180,6 @@ class NativeDescriptorBase: public IDescriptor
         _context { std::move(context) }, _handle { std::move(handle) }, _flags { flags }, _type { type }
     {
     }
-
-    /// A directory passed as `newDirectory`: its handle, rights and type, read on the caller's
-    /// thread while the caller still holds it.
-    struct Target
-    {
-        SharedHandle handle;                           ///< Its handle, shared with the job.
-        DescriptorFlags flags = DescriptorFlags::None; ///< Its rights.
-        DescriptorType type = DescriptorType::Unknown; ///< What it is.
-    };
 
     /// Runs @p work on the blocking executor and resumes on home. @p work captures by value
     /// everything it uses, the handle included, and never the descriptor.
@@ -199,5 +213,16 @@ class NativeDescriptorBase: public IDescriptor
     DescriptorFlags _flags;
     DescriptorType _type;
 };
+
+/// What a native file system's @c IDescriptorFileSystem::relation is: both descriptors read on the
+/// caller's thread, then @c nativeRelation on the blocking executor.
+/// @param context The file system's.
+/// @param first A directory of it.
+/// @param second Another, or the same.
+/// @return The task; `CrossDevice` for a foreign descriptor, `NotDirectory` for one that is not a
+///         directory, or what @c nativeRelation answers.
+[[nodiscard]] async::Task<FsResult<Relation>> relationOf(SharedContext const& context,
+                                                         IDescriptor const& first,
+                                                         IDescriptor const& second);
 
 } // namespace core::fs::detail
