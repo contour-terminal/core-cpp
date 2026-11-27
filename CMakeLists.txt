@@ -16,7 +16,7 @@ endif()
 
 # The version literal is the source of truth; a release tag must equal it.
 project(core-cpp
-    VERSION 0.23.0
+    VERSION 0.24.0
     DESCRIPTION "Shared C++23 foundation libraries of the Contour Terminal projects"
     HOMEPAGE_URL "https://github.com/contour-terminal/core-cpp"
     LANGUAGES CXX)
