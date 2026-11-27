@@ -13,6 +13,7 @@
 /// rather than speculatively.
 
 #include <core/async/Task.hpp>
+#include <core/net/AcceptLoop.hpp>
 #include <core/net/AcceptPolicy.hpp>
 #include <core/net/EventLoop.hpp>
 #include <core/net/IListener.hpp>
@@ -102,18 +103,6 @@ struct HttpLimits
     LingerBounds linger { .total = std::chrono::milliseconds { 250 },
                           .maxBytes = std::size_t { 64 } * 1024,
                           .reads = 4 };
-};
-
-/// Where @c serve's accept loop reports what @c AcceptErrorPolicy decided (`AcceptPolicy.hpp`).
-struct AcceptLoopReporting
-{
-    std::string surface = "http"; ///< What the loop serves, as its reports name it.
-    /// Told each report: a failed accept the loop went on past (rate-limited), the loop becoming
-    /// degraded on a long run of unclassified failures, recovering from one, and giving up on a dead
-    /// listener. @c AcceptLoopHealth::record is written to be handed these. **When empty, each
-    /// report's line goes to @c reportDiagnostic instead**, so a loop that degrades or gives up is
-    /// never silent by default -- the shape of the incident `AcceptPolicy.hpp` opens with.
-    std::function<void(AcceptLoopEvent const&)> onEvent;
 };
 
 /// Serves connections from @p listener until it is closed, dispatching each request

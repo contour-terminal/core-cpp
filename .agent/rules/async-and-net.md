@@ -58,6 +58,11 @@ The contract is the spec's (Part I §2, rules 1 to 6), and it is short enough to
   `core::async::OperationCancelled`; a cancel from the resource (`close()`, `cancelRead()`, a
   closed listener) returns `NetErrorCode::Cancelled` as a value. If a receive already completed
   with bytes, the data wins.
+- **A blocking OS call runs only on an injected blocking executor, through `async::offload`**; it
+  resumes on the home executor, and `NativeDescriptor_test.cpp`'s *native: every descriptor
+  operation parks on the blocking executor* holds it. The blocking executor is drained before the
+  home executor dies. A call that may never return (a lookup, a read of a terminal) waits through
+  `net::detail::ParkedCall` instead, which hands its waiter back on a stop.
 
 ## The turn, and the orderings inside it
 
@@ -1351,6 +1356,42 @@ in-process doubles (`testing::DatagramBus`, `testing::InMemorySocket`, the parki
   fit is dropped and answered `DatagramWait::MessageTooLarge` -- `MSG_TRUNC` through `recvmsg`,
   `WSAEMSGSIZE` -- never handed back cut short and never read as a timeout. A datagram send that places fewer bytes than it was given is
   `MessageTooLarge`, never a partial write to retry: the rest resent is a second message.
+- **The loop-driven datagram socket has one state machine, and its double runs it** (P13 Task 10).
+  `IAsyncDatagramSocket` is `AsyncDatagramSocket.cpp` over a `detail::IDatagramChannel`; the
+  platform channels (`posix/ReadinessDatagramSocket.cpp`, `windows/IocpDatagramSocket.cpp`) and
+  `testing::InMemoryAsyncDatagramNetwork`'s channel only do what the socket decided. So a refusal
+  -- closed, unbound, unconnected, the other family -- cannot be answered more permissively by the
+  double: a new state rule goes in the socket, never in a channel. A send or receive holds its own
+  share of the channel, so a socket destroyed while one is parked leaves the frame something to read.
+- **Three kernel differences the datagram socket hides, each where it is written down.** Linux
+  unbinds a socket whose port the kernel chose when it disconnects (`__udp_disconnect`), so the
+  socket binds that endpoint again; macOS refuses an address on a connected socket's `sendto` with
+  `EISCONN`, so a send naming the remote is sent unaddressed; and Windows fails an unconnected
+  socket's next receive with `WSAECONNRESET` after an ICMP port-unreachable, so
+  `SIO_UDP_CONNRESET` is turned off at open. An immediate `WSAEMSGSIZE` from an overlapped
+  `WSARecvFrom` is answered `MessageTooLarge` at once, never waited for, and the operation is left
+  announced and holding itself, so a packet that may or may not follow frees it. The rebind after a
+  Linux disconnect takes the address `bind` was given, not `getsockname`'s connected source.
+- **A standard handle's flags are the parent's, so the standard streams never set one** (P13 Task
+  11). `O_NONBLOCK` lives on the open file description an inherited descriptor shares with its
+  parent, and a shell whose stdin turned non-blocking under it reads `EAGAIN` as end of input. A
+  Pollable input (`classifyStreamHandle`: a pipe, a socket, a terminal) therefore waits on the loop
+  and then asks a zero-timeout `poll` before it reads, so a spurious readiness never blocks the
+  loop's thread on a blocking descriptor. A regular file and `/dev/null` are never Pollable, because
+  epoll refuses both (`EPERM`); a registration the backend refuses anyway (macOS kqueue, some ttys)
+  turns the stream Blocking for good. No Windows handle is Pollable: a console cannot join a
+  completion port, and an inherited pipe is not overlapped.
+- **A blocking stdin read is a `detail::ParkedCall`, not `async::offload`** (P13 ruling R13):
+  `offload` never resumes before its work returns, and a read of a terminal may never return. A stop
+  hands the waiter back at once; the worker read stays the stream's ONE outstanding read, the next
+  read waits for that same worker (swapping in a fresh call under the worker's mutex), and what it
+  read is the next read's -- bytes beyond the next read's `maxBytes` are kept, never dropped. On
+  Windows the stop also sends `CancelSynchronousIo` to the worker's thread, recorded and forgotten
+  under that mutex so it can never reach the pool thread's next job.
+- **A write to a pipe nobody reads is an error, not a signal.** There is no `MSG_NOSIGNAL` for a
+  pipe and no descriptor flag a child may set, so the standard output blocks `SIGPIPE` on the
+  writing thread for the write and consumes one the write raised (`sigwait`, since macOS lacks
+  `sigtimedwait`) before the mask returns.
 - **Sharing a port buys hearing a broadcast, and nothing else.** A unicast to a shared port reaches
   one socket, and which one differs by platform, so a node that shares a port to hear the segment
   sends -- and is answered -- from an address only it holds (`answerFromOwnAddress`,

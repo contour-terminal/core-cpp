@@ -25,8 +25,10 @@
 #include <cstdint>
 #include <expected>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace core::net::testing
 {
@@ -39,24 +41,43 @@ enum class StreamEnd : std::uint8_t
     Failed,      ///< Anything else went wrong.
 };
 
+/// What a strict peer offers, selects or refuses.
+struct StrictTlsPeerOptions
+{
+    /// The newest protocol version it speaks; @c TlsVersion::Tls12 makes a peer that cannot speak
+    /// TLS 1.3.
+    TlsVersion maximumVersion = TlsVersion::Tls13;
+
+    /// ALPN names. A client offers them; a server selects the first of them the client offered,
+    /// and refuses a client that offered only others with `no_application_protocol`.
+    std::vector<std::string> alpn {};
+
+    /// A server only: answers every ClientHello with this fatal alert (RFC 8446 section 6), the way
+    /// a server refuses a client it will not serve.
+    std::optional<std::uint8_t> refuseWithAlert {};
+
+    /// A server only: sends this alert as a WARNING when the ClientHello arrives and carries on, as
+    /// a TLS 1.2 server does with `unrecognized_name`. TLS 1.3 has no warnings, so OpenSSL drops it
+    /// there; pair it with @c maximumVersion @c TlsVersion::Tls12.
+    std::optional<std::uint8_t> warnWithAlert {};
+};
+
 /// One TLS endpoint over the far end of a socket pair, pumped by hand.
 class CORE_NET_TLS_API StrictTlsPeer
 {
   public:
     /// A client that verifies nothing (the cases check identity by asking, not by failing).
-    /// @param maximumVersion The newest protocol version it offers; @c TlsVersion::Tls12 makes it a
-    ///        client that cannot speak TLS 1.3.
+    /// @param options Its newest version and the ALPN names it offers.
     /// @return The peer, or why OpenSSL could not build it.
     [[nodiscard]] static std::expected<std::unique_ptr<StrictTlsPeer>, std::string> client(
-        TlsVersion maximumVersion = TlsVersion::Tls13);
+        StrictTlsPeerOptions const& options = {});
 
     /// A server presenting @p material.
     /// @param material The certificate chain and key to serve.
-    /// @param maximumVersion The newest protocol version it accepts; @c TlsVersion::Tls12 makes it a
-    ///        server that cannot speak TLS 1.3.
+    /// @param options Its newest version, the ALPN names it selects from, the alert it refuses with.
     /// @return The peer, or why OpenSSL refused the material.
     [[nodiscard]] static std::expected<std::unique_ptr<StrictTlsPeer>, std::string> server(
-        CertKeyPem const& material, TlsVersion maximumVersion = TlsVersion::Tls13);
+        CertKeyPem const& material, StrictTlsPeerOptions const& options = {});
 
     ~StrictTlsPeer();
     StrictTlsPeer(StrictTlsPeer const&) = delete;
@@ -105,6 +126,13 @@ class CORE_NET_TLS_API StrictTlsPeer
     /// @return How many certificates the other end sent, leaf included.
     [[nodiscard]] int peerChainLength() const;
 
+    /// @return A server's view of the SNI the client sent (`SSL_get_servername`), or empty when it
+    ///         sent none.
+    [[nodiscard]] std::string receivedServerName() const;
+
+    /// @return The ALPN protocol the handshake settled on, or empty.
+    [[nodiscard]] std::string negotiatedProtocol() const;
+
   private:
     struct State;
     explicit StrictTlsPeer(std::unique_ptr<State> state) noexcept;
@@ -132,6 +160,13 @@ class CORE_NET_TLS_API StrictTlsPeer
 /// @param address An IP address literal.
 /// @return Whether a client checking @p address would accept the certificate for it.
 [[nodiscard]] CORE_NET_TLS_API bool certificateMatchesIp(std::string_view certPem, std::string_view address);
+
+/// Re-signs @p material's certificate with a validity that ended a day ago, so a client that checks
+/// it refuses it as expired. The generator refuses to make one; this is what a case asks for instead.
+/// @param material A certificate and the key that signed it.
+/// @return The expired certificate and the same key, or why OpenSSL refused.
+[[nodiscard]] CORE_NET_TLS_API std::expected<CertKeyPem, std::string> expiredCopyOf(
+    CertKeyPem const& material);
 
 /// Leaves an error on the calling thread's OpenSSL error queue, as another connection on the same
 /// loop thread might.

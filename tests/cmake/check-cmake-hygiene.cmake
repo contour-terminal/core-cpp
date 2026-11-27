@@ -136,6 +136,14 @@ set(CORE_CPP_HYGIENE_PRIVATE_DIRECTORIES bsd darwin detail emscripten linux port
 set(CORE_CPP_HYGIENE_FORWARD_DECLARATION_REGEX
     "(class|struct|union|enum([ \t]+(class|struct))?)[ \t]+[A-Za-z_][A-Za-z0-9_]*([ \t]*:[ \t]*[A-Za-z_][A-Za-z0-9_:]*)?[ \t]*;")
 
+# A rule over a line and the one before it: `cmake_policy(SET CMPnnnn …)` stands directly inside
+# `if(POLICY CMPnnnn)`. cmake_minimum_required(VERSION 3.25...) admits a CMake older than the policy,
+# and that CMake refuses to configure on a policy it does not know (CMP0155 is 3.28's).
+set(CORE_CPP_HYGIENE_RULES ${CORE_CPP_HYGIENE_RULES} unguarded-policy)
+set(CORE_CPP_HYGIENE_unguarded-policy_REASON
+    "a cmake_policy(SET CMPnnnn ...) is the first statement inside if(POLICY CMPnnnn): the minimum CMake this tree supports may not know the policy, and refuses to configure on one it does not know")
+set(CORE_CPP_HYGIENE_POLICY_SET_REGEX "^[ \t]*cmake_policy[ \t]*\\([ \t]*SET[ \t]+(CMP[0-9]+)")
+
 # The rule the allowlist itself answers to.
 set(CORE_CPP_HYGIENE_RULES ${CORE_CPP_HYGIENE_RULES} stale-allowlist)
 
@@ -196,6 +204,7 @@ endforeach()
 # tests/wasi-unicode is the same kind of project for a WebAssembly guest: it sets the guest's
 # language mode (-fno-exceptions -fno-rtti) over everything it builds, libunicode included.
 core_cpp_hygiene_allow(global-cmake-variable tests/wasi-unicode/CMakeLists.txt "${_consumerProjectReason}")
+core_cpp_hygiene_allow(global-cmake-variable tests/consumer-module-scan/CMakeLists.txt "${_consumerProjectReason}")
 core_cpp_hygiene_allow(unprefixed-function tests/consumer-cpm/CMakeLists.txt "${_consumerProjectReason}")
 core_cpp_hygiene_allow(unprefixed-function tests/consumer-wasm/CMakeLists.txt "${_consumerProjectReason}")
 core_cpp_hygiene_allow(diagnostic-pragma src/core/testing/SuppressWindowsDialogsAtStartup.cpp
@@ -370,6 +379,8 @@ foreach(path IN LISTS scanned)
         set(expectedNamespace "core")
     endif()
     set(firstNamespaceSeen OFF)
+    # The last line that is neither blank nor a comment, for unguarded-policy.
+    set(previousStatement "")
 
     set(lineNumber 0)
     foreach(encoded IN LISTS lines)
@@ -398,6 +409,20 @@ foreach(path IN LISTS scanned)
                 if(NOT forwardBlock)
                     set(firstNamespaceSeen ON)
                 endif()
+            endif()
+        endif()
+
+        if(kind STREQUAL "cmake")
+            # Two ifs: arguments are expanded before a condition runs, so CMAKE_MATCH_1 is the policy
+            # only once the first MATCHES has set it.
+            if(line MATCHES "${CORE_CPP_HYGIENE_POLICY_SET_REGEX}")
+                set(policy "${CMAKE_MATCH_1}")
+                if(NOT previousStatement MATCHES "^[ \t]*if[ \t]*\\([ \t]*POLICY[ \t]+${policy}[ \t]*\\)[ \t]*$")
+                    core_cpp_hygiene_refuse(unguarded-policy "${path}" ${lineNumber} "${line}")
+                endif()
+            endif()
+            if(NOT line MATCHES "^[ \t]*(#.*)?$")
+                set(previousStatement "${line}")
             endif()
         endif()
 

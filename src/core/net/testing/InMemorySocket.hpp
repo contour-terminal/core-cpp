@@ -31,6 +31,7 @@
 #include <core/net/IoAwaitable.hpp>
 #include <core/net/NetError.hpp>
 #include <core/net/NetExport.hpp>
+#include <core/net/SocketAddress.hpp>
 
 #include <coroutine>
 #include <cstddef>
@@ -146,6 +147,24 @@ class CORE_NET_API InMemoryPipe
     void* _writableState { nullptr };
 };
 
+/// The addresses an @c InMemorySocket reports as its own and its peer's.
+///
+/// An in-process pipe has none of its own, so a test that needs a server to see a client's address
+/// and port -- as one served over TCP would -- states them. An unset one answers
+/// @c NetErrorCode::Unsupported, as the interface's default does.
+struct InMemoryEndpoints
+{
+    std::optional<ResolvedEndpoint> local;  ///< What @c InMemorySocket::localEndpoint answers.
+    std::optional<ResolvedEndpoint> remote; ///< What @c InMemorySocket::remoteEndpoint answers.
+};
+
+/// The addresses of the two ends of an @c InMemorySocketPair, each end's own.
+struct InMemoryPairEndpoints
+{
+    std::optional<ResolvedEndpoint> client; ///< The dialling end's address: the server's remote one.
+    std::optional<ResolvedEndpoint> server; ///< The accepted end's address: the client's remote one.
+};
+
 /// One end of an in-memory connection: reads drain one @c InMemoryPipe, writes fill the other.
 ///
 /// **In every closed state it answers the way a loopback TCP socket does**, which
@@ -200,9 +219,11 @@ class CORE_NET_API InMemorySocket final: public ISocket
     /// @param outbound The pipe this end writes into — the peer's inbound.
     /// @param peerAddress What @c peerAddress reports; "" (the default) means none, as a real
     ///        in-process transport has.
+    /// @param endpoints What @c localEndpoint and @c remoteEndpoint report; none by default.
     InMemorySocket(std::shared_ptr<InMemoryPipe> inbound,
                    std::shared_ptr<InMemoryPipe> outbound,
-                   std::string peerAddress = {}) noexcept;
+                   std::string peerAddress = {},
+                   InMemoryEndpoints endpoints = {}) noexcept;
 
     /// Abandons any parked operation rather than completing it — see @c ISocket::close and the
     /// socket contract's *a destructor abandons, close resolves* — and closes both directions.
@@ -253,6 +274,13 @@ class CORE_NET_API InMemorySocket final: public ISocket
     }
 
     [[nodiscard]] std::string peerAddress() const override { return _peerAddress; }
+
+    /// @return The local endpoint this socket was created with; @c NetErrorCode::Unsupported if it
+    ///         was given none, and @c NetErrorCode::BadHandle after @c close, as the platform sockets do.
+    [[nodiscard]] std::expected<ResolvedEndpoint, NetError> localEndpoint() const override;
+
+    /// @return The remote endpoint this socket was created with; otherwise as @c localEndpoint.
+    [[nodiscard]] std::expected<ResolvedEndpoint, NetError> remoteEndpoint() const override;
 
     void close() noexcept override;
 
@@ -337,6 +365,7 @@ class CORE_NET_API InMemorySocket final: public ISocket
     std::shared_ptr<InMemoryPipe> _inbound;
     std::shared_ptr<InMemoryPipe> _outbound;
     std::string _peerAddress;
+    InMemoryEndpoints _endpoints;
 
     /// What a verb recorded for the arm that follows it: the kind and buffer are known at the verb
     /// and the awaitable's final address only at the arm.
@@ -360,9 +389,12 @@ struct CORE_NET_API InMemorySocketPair
     /// @param maxBytesInFlight Per-direction bound on buffered bytes; zero means none.
     /// @param serverPeerAddress What the SERVER end reports as its peer — the client's apparent
     ///        address. "" (the default) means none.
+    /// @param endpoints Each end's own address; each end's remote endpoint is the other's. None by
+    ///        default. Independent of @p serverPeerAddress, which a test sets apart.
     /// @return Two connected ends.
     [[nodiscard]] static InMemorySocketPair create(std::size_t maxBytesInFlight = 0,
-                                                   std::string serverPeerAddress = {});
+                                                   std::string serverPeerAddress = {},
+                                                   InMemoryPairEndpoints endpoints = {});
 };
 
 /// A listener whose connections a test makes with @c connectClient.

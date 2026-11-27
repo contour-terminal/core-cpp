@@ -27,7 +27,7 @@ the interrupt throttle.
 | `<core/platform/FileInfoProvider.hpp>` | `FileInfoProvider`, a directory listing with `stat(2)` metadata (`FileEntry`), a single file or a glob pattern |
 | `<core/platform/ProcessEnvironment.hpp>` | `ProcessEnvironment`, a `core::Environment` a shell writes: variables with a set-then-export model, each write a `std::expected`; `isValidEnvironmentName()` |
 | `<core/platform/WorkingDirectory.hpp>` | `WorkingDirectory`: `changeDirectory()` and `currentDirectory()`, both over `std::filesystem::path`, so the answer round-trips on Windows whatever it spells |
-| `<core/platform/UserPaths.hpp>` | `homeDirectory()`, `userName()` and `configHome()` over a `core::Environment`, by default the process environment |
+| `<core/platform/UserPaths.hpp>` | `homeDirectory()`, `userName()`, `configHome()` and `cacheHome()` over a `core::Environment`, by default the process environment |
 | `<core/platform/PathUtils.hpp>` | path spelling: `normalizePath()`, `joinPath()`, `absolutePath()`, `canonicalCasePath()`, `stripTrailingSeparator()`, `isCaseOnlyRename()`, `resolveDevicePath()` |
 | `<core/platform/GlobMatch.hpp>` | `globMatchFilename()` (`*`, `?`, `[...]`) and `containsGlobChars()` |
 | `<core/platform/FileUri.hpp>` | RFC 3986 percent-encoding and RFC 8089 `file://` URIs |
@@ -231,10 +231,17 @@ dispatch needs it, and its `dispatch()` is the `noexcept` boundary of the except
   that is not UTF-8.
 - **`UserPaths` reads through a `core::Environment`**, so a test passes a
   `core::testing::FakeEnvironment`. Its default argument is a `core::LiveEnvironment`, so
-  `homeDirectory()`, `userName()` and `configHome()` called without one read the process environment (on
-  Windows the operating system's block) through the same body the tests run. A directory variable
-  that is not UTF-8 names no directory on Windows, so it counts as unset there
+  `homeDirectory()`, `userName()`, `configHome()` and `cacheHome()` called without one read the process
+  environment (on Windows the operating system's block) through the same body the tests run. A
+  directory variable that is not UTF-8 names no directory on Windows, so it counts as unset there
   (`core::pathFromUtf8()`, in [base](base.md#paths-and-utf-8)).
+- **`cacheHome()` answers an absolute path or none.** It reads `XDG_CACHE_HOME`, then
+  `LOCALAPPDATA`, then falls back to the operating system's row below the home directory:
+  `~/.cache` on Linux and the BSDs, `~/Library/Caches` on macOS, `~/AppData/Local` on Windows. The
+  row comes from a source CMake selects per OS, and each OS's test cases are selected the same way.
+  An empty, non-UTF-8 or relative variable counts as unset, as the XDG Base Directory specification
+  says, and a relative home directory names no cache, so a cache never lands below the working
+  directory.
 - **`Wakeup`'s constructor throws** `std::runtime_error` when the operating system refuses the
   eventfd, self-pipe or event, which it does only when descriptors, handles or kernel memory are
   exhausted. That is unrecoverable, since no event loop can run without its wakeup channel, so it

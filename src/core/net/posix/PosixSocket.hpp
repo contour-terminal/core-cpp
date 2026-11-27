@@ -68,6 +68,10 @@ class CORE_NET_API PosixSocket final: public ISocket
     [[nodiscard]] std::expected<void, NetError> armKeepAlive(KeepAliveSettings const& settings) override;
 
     [[nodiscard]] std::string peerAddress() const override { return _peerAddress; }
+    [[nodiscard]] std::expected<ResolvedEndpoint, NetError> localEndpoint() const override;
+    [[nodiscard]] std::expected<ResolvedEndpoint, NetError> remoteEndpoint() const override;
+    [[nodiscard]] std::expected<std::uint64_t, NetError> option(SocketOption option) const override;
+    [[nodiscard]] std::expected<void, NetError> setOption(SocketOption option, std::uint64_t value) override;
 
     void close() noexcept override;
 

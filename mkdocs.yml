@@ -109,6 +109,8 @@ nav:
     - platform: modules/platform.md
     - async: modules/async.md
     - net: modules/net.md
+    - fs: modules/fs.md
+    - http: modules/http.md
     - tui: modules/tui.md
     - testing: modules/testing.md
   - Design notes:

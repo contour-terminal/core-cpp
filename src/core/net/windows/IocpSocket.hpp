@@ -150,6 +150,10 @@ class CORE_NET_API IocpSocket final: public ISocket
     [[nodiscard]] std::expected<void, NetError> armKeepAlive(KeepAliveSettings const& settings) override;
 
     [[nodiscard]] std::string peerAddress() const override { return _peerAddress; }
+    [[nodiscard]] std::expected<ResolvedEndpoint, NetError> localEndpoint() const override;
+    [[nodiscard]] std::expected<ResolvedEndpoint, NetError> remoteEndpoint() const override;
+    [[nodiscard]] std::expected<std::uint64_t, NetError> option(SocketOption option) const override;
+    [[nodiscard]] std::expected<void, NetError> setOption(SocketOption option, std::uint64_t value) override;
 
     void close() noexcept override;
 
@@ -355,6 +359,15 @@ class CORE_NET_API IocpListener final: public IListener
     [[nodiscard]] async::Task<AcceptResult> accept() override;
 
     [[nodiscard]] std::uint16_t boundPort() const noexcept override { return _boundPort; }
+
+    /// @copydoc IListener::localEndpoint
+    [[nodiscard]] std::expected<ResolvedEndpoint, NetError> localEndpoint() const override;
+
+    /// @copydoc IListener::option
+    [[nodiscard]] std::expected<std::uint64_t, NetError> option(SocketOption option) const override;
+
+    /// @copydoc IListener::setOption
+    [[nodiscard]] std::expected<void, NetError> setOption(SocketOption option, std::uint64_t value) override;
 
     /// @return The listening socket, or `INVALID_SOCKET` once closed; for diagnostics and tests.
     [[nodiscard]] SOCKET native() const noexcept;

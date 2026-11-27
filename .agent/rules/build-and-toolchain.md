@@ -204,6 +204,19 @@ presets, scripts and paths.
   `CMAKE_CXX_SCAN_FOR_MODULES` to OFF. Origin: core-cpp's first Portability run (FreeBSD 14.3,
   clang 19.1.7), reproduced on Linux by pointing `CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS` at a
   missing file.
+  **As a subproject that default is not there**, and the root `CMakeLists.txt`'s
+  `cmake_minimum_required(VERSION 3.25...3.31)` sets CMP0155 NEW in core-cpp's scope, so a C++23
+  parent's configure stopped at FindThreads with exit 127 (Isoline P18). The root sets
+  `cmake_policy(SET CMP0155 OLD)`: a directory policy, which the parent's scope does not see, under
+  which only a probe or target whose `CXX_SCAN_FOR_MODULES` is ON scans -- so a parent's explicit
+  `CMAKE_CXX_SCAN_FOR_MODULES=ON` still applies. `core-cpp.module-scan` configures both roles with
+  a missing scanner, and the parent that asks, which must fail. The line sits inside
+  `if(POLICY CMP0155)`: CMake 3.25 to 3.27 do not know the policy and refuse to configure on it, and
+  the hygiene check's `unguarded-policy` rule refuses a `cmake_policy(SET …)` without that guard.
+  **Dependencies core-cpp fetches as a subproject still scan**: each sets CMP0155 NEW with its own
+  `cmake_minimum_required`, and the top-level default does not reach them there. The check runs with
+  `CORE_CPP_FETCH_DEPS=OFF`, so a fetching subproject build on a Clang without clang-scan-deps is
+  unproven.
 - **Run clang-format and clang-tidy at the pinned version, in a build directory of their own.**
   An older clang-tidy is not a laxer one: it is silent about checks it does not have (a file
   clean under 18 arrived at CI with thirteen findings from 22). The PyPI wheel finds its

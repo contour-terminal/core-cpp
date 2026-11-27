@@ -14,6 +14,8 @@ namespace is its directory (`src/core/net/` is `core::net`; headers directly in 
 | [platform](platform.md) | `core::platform` | `core::platform` | static | base, log | available |
 | [async](async.md) | `core::async` | `core::async` | static (shared with `CORE_CPP_BUILD_SHARED`); nearly all headers | Threads | `StopToken`, `Task`, `whenAll`, `whenAny`, `DetachedTask`, `syncRun`, `ParkedWork`, `IExecutor`, `ResumeOn`, `ThreadPoolExecutor` and `AsyncQueue` |
 | [net](net.md) | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | header-only, static, static | async, platform; OpenSSL for `net_tls` | contour's event loop, sockets, TLS and HTTP server available; the merge with fastcached's: Tasks B2 to B11 |
+| [fs](fs.md) | `core::fs` | `core::fs` | static | base, log, async, platform; ntdll and advapi32 on Windows | descriptor-relative file system, native only, with `CORE_CPP_WITH_FS` |
+| [http](http.md) | `core::http` | `core::http` | static | base, async, net | HTTP/1.1 messages, framing, client and server, native only, with `CORE_CPP_WITH_HTTP` |
 | [tui](tui.md) | `core::tui` | `core::tui_output`, `core::tui` | static | `tui_output`: base; `tui`: also platform, async, net, libunicode, stb (optional) | endo's terminal UI available, native only; its runtime is composed on `core::net::EventLoop` (Task B12) |
 | [testing](testing.md) | `core::testing` | `core::testing`, `core::testing_dialogs`, `core::testing_main` | static, object, static | base; log and Catch2 for `testing_main` | available |
 
@@ -42,6 +44,13 @@ graph BT
     platform --> log
     net --> async
     net --> platform
+    fs --> base
+    fs --> log
+    fs --> async
+    fs --> platform
+    http --> base
+    http --> async
+    http --> net
     tui_output --> base
     tui --> base
     tui --> tui_output
@@ -80,6 +89,7 @@ subset builds, and CI runs its tests under node:
 | async | everything except `ThreadPoolExecutor.hpp` |
 | platform | Types (with `NativeHandle`), PlatformError, Clock, StringUtils, PathUtils, GlobMatch, FileUri, and the POSIX `ProcessEnvironment`, `FileInfoProvider` and `WorkingDirectory` behind `nativeProcessEnvironment()`, `nativeFileInfoProvider()` and `nativeWorkingDirectory()` |
 | net | `net_types` today; `IoBackend`, `EventLoop`, timers, `DeadlineTimer`, `WithTimeout`, the host-driven backend and the test doubles from Tasks B3 to B5; never sockets, DNS, TLS or HTTP |
+| fs, http | never |
 | testing | fully (the Windows parts are no-ops) |
 | tui | never |
 

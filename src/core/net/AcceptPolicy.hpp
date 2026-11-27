@@ -118,6 +118,10 @@ inline constexpr auto AcceptErrorTable =
         // `WSA_NOT_ENOUGH_MEMORY`: out of descriptors, buffer space or memory. Accepting again at once
         // would spin a core; nothing else about it is wrong.
         { .code = NetErrorCode::ResourceExhausted, .disposition = AcceptDisposition::Exhausted },
+        // A name lookup's answers, which an accept never gives -- like the bind-time ones above,
+        // nothing says they pass.
+        { .code = NetErrorCode::NameNotFound, .disposition = AcceptDisposition::Unclassified },
+        { .code = NetErrorCode::ResolverTemporaryFailure, .disposition = AcceptDisposition::Unclassified },
     } };
 
 namespace detail

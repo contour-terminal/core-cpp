@@ -3,7 +3,8 @@
 // What a consumer with a vendored copy builds: a coroutine flow on core::net's event loop, a
 // loopback echo over a real socket, a line through a core::log sink of this program's own, and
 // core::net_tls, which is the one part that needs a system dependency (OpenSSL) rather than a
-// fetched one. There is no core::tui here: CORE_CPP_WITH_TUI is off, as it is for a build that
+// fetched one; and core::http, which a vendored copy carries unless CORE_CPP_WITH_HTTP is off. There
+// is no core::tui here: CORE_CPP_WITH_TUI is off, as it is for a build that
 // wants no libunicode.
 //
 // The first two are in ../consumer-shared/ConsumerSmoke.hpp, which the CPM consumer uses too; what
@@ -12,6 +13,8 @@
 //
 // Every step reports through Checks, so a failure names the step rather than only an exit code.
 
+#include <core/http/Framing.hpp>
+#include <core/http/HttpServer.hpp>
 #include <core/net/Tls.hpp>
 
 #include <iostream>
@@ -36,6 +39,13 @@ void checkTls(Checks& checks)
     checks.expect(context.has_value() && *context != nullptr, "core::net_tls built a client context");
 }
 
+/// core::http: a copy that carries it links it, and its pure layer answers.
+void checkHttp(Checks& checks)
+{
+    checks.expect(core::http::chunkHeader(255) == "ff\r\n" && core::http::statusPhrase(100) == "Continue",
+                  "core::http framed a chunk and named a status");
+}
+
 } // namespace
 
 int main()
@@ -44,6 +54,7 @@ int main()
     consumer::smoke::checkLoopbackEcho(checks, std::string_view { "hello from a vendored copy" });
     consumer::smoke::checkLogging(checks, std::string_view { "a vendored consumer" });
     checkTls(checks);
+    checkHttp(checks);
 
     if (checks.failed() != 0)
     {

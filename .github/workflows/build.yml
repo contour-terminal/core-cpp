@@ -196,6 +196,10 @@ jobs:
       - name: Text-encoding self-test
         run: python scripts/check-text-encoding-selftest.py
 
+      # covers: core-cpp.constant-time-selftest
+      - name: Constant-time check self-test
+        run: python scripts/check-constant-time-selftest.py
+
       # covers: core-cpp.tidy-record-selftest
       - name: Tidy-record self-test
         run: python scripts/tidy-record-selftest.py
@@ -468,10 +472,10 @@ jobs:
           database, standard, *roots = sys.argv[1:]
           roots = tuple(os.path.realpath(root) + os.sep for root in roots)
           entries = [e for e in json.load(open(database))
-                     if os.path.realpath(os.path.join(e["directory"], e["file"])).startswith(roots)]
+                      if os.path.realpath(os.path.join(e["directory"], e["file"])).startswith(roots)]
           flags = {"26": ("c++26", "c++2c")}[standard]
           wrong = [e["file"] for e in entries
-                   if not any(f"-std={f}" in (e.get("command") or " ".join(e.get("arguments", []))) for f in flags)]
+                    if not any(f"-std={f}" in (e.get("command") or " ".join(e.get("arguments", []))) for f in flags)]
           print(f"{len(entries)} compile(s) under {', '.join(roots)}; {len(wrong)} not compiled as C++{standard}")
           for path in wrong:
               print(f"::error::{path} is not compiled as C++{standard}")
@@ -481,7 +485,15 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
 
+      # Ubuntu 24.04's AppArmor refuses an unprivileged process its own user namespace, so the
+      # Linux relation rows across bind and tmpfs mounts (src/core/fs/linux/Relation_test.cpp)
+      # would skip; with the restriction lifted, CORE_TEST_REQUIRE_USERNS makes such a skip fail.
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Test
+        env:
+          CORE_TEST_REQUIRE_USERNS: "1"
         run: ctest --preset ${{ matrix.preset }} -LE tree-level
 
   # ---------------------------------------------------------------------------------------------
@@ -559,6 +571,23 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
 
+      # The constant-time record for the pull request body: AppleClang's arm64 code for
+      # core::constantTimeEquals and core::secureZero, as this release build generated it, with the
+      # barriers they call. Printed, not judged: scripts/check-constant-time.py judges it in ctest.
+      - name: Disassemble the constant-time functions
+        if: matrix.name == 'appleclang'
+        run: |
+          set -e
+          uname -m
+          clang++ --version | head -1
+          for object in $(find out/build/${{ matrix.preset }} -name 'ConstantTime.cpp.o' -o -name 'ValueBarrierGnu.cpp.o'); do
+            echo "::group::otool -tvV -rv $object"
+            otool -tvV "$object"
+            # An object's calls are unresolved until the link: the relocations name their targets.
+            otool -rv "$object"
+            echo "::endgroup::"
+          done
+
       - name: Test
         run: ctest --preset ${{ matrix.preset }} -LE tree-level
 
@@ -598,6 +627,10 @@ jobs:
     env:
       VCPKG_COMMIT: e6f9e70a29a3e80a1fc510d8503304315447112f
       VCPKG_ARCHIVES: ${{ github.workspace }}/.cache/vcpkg-archives
+      # GitHub's Windows runners run elevated (administrator, UAC off), so the fs cases that need
+      # elevation -- an owner-only file created elevated, a file given to BUILTIN\Administrators --
+      # fail here instead of skipping (src/core/fs/windows/OwnerOnly_test.cpp).
+      CORE_TEST_REQUIRE_ELEVATED: "1"
     steps:
       - uses: actions/checkout@v7
         with:
@@ -796,7 +829,18 @@ jobs:
       #
       # To exclude another label here, extend this regex -- `-LE 'tree-level|other'` -- and never
       # add a second flag.
+
+      # Ubuntu 24.04's AppArmor refuses an unprivileged process its own user namespace, so the
+      # Linux relation rows across bind and tmpfs mounts (src/core/fs/linux/Relation_test.cpp)
+      # would skip; with the restriction lifted, CORE_TEST_REQUIRE_USERNS makes such a skip fail.
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      # Not under TSan: its runtime keeps a thread of its own in a forked child, and the kernel
+      # refuses a user namespace to a process with more than one thread (unshare: EINVAL).
       - name: Test
+        env:
+          CORE_TEST_REQUIRE_USERNS: ${{ matrix.preset == 'clang-tsan' && '0' || '1' }}
         run: ctest --preset ${{ matrix.preset }} -LE tree-level
 
   # ---------------------------------------------------------------------------------------------
@@ -897,6 +941,12 @@ jobs:
     name: windows (clang-tidy)
     runs-on: windows-2025
     timeout-minutes: 60
+    # core::net_tls is configured in, so its `windows/` sources (the system trust and the chain
+    # verifier) are in the database and counted; without it the script refuses 81 of 84. OpenSSL
+    # comes from vcpkg as in the cl-release-tls leg, sharing that leg's binary archives.
+    env:
+      VCPKG_COMMIT: e6f9e70a29a3e80a1fc510d8503304315447112f
+      VCPKG_ARCHIVES: ${{ github.workspace }}/.cache/vcpkg-archives
     steps:
       - uses: actions/checkout@v7
         with:
@@ -933,6 +983,30 @@ jobs:
           test -x "$tidy" || { echo "::error::the clang-tidy wheel has no $tidy"; exit 1; }
           echo "CLANG_TIDY_EXE=$tidy" >> "$GITHUB_ENV"
 
+      - name: Cache vcpkg binary archives
+        uses: actions/cache@v6
+        with:
+          path: .cache/vcpkg-archives
+          key: vcpkg-archives-x64-windows-${{ env.VCPKG_COMMIT }}-${{ hashFiles('.github/vcpkg/vcpkg.json') }}
+          restore-keys: vcpkg-archives-x64-windows-${{ env.VCPKG_COMMIT }}-
+
+      - name: vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT }}
+
+      # As in the windows matrix: run-vcpkg's x-gha provider is gone, so a files provider in the
+      # cached directory replaces it.
+      - name: Use vcpkg's toolchain and binary archives
+        run: |
+          archives="${VCPKG_ARCHIVES//\\//}"
+          mkdir -p "$archives"
+          root="${VCPKG_ROOT//\\//}"
+          workspace="${GITHUB_WORKSPACE//\\//}"
+          echo "VCPKG_BINARY_SOURCES=clear;files,$archives,readwrite" >> "$GITHUB_ENV"
+          echo "TOOLCHAIN_FILE=$root/scripts/buildsystems/vcpkg.cmake" >> "$GITHUB_ENV"
+          echo "VCPKG_MANIFEST=$workspace/.github/vcpkg" >> "$GITHUB_ENV"
+
       - name: MSVC developer environment
         uses: ilammy/msvc-dev-cmd@v1
 
@@ -944,7 +1018,8 @@ jobs:
       # linkage findings). So the one target that generates them is built, and nothing else.
       - name: Configure, and generate libunicode's headers
         run: |
-          cmake --preset clangcl-release "-DCMAKE_CXX_COMPILER=$CXX_COMPILER_PATH"
+          cmake --preset clangcl-release "-DCMAKE_CXX_COMPILER=$CXX_COMPILER_PATH" -DCORE_CPP_WITH_TLS=ON \
+            "-DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN_FILE" "-DVCPKG_MANIFEST_DIR=$VCPKG_MANIFEST"
           cmake --build out/build/clangcl-release --target unicode_ucd
 
       - name: clang-tidy over the clang-cl compile database
@@ -1193,7 +1268,16 @@ jobs:
           [ "${hits:-0}" -ge 1 ] || { echo "::error::pace-cc --show-stats shows no hits"; exit 1; }
 
       # A replayed object is only as good as what it runs: the tests run on the cache's objects.
+
+      # Ubuntu 24.04's AppArmor refuses an unprivileged process its own user namespace, so the
+      # Linux relation rows across bind and tmpfs mounts (src/core/fs/linux/Relation_test.cpp)
+      # would skip; with the restriction lifted, CORE_TEST_REQUIRE_USERNS makes such a skip fail.
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Test the replayed build
+        env:
+          CORE_TEST_REQUIRE_USERNS: "1"
         run: ctest --preset "$PRESET" -LE tree-level
 
   # ---------------------------------------------------------------------------------------------
@@ -1322,7 +1406,7 @@ jobs:
         run: |
           cmake -DMODE=sync -DREF="$GITHUB_SHA" -DREPO="$GITHUB_WORKSPACE" \
             -DDEST="$RUNNER_TEMP/vendor/core-cpp" \
-            "-DMODULES=base;log;cli;codec;platform;async;net;testing" \
+            "-DMODULES=base;log;cli;codec;platform;async;net;fs;http;testing" \
             -P cmake/CoreCppVendor.cmake
           sed -n '1,7p' "$RUNNER_TEMP/vendor/core-cpp/MANIFEST"
 
@@ -1335,8 +1419,8 @@ jobs:
           docker build -t core-cpp-vendored-smoke - <<'DOCKERFILE'
           FROM ubuntu:24.04
           RUN apt-get update -q \
-           && apt-get install -y -q --no-install-recommends g++-14 cmake ninja-build libssl-dev libsystemd-dev pkg-config \
-           && rm -rf /var/lib/apt/lists/*
+            && apt-get install -y -q --no-install-recommends g++-14 cmake ninja-build libssl-dev libsystemd-dev pkg-config \
+            && rm -rf /var/lib/apt/lists/*
           DOCKERFILE
 
       - name: The vendored copy configures, builds and verifies with no network
@@ -1439,7 +1523,15 @@ jobs:
       - name: Build
         run: cmake --build --preset clang-coverage
 
+      # Ubuntu 24.04's AppArmor refuses an unprivileged process its own user namespace, so the
+      # Linux relation rows across bind and tmpfs mounts (src/core/fs/linux/Relation_test.cpp)
+      # would skip; with the restriction lifted, CORE_TEST_REQUIRE_USERNS makes such a skip fail.
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Test
+        env:
+          CORE_TEST_REQUIRE_USERNS: "1"
         run: |
           mkdir -p out/build/clang-coverage/profiles
           LLVM_PROFILE_FILE="$PWD/out/build/clang-coverage/profiles/%m-%p.profraw" ctest --preset clang-coverage -LE tree-level

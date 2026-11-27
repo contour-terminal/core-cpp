@@ -44,6 +44,7 @@ core_cpp_add_module(async KIND STATIC
         IExecutor.hpp
         Join.hpp
         KeyedStrands.hpp
+        Offload.hpp
         ParkedWork.hpp
         ResumeOn.hpp
         StopToken.hpp
@@ -79,6 +80,7 @@ set(_coreCppAsyncStopTokenTests
     AsyncQueue_test.cpp
     Awaitable_test.cpp
     KeyedStrands_test.cpp
+    Offload_test.cpp
     ParkedWork_test.cpp
     StopToken_test.cpp
     Strand_test.cpp

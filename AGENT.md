@@ -20,6 +20,8 @@ is [the plan](docs/superpowers/plans/2026-09-18-core-cpp.md).
 | platform | `core::platform` | `core::platform` | base, log |
 | async | `core::async` | `core::async` (headers, and two sources for thread-local state) | Threads |
 | net | `core::net` | `core::net_types`, `core::net`, `core::net_tls` | async, platform |
+| fs | `core::fs` | `core::fs` (`CORE_CPP_WITH_FS`, native only) | base, log, async, platform |
+| http | `core::http` | `core::http` (`CORE_CPP_WITH_HTTP`, native only) | base, async, net |
 | tui | `core::tui` | `core::tui_output`, `core::tui_core`, `core::tui` | base (leaf); + tui_output, libunicode (headless `tui_core`); + platform, async, net (`tui`) |
 | testing | `core::testing` | `core::testing`, `core::testing_dialogs`, `core::testing_main` | base; log and Catch2 for `testing_main` |
 
@@ -32,7 +34,10 @@ Every module exists. `Generator` is in base (Task A5b: it needs only std, and
 a leaf that links base alone. Task B12 composed the TUI runtime on `core::net::EventLoop`, which
 is why the `tui` row lists `net`; `tui_output` still links base alone, which is the point of the
 split. Phase B is complete: the networking half of the merge landed in `net` (Tasks B6 to B11). The module DAG is the
-table in `cmake/CoreCppModules.cmake`, and configure refuses a link it does not list.
+table in `cmake/CoreCppModules.cmake`, and configure refuses a link it does not list. `fs` (the
+descriptor-relative file system) and `http` (HTTP/1.1 client and server) are native only, and
+each has an option (`CORE_CPP_WITH_FS`, `CORE_CPP_WITH_HTTP`), which a vendored copy
+without the module's directory sets OFF.
 
 Consumers: contour (vendored), endo, fastcached, tuidu, Lightweight's `dbtool`, morph (CPM). Who
 links what, and where each keeps its pin: [`.agent/reference/consumers.md`](.agent/reference/consumers.md).

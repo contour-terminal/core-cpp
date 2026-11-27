@@ -54,7 +54,8 @@ src/core/
   async/                    core::async, headers but for two sources that own thread-local state:
                             StopToken (std:: or the fallback); Task, UniqueCoroHandle,
                             Cancellation, Awaitable, whenAll/whenAny (contour);
-                            executors, AsyncQueue (planned, B1)
+                            executors, AsyncQueue (planned, B1); Offload (offload: a blocking
+                            call on an injected executor, resumed on the home one)
   net/                      core::net_types (NetError, IoResult; header-only, everywhere),
                             core::net (EventLoop over IoBackend, which DISPATCHES readiness to
                             the handlers registered with it; PlatformLoop owns the default
@@ -74,6 +75,19 @@ src/core/
                             hold. The WebAssembly subset is IoBackend, IHostScheduler,
                             HostDrivenBackend and EventLoop with PlatformLoop and TestLoop over
                             it; IOCP, sockets and dialling (planned, B6-B11)
+  fs/                       core::fs: Descriptor (IDescriptorFileSystem, IDescriptor, relation),
+                            NativeFileSystem, FsError, PathPolicy (isRootedLinkTarget), Rights
+                            (the one rights table), AccessScope (classifyAccess); detail/ (the
+                            path walk every resolver runs, Ancestry's decision) posix/ linux/
+                            (openat2, mountinfo) bsd/ darwin/ (firmlink exits) windows/ (ntdll
+                            beneath walk, owner security, stable file id rows) are private and
+                            CMake picks one file per concern; testing/ holds
+                            InMemoryDescriptorFileSystem; DescriptorTestSupport.hpp is test-only
+  http/                     core::http: Message (HttpErrorCode, Fields, the validating
+                            factories), Framing (HttpLimits, request/responseFraming, HeadParser,
+                            ChunkedDecoder), Body, Connection, HttpClient (the per-origin pool),
+                            HttpServer (serveHttp, errorStatusTable); testing/ScriptedConnector;
+                            SmugglingCorpus.hpp and HttpTestSupport.hpp are test-only
   tui/                      core::tui_output (endo: TerminalOutput, SyncGuard, SgrBuilder,
                             TerminalProtocols, CursorShape, Error; links base alone; with
                             CORE_CPP_WITH_TUI_OUTPUT, which the full TUI forces on),
@@ -119,6 +133,8 @@ tests/
                                     repositories it builds for the purpose
     check-install.cmake             installs the build, consumes the package, and exports from a
                                     parent with CORE_CPP_INSTALL on and off
+    check-module-scan.cmake         configures core-cpp top-level and as a subproject on a Clang
+                                    without clang-scan-deps, and a parent asking for modules
   consumer-shared/          ConsumerSmoke.hpp: the loopback echo and the core::log line the CPM
                             and vendored consumer programs both run, so neither carries a copy
   consumer-cpm/             a consumer's own project, added to core-cpp with CPM: asserts that
@@ -130,6 +146,8 @@ tests/
   consumer-install/         a consumer of the INSTALLED package: find_package(core-cpp), core::net,
                             and core::testing_main where the build installed it
   consumer-install-nested/  a parent exporting a target that links core-cpp's, as morph does
+  consumer-module-scan/     a C++23 parent that adds core-cpp and never asks for modules, as
+                            Isoline does
 scripts/
   tool-versions.py          prints, installs or checks the pinned clang-format/clang-tidy
   clang-format.py           formats or checks the C++ sources named, or --all, with the pinned build

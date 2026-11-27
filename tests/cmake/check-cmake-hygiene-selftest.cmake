@@ -19,7 +19,7 @@ endif()
 
 # A tree with nothing to refuse: "<file>|<content>".
 set(clean
-    "CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\noption(CORE_CPP_FOO \"x\" ON)\ninclude(CMakeDependentOption)\ninclude(\"\${CMAKE_CURRENT_LIST_DIR}/cmake/Foo.cmake\")\n"
+    "CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\nif(POLICY CMP0155)\n    # why\n    cmake_policy(SET CMP0155 OLD)\nendif()\noption(CORE_CPP_FOO \"x\" ON)\ninclude(CMakeDependentOption)\ninclude(\"\${CMAKE_CURRENT_LIST_DIR}/cmake/Foo.cmake\")\n"
     "cmake/Foo.cmake|# SPDX-License-Identifier: Apache-2.0\nfunction(core_cpp_foo)\nendfunction()\nset(CORE_CPP_FOO_DIR \"\" CACHE PATH \"x\")\n"
     "src/core/foo/CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\nadd_library(core-cpp-foo STATIC Foo.cpp)\ntarget_compile_options(core-cpp-foo PRIVATE -Wall)\n"
     "src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foo {}\n"
@@ -68,6 +68,9 @@ set(cases
     "untyped-library|src/core/foo/CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\nadd_library(x a.cpp)\n"
     "public-flags|src/core/foo/CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\nadd_library(x STATIC a.cpp)\ntarget_compile_options(x PUBLIC -Wall)\n"
     "source-glob|src/core/foo/CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\nfile(GLOB sources *.cpp)\n"
+    "unguarded-policy|CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\ncmake_policy(SET CMP0155 OLD)\n"
+    # Guarded by the wrong policy is no guard.
+    "unguarded-policy|CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\nif(POLICY CMP0167)\n    cmake_policy(SET CMP0155 OLD)\nendif()\n"
     "include-by-name|CMakeLists.txt|# SPDX-License-Identifier: Apache-2.0\ninclude(CoreCppOptions)\n"
     "nolint|src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\nnamespace core::foo {} // NOLINT\n"
     "diagnostic-pragma|src/core/foo/Foo.cpp|// SPDX-License-Identifier: Apache-2.0\n#pragma clang diagnostic ignored \"-Wshadow\"\n"

@@ -54,6 +54,12 @@ Most of these rules were paid for in fastcached; the full measurements are in
   everywhere and run by nothing, and an absent check looks exactly like a passing one.
   `core-cpp.tree-level-coverage` refuses that in both directions, but know the rule as well as the
   gate: a gate tells you that you broke it, the rule tells you what it is.
+- **Test support that needs Catch2, `SKIP` or another module is a test-only `*TestSupport.hpp`**
+  next to the tests (`async/StrandTestSupport.hpp`, `fs/DescriptorTestSupport.hpp`), in no
+  `FILE_SET`, never in `testing/`, which is compiled into the module. Like a `*_test.cpp`, it is
+  compiled only into a test binary, which may link more than the module's row lists, so
+  `core-cpp.layering`'s include scan skips it as it skips the tests themselves; its self-check
+  plants one that reaches a module its row does not.
 - **Script-driven checks are `cmake -P` scripts under `tests/cmake/`**, registered in
   `tests/CMakeLists.txt`, each with a self-test that proves every rule it states refuses.
 

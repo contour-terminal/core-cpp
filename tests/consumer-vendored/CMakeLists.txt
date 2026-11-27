@@ -6,7 +6,7 @@
 # this project's own suite.
 #
 #   cmake -DMODE=sync -DREF=<tag> -DDEST=<somewhere>/vendor/core-cpp \
-#         "-DMODULES=base;log;cli;codec;platform;async;net;testing" -P <core-cpp>/cmake/CoreCppVendor.cmake
+#         "-DMODULES=base;log;cli;codec;platform;async;net;fs;http;testing" -P <core-cpp>/cmake/CoreCppVendor.cmake
 #   cmake -S tests/consumer-vendored -B <build> -DCORE_CPP_VENDOR_DIR=<somewhere>/vendor/core-cpp
 #   cmake --build <build> && ctest --test-dir <build> --output-on-failure
 #
@@ -76,6 +76,8 @@ add_test(NAME core-cpp-vendored-copy
                  -P "${CORE_CPP_VENDOR_DIR}/cmake/CoreCppVendor.cmake")
 
 add_executable(consumer-vendored main.cpp)
-target_link_libraries(consumer-vendored PRIVATE core::async core::log core::net core::net_tls)
+# core::fs is linked although main.cpp names nothing of it: it is EXCLUDE_FROM_ALL like every target
+# of the copy, so a link is what makes this build compile it.
+target_link_libraries(consumer-vendored PRIVATE core::async core::log core::net core::net_tls core::fs core::http)
 add_test(NAME consumer-vendored COMMAND consumer-vendored)
 set_tests_properties(consumer-vendored PROPERTIES TIMEOUT 120)
