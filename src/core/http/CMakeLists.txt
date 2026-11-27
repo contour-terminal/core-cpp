@@ -4,27 +4,37 @@
 # factories, the framing rules of RFC 9112 section 6.3 as one row table, the incremental head parser
 # and the chunked codec -- holds no socket, so every framing rule is tested from a table
 # (Framing_test.cpp, over the shared SmugglingCorpus.hpp). Connection puts it on an ISocket: heads
-# and streamed bodies with trailers, read through one buffer of maxReadChunk bytes.
+# and streamed bodies with trailers, read through one buffer of maxReadChunk bytes. HttpClient sends
+# a request over a connection of its own: the dial through an injected IConnector, TLS through an
+# injected ITlsContext, and every failure on the way classified. testing/ScriptedConnector is the
+# connector a consumer's test dials in memory with.
 core_cpp_add_module(http KIND STATIC
     HEADERS
         Body.hpp
         Connection.hpp
         Framing.hpp
+        HttpClient.hpp
         Message.hpp
+        testing/ScriptedConnector.hpp
     SOURCES
         Body.cpp
         Connection.cpp
         Framing.cpp
+        HttpClient.cpp
         Message.cpp
+        testing/ScriptedConnector.cpp
     PUBLIC_LIBS core::base core::net)
 
 # One binary. SmugglingCorpus.hpp is the test-only corpus the server's cases run too, and
-# HttpTestSupport.hpp the helpers the cases share; Connection_test.cpp drives both ends over
-# net::testing's in-memory pair on a TestLoop, so nothing in it waits on anything but the loop.
+# HttpTestSupport.hpp the helpers the cases share, a scripted TLS context among them (R29: the binary
+# links no net_tls and builds without CORE_CPP_WITH_TLS); Connection_test.cpp and HttpClient_test.cpp
+# drive both ends over net::testing's in-memory pair on a TestLoop, so nothing in them waits on
+# anything but the loop.
 core_cpp_add_test(http
     SOURCES
         Connection_test.cpp
         Framing_test.cpp
+        HttpClient_test.cpp
         HttpTestSupport.hpp
         Message_test.cpp
         SmugglingCorpus.hpp)

@@ -1033,7 +1033,11 @@ Reuse Connection::reusable() const noexcept
                        && state.persist == Persist::KeepAlive && !state.socket->isClosed()
                        && state.readPhase == ReadPhase::Idle && state.writePhase == WritePhase::Idle
                        && state.readWire == Wire::Idle && state.writeWire == Wire::Idle;
-    return clean ? Reuse::Yes : Reuse::No;
+    // Bytes a response role holds past the end of its last response answer no request it sent: pooled,
+    // they would be read as the next request's response. A request role keeps them, as the start of the
+    // next pipelined request.
+    auto const answered = state.role == MessageRole::Request || state.begin == state.end;
+    return clean && answered ? Reuse::Yes : Reuse::No;
 }
 
 net::ISocket& Connection::socket() noexcept

@@ -12,6 +12,7 @@
 #include <core/http/Framing.hpp>
 #include <core/http/HttpTestSupport.hpp>
 #include <core/http/Message.hpp>
+#include <core/net/EventLoop.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/IoAwaitable.hpp>
 #include <core/net/NetError.hpp>
@@ -30,6 +31,7 @@
 #include <expected>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -63,6 +65,7 @@ using core::http::test::into;
 using core::http::test::readAll;
 using core::http::test::ReadBody;
 using core::http::test::readUntilClosed;
+using core::http::test::SlowBodySource;
 using core::http::test::writeAndClose;
 using core::http::test::writeOnly;
 using core::net::ISocket;
@@ -1167,6 +1170,80 @@ TEST_CASE("Connection.aZeroTimeoutIsNone", "[http][connection]")
     CHECK(connection.reusable() == Reuse::Yes); // a bodiless response is a finished one
 }
 
+TEST_CASE("Connection.anUploadInProgressCountsTowardTheResponseTimeout", "[http][connection]")
+{
+    // The response timeout follows wasmtime's first-byte timeout (P13 Task 16 ruling): it runs from
+    // the head read's start, and a request body still being written -- here one chunk every three
+    // timeouts -- does not hold it.
+    auto wire = Wire {};
+    auto server = Connection {
+        wire.loop, std::move(wire.pair.server), MessageRole::Request, HttpLimits {}, NoTimeouts
+    };
+    auto client = Connection { wire.loop,
+                               std::move(wire.pair.client),
+                               MessageRole::Response,
+                               HttpLimits {},
+                               WireTimeouts { .firstByte = 100ms, .betweenBytes = 0ms, .write = 0ms } };
+    auto upload = SlowBodySource { wire.loop, { "aaaa", "bbbb", "cccc" }, 300ms };
+    auto const framing = core::http::framingFor(&upload);
+    auto sent = std::optional<HttpResult<void>> {};
+    auto received = std::optional<ReadResponse> {};
+    auto served = std::optional<ServedRequest> {};
+    wire.loop.spawn(
+        into(sendRequest(&client, requestHead("PUT", "/", { { "Host", "h" } }), &upload, framing), &sent));
+    wire.loop.spawn(into(receiveOne(&client, "PUT", 100), &received));
+    wire.loop.spawn(into(serveOne(&server, 100), &served));
+    std::ignore = wire.loop.drain();
+    wire.clock.advance(99ms);
+    std::ignore = wire.loop.drain();
+    REQUIRE_FALSE(received.has_value());
+    wire.clock.advance(1ms);
+    std::ignore = wire.loop.drain();
+    REQUIRE(received.has_value());
+    CHECK(received->error == HttpErrorCode::ResponseTimeout);
+    REQUIRE_FALSE(sent.has_value()); // the upload was still in progress
+    for ([[maybe_unused]] auto const chunk: std::views::iota(0, 3))
+    {
+        wire.clock.advance(300ms);
+        std::ignore = wire.loop.drain();
+    }
+    REQUIRE(sent.has_value());
+    CHECK(sent->has_value());
+}
+
+TEST_CASE("Connection.aHeadWrittenAloneLeavesTheResponseTimeoutRunning", "[http][connection]")
+{
+    // Only a write in progress holds the timeout. A client that writes its head and waits for an
+    // interim answer before the body (Expect: 100-continue) is waiting on the server, and is bounded.
+    auto wire = Wire {};
+    auto client = Connection { wire.loop,
+                               std::move(wire.pair.client),
+                               MessageRole::Response,
+                               HttpLimits {},
+                               WireTimeouts { .firstByte = 100ms, .betweenBytes = 0ms, .write = 0ms } };
+    auto drained = std::optional<std::string> {};
+    auto wrote = std::optional<HttpResult<void>> {};
+    auto received = std::optional<ReadResponse> {};
+    wire.loop.spawn(into(readUntilClosed(wire.pair.server.get()), &drained));
+    wire.loop.spawn(into(
+        client.writeRequestHead(requestHead("PUT", "/", { { "Host", "h" }, { "Expect", "100-continue" } }),
+                                Framing { .kind = BodyFraming::Length, .length = 4 }),
+        &wrote));
+    std::ignore = wire.loop.drain();
+    REQUIRE(wrote.has_value());
+    REQUIRE(wrote->has_value());
+    wire.loop.spawn(into(receiveOne(&client, "PUT", 100), &received));
+    std::ignore = wire.loop.drain();
+    wire.clock.advance(99ms);
+    std::ignore = wire.loop.drain();
+    REQUIRE_FALSE(received.has_value());
+    wire.clock.advance(1ms);
+    std::ignore = wire.loop.drain();
+    REQUIRE(received.has_value());
+    CHECK(received->error == HttpErrorCode::ResponseTimeout);
+    client.close();
+}
+
 TEST_CASE("Connection.socketErrorsMapThroughTheTable", "[http][connection]")
 {
     // A transport failure is classified once, by a row per NetErrorCode, and the direction decides
@@ -1224,7 +1301,8 @@ TEST_CASE("Connection.reuseFollowsTheExchange", "[http][connection]")
 {
     SECTION("a second response in the same bytes is read after the first")
     {
-        // Bytes past a body stay buffered for the next head.
+        // Bytes past a body stay buffered for the next head; while they wait, the connection is not
+        // one a pool may hand to a request they do not answer.
         auto wire = Wire {};
         auto connection = Connection {
             wire.loop, std::move(wire.pair.client), MessageRole::Response, HttpLimits {}, NoTimeouts
@@ -1237,7 +1315,7 @@ TEST_CASE("Connection.reuseFollowsTheExchange", "[http][connection]")
         std::ignore = wire.loop.drain();
         REQUIRE(first.has_value());
         CHECK(first->body.text == "abc");
-        CHECK(connection.reusable() == Reuse::Yes);
+        CHECK(connection.reusable() == Reuse::No);
         auto second = std::optional<ReadResponse> {};
         wire.loop.spawn(into(receiveOne(&connection, "GET", 100), &second));
         std::ignore = wire.loop.drain();

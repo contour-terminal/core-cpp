@@ -2,16 +2,20 @@
 //
 // `Connection` over a real socket pair on every backend this platform builds: the deadlines, which
 // the in-memory cases can only drive through the double's own `cancelRead`, and cancellation, which
-// that double does not model at all. Every case bounds its whole flow with a watchdog, so a deadline
-// that never fires fails the case in seconds instead of hanging it.
+// that double does not model at all; and `HttpClient`'s response timeout bounding a peer that never
+// reads, on real timers. Every case bounds its whole flow with a watchdog, so a deadline that never fires
+// fails the case in seconds instead of hanging it.
 #include <core/async/AsTask.hpp>
 #include <core/async/Task.hpp>
+#include <core/async/WhenAll.hpp>
 #include <core/http/Body.hpp>
 #include <core/http/Connection.hpp>
 #include <core/http/Framing.hpp>
+#include <core/http/HttpClient.hpp>
 #include <core/http/HttpTestSupport.hpp>
 #include <core/http/Message.hpp>
 #include <core/net/EventLoop.hpp>
+#include <core/net/IConnector.hpp>
 #include <core/net/ISocket.hpp>
 #include <core/net/IoBackend.hpp>
 #include <core/net/SocketOption.hpp>
@@ -223,6 +227,45 @@ void runBounded(EventLoop& loop, Task<void> task)
     REQUIRE(finished);
 }
 
+/// A connector that hands out the sockets it was given, one per dial, in order.
+class QueuedSocketConnector final: public core::net::IConnector
+{
+  public:
+    explicit QueuedSocketConnector(std::vector<std::unique_ptr<ISocket>> sockets):
+        _sockets { std::move(sockets) }
+    {
+    }
+
+    [[nodiscard]] Task<core::net::SocketResult> connect(std::string /*host*/,
+                                                        std::uint16_t /*port*/,
+                                                        core::net::DialOptions /*options*/) override
+    {
+        return handOut(&_sockets, _dials++);
+    }
+
+    /// @return How many dials were asked for.
+    [[nodiscard]] std::size_t connects() const noexcept { return _dials; }
+
+  private:
+    static Task<core::net::SocketResult> handOut(std::vector<std::unique_ptr<ISocket>>* sockets,
+                                                 std::size_t index)
+    {
+        if (index >= sockets->size())
+            co_return std::unexpected(
+                core::net::makeNetError(core::net::NetErrorCode::BadHandle, 0, "dialled once too often"));
+        co_return std::move(sockets->at(index));
+    }
+
+    std::vector<std::unique_ptr<ISocket>> _sockets;
+    std::size_t _dials = 0;
+};
+
+/// Runs @p server and @p client together, to both ends.
+Task<void> both(Task<void> server, Task<void> client)
+{
+    co_await core::async::whenAll(std::move(server), std::move(client));
+}
+
 } // namespace
 
 TEST_CASE("ConnectionLoopback.aSilentPeerTimesOutOnEveryBackend", "[http][connection][loopback]")
@@ -424,6 +467,100 @@ TEST_CASE("ConnectionLoopback.aFlowCancelledOnTheWireLeavesTheConnectionUnreusab
                 expectStalled(!*timedOut);
                 expectCutOff(timedOut, *connection);
             }
+        }
+    }
+}
+
+TEST_CASE("ConnectionLoopback.aServerThatNeverReadsIsBoundedByTheResponseTimeout", "[http][client][loopback]")
+{
+    // HttpClient reads the response head while it uploads a flood the peer never reads, so the write
+    // stalls in the kernel. The response timeout runs through the upload (P13 Task 16 ruling, as
+    // wasmtime's first-byte timeout does), ends the request, and its close ends the stalled write.
+    for (auto const& backend: BackendMatrix)
+    {
+        if (!buildsHere(backend.kind))
+            continue;
+        DYNAMIC_SECTION("backend=" << backend.name)
+        {
+            auto ioBackend = core::net::makeBackend(backend.kind);
+            REQUIRE(ioBackend != nullptr);
+            auto loop = EventLoop { *ioBackend };
+            auto pair = core::net::testing::makeSocketPair(loop);
+            REQUIRE(pair.has_value());
+            std::ignore = pair->first->setOption(core::net::SocketOption::SendBufferSize, SmallBuffer);
+            std::ignore = pair->second->setOption(core::net::SocketOption::ReceiveBufferSize, SmallBuffer);
+            auto sockets = std::vector<std::unique_ptr<ISocket>> {};
+            sockets.push_back(std::move(pair->first));
+            auto connector = QueuedSocketConnector { std::move(sockets) };
+            auto options = core::http::HttpClientOptions {};
+            options.timeouts =
+                core::http::HttpTimeouts { .connect = 0ms, .firstByte = Deadline, .betweenBytes = 0ms };
+            auto client = core::http::HttpClient { loop, connector, nullptr, options };
+            auto request = core::http::test::get("http://example.test/upload", "PUT");
+            request.body = std::make_unique<BufferBodySource>(std::string(Flood, 'x'));
+            auto answer = std::optional<HttpResult<core::http::IncomingResponse>> {};
+            runBounded(loop, into(client.send(std::move(request)), &answer));
+            REQUIRE(answer.has_value());
+            REQUIRE_FALSE(answer->has_value());
+            CHECK(answer->error().code == HttpErrorCode::ResponseTimeout);
+        }
+    }
+}
+
+TEST_CASE("ConnectionLoopback.aKeptAliveConnectionTheServerClosedIsRetried", "[http][client][pool][loopback]")
+{
+    // A server closes a kept-alive connection while it sits in the client's pool, as servers do at
+    // their own idle timeout. On a real socket the reuse sees the close as an end of stream or a
+    // reset, depending on the kernel and the timing; either is a stale connection, and the bodiless
+    // GET is sent again on a fresh one.
+    for (auto const& backend: BackendMatrix)
+    {
+        if (!buildsHere(backend.kind))
+            continue;
+        DYNAMIC_SECTION("backend=" << backend.name)
+        {
+            auto ioBackend = core::net::makeBackend(backend.kind);
+            REQUIRE(ioBackend != nullptr);
+            auto loop = EventLoop { *ioBackend };
+            auto pooled = core::net::testing::makeSocketPair(loop);
+            REQUIRE(pooled.has_value());
+            auto fresh = core::net::testing::makeSocketPair(loop);
+            REQUIRE(fresh.has_value());
+            auto sockets = std::vector<std::unique_ptr<ISocket>> {};
+            sockets.push_back(std::move(pooled->first));
+            sockets.push_back(std::move(fresh->first));
+            auto connector = QueuedSocketConnector { std::move(sockets) };
+            auto client = core::http::HttpClient { loop, connector, nullptr };
+            constexpr auto Reply = std::string_view { "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok" };
+
+            auto firstLine = std::optional<std::string> {};
+            auto first = std::optional<HttpResult<core::http::IncomingResponse>> {};
+            runBounded(
+                loop,
+                both(into(core::http::test::answerHeadOnly(pooled->second.get(), std::string { Reply }),
+                          &firstLine),
+                     into(client.send(core::http::test::get("http://example.test/one")), &first)));
+            REQUIRE(firstLine == "GET /one HTTP/1.1");
+            REQUIRE(first.has_value());
+            REQUIRE(first->has_value());
+            auto firstBody = std::optional<ReadBody> {};
+            runBounded(loop, into(readAll((*first)->body.get(), 100), &firstBody));
+            REQUIRE(firstBody.has_value());
+            CHECK(firstBody->text == "ok");
+            REQUIRE(client.idleConnections() == 1);
+
+            pooled->second->close();
+            auto secondLine = std::optional<std::string> {};
+            auto second = std::optional<HttpResult<core::http::IncomingResponse>> {};
+            runBounded(loop,
+                       both(into(core::http::test::answerHeadOnly(fresh->second.get(), std::string { Reply }),
+                                 &secondLine),
+                            into(client.send(core::http::test::get("http://example.test/two")), &second)));
+            CHECK(connector.connects() == 2);
+            CHECK(secondLine == "GET /two HTTP/1.1");
+            REQUIRE(second.has_value());
+            REQUIRE(second->has_value());
+            CHECK((*second)->head.status == 200);
         }
     }
 }

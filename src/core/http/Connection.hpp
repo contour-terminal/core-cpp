@@ -49,6 +49,10 @@ struct WireTimeouts
     /// From the start of a head read to its first byte. In the response role this is the response
     /// timeout (@c HttpErrorCode::ResponseTimeout); in the request role it is the idle time a client
     /// may take before its next request (@c HttpErrorCode::ConnectionReadTimeout).
+    ///
+    /// **A request still being written counts toward it**, as `wasi:http`'s first-byte timeout does
+    /// in wasmtime: a head read alongside an upload times out after this long whether or not the
+    /// upload is done, which also bounds a server that never reads the body.
     std::chrono::milliseconds firstByte { 0 };
     /// Between any two reads after that, the body's included (@c HttpErrorCode::ConnectionReadTimeout).
     std::chrono::milliseconds betweenBytes { 0 };
@@ -173,7 +177,8 @@ class CORE_HTTP_API Connection
 
     /// No after UntilClose, Persistence::Close, an error, a close, a flow cancelled while it waited
     /// on the socket, or an unread body (a head read whose body has not reached its end, or a head
-    /// written whose body has not been written).
+    /// written whose body has not been written), or, for a response role, bytes read past the end of
+    /// the last response (they answer no request this side sent).
     [[nodiscard]] Reuse reusable() const noexcept;
 
     /// The socket, for its endpoints and TLS session. Requires a connection not moved from.

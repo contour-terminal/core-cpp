@@ -235,18 +235,23 @@ others in notes.
 | `src/core/http/CMakeLists.txt` | origin: core-cpp | - | - | 0.24.0 (P13): the module and its test binary |
 | `src/core/http/Connection.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the role, socket-error and write-framing row tables; one read buffer per connection |
 | `src/core/http/Connection.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `Connection`, `WireTimeouts` (zero is none), `Reuse` |
-| `src/core/http/ConnectionLoopback_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): deadlines and cancellation over a real pair on every backend |
+| `src/core/http/ConnectionLoopback_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): deadlines and cancellation over a real pair on every backend, and the client's response timeout against a slow upload |
 | `src/core/http/Connection_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): both ends over an in-memory pair on a `TestLoop` |
 | `src/core/http/Framing.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the RFC 9112 section 6.3 row table, the head parser and the chunked codec's transition table |
 | `src/core/http/Framing.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): limits, body framing, `HeadParser`, `ChunkedDecoder` |
 | `src/core/http/Framing_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the smuggling corpus, whole and one byte at a time; the framing tables; the parsers' bounds |
-| `src/core/http/HttpTestSupport.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): test-only helpers the http cases share |
+| `src/core/http/HttpClient.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the dial, wrap and TLS-failure row tables; the exchange as two halves under `whenAll` |
+| `src/core/http/HttpClient.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `HttpClient`, `Origin`, `HttpTimeouts` (zero is none), `OutgoingRequest`, `IncomingResponse` |
+| `src/core/http/HttpClient_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the client over `testing::ScriptedConnector` on a `TestLoop`, TLS scripted |
+| `src/core/http/HttpTestSupport.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): test-only helpers the http cases share: a scripted server end, a slow body source, and a scripted TLS context (R29) |
 | `src/core/http/Message.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/http/Message.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): one `HttpErrorCode` per WASI 0.3 `wasi:http` `error-code` case, the validating field, method, target and reason factories |
 | `src/core/http/Message_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/http/SmugglingCorpus.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): test-only request-smuggling corpus, shared with the server's tests |
 | `src/core/http/detail/Syntax.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the RFC 9110/3986 character-class table both parsers and the factories share |
 | `src/core/http/posix/HttpTestSupport.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): test-only; `runsUnderWine` is false |
+| `src/core/http/testing/ScriptedConnector.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/http/testing/ScriptedConnector.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): an `IConnector` over in-memory pairs, with refusals and a dial log |
 | `src/core/http/windows/HttpTestSupport.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): test-only; `runsUnderWine` from ntdll's `wine_get_version` |
 | `src/core/SystemRandomSource.hpp` | origin: core-cpp | - | - | the platform half of `Random.hpp`: one `fillFromSystemRandom()` per platform |
 | `src/core/log/Assert.hpp` | contour-terminal/contour | `src/crispy/Assert.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | `fatal()`/`SoftRequire()` moved here from crispy's `Assert.hpp` to close a base→log layering cycle; `Require`/`Guarantee`/`todo`/`unreachable`/`setFailHandler` stay in `src/core/Assert.hpp` |
