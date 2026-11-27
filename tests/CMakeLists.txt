@@ -614,6 +614,39 @@ endif()
 set_tests_properties(core-cpp.text-encoding core-cpp.text-encoding-selftest PROPERTIES
     LABELS "core-cpp;hygiene;tree-level"
     TIMEOUT 60)
+# core::constantTimeEquals branches on nothing but its index, in the code this build generated
+# (ConstantTime.hpp): scripts/check-constant-time.py disassembles ConstantTime.cpp's object with
+# objdump and refuses a compare loop holding another conditional branch or no barrier call. It is a
+# fact about an optimized build, since a Debug build's bounds assertions are branches in the loop,
+# and it reads GNU objdump's x86-64 and AArch64 listings: it runs for the GNU front end's optimized
+# builds and says why it did not run anywhere else (MSVC's front end, Debug, no objdump, another
+# architecture, Apple: Apple's objdump lists a Mach-O object's functions under local labels, `ltmp0`,
+# so no listing there names constantTimeEquals; Emscripten and WASI, whose objects are WebAssembly). NOT tree-level: its input is this build's object. Its self-test judges planted
+# listings, so its answer cannot differ between platforms: tree-level, run by the `style` job.
+if(Python3_Interpreter_FOUND AND TARGET core-cpp-base AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+   AND NOT APPLE AND NOT CMAKE_SYSTEM_NAME MATCHES "^(Emscripten|WASI)$"
+   AND CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$")
+    add_test(NAME core-cpp.constant-time
+             COMMAND "${Python3_EXECUTABLE}" "${CORE_CPP_SOURCE_DIR}/scripts/check-constant-time.py"
+                     "--objdump=${CMAKE_OBJDUMP}"
+                     "--objects=$<JOIN:$<TARGET_OBJECTS:core-cpp-base>,|>")
+    set_tests_properties(core-cpp.constant-time PROPERTIES SKIP_RETURN_CODE ${CORE_CPP_SKIP_EXIT_CODE})
+else()
+    add_test(NAME core-cpp.constant-time COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.constant-time: SKIPPED -- it judges a GNU front end's optimized ELF build with Python 3, and this is not one")
+    set_tests_properties(core-cpp.constant-time PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED")
+endif()
+set_tests_properties(core-cpp.constant-time PROPERTIES LABELS "core-cpp;hygiene" TIMEOUT 60)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME core-cpp.constant-time-selftest
+             COMMAND "${Python3_EXECUTABLE}" "${CORE_CPP_SOURCE_DIR}/scripts/check-constant-time-selftest.py")
+else()
+    add_test(NAME core-cpp.constant-time-selftest COMMAND "${CMAKE_COMMAND}" -E echo
+             "core-cpp.constant-time-selftest: SKIPPED -- no Python 3 interpreter was found at configure time")
+    set_tests_properties(core-cpp.constant-time-selftest PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED")
+endif()
+set_tests_properties(core-cpp.constant-time-selftest PROPERTIES LABELS "core-cpp;hygiene;tree-level" TIMEOUT 60)
+
 # Outside a git checkout (a source archive) the check cannot tell which files are the tree's.
 set_tests_properties(core-cpp.text-encoding PROPERTIES SKIP_RETURN_CODE 77)
 

@@ -196,6 +196,10 @@ jobs:
       - name: Text-encoding self-test
         run: python scripts/check-text-encoding-selftest.py
 
+      # covers: core-cpp.constant-time-selftest
+      - name: Constant-time check self-test
+        run: python scripts/check-constant-time-selftest.py
+
       # covers: core-cpp.tidy-record-selftest
       - name: Tidy-record self-test
         run: python scripts/tidy-record-selftest.py
@@ -558,6 +562,23 @@ jobs:
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
+
+      # The constant-time record for the pull request body: AppleClang's arm64 code for
+      # core::constantTimeEquals and core::secureZero, as this release build generated it, with the
+      # barriers they call. Printed, not judged: scripts/check-constant-time.py judges it in ctest.
+      - name: Disassemble the constant-time functions
+        if: matrix.name == 'appleclang'
+        run: |
+          set -e
+          uname -m
+          clang++ --version | head -1
+          for object in $(find out/build/${{ matrix.preset }} -name 'ConstantTime.cpp.o' -o -name 'ValueBarrierGnu.cpp.o'); do
+            echo "::group::otool -tvV -rv $object"
+            otool -tvV "$object"
+            # An object's calls are unresolved until the link: the relocations name their targets.
+            otool -rv "$object"
+            echo "::endgroup::"
+          done
 
       - name: Test
         run: ctest --preset ${{ matrix.preset }} -LE tree-level
