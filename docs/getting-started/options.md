@@ -20,6 +20,7 @@ core-cpp never writes to the parent's cache.
 | `CORE_CPP_WITH_IMAGES` | ON, when `CORE_CPP_WITH_TUI` is | Decode images in `core::tui` (stb_image) |
 | `CORE_CPP_WITH_TLS` | OFF | Build `core::net_tls` (OpenSSL, from the system) |
 | `CORE_CPP_WITH_FS` | ON | Build `core::fs`, the descriptor-relative file system. Native only: under Emscripten and WASI the module is skipped |
+| `CORE_CPP_WITH_HTTP` | ON | Build `core::http`, HTTP/1.1 messages and framing. Native only: under Emscripten and WASI the module is skipped |
 | `CORE_CPP_WITH_SYSTEMD` | ON | Linux only: notify of system sleep/wake through logind (`libsystemd`, found with pkg-config and linked by value). A configure without its development files stops, naming this option; OFF builds without it and `makeNativeSystemPowerMonitor()` reports `NotImplemented` |
 | `CORE_CPP_WITH_TRACY` | OFF | Instrument core-cpp for the Tracy profiler |
 | `CORE_CPP_PEDANTIC` | ON when top-level | Compile core-cpp's targets with the pedantic warning set |

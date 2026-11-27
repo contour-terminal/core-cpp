@@ -230,6 +230,15 @@ others in notes.
 | `src/core/fs/windows/WindowsPathWalk.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the Windows component walker and the NT seam |
 | `src/core/fs/windows/WindowsPathWalk.hpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
 | `src/core/fs/windows/WindowsPathWalk_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/http/CMakeLists.txt` | origin: core-cpp | - | - | 0.24.0 (P13): the module and its test binary |
+| `src/core/http/Framing.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the RFC 9112 section 6.3 row table, the head parser and the chunked codec's transition table |
+| `src/core/http/Framing.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): limits, body framing, `HeadParser`, `ChunkedDecoder` |
+| `src/core/http/Framing_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the smuggling corpus, whole and one byte at a time; the framing tables; the parsers' bounds |
+| `src/core/http/Message.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/http/Message.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): one `HttpErrorCode` per WASI 0.3 `wasi:http` `error-code` case, the validating field, method, target and reason factories |
+| `src/core/http/Message_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/http/SmugglingCorpus.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): test-only request-smuggling corpus, shared with the server's tests |
+| `src/core/http/detail/Syntax.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the RFC 9110/3986 character-class table both parsers and the factories share |
 | `src/core/SystemRandomSource.hpp` | origin: core-cpp | - | - | the platform half of `Random.hpp`: one `fillFromSystemRandom()` per platform |
 | `src/core/log/Assert.hpp` | contour-terminal/contour | `src/crispy/Assert.hpp` | `6777ff05014f8ff163b071e8b0e942830119db80` | `fatal()`/`SoftRequire()` moved here from crispy's `Assert.hpp` to close a base→log layering cycle; `Require`/`Guarantee`/`todo`/`unreachable`/`setFailHandler` stay in `src/core/Assert.hpp` |
 | `src/core/log/CMakeLists.txt` | origin: core-cpp | - | - | - |

@@ -28,7 +28,7 @@ cmake -DMODE=sync -DREF=<tag or full SHA> -DDEST=<dir> \
 # The same, choosing the modules and the repository explicitly. MODULES is a CMake list, so the
 # shell must not see its semicolons: quote the whole -D argument.
 cmake -DMODE=sync -DREF=<tag or full SHA> -DDEST=<dir> -DREPO=<url or path> \
-      "-DMODULES=base;log;cli;codec;platform;async;net;fs;testing" \
+      "-DMODULES=base;log;cli;codec;platform;async;net;fs;http;testing" \
       -P <core-cpp checkout>/cmake/CoreCppVendor.cmake
 
 # Verify <dir> against its MANIFEST. Needs no git, and this one IS the copy's own script.
@@ -46,9 +46,9 @@ cmake -DMODE=check -DDEST=<dir> -P <dir>/cmake/CoreCppVendor.cmake
 - **`MODULES`** selects which module directories are copied; it defaults to every module the ref
   has. A module that no option can switch off must be in the list, and `sync` reads the ref's own
   `cmake/CoreCppModules.cmake` to refuse a list that leaves one out; `CORE_CPP_WITH_TUI=OFF` is
-  what lets contour leave `tui` out, and `CORE_CPP_WITH_FS=OFF` leaves `fs` out. A copy without the
-  directory of a module whose option is still on stops the configure with a message naming that
-  option.
+  what lets contour leave `tui` out, `CORE_CPP_WITH_FS=OFF` leaves `fs` out and
+  `CORE_CPP_WITH_HTTP=OFF` leaves `http` out. A copy without the directory of a module whose
+  option is still on stops the configure with a message naming that option.
 - **`REF`** is a tag or a full 40-character commit SHA, and `sync` refuses anything else. A branch,
   `HEAD` or a short SHA names a different tree from one day to the next, and the manifest would
   then record a ref that cannot restore the copy it describes.

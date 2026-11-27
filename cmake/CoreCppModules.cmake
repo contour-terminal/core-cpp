@@ -281,6 +281,12 @@ core_cpp_module_target(NAME net_tls MODULE net KIND STATIC DEPS net PLATFORMS na
 # WASI have no file descriptors to hold.
 core_cpp_module(NAME fs KIND STATIC DEPS base log async platform PLATFORMS native WHEN CORE_CPP_WITH_FS)
 
+# HTTP/1.1 (RFC 9110/9112): the message vocabulary, the framing rules, the head parser and the
+# chunked codec, a pure layer no socket enters. async and net are its edges for what runs over
+# core::net's sockets; the error payload already names net::TlsFailure. Native only, like those
+# sockets. Its own module rather than more of net, whose serve()/HttpServer.hpp it leaves untouched.
+core_cpp_module(NAME http KIND STATIC DEPS base async net PLATFORMS native WHEN CORE_CPP_WITH_HTTP)
+
 # endo's terminal UI. Native only: there is no terminal under Emscripten, where CORE_CPP_WITH_TUI is
 # forced off. core::tui_output is the part that composes and writes bytes, and it has a row of its
 # own because it links less than the module does: base alone, no libunicode and no coroutines, so a

@@ -37,6 +37,7 @@ cmake_dependent_option(CORE_CPP_WITH_IMAGES "Decode images in core::tui (stb_ima
                        "CORE_CPP_WITH_TUI" OFF)
 option(CORE_CPP_WITH_TLS "Build core::net_tls (OpenSSL)" OFF)
 option(CORE_CPP_WITH_FS "Build core::fs, the descriptor-relative file system" ON)
+option(CORE_CPP_WITH_HTTP "Build core::http, HTTP/1.1 messages and framing" ON)
 # Linux only; ignored elsewhere. Needs pkg-config and libsystemd's development files (libsystemd-dev,
 # systemd-devel).
 option(CORE_CPP_WITH_SYSTEMD "Notify of system sleep/wake on Linux through logind (libsystemd)" ON)
