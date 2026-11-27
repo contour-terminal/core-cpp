@@ -51,6 +51,7 @@ directory `src/core/net/`. Three targets:
 | `<core/net/SplitSocket.hpp>` | one duplex `ISocket` from two simplex halves |
 | `<core/net/WithTimeout.hpp>` | `withTimeout()`: a task raced against a timer on the loop's clock |
 | `<core/net/HttpServer.hpp>` | a minimal HTTP/1.1 server: `serve()`, `readRequest()`, `writeResponse()`; `Content-Length` bodies only, every response closes, and a refusal closes lingering (`HttpLimits::linger`). A failed accept is answered by `AcceptErrorPolicy` and reported through `AcceptLoopReporting` |
+| `<core/net/AcceptLoop.hpp>` | `acceptLoop()`: the accept loop `serve()` and `core::http::serveHttp()` share -- every failed accept answered by `AcceptErrorPolicy` and reported through `AcceptLoopReporting`, each connection's flow awaited or spawned (`ConnectionFlow`) |
 | `<core/net/AcceptPolicy.hpp>` | `AcceptErrorPolicy`, `AcceptErrorTable`, `acceptDispositionOf()`, `describeAcceptFailure()`, `describeAcceptLoopEnded()`: what an accept loop does about a failed accept (see [Accept loops](#accept-loops)) |
 | `<core/net/AcceptLoopHealth.hpp>` | `AcceptLoopHealth`: the accept loops of a process that gave up while they were meant to be serving, for a liveness probe |
 | `<core/net/LingeringClose.hpp>` | `closeLingering()`: half-close, drain the peer within `LingerBounds` (time, bytes, reads), then close, so a reply written over a request left unread is not destroyed by the reset a bare close sends |

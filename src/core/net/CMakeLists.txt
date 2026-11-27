@@ -119,6 +119,7 @@ endif()
 core_cpp_add_module(net KIND STATIC
     HEADERS
         AcceptLoopHealth.hpp
+        AcceptLoop.hpp
         AcceptPolicy.hpp
         AsyncBufferedReader.hpp
         BlockingConnector.hpp
@@ -197,6 +198,7 @@ core_cpp_add_module(net KIND STATIC
     SOURCES
         ${_coreCppNetSubset}
         AcceptLoopHealth.cpp
+        AcceptLoop.cpp
         AcceptPolicy.cpp
         AsyncBufferedReader.cpp
         AsyncDatagramSocket.cpp
