@@ -58,6 +58,11 @@ The contract is the spec's (Part I §2, rules 1 to 6), and it is short enough to
   `core::async::OperationCancelled`; a cancel from the resource (`close()`, `cancelRead()`, a
   closed listener) returns `NetErrorCode::Cancelled` as a value. If a receive already completed
   with bytes, the data wins.
+- **A blocking OS call runs only on an injected blocking executor, through `async::offload`**; it
+  resumes on the home executor, and `NativeDescriptor_test.cpp`'s *native: every descriptor
+  operation parks on the blocking executor* holds it. The blocking executor is drained before the
+  home executor dies. A call that may never return (a lookup, a read of a terminal) waits through
+  `net::detail::ParkedCall` instead, which hands its waiter back on a stop.
 
 ## The turn, and the orderings inside it
 

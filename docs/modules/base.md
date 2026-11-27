@@ -94,15 +94,21 @@ only on the length; inputs of different lengths compare unequal at once, since a
 is public. `secureZero()` writes every byte through a `volatile` pointer and ends with a memory
 barrier, so the stores survive even when the buffer is never read again.
 
-- **Both are out of line, and the barriers are compiler barriers, not just calls.** The barrier is
-  an empty `asm volatile` under GCC and Clang (`ValueBarrierGnu.cpp`) and a `volatile` object under
-  MSVC's front end, cl and clang-cl (`ValueBarrierMsvc.cpp`), chosen by
+- **Both are out of line, and the barriers are compiler barriers, not just calls.** Under GCC and
+  Clang both are an empty `asm volatile` (`ValueBarrierGnu.cpp`), the memory barrier with a `memory`
+  clobber. Under MSVC's front end, cl and clang-cl (`ValueBarrierMsvc.cpp`), the value barrier is a
+  `volatile` object and the memory barrier is `std::atomic_signal_fence(std::memory_order_seq_cst)`,
+  a compiler fence that emits no instruction: a `volatile` access orders only other `volatile`
+  accesses, so it alone would not keep the zeroing stores in place. The file is chosen by
   `CMAKE_CXX_COMPILER_FRONTEND_VARIANT`. Either survives inlining, link-time optimisation included.
 - **A unit test cannot see a timing difference**, so the test checks the answers and the
   guarantee is checked by reading the release disassembly: the compare loop's only branches are on
   the index, never on the data.
-- `core::net`'s TLS layer keeps OpenSSL's `CRYPTO_memcmp` for the comparisons it makes; these are
-  for code that links no TLS.
+- **`core::net::constantTimeEquals()` stays on OpenSSL's `CRYPTO_memcmp`**, and `core::net_tls`
+  does not call these. The network-facing token and fingerprint checks of core-cpp's consumers go
+  through it, and OpenSSL's comparison is written per architecture, in assembly where it has one, so
+  it does not depend on a compiler honouring a barrier; moving it here would trade that guarantee for
+  nothing. These are for code that links no TLS: a key cache, a MAC over a file.
 
 ## Paths and UTF-8
 

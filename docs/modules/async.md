@@ -271,6 +271,28 @@ bottoms out in a `DetachedTask`. `whenAll`'s and `whenAny`'s runners carry it to
 coroutine type of its own between a detached root and the task that parks, and one that did not
 carry the answer would make every park underneath a combinator read as *somebody owns this*.
 
+## Offloading a blocking call
+
+`<core/async/Offload.hpp>` has `offload(home, blocking, work)`: the awaiting coroutine hops to the
+`blocking` executor, calls `work` there, and hops back to `home` before it sees the result, so a
+caller on a loop never runs the blocking call itself and never resumes on a pool thread. It is how
+[fs](fs.md), the standard output and error streams, the trust stores and the platform chain
+verifiers of [net](net.md) reach the operating system; nothing in it owns a thread.
+
+- **The stop token is read once, before the hop.** A stop already requested throws
+  `OperationCancelled` and `work` never runs. Once `work` has run, its result is returned whatever
+  the token says by then: a write that completed, or a handle that was opened, is never dropped
+  because a stop arrived while it was in flight. What `work` throws is rethrown on `home`.
+- **`work`'s result is a value, never a reference** (a `static_assert`), and the executors are
+  pointers, because a reference parameter of a coroutine would name storage the caller may destroy
+  while it is suspended. Both must outlive the returned task.
+- **Teardown: drain or stop `blocking` before `home` is destroyed**, so no job resumes a dead
+  executor.
+- **A call that may never return does not belong here.** `offload` resumes only once `work` has
+  returned, so a read of a terminal that waits for input would hold its waiter for as long. The
+  resolver and the standard input wait through `net::detail::ParkedCall` instead, which hands the
+  waiter back on a stop and leaves the call running.
+
 ## Strands and the current executor
 
 Written for 0.4.0 after morph's `StrandExecutor` (morph PR #806); see
