@@ -468,10 +468,10 @@ jobs:
           database, standard, *roots = sys.argv[1:]
           roots = tuple(os.path.realpath(root) + os.sep for root in roots)
           entries = [e for e in json.load(open(database))
-                     if os.path.realpath(os.path.join(e["directory"], e["file"])).startswith(roots)]
+                      if os.path.realpath(os.path.join(e["directory"], e["file"])).startswith(roots)]
           flags = {"26": ("c++26", "c++2c")}[standard]
           wrong = [e["file"] for e in entries
-                   if not any(f"-std={f}" in (e.get("command") or " ".join(e.get("arguments", []))) for f in flags)]
+                    if not any(f"-std={f}" in (e.get("command") or " ".join(e.get("arguments", []))) for f in flags)]
           print(f"{len(entries)} compile(s) under {', '.join(roots)}; {len(wrong)} not compiled as C++{standard}")
           for path in wrong:
               print(f"::error::{path} is not compiled as C++{standard}")
@@ -1335,8 +1335,8 @@ jobs:
           docker build -t core-cpp-vendored-smoke - <<'DOCKERFILE'
           FROM ubuntu:24.04
           RUN apt-get update -q \
-           && apt-get install -y -q --no-install-recommends g++-14 cmake ninja-build libssl-dev libsystemd-dev pkg-config \
-           && rm -rf /var/lib/apt/lists/*
+            && apt-get install -y -q --no-install-recommends g++-14 cmake ninja-build libssl-dev libsystemd-dev pkg-config \
+            && rm -rf /var/lib/apt/lists/*
           DOCKERFILE
 
       - name: The vendored copy configures, builds and verifies with no network
