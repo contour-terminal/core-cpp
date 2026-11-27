@@ -72,6 +72,20 @@ else()
     set(_coreCppPlatformSystemPowerSource UnavailableSystemPower.cpp)
 endif()
 
+# Where a user's caches live below the home directory (core::platform::cacheHome), one row per OS,
+# and the cases that hold each OS to its own row: macOS's ~/Library/Caches, Windows' AppData/Local,
+# and every other system's ~/.cache (the XDG default). An Emscripten build answers as POSIX does.
+if(APPLE)
+    set(_coreCppPlatformCacheHomeRow darwin/CacheHomeRow.cpp)
+    set(_coreCppPlatformCacheHomeCases darwin/CacheHomeCases_test.cpp)
+elseif(WIN32)
+    set(_coreCppPlatformCacheHomeRow windows/CacheHomeRow.cpp)
+    set(_coreCppPlatformCacheHomeCases windows/CacheHomeCases_test.cpp)
+else()
+    set(_coreCppPlatformCacheHomeRow posix/CacheHomeRow.cpp)
+    set(_coreCppPlatformCacheHomeCases posix/CacheHomeCases_test.cpp)
+endif()
+
 # Sockets back SystemPipe on Windows: a loopback pair mapped to a waitable event.
 set(_coreCppPlatformLibs "")
 if(APPLE)
@@ -134,6 +148,7 @@ core_cpp_add_module(platform KIND STATIC
         ${_coreCppPlatformSystemPowerSource}
         WinsockInit.cpp
         testing/InMemoryFileSystem.cpp
+        ${_coreCppPlatformCacheHomeRow}
     SOURCES_POSIX
         ${_coreCppPlatformPosixProviders}
         posix/PosixDurableFiles.cpp
@@ -158,6 +173,7 @@ core_cpp_add_module(platform KIND STATIC
         ${_coreCppPlatformCpuCounterSource}
         SystemPower.cpp
         ${_coreCppPlatformSystemPowerSource}
+        ${_coreCppPlatformCacheHomeRow}
     PUBLIC_LIBS core::base
     PRIVATE_LIBS ${_coreCppPlatformLibs})
 
@@ -187,6 +203,8 @@ core_cpp_add_test(platform
         SystemPipe_test.cpp
         SystemPower_test.cpp
         UserPaths_test.cpp
+        UserPathsTestSupport.hpp
+        ${_coreCppPlatformCacheHomeCases}
         Wakeup_test.cpp
     DEFINITIONS ${_coreCppPlatformPowerDefinitions}
     SOURCES_WINDOWS

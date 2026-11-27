@@ -392,6 +392,13 @@ others in notes.
 | `src/core/platform/PlatformTestSupport.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): `runsUnderWine` for the platform tests |
 | `src/core/platform/posix/PlatformTestSupport.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `runsUnderWine` on POSIX |
 | `src/core/platform/windows/PlatformTestSupport.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): `runsUnderWine` on Windows |
+| `src/core/platform/UserPathsTestSupport.hpp` | origin: core-cpp | - | - | 0.24.0 (P13): the per-OS `cacheHome` cases' declaration |
+| `src/core/platform/darwin/CacheHomeCases_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/platform/darwin/CacheHomeRow.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): macOS's cache row |
+| `src/core/platform/posix/CacheHomeCases_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/platform/posix/CacheHomeRow.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): the XDG cache row |
+| `src/core/platform/windows/CacheHomeCases_test.cpp` | origin: core-cpp | - | - | 0.24.0 (P13) |
+| `src/core/platform/windows/CacheHomeRow.cpp` | origin: core-cpp | - | - | 0.24.0 (P13): Windows' cache row |
 | `src/core/testing/windows/SuppressWindowsDialogs_test.cpp` | origin: core-cpp | - | - | 0.3.0: reads back from WerGetFlags that suppressWindowsDialogs() asked Windows Error Reporting for no UI |
 | `src/core/net/CallbackAllocation_test.cpp` | origin: core-cpp | - | - | 0.3.0 review: a drain-step callback that queues nothing costs no allocation, measured by replacing the global allocation functions, which is why it is a binary of its own |
 | `src/core/net/CompletionClaim_test.cpp` | origin: core-cpp | - | - | 0.4.0: the claim a frame-free completion queues for a chain nobody owns -- counted, armed, holding no reference -- and its free at teardown and take-back; a `[bench]` case for the completion path |
